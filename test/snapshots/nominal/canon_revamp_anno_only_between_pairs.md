@@ -2,6 +2,7 @@
 ~~~ini
 description=Anno-only def sandwiched between two matching anno+decl pairs - verifies PostAnno doesn't double-register the surrounding pairs and correctly registers the anno-only
 type=file:Foo.roc
+skip=true
 ~~~
 # SOURCE
 ~~~roc

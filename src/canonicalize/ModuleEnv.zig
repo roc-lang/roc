@@ -833,8 +833,14 @@ pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
     const new_top = scratch.diagnostics.top();
     if (new_top == 0) return;
 
-    const existing = self.store.sliceDiagnostics(self.diagnostics);
     const index_start = self.store.index_data.len();
+    const existing_len = self.diagnostics.span.len;
+    try self.store.index_data.items.ensureTotalCapacity(
+        self.gpa,
+        @intCast(index_start + existing_len + new_top),
+    );
+
+    const existing = self.store.sliceDiagnostics(self.diagnostics);
 
     for (existing) |diagnostic_idx| {
         _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
@@ -850,7 +856,7 @@ pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
     self.diagnostics = .{
         .span = .{
             .start = @intCast(index_start),
-            .len = @intCast(existing.len + new_top),
+            .len = @intCast(existing_len + new_top),
         },
     };
 }

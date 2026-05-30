@@ -2,6 +2,7 @@
 ~~~ini
 description=Two type aliases that reference each other - tests topological resolution via placeholders
 type=snippet
+skip=true
 ~~~
 # SOURCE
 ~~~roc

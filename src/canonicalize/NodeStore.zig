@@ -43,11 +43,6 @@ type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type 
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
-/// Expressions whose type doesn't match the expected return type in their context.
-/// Populated by the type checker for match/if branch bodies, read by the interpreter
-/// to crash at runtime when an erroneous branch is actually taken.
-/// Key: @intFromEnum(CIR.Expr.Idx) of the branch body expression.
-erroneous_exprs: std.AutoHashMapUnmanaged(u32, void) = .{},
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -248,7 +243,6 @@ pub fn deinit(store: *NodeStore) void {
     store.type_apply_data.deinit(store.gpa);
     store.pattern_list_data.deinit(store.gpa);
     store.index_data.deinit(store.gpa);
-    store.erroneous_exprs.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -910,15 +904,18 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_type_method_call => {
             const p = payload.expr_type_method_call;
-            // Retrieve type var dispatch data from node and span2_data
             const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.type_var_alias_stmt);
             const method_name: base.Ident.Idx = @bitCast(p.method_name);
             const args_span = store.span2_data.items.items[p.args_span2_idx];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
 
             return CIR.Expr{ .e_type_method_call = .{
                 .type_var_alias_stmt = type_var_alias_stmt,
                 .method_name = method_name,
-                .method_name_region = store.getRegionAt(node_idx),
+                .method_name_region = .{
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
+                },
                 .args = .{ .span = .{ .start = args_span.start, .len = args_span.len } },
             } };
         },

@@ -456,6 +456,7 @@ fn populateBuiltinAutoImportedTypes(
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
         .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
         .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
@@ -507,6 +508,7 @@ pub fn populateModuleEnvs(
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
         .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
         .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
@@ -543,7 +545,7 @@ pub fn populateModuleEnvs(
     }
 }
 
-/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, and numeric types) from the Builtin module.
+/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, and numeric types) from the Builtin module.
 /// Used for all modules EXCEPT Builtin itself.
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
@@ -565,7 +567,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
+    const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -2702,7 +2704,7 @@ pub fn canonicalizeFile(
         const node_count_pre = self.env.store.nodes.len();
         const types_len_pre = self.env.types.len();
         if (types_len_pre < node_count_pre) {
-            _ = try self.env.types.freshN(@intCast(node_count_pre - types_len_pre));
+            try self.ensureTypeSlots(node_count_pre - types_len_pre);
         }
     }
 
@@ -2739,7 +2741,7 @@ pub fn canonicalizeFile(
         const node_count = self.env.store.nodes.len();
         const types_len = self.env.types.len();
         if (types_len < node_count) {
-            _ = try self.env.types.freshN(@intCast(node_count - types_len));
+            try self.ensureTypeSlots(node_count - types_len);
         }
     }
 
@@ -2781,6 +2783,12 @@ pub fn canonicalizeFile(
     // published span, so this is the explicit hand-off of canonicalization's
     // diagnostic output to later stages.
     try self.env.publishScratchDiagnostics();
+}
+
+fn ensureTypeSlots(self: *Self, count: usize) std.mem.Allocator.Error!void {
+    for (0..count) |_| {
+        _ = try self.env.types.fresh();
+    }
 }
 
 /// Validate a type module for use in checking mode (roc check).
@@ -3247,8 +3255,7 @@ fn addToExposedScope(
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
-                    // Don't add types to exposed_items - types are not values
-                    // Only add to type_bindings for type resolution
+                    try self.env.addExposedById(ident_idx);
 
                     // Just track that this type is exposed
                     try self.exposed_types.put(gpa, ident_idx, {});
@@ -3279,8 +3286,7 @@ fn addToExposedScope(
 
                 // Get the interned identifier
                 if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
-                    // Don't add types to exposed_items - types are not values
-                    // Only add to type_bindings for type resolution
+                    try self.env.addExposedById(ident_idx);
 
                     // Just track that this type is exposed
                     try self.exposed_types.put(gpa, ident_idx, {});

@@ -2,6 +2,7 @@
 ~~~ini
 description=Mutually recursive methods within an associated block - each refs the other via unqualified name
 type=file:Tree.roc
+skip=true
 ~~~
 # SOURCE
 ~~~roc

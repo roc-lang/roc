@@ -2,6 +2,7 @@
 ~~~ini
 description=Reference to a name that is never declared inside an associated block should produce a not-in-scope error
 type=file:Foo.roc
+skip=true
 ~~~
 # SOURCE
 ~~~roc

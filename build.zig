@@ -522,7 +522,7 @@ const CheckEnumFromIntZeroStep = struct {
                 \\    .anno = @enumFromInt(0), // placeholder - will be replaced
                 \\
                 \\  Example - RIGHT:
-                \\    .anno = undefined, // overwritten before use when the placeholder is filled in
+                \\    .anno = undefined, // overwritten in Phase 1.7 before use
                 \\
                 \\VIOLATIONS FOUND:
                 \\

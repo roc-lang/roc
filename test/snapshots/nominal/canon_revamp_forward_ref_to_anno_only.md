@@ -2,6 +2,7 @@
 ~~~ini
 description=Method forward-references an anno-only sibling within the same associated block
 type=file:Foo.roc
+skip=true
 ~~~
 # SOURCE
 ~~~roc

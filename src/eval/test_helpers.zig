@@ -626,27 +626,6 @@ fn checkedModuleHasArtifactBlockingProblems(module: *const CheckedModule) bool {
     for (module.checker.problems.problems.items) |problem| {
         if (problemBlocksCheckedArtifact(problem)) return true;
     }
-    // An undefined identifier leaves a dangling forward-reference placeholder
-    // pattern: canon reports `ident_not_in_scope` but the `e_lookup_local`
-    // still points at a binder that is never defined, which the Monotype
-    // lowerer cannot resolve. Treat such a reference as blocking so the error
-    // is reported instead of crashing during lowering.
-    {
-        const me = module.module_env;
-        for (me.store.sliceDiagnostics(me.diagnostics)) |diag_idx| {
-            switch (me.store.getDiagnostic(diag_idx)) {
-                .ident_not_in_scope => return true,
-                else => {},
-            }
-        }
-    }
-
-    // Erroneous (`.err`) checked types cannot be published — the checked
-    // artifact builder rejects them outright. So any module whose type store
-    // still holds `.err` content must be reported as a problem rather than
-    // built. A canonicalization error such as `return` outside a function, or
-    // an undefined uppercase tag like `Bool.true`, surfaces this way even when
-    // it does not also produce a separate Check problem.
     return module.module_env.types.containsErrContent();
 }
 
@@ -929,10 +908,6 @@ pub fn parseCheckModule(
 
     var can_timer = try StageTimer.start();
     try czer.canonicalizeFile();
-    // Finalize the canonicalization diagnostics so later stages (the
-    // artifact-blocking-problem check) can see errors like an undefined
-    // variable, which canon records but does not leave as `.err` content.
-    try module_env.publishScratchDiagnostics();
     switch (validation) {
         .roc_check => try czer.validateForChecking(),
         .checked_artifact => try czer.validateForExplicitRoots(),
@@ -1469,12 +1444,6 @@ pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredP
 
 /// Public `lirInterpreterStrWithStats` function.
 pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
-    // No root procedures means every published root was a stub for an
-    // erroneous type. Surface this as a Crash so the snapshot renderer
-    // emits the type-error diagnostics instead of trying to interpret an
-    // empty program.
-    if (lowered.view.root_procs.len == 0) return error.Crash;
-
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 

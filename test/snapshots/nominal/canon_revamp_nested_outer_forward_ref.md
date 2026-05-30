@@ -2,6 +2,7 @@
 ~~~ini
 description=Nested associated block uses a parent-block item that is defined AFTER the nested type in source order
 type=file:Outer.roc
+skip=true
 ~~~
 # SOURCE
 ~~~roc

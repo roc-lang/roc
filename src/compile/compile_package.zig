@@ -184,21 +184,7 @@ const ModuleState = struct {
         }
     }
 
-    /// Replace this module's checked artifact when the new artifact shares the
-    /// same `ModuleEnv` as the old one (e.g. a re-publication of the same
-    /// checked source). The old artifact is torn down without freeing the
-    /// module env, since the new artifact still references it.
-    pub fn replaceCheckedArtifactRetainingModuleEnv(self: *ModuleState, artifact: CheckedArtifact.CheckedModuleArtifact) void {
-        if (self.semantic) |*semantic| {
-            if (semantic.checked_artifact) |*existing| existing.deinitRetainingModuleEnv(existing.canonical_names.allocator);
-            semantic.module_env = null;
-            semantic.checked_artifact = artifact;
-            return;
-        }
-        std.debug.panic("compile_package.ModuleState.replaceCheckedArtifactRetainingModuleEnv missing module env for {s}", .{self.name});
-    }
-
-    pub fn replaceCheckedArtifact(self: *ModuleState, artifact: CheckedArtifact.CheckedModuleArtifact) void {
+    fn replaceCheckedArtifact(self: *ModuleState, artifact: CheckedArtifact.CheckedModuleArtifact) void {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |*existing| existing.deinit(existing.canonical_names.allocator);
             semantic.module_env = null;

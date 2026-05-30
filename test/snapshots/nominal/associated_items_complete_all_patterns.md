@@ -5730,39 +5730,6 @@ But _L2_ was already declared here:
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `l5_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:416:19:416:28:**
-```roc
-            bad = l5_secret
-```
-                  ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d3_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:71:8:71:26:**
-```roc
-d3_1 = d3_types_then_vals.val1
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l1_val_last` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:387:8:387:22:**
-```roc
-d5_6 = d5_l1_val_last.val1
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named `l3_private` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -5774,12 +5741,56 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `d2_outer_val_middle` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:30:8:30:27:**
+```roc
+d2_3 = d2_outer_val_middle.Inner.inner_val
+```
+       ^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d4_all_types_then_vals` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:140:8:140:30:**
+```roc
+d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
+```
+       ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named `d3_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **associated_items_complete_all_patterns.md:86:8:86:26:**
 ```roc
 d3_4 = d3_vals_then_types.val1
+```
+       ^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d4_reverse_types` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:174:8:174:24:**
+```roc
+d4_3 = d4_reverse_types.L2.L3.L4.val4
+```
+       ^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d4_l2_val_after_l3` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:218:8:218:26:**
+```roc
+d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
 ```
        ^^^^^^^^^^^^^^^^^^
 
@@ -5796,28 +5807,6 @@ d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `l3_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:106:18:106:27:**
-```roc
-        bad_l2 = l3_secret
-```
-                 ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_all_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:292:8:292:30:**
-```roc
-d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named `deep_secret` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -5826,39 +5815,6 @@ Is there an `import` or `exposing` missing up-top?
     bad = deep_secret
 ```
           ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_all_vals_then_types` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:157:8:157:30:**
-```roc
-d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d1_scope` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:11:8:11:16:**
-```roc
-d1_2 = d1_scope.inner
-```
-       ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l4_val_after_l5` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:349:8:349:26:**
-```roc
-d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -5873,135 +5829,14 @@ d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `d1_forward` in this scope.
+Nothing is named `d5_l4_val_after_l5` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_complete_all_patterns.md:6:8:6:18:**
+**associated_items_complete_all_patterns.md:349:8:349:26:**
 ```roc
-d1_1 = d1_forward.first
-```
-       ^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_l1_val_after_l2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:235:8:235:26:**
-```roc
-d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
 ```
        ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_l3_val_after_l4` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:203:8:203:26:**
-```roc
-d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l4_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:257:15:257:24:**
-```roc
-        bad = l4_secret
-```
-              ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `inner_private` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:46:26:46:39:**
-```roc
-    outer_trying_inner = inner_private
-```
-                         ^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l4_private` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:268:23:268:33:**
-```roc
-            attempt = l4_private
-```
-                      ^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_outer_val_middle` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:30:8:30:27:**
-```roc
-d2_3 = d2_outer_val_middle.Inner.inner_val
-```
-       ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d5_l3_val_after_l4` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:366:8:366:26:**
-```roc
-d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
-```
-       ^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_siblings` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:51:16:51:27:**
-```roc
-        valA = d2_siblings.InnerB.valB + 1
-```
-               ^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_outer_refs_inner` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:33:17:33:36:**
-```roc
-    outer_val = d2_outer_refs_inner.Inner.inner_val
-```
-                ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d2_inner_first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:20:8:20:22:**
-```roc
-d2_1 = d2_inner_first.outer_val
-```
-       ^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_all_types_then_vals` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:140:8:140:30:**
-```roc
-d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -6016,6 +5851,116 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **UNDEFINED VARIABLE**
+Nothing is named `d1_forward` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:6:8:6:18:**
+```roc
+d1_1 = d1_forward.first
+```
+       ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d4_l3_val_after_l4` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:203:8:203:26:**
+```roc
+d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
+```
+       ^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d3_val_after_nested` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:121:8:121:27:**
+```roc
+d3_7 = d3_val_after_nested.val1
+```
+       ^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d2_inner_first` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:20:8:20:22:**
+```roc
+d2_1 = d2_inner_first.outer_val
+```
+       ^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `l4_secret` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:257:15:257:24:**
+```roc
+        bad = l4_secret
+```
+              ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `l4_private` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:268:23:268:33:**
+```roc
+            attempt = l4_private
+```
+                      ^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d3_types_then_vals` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:71:8:71:26:**
+```roc
+d3_1 = d3_types_then_vals.val1
+```
+       ^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d2_outer_refs_inner` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:33:17:33:36:**
+```roc
+    outer_val = d2_outer_refs_inner.Inner.inner_val
+```
+                ^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d4_all_vals_then_types` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:157:8:157:30:**
+```roc
+d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
+```
+       ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `inner_private` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:46:26:46:39:**
+```roc
+    outer_trying_inner = inner_private
+```
+                         ^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named `l5_only` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -6024,17 +5969,6 @@ Is there an `import` or `exposing` missing up-top?
                 bad = l5_only
 ```
                       ^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `d4_l2_val_after_l3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:218:8:218:26:**
-```roc
-d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
-```
-       ^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -6049,25 +5983,91 @@ d4_4 = d4_interleaved.L2.L3.L4.val4
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `d4_reverse_types` in this scope.
+Nothing is named `d2_siblings` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_complete_all_patterns.md:174:8:174:24:**
+**associated_items_complete_all_patterns.md:51:16:51:27:**
 ```roc
-d4_3 = d4_reverse_types.L2.L3.L4.val4
+        valA = d2_siblings.InnerB.valB + 1
 ```
-       ^^^^^^^^^^^^^^^^
+               ^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `d3_val_after_nested` in this scope.
+Nothing is named `d1_scope` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_complete_all_patterns.md:121:8:121:27:**
+**associated_items_complete_all_patterns.md:11:8:11:16:**
 ```roc
-d3_7 = d3_val_after_nested.val1
+d1_2 = d1_scope.inner
 ```
-       ^^^^^^^^^^^^^^^^^^^
+       ^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d4_l1_val_after_l2` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:235:8:235:26:**
+```roc
+d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+```
+       ^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `l5_secret` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:416:19:416:28:**
+```roc
+            bad = l5_secret
+```
+                  ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d5_all_types_then_vals` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:292:8:292:30:**
+```roc
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+```
+       ^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `l3_secret` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:106:18:106:27:**
+```roc
+        bad_l2 = l3_secret
+```
+                 ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d5_l1_val_last` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:387:8:387:22:**
+```roc
+d5_6 = d5_l1_val_last.val1
+```
+       ^^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `d5_l3_val_after_l4` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_complete_all_patterns.md:366:8:366:26:**
+```roc
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+```
+       ^^^^^^^^^^^^^^^^^^
 
 
 **TYPE MODULE MISSING MATCHING TYPE**
@@ -8715,7 +8715,7 @@ L2 := [DS].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d1_1"))
-		(e-dot-access (field "first")
+		(e-field-access (field "first")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d1_forward"))))))
@@ -8724,7 +8724,7 @@ L2 := [DS].{
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "d1_2"))
-		(e-dot-access (field "inner")
+		(e-field-access (field "inner")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d1_scope"))))))
@@ -8737,7 +8737,7 @@ L2 := [DS].{
 		(e-num (value "300")))
 	(d-let
 		(p-assign (ident "d2_1"))
-		(e-dot-access (field "outer_val")
+		(e-field-access (field "outer_val")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d2_inner_first"))))))
@@ -8765,7 +8765,7 @@ L2 := [DS].{
 		(e-num (value "600")))
 	(d-let
 		(p-assign (ident "d2_4"))
-		(e-dot-access (field "outer_val")
+		(e-field-access (field "outer_val")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d2_outer_refs_inner"))))))
@@ -8789,11 +8789,13 @@ L2 := [DS].{
 			(p-assign (ident "d2_siblings"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1281)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
 		(e-num (value "20")))
@@ -8802,7 +8804,7 @@ L2 := [DS].{
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d3_1"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d3_types_then_vals"))))))
@@ -8832,7 +8834,7 @@ L2 := [DS].{
 				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "d3_4"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d3_vals_then_types"))))))
@@ -8875,7 +8877,7 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d3_7"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d3_val_after_nested"))))))
@@ -8889,14 +8891,18 @@ L2 := [DS].{
 			(p-assign (ident "d3_val_after_nested"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 1414)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 1412)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "val3")))))
+					(p-assign (ident "val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "3")))
@@ -9073,17 +9079,23 @@ L2 := [DS].{
 			(p-assign (ident "l4_private"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1660)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 1658)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 1656)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "val1"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "Test.L2.val2"))))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "val3"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val3"))))
-			(e-lookup-local
-				(p-assign (ident "val4")))))
+					(p-assign (ident "val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "4")))
@@ -9218,10 +9230,12 @@ L2 := [DS].{
 			(p-assign (ident "d5_l3_val_after_l4"))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "10"))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1279)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-binop (op "add")
@@ -9257,7 +9271,7 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d5_6"))
-		(e-dot-access (field "val1")
+		(e-field-access (field "val1")
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "d5_l1_val_last"))))))
