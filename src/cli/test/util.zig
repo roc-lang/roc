@@ -10,13 +10,8 @@ const builtin = @import("builtin");
 /// fork()). In tests we use `std.testing.io`, which is initialized with `testing.allocator`.
 const io: std.Io = if (builtin.is_test) std.testing.io else std.Options.debug_io;
 
-// zig 0.16 removed std.time.milliTimestamp; read the monotonic clock directly.
 fn milliTimestamp() i64 {
-    var ts: std.posix.timespec = undefined;
-    switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
-        .SUCCESS => return @as(i64, @intCast(ts.sec)) * 1000 + @divFloor(@as(i64, @intCast(ts.nsec)), 1_000_000),
-        else => return 0,
-    }
+    return std.Io.Timestamp.now(io, .awake).toMilliseconds();
 }
 
 var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
@@ -91,7 +86,12 @@ pub const ChildRunOptions = struct {
 
 fn terminateChildGroup(child_id: std.process.Child.Id) void {
     switch (builtin.os.tag) {
-        .windows => std.os.windows.TerminateProcess(child_id, 1) catch {},
+        .windows => {
+            const kernel32 = struct {
+                extern "kernel32" fn TerminateProcess(hProcess: std.os.windows.HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
+            };
+            _ = kernel32.TerminateProcess(child_id, 1);
+        },
         .wasi => {},
         else => {
             const pid: std.posix.pid_t = child_id;
@@ -252,8 +252,8 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
 }
 
 /// Build an environment map for a test Roc subprocess.
-/// Unless the caller already set them, this gives the subprocess unique Roc and
-/// Zig local cache roots so concurrent CLI tests cannot share cache state.
+/// Unless the caller already set them, this gives the subprocess unique Roc,
+/// URL package, and Zig local cache roots so concurrent CLI tests cannot share cache state.
 pub fn buildIsolatedTestEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,
@@ -276,12 +276,19 @@ pub fn buildIsolatedTestEnvMap(
         }
     }
 
-    if (env_map.get("ROC_CACHE_DIR") == null or env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
+    if (env_map.get("ROC_CACHE_DIR") == null or
+        env_map.get("XDG_CACHE_HOME") == null or
+        env_map.get("ZIG_LOCAL_CACHE_DIR") == null)
+    {
         const cache_dirs = try createIsolatedTestCacheDirs(allocator);
         defer cache_dirs.deinit(allocator);
 
         if (env_map.get("ROC_CACHE_DIR") == null) {
             try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+        }
+
+        if (env_map.get("XDG_CACHE_HOME") == null) {
+            try env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir);
         }
 
         if (env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {

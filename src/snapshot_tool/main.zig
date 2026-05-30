@@ -76,6 +76,7 @@ const parallel = base.parallel;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
+var snapshot_temp_counter = std.atomic.Value(usize).init(0);
 
 const rand = prng.random();
 
@@ -89,6 +90,44 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
 /// Always logs a warning message.
 fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
+}
+
+fn getTempRoot(allocator: Allocator) ![]u8 {
+    const names: []const [:0]const u8 = if (comptime @import("builtin").os.tag == .windows)
+        &.{ "TEMP", "TMP" }
+    else
+        &.{ "TMPDIR", "TEMP", "TMP" };
+
+    for (names) |name| {
+        if (std.c.getenv(name.ptr)) |value_z| {
+            const value = std.mem.sliceTo(value_z, 0);
+            if (value.len != 0) return allocator.dupe(u8, value);
+        }
+    }
+
+    return error.TempDirUnavailable;
+}
+
+fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) ![]u8 {
+    const temp_root = try getTempRoot(allocator);
+    defer allocator.free(temp_root);
+
+    try std.Io.Dir.cwd().createDirPath(app_io, temp_root);
+    const temp_root_abs = if (std.fs.path.isAbsolute(temp_root))
+        try allocator.dupe(u8, temp_root)
+    else
+        try std.Io.Dir.cwd().realPathFileAlloc(app_io, temp_root, allocator);
+    defer allocator.free(temp_root_abs);
+
+    const counter = snapshot_temp_counter.fetchAdd(1, .monotonic);
+    const dirname = try std.fmt.allocPrint(allocator, "{s}_{d}_{d}", .{
+        prefix,
+        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
+        counter,
+    });
+    defer allocator.free(dirname);
+
+    return std.fs.path.join(allocator, &.{ temp_root_abs, dirname });
 }
 
 const UpdateCommand = enum {
@@ -3519,10 +3558,11 @@ fn processDocsSnapshot(
     }
 
     // 2. Write source files to a temp directory
-    var tmp_dir_name_buf: [256]u8 = undefined;
-    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_docs_{d}", .{
-        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
-    }) catch return false;
+    const tmp_dir_name = makeSnapshotTempDir(allocator, "roc_snapshot_docs", output_path) catch |err| {
+        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer allocator.free(tmp_dir_name);
 
     std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
@@ -3533,7 +3573,7 @@ fn processDocsSnapshot(
     // Find the app file (first .roc file, or explicitly "app.roc")
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
-        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
         std.Io.Dir.cwd().writeFile(app_io, .{
             .sub_path = sub_path,
@@ -3547,7 +3587,7 @@ fn processDocsSnapshot(
         }
     }
 
-    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    const app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? });
     defer allocator.free(app_path);
 
     // 3. Build with BuildEnv
@@ -3955,10 +3995,11 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    var tmp_dir_name_buf: [256]u8 = undefined;
-    const tmp_dir_name = std.fmt.bufPrint(&tmp_dir_name_buf, "/tmp/roc_snapshot_dev_{d}", .{
-        @as(u64, @intCast(@intFromPtr(output_path.ptr))),
-    }) catch return false;
+    const tmp_dir_name = makeSnapshotTempDir(allocator, "roc_snapshot_dev", output_path) catch |err| {
+        std.log.err("Failed to resolve temp directory for {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer allocator.free(tmp_dir_name);
 
     std.Io.Dir.cwd().createDirPath(app_io, tmp_dir_name) catch |err| {
         std.log.err("Failed to create temp directory {s}: {}", .{ tmp_dir_name, err });
@@ -3968,7 +4009,7 @@ fn processDevObjectSnapshot(
 
     var app_filename: ?[]const u8 = null;
     for (source_files) |sf| {
-        const sub_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, sf.filename });
+        const sub_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, sf.filename });
         defer allocator.free(sub_path);
         std.Io.Dir.cwd().writeFile(app_io, .{
             .sub_path = sub_path,
@@ -3982,7 +4023,7 @@ fn processDevObjectSnapshot(
         }
     }
 
-    const app_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tmp_dir_name, app_filename.? });
+    const app_path = try std.fs.path.join(allocator, &.{ tmp_dir_name, app_filename.? });
     defer allocator.free(app_path);
 
     const BuildEnv = compile.BuildEnv;

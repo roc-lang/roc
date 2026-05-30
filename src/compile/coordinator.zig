@@ -152,40 +152,18 @@ const thread_safe_allocator: Allocator = if (threads_available)
 else
     std.heap.page_allocator;
 
-/// Lightweight monotonic stage timer.
-///
-/// Zig 0.16 removed `std.time.Timer`/`std.time.Instant`; the monotonic clock
-/// now lives behind the `Io` interface. These stage timers are read from many
-/// call sites that have no `Io` handle, so we read the OS monotonic clock
-/// directly via `std.posix`. `StageTimer` is only ever non-`void` when
-/// `threads_available` is true (which excludes wasm/freestanding), so the
-/// posix path is always valid here.
-const StageTimer = if (threads_available) struct {
-    start_ns: u64,
+const StageTimer = if (threads_available) std.Io.Timestamp else void;
 
-    fn now() u64 {
-        var ts: std.posix.timespec = undefined;
-        switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
-            .SUCCESS => {
-                const sec: u64 = @intCast(ts.sec);
-                const nsec: u64 = @intCast(ts.nsec);
-                return sec * std.time.ns_per_s + nsec;
-            },
-            else => return 0,
-        }
-    }
-} else void;
-
-fn startStageTimer() ?StageTimer {
+fn startStageTimer(io: std.Io) ?StageTimer {
     if (comptime !threads_available) return null;
-    return StageTimer{ .start_ns = StageTimer.now() };
+    return std.Io.Timestamp.now(io, .awake);
 }
 
-fn readStageTimer(timer: *?StageTimer) u64 {
+fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     if (comptime !threads_available) return 0;
     if (timer.*) |active| {
-        const current = StageTimer.now();
-        return if (current >= active.start_ns) current - active.start_ns else 0;
+        const elapsed = active.untilNow(io, .awake).nanoseconds;
+        return if (elapsed > 0) @intCast(elapsed) else 0;
     }
     return 0;
 }
@@ -3080,7 +3058,7 @@ pub const Coordinator = struct {
     }
 
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
-        var parse_timer = startStageTimer();
+        var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
         const src = try self.readModuleSource(task.path, task_allocs.module);
 
@@ -3184,7 +3162,7 @@ pub const Coordinator = struct {
                 .discovered_local_imports = discovered_local_imports,
                 .discovered_external_imports = discovered_external_imports,
                 .reports = reports,
-                .parse_ns = readStageTimer(&parse_timer),
+                .parse_ns = readStageTimer(self.roc_ctx.std_io, &parse_timer),
             },
         };
     }
@@ -3206,7 +3184,7 @@ pub const Coordinator = struct {
     }
 
     fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
-        var canonicalize_timer = startStageTimer();
+        var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
         const ast = task.cached_ast;
@@ -3242,9 +3220,9 @@ pub const Coordinator = struct {
             task.imported_modules,
         );
 
-        const canonicalize_ns = readStageTimer(&canonicalize_timer);
+        const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
 
-        var diagnostics_timer = startStageTimer();
+        var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
         errdefer deinitReports(&reports, worker_alloc);
@@ -3255,7 +3233,7 @@ pub const Coordinator = struct {
             const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
             try appendReportOwned(worker_alloc, &reports, rep);
         }
-        const diagnostics_ns = readStageTimer(&diagnostics_timer);
+        const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
         return .{
             .canonicalized = .{
@@ -3290,7 +3268,7 @@ pub const Coordinator = struct {
     }
 
     fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
-        var check_timer = startStageTimer();
+        var check_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
         defer task_allocs.result.free(task.imported_envs);
@@ -3313,9 +3291,9 @@ pub const Coordinator = struct {
         );
         defer typecheck_output.deinit();
 
-        const type_check_ns = readStageTimer(&check_timer);
+        const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
 
-        var diagnostics_timer = startStageTimer();
+        var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
         errdefer deinitReports(&reports, worker_alloc);
@@ -3338,7 +3316,7 @@ pub const Coordinator = struct {
             try appendReportOwned(worker_alloc, &reports, rep);
         }
 
-        const diagnostics_ns = readStageTimer(&diagnostics_timer);
+        const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
         var checked_artifact: ?check.CheckedArtifact.CheckedModuleArtifact =
             if (typecheck_output.checked_artifact != null) typecheck_output.takeCheckedArtifact() else null;

@@ -279,7 +279,7 @@ fn emitMergedBitcodeToObjectFile(
 
 /// Compile LLVM bitcode to a native object file.
 pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
-    const temp_path = createTempPath(allocator, ".o") catch return Error.TempFileError;
+    const temp_path = createTempPath(allocator, io, ".o") catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
     try emitMergedBitcodeToObjectFile(io, bitcode, options, temp_path);
@@ -309,13 +309,13 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
 /// Compile LLVM bitcode to a native shared library and return its path.
 /// Caller owns the returned path and is responsible for deleting the file.
 pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
-    const object_path = createTempPath(allocator, objectExtension()) catch return Error.TempFileError;
+    const object_path = createTempPath(allocator, io, objectExtension()) catch return Error.TempFileError;
     defer {
         std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(object_path, 0)) catch {};
         allocator.free(object_path);
     }
 
-    const shared_lib_path = createTempPath(allocator, sharedLibraryExtension()) catch return Error.TempFileError;
+    const shared_lib_path = createTempPath(allocator, io, sharedLibraryExtension()) catch return Error.TempFileError;
     errdefer {
         std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(shared_lib_path, 0)) catch {};
         allocator.free(shared_lib_path);
@@ -456,30 +456,53 @@ fn linkSharedLibraryMacos(
     return Error.LinkFailed;
 }
 
+fn getTempDir(allocator: Allocator) ![]u8 {
+    const names: []const [:0]const u8 = if (builtin.os.tag == .windows)
+        &.{ "TEMP", "TMP" }
+    else
+        &.{ "TMPDIR", "TEMP", "TMP" };
+
+    for (names) |name| {
+        if (std.c.getenv(name.ptr)) |value_z| {
+            const value = std.mem.sliceTo(value_z, 0);
+            if (value.len != 0) return allocator.dupe(u8, value);
+        }
+    }
+
+    return error.TempDirUnavailable;
+}
+
 /// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, extension: []const u8) ![:0]const u8 {
+fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) ![:0]const u8 {
     const counter = temp_path_counter.fetchAdd(1, .monotonic);
     // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
     // mixed with the pid for cross-process uniqueness of the temp path.
-    const pid: u64 = @intCast(std.c.getpid());
+    const pid: u64 = if (builtin.os.tag == .windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        @intCast(std.c.getpid());
     var prng = std.Random.DefaultPrng.init((@as(u64, counter) << 32) ^ pid);
     const rng = prng.random();
     const random_hi = rng.int(u64);
     const random_lo = rng.int(u64);
 
-    // Use appropriate temp directory for each platform
-    const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";
+    const temp_dir = try getTempDir(allocator);
+    defer allocator.free(temp_dir);
+    try std.Io.Dir.cwd().createDirPath(io, temp_dir);
+    const temp_dir_abs = if (std.fs.path.isAbsolute(temp_dir))
+        try allocator.dupe(u8, temp_dir)
+    else
+        try std.Io.Dir.cwd().realPathFileAlloc(io, temp_dir, allocator);
+    defer allocator.free(temp_dir_abs);
 
-    const str = try std.fmt.allocPrint(
+    const filename = try std.fmt.allocPrint(
         allocator,
-        "{s}{x}_{x}_{x}{s}",
-        .{ tmp_prefix, random_hi, random_lo, counter, extension },
+        "roc_llvm_{x}_{x}_{x}{s}",
+        .{ random_hi, random_lo, counter, extension },
     );
-    // Convert to null-terminated by reallocating with extra byte
-    const result = try allocator.allocSentinel(u8, str.len, 0);
-    @memcpy(result, str);
-    allocator.free(str);
-    return result;
+    defer allocator.free(filename);
+
+    return try std.fs.path.joinZ(allocator, &.{ temp_dir_abs, filename });
 }
 
 fn objectExtension() []const u8 {

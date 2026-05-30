@@ -11,16 +11,12 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const cache_manager = @import("cache_manager.zig");
-const cache_module = @import("cache_module.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CheckedArtifact = check.CheckedArtifact;
 const Report = reporting.Report;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
-const CacheData = cache_module.CacheModule.CacheData;
-const ImportInfo = cache_manager.ImportInfo;
 
 /// Module identifier - index into the modules list
 pub const ModuleId = u32;
@@ -273,30 +269,6 @@ pub const CycleDetected = struct {
     reports: std.ArrayList(Report),
     /// Module environment (ownership returned even on cycle)
     module_env: *ModuleEnv,
-};
-
-/// Result of a cache hit during compilation
-pub const CacheHitResult = struct {
-    /// Package this module belongs to
-    package_name: []const u8,
-    /// Module identifier
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// The cached module environment (ownership returned)
-    module_env: *ModuleEnv,
-    /// Source code (kept for ModuleEnv)
-    source: []const u8,
-    /// Error count from cache
-    error_count: u32,
-    /// Warning count from cache
-    warning_count: u32,
-    /// Cache data buffer - must be kept alive for the lifetime of module_env
-    cache_data: CacheData,
-    /// Imports from cached metadata - these need to be recursively loaded (owned slice)
-    imports: []ImportInfo,
 };
 
 /// Result sent from workers - contains ALL outputs from the operation

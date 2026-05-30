@@ -5,14 +5,9 @@
 
 const std = @import("std");
 const parse = @import("parse");
-const can = @import("can");
-const base = @import("base");
-const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
-const ModuleEnv = can.ModuleEnv;
-const Can = can.Can;
 
 /// Extract unqualified sibling module imports from a parsed AST.
 /// Returns module names that:
@@ -165,66 +160,4 @@ pub fn extractQualifiedImportsFromAST(
     }
 
     return result.toOwnedSlice(gpa);
-}
-
-/// Add imported sibling modules to the module_envs_map.
-///
-/// 1. Extracts imports from the parsed AST
-/// 2. Checks if each imported module has a corresponding .roc file
-/// 3. Only adds those that exist to the module_envs_map
-///
-/// The sibling modules are added with a placeholder env (just to pass the "contains" check).
-/// The actual env will be loaded later when the module is compiled.
-///
-/// Parameters:
-/// - parse_ast: The parsed AST to extract imports from
-/// - dir_path: The directory where sibling .roc files are located
-/// - current_module_name: The name of the current module (will be skipped)
-/// - env: The ModuleEnv to insert identifiers into
-/// - module_envs_map: The map to add discovered modules to
-/// - placeholder_env: The placeholder env to use for discovered modules
-/// - gpa: Allocator for temporary allocations
-pub fn addImportedModulesToEnvMap(
-    parse_ast: *const AST,
-    dir_path: []const u8,
-    current_module_name: []const u8,
-    env: *ModuleEnv,
-    module_envs_map: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
-    placeholder_env: *const ModuleEnv,
-    gpa: Allocator,
-    roc_ctx: CoreCtx,
-) !void {
-    // Extract imports from the parsed AST
-    const imports = try extractImportsFromAST(parse_ast, gpa);
-    defer {
-        for (imports) |imp| gpa.free(imp);
-        gpa.free(imports);
-    }
-
-    for (imports) |module_name| {
-        // Skip the current module
-        if (std.mem.eql(u8, module_name, current_module_name)) continue;
-
-        // Check if the corresponding .roc file exists
-        const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{module_name});
-        defer gpa.free(file_name);
-
-        const file_path = try std.fs.path.join(gpa, &.{ dir_path, file_name });
-        defer gpa.free(file_path);
-
-        // Only add if the file exists
-        if (!roc_ctx.fileExists(file_path)) continue;
-
-        // Add to module_envs with a placeholder env (just to pass the "contains" check)
-        const module_ident = try env.insertIdent(base.Ident.for_text(module_name));
-        // For user modules, the qualified name is just the module name itself
-        const qualified_ident = try env.insertIdent(base.Ident.for_text(module_name));
-        // Only add if not already present (platform modules may already be there)
-        if (!module_envs_map.contains(module_ident)) {
-            try module_envs_map.put(module_ident, .{
-                .env = placeholder_env,
-                .qualified_type_ident = qualified_ident,
-            });
-        }
-    }
 }

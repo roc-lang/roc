@@ -45,9 +45,18 @@ pub const Timer = struct {
             var ts: std.c.timespec = undefined;
             _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
             return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        } else if (builtin.os.tag == .windows) {
+            const k32 = struct {
+                extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.winapi) std.os.windows.BOOL;
+                extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.winapi) std.os.windows.BOOL;
+            };
+            var counter: i64 = undefined;
+            var freq: i64 = undefined;
+            if (k32.QueryPerformanceCounter(&counter) == .FALSE) unreachable;
+            if (k32.QueryPerformanceFrequency(&freq) == .FALSE) unreachable;
+            return @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
         } else {
-            // Fallback: use a simple counter (Windows, etc.)
-            return 0;
+            @compileError("unsupported monotonic clock for test harness");
         }
     }
 };
@@ -137,6 +146,22 @@ const job_object = if (builtin.os.tag == .windows) struct {
         windows.CloseHandle(job);
     }
 } else struct {};
+
+fn terminateProcess(child_id: std.process.Child.Id) void {
+    if (builtin.os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn TerminateProcess(
+                hProcess: std.os.windows.HANDLE,
+                uExitCode: c_uint,
+            ) callconv(.winapi) std.os.windows.BOOL;
+        };
+        _ = k32.TerminateProcess(child_id, 1);
+        return;
+    }
+
+    const pid: std.posix.pid_t = child_id;
+    posixKill(pid, posix.SIG.KILL) catch {};
+}
 
 // POSIX compatibility helpers (removed from std.posix in Zig 0.16)
 //
@@ -939,7 +964,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 return;
             }
             if (!cfg.windows_persistent_workers) {
-                runChildPoolSingleShot(specs, results, max_children, timeout_ms, gpa, template);
+                runChildPoolSingleShot(io, specs, results, max_children, timeout_ms, gpa, template);
                 return;
             }
 
@@ -985,6 +1010,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         }
 
         const SingleShotChildPoolState = struct {
+            io: std.Io,
             next_test: std.atomic.Value(usize),
             template: []const []const u8,
             timeout_ms: u64,
@@ -994,6 +1020,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         };
 
         fn runChildPoolSingleShot(
+            io: std.Io,
             specs: []const Spec,
             results: []Result,
             max_children: usize,
@@ -1002,6 +1029,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             template: []const []const u8,
         ) void {
             var state = SingleShotChildPoolState{
+                .io = io,
                 .next_test = std.atomic.Value(usize).init(0),
                 .template = template,
                 .timeout_ms = timeout_ms,
@@ -1029,7 +1057,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
 
-                state.results[idx] = switch (spawnSingleWorker(state.gpa, state.template, idx, &.{}, state.timeout_ms)) {
+                state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, idx, &.{}, state.timeout_ms)) {
                     .ok => |result| result,
                     .timed_out => cfg.timeout_result,
                     .crashed => cfg.default_result,
@@ -1074,7 +1102,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             defer {
                 if (child.stdin) |stdin| stdin.close(io);
                 child.stdin = null;
-                _ = child.wait(io) catch {};
+                if (child.id != null) _ = child.wait(io) catch {};
             }
 
             while (true) {
@@ -1097,13 +1125,21 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 };
                 defer gpa.free(cmd);
 
-                if (fileWriteAll(io, child.stdin.?, cmd)) |_| {} else |_| {
+                const child_stdin = child.stdin orelse {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                };
+                if (fileWriteAll(io, child_stdin, cmd)) |_| {} else |_| {
                     state.results[idx] = cfg.default_result;
                     return;
                 }
 
                 var length_bytes: [4]u8 = undefined;
-                if (fileReadExactly(io, child.stdout.?, &length_bytes)) |_| {} else |_| {
+                const child_stdout = child.stdout orelse {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                };
+                if (fileReadExactly(io, child_stdout, &length_bytes)) |_| {} else |_| {
                     state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 }
@@ -1114,7 +1150,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     return;
                 };
                 defer gpa.free(payload);
-                if (fileReadExactly(io, child.stdout.?, payload)) |_| {} else |_| {
+                if (fileReadExactly(io, child_stdout, payload)) |_| {} else |_| {
                     state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 }
@@ -1172,7 +1208,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         const kill_after_ms = state.timeout_ms +| cfg.timeout_report_grace_ms;
                         if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
-                            slot.child.kill(io);
+                            if (slot.child.id) |id| terminateProcess(id);
                         }
                     }
                 }
@@ -1227,7 +1263,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         if (self.done.load(.acquire)) return;
                         if (milliTimestamp() >= self.deadline_ms) {
                             self.timed_out.store(true, .release);
-                            self.child_ptr.kill(self.io);
+                            if (self.child_ptr.id) |id| terminateProcess(id);
                             return;
                         }
                     }
@@ -1259,7 +1295,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 buf.appendSlice(gpa, read_buf[0..n]) catch break;
             }
 
-            const term = child.wait(io) catch std.process.Child.Term{ .unknown = 0 };
+            const term = if (child.id != null)
+                child.wait(io) catch std.process.Child.Term{ .unknown = 0 }
+            else
+                std.process.Child.Term{ .unknown = 0 };
 
             watch.done.store(true, .release);
             if (watch_thread) |t| t.join();

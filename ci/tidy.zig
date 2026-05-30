@@ -39,8 +39,7 @@ pub fn main(init: std.process.Init) !void {
     const gpa = gpa_impl.allocator();
     const io = init.io;
 
-    // zig 0.16 removed std.process.argsAlloc; iterate the args provided on Init.
-    var arg_it = std.process.Args.Iterator.init(init.minimal.args);
+    var arg_it = try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
     defer arg_it.deinit();
     var arg_list = std.ArrayList([]const u8).empty;
     defer arg_list.deinit(gpa);

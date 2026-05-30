@@ -81,13 +81,8 @@ const posix = std.posix;
 /// that don't get an `io` parameter (e.g. pool worker callbacks).
 var app_io: std.Io = undefined;
 
-// zig 0.16 removed std.time.milliTimestamp; read the monotonic clock directly.
 fn milliTimestamp() i64 {
-    var ts: std.posix.timespec = undefined;
-    switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
-        .SUCCESS => return @as(i64, @intCast(ts.sec)) * 1000 + @divFloor(@as(i64, @intCast(ts.nsec)), 1_000_000),
-        else => return 0,
-    }
+    return std.Io.Timestamp.now(app_io, .awake).toMilliseconds();
 }
 
 // Test definition modules

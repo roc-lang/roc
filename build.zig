@@ -113,6 +113,9 @@ const TestsSummaryStep = struct {
     has_filters: bool,
     test_filters: []const []const u8,
     forced_passes: u64,
+    run_prerequisite: ?*Step,
+    serialize_runs: bool,
+    last_run: ?*Step,
 
     fn create(
         b: *std.Build,
@@ -130,11 +133,31 @@ const TestsSummaryStep = struct {
             .has_filters = test_filters.len > 0,
             .test_filters = test_filters,
             .forced_passes = @intCast(forced_passes),
+            .run_prerequisite = null,
+            .serialize_runs = false,
+            .last_run = null,
         };
         return self;
     }
 
+    fn setRunPrerequisite(self: *TestsSummaryStep, prerequisite: *Step) void {
+        self.run_prerequisite = prerequisite;
+    }
+
+    fn setRunSerialization(self: *TestsSummaryStep) void {
+        self.serialize_runs = true;
+    }
+
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
+        if (self.run_prerequisite) |prerequisite| {
+            run_step.dependOn(prerequisite);
+        }
+        if (self.serialize_runs) {
+            if (self.last_run) |last_run| {
+                run_step.dependOn(last_run);
+            }
+            self.last_run = run_step;
+        }
         self.step.dependOn(run_step);
     }
 
@@ -219,6 +242,19 @@ const TestsSummaryStep = struct {
         }
     }
 };
+
+fn createNoopStep(b: *std.Build, name: []const u8) *Step {
+    const step = b.allocator.create(Step) catch @panic("OOM");
+    step.* = Step.init(.{
+        .id = Step.Id.custom,
+        .name = name,
+        .owner = b,
+        .makeFn = struct {
+            fn make(_: *Step, _: Step.MakeOptions) !void {}
+        }.make,
+    });
+    return step;
+}
 
 /// Build step that checks for forbidden patterns in the type checker code.
 ///
@@ -790,7 +826,10 @@ const CheckPostcheckArchitectureStep = struct {
         try child_argv.append(b.allocator, "ci/check_postcheck_architecture.pl");
 
         const io = b.graph.io;
-        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(io);
 
         switch (term) {
@@ -1537,6 +1576,7 @@ fn runSemanticAuditCommand(step: *Step) !void {
 
     var child = try std.process.spawn(b.graph.io, .{
         .argv = &.{ "perl", "ci/semantic_audit.pl" },
+        .environ_map = &b.graph.environ_map,
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
@@ -1684,8 +1724,12 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, b.graph.zig_exe);
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/zig_lints.zig");
+        try appendZigCacheArgs(b, &child_argv);
 
-        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(b.graph.io);
 
         switch (term) {
@@ -1710,8 +1754,12 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, b.graph.zig_exe);
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/tidy.zig");
+        try appendZigCacheArgs(b, &child_argv);
 
-        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(b.graph.io);
 
         switch (term) {
@@ -1738,7 +1786,10 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "--check");
         try child_argv.append(b.allocator, "src/build/roc/Builtin.roc");
 
-        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(b.graph.io);
 
         switch (term) {
@@ -1777,7 +1828,10 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "--exit-code");
         try child_argv.append(b.allocator, "test/snapshots");
 
-        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(b.graph.io);
 
         switch (term) {
@@ -1810,13 +1864,17 @@ const MiniCiStep = struct {
         // Build a clean zig build command for the requested step.
         try child_argv.append(b.allocator, b.graph.zig_exe); // zig executable
         try child_argv.append(b.allocator, "build");
+        try appendZigCacheArgs(b, &child_argv);
 
         for (args) |arg| {
             try child_argv.append(b.allocator, arg);
         }
 
         const io = b.graph.io;
-        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(io);
 
         switch (term) {
@@ -1841,9 +1899,13 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, b.graph.zig_exe);
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/check_test_wiring.zig");
+        try appendZigCacheArgs(b, &child_argv);
 
         const io = b.graph.io;
-        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(io);
 
         switch (term) {
@@ -1877,7 +1939,10 @@ const MiniCiStep = struct {
         try child_argv.append(b.allocator, "ci/check_postcheck_architecture.pl");
 
         const io = b.graph.io;
-        var child = try std.process.spawn(io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(io);
 
         switch (term) {
@@ -1893,6 +1958,13 @@ const MiniCiStep = struct {
                 return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
         }
+    }
+
+    fn appendZigCacheArgs(b: *std.Build, child_argv: *std.ArrayList([]const u8)) !void {
+        try child_argv.append(b.allocator, "--cache-dir");
+        try child_argv.append(b.allocator, b.cache_root.path orelse ".");
+        try child_argv.append(b.allocator, "--global-cache-dir");
+        try child_argv.append(b.allocator, b.graph.global_cache_root.path orelse ".");
     }
 };
 
@@ -1923,7 +1995,10 @@ const TidyStep = struct {
         try child_argv.append(b.allocator, "run");
         try child_argv.append(b.allocator, "ci/tidy.zig");
 
-        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(b.graph.io);
 
         switch (term) {
@@ -1968,7 +2043,10 @@ const GitLintsStep = struct {
         try child_argv.append(b.allocator, "--");
         try child_argv.append(b.allocator, "--git-lints");
 
-        var child = try std.process.spawn(b.graph.io, .{ .argv = child_argv.items });
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
         const term = try child.wait(b.graph.io);
 
         switch (term) {
@@ -2453,7 +2531,25 @@ fn setupTestPlatforms(
     build_test_hosts_step.dependOn(clear_cache_step);
 }
 
+fn configureZigCacheEnvironment(b: *std.Build) void {
+    const local_cache_dir = b.cache_root.path orelse ".";
+    const global_cache_dir = b.graph.global_cache_root.path orelse ".";
+    const temp_dir = b.pathJoin(&.{ local_cache_dir, "tmp" });
+
+    std.Io.Dir.cwd().createDirPath(b.graph.io, temp_dir) catch |err| {
+        std.debug.panic("unable to create build temp directory '{s}': {s}", .{ temp_dir, @errorName(err) });
+    };
+
+    b.graph.environ_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir) catch @panic("OOM");
+    b.graph.environ_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_dir) catch @panic("OOM");
+    b.graph.environ_map.put("TEMP", temp_dir) catch @panic("OOM");
+    b.graph.environ_map.put("TMP", temp_dir) catch @panic("OOM");
+    b.graph.environ_map.put("TMPDIR", temp_dir) catch @panic("OOM");
+}
+
 pub fn build(b: *std.Build) void {
+    configureZigCacheEnvironment(b);
+
     // Ensure zig-out/bin exists — Zig's install step can silently fail after `rm -rf zig-out`
     std.Io.Dir.cwd().createDirPath(b.graph.io, "zig-out/bin") catch {};
 
@@ -3402,6 +3498,18 @@ pub fn build(b: *std.Build) void {
     // Create and add module tests
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
+    const eval_tests_complete = createNoopStep(b, "eval-tests-complete");
+    eval_tests_complete.dependOn(eval_test_step);
+    eval_tests_complete.dependOn(eval_host_effects_step);
+    tests_summary.setRunPrerequisite(eval_tests_complete);
+    tests_summary.step.dependOn(eval_tests_complete);
+    if (builtin.os.tag == .windows) {
+        // Zig 0.16's Windows test runner IPC can time out while many Roc test
+        // binaries are starting at once. Keep the same tests, but start them
+        // in a deterministic order after the eval suite completes.
+        tests_summary.setRunSerialization();
+    }
+
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
         if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
@@ -3700,11 +3808,7 @@ pub fn build(b: *std.Build) void {
     // The dev backend's forked children allocate heavily (code generation + mmap PROT_EXEC)
     // and get SIGKILL'd by macOS jetsam under memory pressure when running in parallel
     // with fx_platform_test and other test suites.
-    tests_summary.step.dependOn(eval_test_step);
-    tests_summary.step.dependOn(eval_host_effects_step);
     test_step.dependOn(&tests_summary.step);
-    test_step.dependOn(eval_test_step);
-    test_step.dependOn(eval_host_effects_step);
 
     b.default_step.dependOn(playground_step);
     {

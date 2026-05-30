@@ -10,8 +10,10 @@ pub const std_options: std.Options = .{
 /// Install the compiler crash handler and trigger the requested crash mode so
 /// tests can validate the emitted message in a child process.
 pub fn main(init: std.process.Init) noreturn {
-    // zig 0.16 removed std.process.argsWithAllocator; iterate Init's args.
-    var args = std.process.Args.Iterator.init(init.minimal.args);
+    var args = std.process.Args.Iterator.initAllocator(init.minimal.args, std.heap.page_allocator) catch {
+        std.debug.print("Failed to read stack overflow helper arguments\n", .{});
+        std.process.exit(99);
+    };
     _ = args.skip();
     const mode = args.next() orelse "stack-overflow";
 

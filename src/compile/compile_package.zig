@@ -67,34 +67,19 @@ const Condition = threading.Condition;
 
 const stage_timers_supported = !threading.is_freestanding;
 
-// Zig 0.16 removed std.time.Timer/Instant; the monotonic clock now lives behind
-// the Io interface. These stage timers are read from call sites without an Io
-// handle, so read the OS monotonic clock directly via std.posix. StageTimer is
-// only non-void when stage_timers_supported (excludes wasm/freestanding).
-const StageTimer = if (stage_timers_supported) struct {
-    start_ns: u64,
+const StageTimer = if (stage_timers_supported) std.Io.Timestamp else void;
 
-    fn now() u64 {
-        var ts: std.posix.timespec = undefined;
-        switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
-            .SUCCESS => {
-                const sec: u64 = @intCast(ts.sec);
-                const nsec: u64 = @intCast(ts.nsec);
-                return sec * std.time.ns_per_s + nsec;
-            },
-            else => return 0,
-        }
-    }
-} else void;
-
-fn startStageTimer() ?StageTimer {
+fn startStageTimer(io: std.Io) ?StageTimer {
     if (comptime !stage_timers_supported) return null;
-    return .{ .start_ns = StageTimer.now() };
+    return std.Io.Timestamp.now(io, .awake);
 }
 
-fn readStageTimer(timer: *?StageTimer) u64 {
+fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     if (comptime !stage_timers_supported) return 0;
-    if (timer.*) |active| return StageTimer.now() -| active.start_ns;
+    if (timer.*) |active| {
+        const elapsed = active.untilNow(io, .awake).nanoseconds;
+        return if (elapsed > 0) @intCast(elapsed) else 0;
+    }
     return 0;
 }
 
@@ -1195,7 +1180,7 @@ pub const PackageEnv = struct {
         }
 
         // canonicalize using the AST
-        var canonicalize_timer = startStageTimer();
+        var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
         const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
         try canonicalizeModuleWithSiblings(
@@ -1211,17 +1196,17 @@ pub const PackageEnv = struct {
             &.{},
         );
 
-        self.total_canonicalize_ns += readStageTimer(&canonicalize_timer);
+        self.total_canonicalize_ns += readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
 
         // Collect canonicalization diagnostics
-        var canonicalize_diagnostics_timer = startStageTimer();
+        var canonicalize_diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const diags = try env.getDiagnostics();
         defer self.gpa.free(diags);
         for (diags) |d| {
             const report = try env.diagnosticToReport(d, self.gpa, st.path);
             try st.reports.append(self.gpa, report);
         }
-        self.total_canonicalize_diagnostics_ns += readStageTimer(&canonicalize_diagnostics_timer);
+        self.total_canonicalize_diagnostics_ns += readStageTimer(self.roc_ctx.std_io, &canonicalize_diagnostics_timer);
 
         // Discover imports from env.imports
         const import_count = env.imports.imports.items.items.len;
@@ -1875,7 +1860,7 @@ pub const PackageEnv = struct {
         const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
         defer self.gpa.free(available_artifacts);
 
-        var check_timer = startStageTimer();
+        var check_timer = startStageTimer(self.roc_ctx.std_io);
         var typecheck_output = try typeCheckModule(
             self.gpa,
             self.gpa,
@@ -1889,10 +1874,10 @@ pub const PackageEnv = struct {
         if (typecheck_output.checked_artifact != null) {
             st.replaceCheckedArtifact(typecheck_output.takeCheckedArtifact());
         }
-        self.total_type_checking_ns += readStageTimer(&check_timer);
+        self.total_type_checking_ns += readStageTimer(self.roc_ctx.std_io, &check_timer);
 
         // Build reports from problems
-        var check_diagnostics_timer = startStageTimer();
+        var check_diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         var rb = try ReportBuilder.init(
             self.gpa,
             env,
@@ -1910,7 +1895,7 @@ pub const PackageEnv = struct {
             errdefer rep.deinit();
             try st.reports.append(self.gpa, rep);
         }
-        self.total_check_diagnostics_ns += readStageTimer(&check_diagnostics_timer);
+        self.total_check_diagnostics_ns += readStageTimer(self.roc_ctx.std_io, &check_diagnostics_timer);
 
         // Comptime evaluator is managed inside typeCheckModule, no need to deinit here
 

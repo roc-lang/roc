@@ -32,6 +32,49 @@ const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const LirImage = lir.LirImage;
 
+const EvalDynLib = switch (builtin.target.os.tag) {
+    .windows => struct {
+        handle: std.os.windows.HMODULE,
+
+        const kernel32 = struct {
+            extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?std.os.windows.HMODULE;
+            extern "kernel32" fn GetProcAddress(hModule: std.os.windows.HMODULE, lpProcName: [*:0]const u8) callconv(.winapi) ?std.os.windows.FARPROC;
+            extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
+        };
+
+        fn open(allocator: Allocator, path: []const u8) !@This() {
+            const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+            defer allocator.free(wide_path);
+            const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
+            return .{ .handle = handle };
+        }
+
+        fn close(self: *@This()) void {
+            _ = kernel32.FreeLibrary(self.handle);
+        }
+
+        fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
+            const proc = kernel32.GetProcAddress(self.handle, name.ptr) orelse return null;
+            return @ptrCast(proc);
+        }
+    },
+    else => struct {
+        inner: std.DynLib,
+
+        fn open(_: Allocator, path: []const u8) !@This() {
+            return .{ .inner = try std.DynLib.open(path) };
+        }
+
+        fn close(self: *@This()) void {
+            self.inner.close();
+        }
+
+        fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
+            return self.inner.lookup(T, name);
+        }
+    },
+};
+
 /// Captures an eval backend's string output and host allocation count.
 pub const EvalRunResult = struct {
     output: []u8,
@@ -1633,7 +1676,7 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
         allocator.free(dylib_path);
     }
 
-    var lib = try std.DynLib.open(std.mem.sliceTo(dylib_path, 0));
+    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
     defer lib.close();
 
     const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
