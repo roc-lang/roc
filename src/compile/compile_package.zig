@@ -1578,13 +1578,34 @@ pub const PackageEnv = struct {
             const base_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
             const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
 
-            // Try to get the actual module env using the resolver
-            const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
-                if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
-                    break :blk mod_env;
+            // Try to get the actual module env. Prefer an already-built env the
+            // coordinator supplied via pre_resolved_imports (matching the sibling
+            // path above); this lets platform-exposed nominal types like
+            // `Host.Tree` resolve directly instead of falling back to a
+            // placeholder (which only defers value/type-annotation lookups, not
+            // nominal tag expressions/patterns). Fall back to the resolver, then
+            // to the builtin placeholder when the dependency isn't built yet.
+            const actual_env: *const ModuleEnv = blk: {
+                for (pre_resolved_imports) |pre| {
+                    if (std.mem.eql(u8, pre.import_name, km.import_name) or
+                        std.mem.eql(u8, pre.import_name, base_module_name))
+                    {
+                        break :blk pre.module_env;
+                    }
+                    // Match on base module name too (e.g. pre "pf.Host" vs base "Host").
+                    const pre_base = if (std.mem.findScalarLast(u8, pre.import_name, '.')) |d|
+                        pre.import_name[d + 1 ..]
+                    else
+                        pre.import_name;
+                    if (std.mem.eql(u8, pre_base, base_module_name)) break :blk pre.module_env;
+                }
+                if (resolver) |res| {
+                    if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
+                        break :blk mod_env;
+                    }
                 }
                 break :blk builtin_module_env;
-            } else builtin_module_env;
+            };
 
             // For platform type modules, set statement_idx so method lookups work correctly
             const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
