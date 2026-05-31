@@ -615,6 +615,101 @@ test "imported multi-qualified tag rejects exposed alias target" {
     try testing.expect(found_alias_error);
 }
 
+test "imported nested associated types resolve by qualified export key" {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const imported_source =
+        \\module [A, B]
+        \\
+        \\A := [A].{
+        \\    Inner := [AInner]
+        \\}
+        \\
+        \\B := [B].{
+        \\    Inner := [BInner]
+        \\}
+    ;
+
+    var imported_allocators: Allocators = undefined;
+    imported_allocators.initInPlace(allocator);
+    defer imported_allocators.deinit();
+
+    var imported_env = try ModuleEnv.init(allocator, imported_source);
+    defer imported_env.deinit();
+    try imported_env.initCIRFields("Types");
+
+    const imported_ast = try parse.parse(&imported_allocators, &imported_env.common);
+    defer imported_ast.deinit();
+
+    var imported_can = try Can.initModule(&imported_allocators, &imported_env, imported_ast, builtin_ctx.canInitContext());
+    defer imported_can.deinit();
+    try imported_can.canonicalizeFile();
+
+    const source =
+        \\module [a, b]
+        \\
+        \\import Types
+        \\
+        \\a : Types.A.Inner
+        \\a = Types.A.Inner.AInner
+        \\
+        \\b : Types.B.Inner
+        \\b = Types.B.Inner.BInner
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Main");
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+
+    const types_ident = try env.insertIdent(base.Ident.for_text("Types"));
+    const types_qualified_ident = try imported_env.insertIdent(base.Ident.for_text("Types"));
+    try module_envs.put(types_ident, .{
+        .env = &imported_env,
+        .qualified_type_ident = types_qualified_ident,
+    });
+
+    const ast = try parse.parse(&allocators, &env.common);
+    defer ast.deinit();
+
+    var can = try Can.initModule(&allocators, &env, ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_ctx.builtin_module.env,
+            .builtin_indices = builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .type_not_exposed,
+            .type_from_missing_module,
+            .module_not_imported,
+            .undeclared_type,
+            .type_alias_but_needed_nominal,
+            .qualified_ident_does_not_exist,
+            => return error.UnexpectedDiagnostic,
+            else => {},
+        }
+    }
+}
+
 test "export count safety - ensures safe u16 casting" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
