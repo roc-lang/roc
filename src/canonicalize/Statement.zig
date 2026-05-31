@@ -157,14 +157,14 @@ pub const Statement = union(enum) {
     /// Only valid at the top level of a module
     s_alias_decl: struct {
         header: CIR.TypeHeader.Idx,
-        anno: CIR.TypeAnno.Idx,
+        anno: ?CIR.TypeAnno.Idx,
     },
     /// A nominal type declaration, e.g., `Foo := (U64, Str)` or `Foo :: (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
         header: CIR.TypeHeader.Idx,
-        anno: CIR.TypeAnno.Idx,
+        anno: ?CIR.TypeAnno.Idx,
         /// True if declared with :: (opaque), false if declared with := (nominal)
         is_opaque: bool,
     },
@@ -368,7 +368,11 @@ pub const Statement = union(enum) {
                 const attrs = tree.beginNode();
 
                 try env.store.getTypeHeader(s.header).pushToSExprTree(env, tree, s.header);
-                try env.store.getTypeAnno(s.anno).pushToSExprTree(env, tree, s.anno);
+                if (s.anno) |anno| {
+                    try env.store.getTypeAnno(anno).pushToSExprTree(env, tree, anno);
+                } else {
+                    try tree.pushStaticAtom("placeholder");
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -380,7 +384,11 @@ pub const Statement = union(enum) {
                 const attrs = tree.beginNode();
 
                 try env.store.getTypeHeader(s.header).pushToSExprTree(env, tree, s.header);
-                try env.store.getTypeAnno(s.anno).pushToSExprTree(env, tree, s.anno);
+                if (s.anno) |anno| {
+                    try env.store.getTypeAnno(anno).pushToSExprTree(env, tree, anno);
+                } else {
+                    try tree.pushStaticAtom("placeholder");
+                }
 
                 try tree.endNode(begin, attrs);
             },

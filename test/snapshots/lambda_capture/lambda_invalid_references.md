@@ -8,20 +8,9 @@ type=expr
 |x| |y| x + z
 ~~~
 # EXPECTED
-UNUSED VARIABLE - lambda_invalid_references.md:1:6:1:7
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**lambda_invalid_references.md:1:6:1:7:**
-```roc
-|x| |y| x + z
-```
-     ^
-
-
+NIL
 # TOKENS
 ~~~zig
 OpBar,LowerIdent,OpBar,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
@@ -54,11 +43,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "y")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-lookup-local
-					(p-assign (ident "z")))))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 17)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-lookup-local
+						(p-assign (ident "z"))))))))
 ~~~
 # TYPES
 ~~~clojure

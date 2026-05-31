@@ -524,6 +524,9 @@ all_defs: CIR.Def.Span,
 global_value_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
+/// Type declarations in dependency order for checking. This is separate from
+/// `all_statements` so source-order consumers do not observe checker ordering.
+type_decl_order: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
 /// Required type signatures for platform modules (from `requires { main! : () => {} }`)
@@ -659,6 +662,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
+    self.type_decl_order = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
@@ -695,6 +699,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
+        .type_decl_order = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
@@ -2668,6 +2673,7 @@ pub const Serialized = extern struct {
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
+    type_decl_order: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
@@ -2709,6 +2715,7 @@ pub const Serialized = extern struct {
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
         self.all_statements = env.all_statements;
+        self.type_decl_order = env.type_decl_order;
         self.exports = env.exports;
         self.builtin_statements = env.builtin_statements;
 
@@ -2769,6 +2776,7 @@ pub const Serialized = extern struct {
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
+            .type_decl_order = self.type_decl_order,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
@@ -2819,6 +2827,7 @@ pub const Serialized = extern struct {
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
+            .type_decl_order = self.type_decl_order,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
@@ -3079,6 +3088,19 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
                 .{ cir_nodes, region_nodes },
             );
         }
+    }
+}
+
+/// Ensure every CIR node has a same-index type variable slot before a stage
+/// consumes node-indexed type variables with `varFrom(node_idx)`.
+pub fn ensureTypeStoreCoversNodes(self: *Self) std.mem.Allocator.Error!void {
+    const node_count = self.store.nodes.len();
+    const types_len = self.types.len();
+    if (types_len >= node_count) return;
+
+    try self.types.ensureTotalCapacity(node_count);
+    for (types_len..node_count) |_| {
+        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = types_mod.Flex.init() }, types_mod.Rank.outermost);
     }
 }
 

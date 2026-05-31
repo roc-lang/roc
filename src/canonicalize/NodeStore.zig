@@ -469,7 +469,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             return CIR.Statement{
                 .s_alias_decl = .{
                     .header = @enumFromInt(p.header),
-                    .anno = @enumFromInt(p.anno),
+                    .anno = decodeOptionalTypeAnno(p.anno),
                 },
             };
         },
@@ -478,7 +478,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = @enumFromInt(p.header),
-                    .anno = @enumFromInt(p.anno),
+                    .anno = decodeOptionalTypeAnno(p.anno),
                     .is_opaque = p.is_opaque != 0,
                 },
             };
@@ -519,6 +519,14 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
         },
     }
+}
+
+fn encodeOptionalTypeAnno(anno: ?CIR.TypeAnno.Idx) u32 {
+    return if (anno) |idx| @intFromEnum(idx) + 1 else 0;
+}
+
+fn decodeOptionalTypeAnno(encoded: u32) ?CIR.TypeAnno.Idx {
+    return if (encoded == 0) null else @enumFromInt(encoded - 1);
 }
 
 /// Retrieves an expression node from the store.
@@ -1793,14 +1801,14 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_alias_decl;
             node.setPayload(.{ .statement_alias_decl = .{
                 .header = @intFromEnum(s.header),
-                .anno = @intFromEnum(s.anno),
+                .anno = encodeOptionalTypeAnno(s.anno),
             } });
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
             node.setPayload(.{ .statement_nominal_decl = .{
                 .header = @intFromEnum(s.header),
-                .anno = @intFromEnum(s.anno),
+                .anno = encodeOptionalTypeAnno(s.anno),
                 .is_opaque = if (s.is_opaque) 1 else 0,
             } });
         },
@@ -2766,12 +2774,6 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
-    // Refuse to hand out an idx that collides with TypeAnno.Idx.placeholder —
-    // a sentinel that means "this anno hasn't been filled in." Silent collision
-    // would corrupt forward-reference resolution.
-    if (@intFromEnum(nid) == @intFromEnum(CIR.TypeAnno.Idx.placeholder)) {
-        return Allocator.Error.OutOfMemory;
-    }
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -3325,9 +3327,14 @@ pub fn replaceExprWithDispatchCall(
 /// the resulting span. Helper for callers that need to materialise a small,
 /// non-scratch span (e.g., Check synthesising dispatch-call args).
 pub fn appendExprSpan(store: *NodeStore, items: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
-    const span_start: u32 = @intCast(store.scratchTop("exprs"));
-    for (items) |item| try store.addScratchExpr(item);
-    return try store.exprSpanFrom(span_start);
+    const span_start = store.index_data.len();
+    for (items) |item| {
+        _ = try store.index_data.append(store.gpa, @intFromEnum(item));
+    }
+    return CIR.Expr.Span{ .span = .{
+        .start = @intCast(span_start),
+        .len = @intCast(items.len),
+    } };
 }
 
 /// Re-encode an `e_call` to remember the constraint fn var that Check picked
@@ -4537,7 +4544,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try testing.expectEqual(file_size, try file.readAll(buffer));
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4602,7 +4609,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try testing.expectEqual(file_size, try file.readAll(buffer));
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4693,7 +4700,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
     defer gpa.free(buffer);
 
-    _ = try file.read(buffer);
+    try testing.expectEqual(file_size, try file.readAll(buffer));
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

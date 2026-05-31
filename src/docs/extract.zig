@@ -271,7 +271,10 @@ pub fn extractModuleDocs(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                const type_sig = if (decl.anno) |anno|
+                    try extractDeclTypeSig(gpa, module_env, anno)
+                else
+                    null;
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -303,7 +306,10 @@ pub fn extractModuleDocs(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                const type_sig = if (decl.anno) |anno|
+                    try extractDeclTypeSig(gpa, module_env, anno)
+                else
+                    null;
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -746,7 +752,10 @@ fn extractDefEntry(
                     const doc_extract = try extractDocComment(gpa, source, region.start.offset);
                     errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                    const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                    const type_sig = if (decl.anno) |anno|
+                        try extractDeclTypeSig(gpa, module_env, anno)
+                    else
+                        null;
                     errdefer if (type_sig) |s| {
                         s.deinit(gpa);
                         gpa.destroy(s);

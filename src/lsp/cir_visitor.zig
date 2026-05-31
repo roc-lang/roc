@@ -411,10 +411,10 @@ pub fn CirVisitor(comptime Context: type) type {
                     }
                 },
                 .s_alias_decl => |a| {
-                    self.walkTypeAnno(store, a.anno);
+                    if (a.anno) |anno| self.walkTypeAnno(store, anno);
                 },
                 .s_nominal_decl => |n| {
-                    self.walkTypeAnno(store, n.anno);
+                    if (n.anno) |anno| self.walkTypeAnno(store, anno);
                 },
                 // Leaf statements - no children to traverse
                 .s_crash,

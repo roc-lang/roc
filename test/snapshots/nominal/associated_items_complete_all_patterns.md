@@ -792,37 +792,37 @@ TYPE REDECLARED - associated_items_complete_all_patterns.md:394:5:402:6
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:404:5:404:8
 TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:416:19:416:28
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:71:8:71:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:387:8:387:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:97:14:97:24
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:86:8:86:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:313:8:313:30
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:106:18:106:27
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:292:8:292:30
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:404:11:404:22
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:157:8:157:30
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:11:8:11:16
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:349:8:349:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:334:8:334:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:6:8:6:18
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:235:8:235:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:203:8:203:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:257:15:257:24
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:46:26:46:39
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:268:23:268:33
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:30:8:30:27
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:366:8:366:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:51:16:51:27
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:33:17:33:36
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:20:8:20:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:140:8:140:30
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:246:11:246:17
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:429:23:429:30
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:218:8:218:26
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:191:8:191:22
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:86:8:86:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:174:8:174:24
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:218:8:218:26
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:313:8:313:30
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:404:11:404:22
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:334:8:334:26
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:349:8:349:26
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:246:11:246:17
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:6:8:6:18
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:203:8:203:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:121:8:121:27
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:20:8:20:22
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:257:15:257:24
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:268:23:268:33
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:71:8:71:26
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:33:17:33:36
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:157:8:157:30
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:46:26:46:39
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:429:23:429:30
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:191:8:191:22
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:51:16:51:27
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:11:8:11:16
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:235:8:235:26
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:416:19:416:28
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:292:8:292:30
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:106:18:106:27
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:387:8:387:22
+UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:366:8:366:26
 TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
 # PROBLEMS
 **PARSE ERROR**
@@ -4687,9 +4687,9 @@ The redeclaration is here:
 ```
 
 But _Inner_ was already declared here:
-**associated_items_complete_all_patterns.md:24:5:26:6:**
+**associated_items_complete_all_patterns.md:14:5:16:6:**
 ```roc
-    Inner := [H].{
+    Inner := [D].{
         inner_val = outer_val
     }
 ```
@@ -4707,10 +4707,10 @@ The redeclaration is here:
 ```
 
 But _Inner_ was already declared here:
-**associated_items_complete_all_patterns.md:35:5:37:6:**
+**associated_items_complete_all_patterns.md:14:5:16:6:**
 ```roc
-    Inner := [J].{
-        inner_val = 600
+    Inner := [D].{
+        inner_val = outer_val
     }
 ```
 
@@ -4775,14 +4775,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:78:5:84:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [T].{
-        val2 = val1 + 5
-
-        L3 := [U].{
+    L2 := [Q].{
+        L3 := [R].{
             val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -4803,12 +4803,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:91:5:95:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [W].{
-        L3 := [X].{
-            l3_private = 999
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -4829,14 +4831,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:101:5:107:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [Z].{
-        L3 := [AA].{
-            l3_secret = 888
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        bad_l2 = l3_secret
+        val2 = 20
     }
 ```
 
@@ -4879,14 +4881,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:111:5:117:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [AC].{
-        L3 := [AD].{
-            val3 = val2 * 2
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        val2 = val1 * 3
+        val2 = 20
     }
 ```
 
@@ -4947,18 +4949,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:126:5:136:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [AF].{
-        L3 := [AG].{
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-
-            val3 = 3
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        val2 = 2
+        val2 = 20
     }
 ```
 
@@ -4983,18 +4981,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:145:5:155:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [AJ].{
-        val2 = val1 + 1
-
-        L3 := [AK].{
+    L2 := [Q].{
+        L3 := [R].{
             val3 = val1 + val2
-
-            L4 := [AL].{
-                val4 = val1 + val2 + val3
-            }
         }
+
+        val2 = 20
     }
 ```
 
@@ -5055,18 +5049,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:160:5:170:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [AN].{
-        L3 := [AO].{
-            L4 := [AP].{
-                val4 = val3 + 1
-            }
-
-            val3 = val2 + 1
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        val2 = val1 + 1
+        val2 = 20
     }
 ```
 
@@ -5088,18 +5078,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:179:5:189:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [AR].{
-        L3 := [AS].{
+    L2 := [Q].{
+        L3 := [R].{
             val3 = val1 + val2
-
-            L4 := [AT].{
-                val4 = val1 + val2 + val3
-            }
         }
 
-        val2 = val1 + 5
+        val2 = 20
     }
 ```
 
@@ -5124,15 +5110,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:194:5:201:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BB].{
-        L3 := [BC].{
-            L4 := [BD].{
-                val4 = val3 * 3
-            }
-            val3 = 12
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -5157,18 +5142,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:206:5:216:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BF].{
-        L3 := [BG].{
-            L4 := [BH].{
-                val4 = val2 + val3
-            }
-
-            val3 = 8
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        val2 = 4
+        val2 = 20
     }
 ```
 
@@ -5207,18 +5188,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:221:5:231:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BJ].{
-        L3 := [BK].{
-            L4 := [BL].{
-                val4 = val1 + 100
-            }
-
-            val3 = val1 + 50
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        val2 = val1 + 10
+        val2 = 20
     }
 ```
 
@@ -5241,14 +5218,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:238:5:244:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BN].{
-        L3 := [BO].{
-            L4 := [BP].{
-                l4_val = 444
-            }
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -5271,16 +5248,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:250:5:258:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BR].{
-        L3 := [BS].{
-            L4 := [BT].{
-                l4_secret = 333
-            }
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        bad = l4_secret
+        val2 = 20
     }
 ```
 
@@ -5309,16 +5284,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:262:5:270:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BV].{
-        L3 := [BW].{
-            L4 := [BX].{
-                l4_private = 555
-            }
-
-            attempt = l4_private
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -5383,22 +5356,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:274:5:288:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [BZ].{
-        L3 := [CA].{
-            L4 := [CB].{
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = 4
-            }
-
-            val3 = 3
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
 
-        val2 = 2
+        val2 = 20
     }
 ```
 
@@ -5445,22 +5410,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:297:5:311:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [CE].{
-        val2 = val1 + 10
-
-        L3 := [CF].{
+    L2 := [Q].{
+        L3 := [R].{
             val3 = val1 + val2
-
-            L4 := [CG].{
-                val4 = val1 + val2 + val3
-
-                L5 := [CH].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
         }
+
+        val2 = 20
     }
 ```
 
@@ -5485,22 +5442,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:318:5:332:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [CJ].{
-        L3 := [CK].{
+    L2 := [Q].{
+        L3 := [R].{
             val3 = val1 + val2
-
-            L4 := [CL].{
-                L5 := [CM].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = val1 + val2 + val3
-            }
         }
 
-        val2 = val1 + 1
+        val2 = 20
     }
 ```
 
@@ -5527,18 +5476,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:337:5:347:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [CO].{
-        L3 := [CP].{
-            L4 := [CQ].{
-                L5 := [CR].{
-                    val5 = val4 * 5
-                }
-
-                val4 = 6
-            }
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -5567,20 +5512,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:352:5:364:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [CT].{
-        L3 := [CU].{
-            L4 := [CV].{
-                L5 := [CW].{
-                    val5 = val3 + val4
-                }
-
-                val4 = 7
-            }
-
-            val3 = 3
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -5621,22 +5560,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:369:5:383:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [DD].{
-        val2 = val1 + 10
-
-        L3 := [DE].{
+    L2 := [Q].{
+        L3 := [R].{
             val3 = val1 + val2
-
-            L4 := [DF].{
-                val4 = val1 + val2 + val3
-
-                L5 := [DG].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
         }
+
+        val2 = 20
     }
 ```
 
@@ -5679,16 +5610,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:394:5:402:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [DI].{
-        L3 := [DJ].{
-            L4 := [DK].{
-                L5 := [DL].{
-                    deep_secret = 12345
-                }
-            }
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -5713,18 +5642,14 @@ The redeclaration is here:
 ```
 
 But _L2_ was already declared here:
-**associated_items_complete_all_patterns.md:408:5:418:6:**
+**associated_items_complete_all_patterns.md:61:5:67:6:**
 ```roc
-    L2 := [DN].{
-        L3 := [DO].{
-            L4 := [DP].{
-                L5 := [DQ].{
-                    l5_secret = 9999
-                }
-            }
-
-            bad = l5_secret
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
         }
+
+        val2 = 20
     }
 ```
 
@@ -8789,7 +8714,7 @@ L2 := [DS].{
 			(p-assign (ident "d2_siblings"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1281)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1311)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -8891,9 +8816,9 @@ L2 := [DS].{
 			(p-assign (ident "d3_val_after_nested"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1414)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1446)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1412)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1442)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val1"))))
@@ -8902,7 +8827,7 @@ L2 := [DS].{
 							(p-assign (ident "Test.L2.val2"))))))
 			(args
 				(e-lookup-local
-					(p-assign (ident "val3"))))))
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "3")))
@@ -8950,7 +8875,7 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val3")))
+				(p-assign (ident "Test.L2.L3.val3")))
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
@@ -9005,7 +8930,7 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val3")))
+				(p-assign (ident "Test.L2.L3.val3")))
 			(e-num (value "3"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
@@ -9020,7 +8945,7 @@ L2 := [DS].{
 			(e-lookup-local
 				(p-assign (ident "Test.L2.val2")))
 			(e-lookup-local
-				(p-assign (ident "val3")))))
+				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-num (value "8")))
@@ -9079,11 +9004,11 @@ L2 := [DS].{
 			(p-assign (ident "l4_private"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1660)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1696)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1658)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1690)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 1656)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1688)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val1"))))
@@ -9092,10 +9017,10 @@ L2 := [DS].{
 									(p-assign (ident "Test.L2.val2"))))))
 					(args
 						(e-lookup-local
-							(p-assign (ident "val3"))))))
+							(p-assign (ident "Test.L2.L3.val3"))))))
 			(args
 				(e-lookup-local
-					(p-assign (ident "val4"))))))
+					(p-assign (ident "Test.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "4")))
@@ -9177,7 +9102,7 @@ L2 := [DS].{
 				(e-lookup-local
 					(p-assign (ident "Test.L2.L3.val3"))))
 			(e-lookup-local
-				(p-assign (ident "val4")))))
+				(p-assign (ident "Test.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
@@ -9202,7 +9127,7 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
 		(e-binop (op "mul")
 			(e-lookup-local
-				(p-assign (ident "val4")))
+				(p-assign (ident "Test.L2.L3.L4.val4")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
@@ -9215,9 +9140,9 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
 		(e-binop (op "add")
 			(e-lookup-local
-				(p-assign (ident "val3")))
+				(p-assign (ident "Test.L2.L3.val3")))
 			(e-lookup-local
-				(p-assign (ident "val4")))))
+				(p-assign (ident "Test.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-num (value "7")))
@@ -9230,7 +9155,7 @@ L2 := [DS].{
 			(p-assign (ident "d5_l3_val_after_l4"))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1279)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1309)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -9238,21 +9163,27 @@ L2 := [DS].{
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1444)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "val1"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
+		(e-dispatch-call (method "plus") (constraint-fn-var 1694)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 1692)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "val1"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "Test.L2.val2"))))))
+			(args
 				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
+					(p-assign (ident "Test.L2.L3.val3"))))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
 		(e-binop (op "add")
@@ -9751,8 +9682,8 @@ L2 := [DS].{
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
@@ -10038,8 +9969,8 @@ L2 := [DS].{
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))

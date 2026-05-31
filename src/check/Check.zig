@@ -1638,26 +1638,30 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
-    // First pass: generate types for each type declaration
+    // First pass: generate types for each type declaration in the explicit
+    // dependency order supplied by canonicalization.
     // Note that any types generated will be generalized
+    for (0..self.cir.type_decl_order.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.type_decl_order, stmt_offset);
+        try self.generateStmtTypeDeclType(stmt_idx, &env);
+    }
+
+    // Then handle non-type top-level statements that need generalized slots.
     for (0..self.cir.all_statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
-        try self.setVarRank(stmt_var, &env);
-
         switch (stmt) {
-            .s_alias_decl => |alias| {
-                try self.generateAliasDecl(stmt_idx, stmt_var, alias, &env);
-            },
-            .s_nominal_decl => |nominal| {
-                try self.generateNominalDecl(stmt_idx, stmt_var, nominal, &env);
+            .s_alias_decl, .s_nominal_decl => {
+                // Already handled through type_decl_order.
             },
             .s_runtime_error => {
+                try self.setVarRank(stmt_var, &env);
                 try self.unifyWith(stmt_var, .err, &env);
             },
             .s_type_anno => |type_anno| {
+                try self.setVarRank(stmt_var, &env);
                 try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
             else => {
@@ -2046,8 +2050,12 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             std.debug.assert(alias_lhs.args.span.len == 0);
 
             // Assert that this alias body is well formed
-            const alias_rhs_var = ModuleEnv.varFrom(alias.anno);
-            const alias_rhs = self.cir.store.getTypeAnno(alias.anno);
+            const alias_anno = alias.anno orelse {
+                try self.unifyWith(stmt_var, .err, env);
+                continue;
+            };
+            const alias_rhs_var = ModuleEnv.varFrom(alias_anno);
+            const alias_rhs = self.cir.store.getTypeAnno(alias_anno);
             std.debug.assert(alias_rhs == .rigid_var);
 
             // Set ranks to generalized
@@ -2161,6 +2169,11 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // Note that any types generated will be generalized
     for (0..self.cir.builtin_statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(self.cir.builtin_statements, stmt_offset);
+        try self.generateStmtTypeDeclType(stmt_idx, &env);
+    }
+
+    for (0..self.cir.type_decl_order.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.type_decl_order, stmt_offset);
         try self.generateStmtTypeDeclType(stmt_idx, &env);
     }
 
@@ -2336,6 +2349,7 @@ fn generateStmtTypeDeclType(
 
     const decl = self.cir.store.getStatement(decl_idx);
     const decl_var = ModuleEnv.varFrom(decl_idx);
+    try self.setVarRank(decl_var, env);
 
     switch (decl) {
         .s_alias_decl => |alias| {
@@ -2383,8 +2397,12 @@ fn generateAliasDecl(
     // Now we have a built of list of rigid variables for the decl lhs (header).
     // With this in hand, we can now generate the type for the lhs (body).
     self.seen_annos.clearRetainingCapacity();
-    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
-    try self.generateAnnoTypeInPlace(alias.anno, env, .{ .type_decl = .{
+    const alias_anno = alias.anno orelse {
+        try self.unifyWith(decl_var, .err, env);
+        return;
+    };
+    const backing_var: Var = ModuleEnv.varFrom(alias_anno);
+    try self.generateAnnoTypeInPlace(alias_anno, env, .{ .type_decl = .{
         .idx = decl_idx,
         .name = header.relative_name,
         .type_ = .alias,
@@ -2393,7 +2411,7 @@ fn generateAliasDecl(
         .num_args = @intCast(header_args.len),
     } });
 
-    if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
+    if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias_anno)))) {
         try self.unifyWith(decl_var, .err, env);
         return;
     }
@@ -2447,8 +2465,12 @@ fn generateNominalDecl(
     // Now we have a built of list of rigid variables for the decl lhs (header).
     // With this in hand, we can now generate the type for the lhs (body).
     self.seen_annos.clearRetainingCapacity();
-    const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
-    try self.generateAnnoTypeInPlace(nominal.anno, env, .{ .type_decl = .{
+    const nominal_anno = nominal.anno orelse {
+        try self.unifyWith(decl_var, .err, env);
+        return;
+    };
+    const backing_var: Var = ModuleEnv.varFrom(nominal_anno);
+    try self.generateAnnoTypeInPlace(nominal_anno, env, .{ .type_decl = .{
         .idx = decl_idx,
         .name = header.relative_name,
         .type_ = .nominal,

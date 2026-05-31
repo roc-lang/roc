@@ -2062,6 +2062,12 @@ const CollectedListPattern = struct {
     rest: ?checked.CheckedListRestPattern,
 };
 
+const CollectedExplicitPattern = struct {
+    local: Ast.LocalId,
+    ty: Type.TypeId,
+    pattern: checked.CheckedPatternId,
+};
+
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -6569,7 +6575,7 @@ const BodyContext = struct {
 
     fn lowerMatchExprWithOutput(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
-        if (!self.matchContainsListPattern(match)) {
+        if (!self.matchContainsExplicitPattern(match)) {
             return try self.builder.program.addExpr(.{
                 .ty = output_ty,
                 .data = try self.lowerMatch(match, output),
@@ -6580,12 +6586,21 @@ const BodyContext = struct {
         const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
         const scrutinee_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), scrutinee_ty);
         const scrutinee_expr = try self.builder.localExpr(scrutinee_local, scrutinee_ty);
-        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output);
+        const rest = try self.lowerExplicitPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output);
         return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .let_ = .{
             .bind = try self.builder.bindPat(scrutinee_local, scrutinee_ty),
             .value = scrutinee,
             .rest = rest,
         } } });
+    }
+
+    fn matchContainsExplicitPattern(self: *BodyContext, match: anytype) bool {
+        for (match.branches) |branch| {
+            for (branch.patterns) |pattern| {
+                if (self.patternContainsExplicitBinding(pattern.pattern)) return true;
+            }
+        }
+        return false;
     }
 
     fn matchContainsListPattern(self: *BodyContext, match: anytype) bool {
@@ -6623,6 +6638,50 @@ const BodyContext = struct {
             .tuple => |items| blk: {
                 for (items) |child| {
                     if (self.patternContainsList(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .assign,
+            .pending,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => false,
+        };
+    }
+
+    fn patternContainsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
+        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        return switch (pattern.data) {
+            .list => true,
+            .record_destructure => |destructs| blk: {
+                if (self.recordDestructsNeedExplicitRest(destructs)) break :blk true;
+                for (destructs) |destruct| {
+                    const child = switch (destruct.kind) {
+                        .required => |child_pattern| child_pattern,
+                        .sub_pattern => |child_pattern| child_pattern,
+                        .rest => |child_pattern| child_pattern,
+                    };
+                    if (self.patternContainsExplicitBinding(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .as => |as| self.patternContainsExplicitBinding(as.pattern),
+            .applied_tag => |tag| blk: {
+                for (tag.args) |child| {
+                    if (self.patternContainsExplicitBinding(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .nominal => |nominal| self.patternContainsExplicitBinding(nominal.backing_pattern),
+            .tuple => |items| blk: {
+                for (items) |child| {
+                    if (self.patternContainsExplicitBinding(child)) break :blk true;
                 }
                 break :blk false;
             },
@@ -6690,6 +6749,89 @@ const BodyContext = struct {
         }
 
         return fallback;
+    }
+
+    fn lowerExplicitPatternMatchAlternatives(
+        self: *BodyContext,
+        scrutinee: Ast.ExprId,
+        scrutinee_ty: Type.TypeId,
+        branches: []const checked.CheckedMatchBranch,
+        output: MatchOutput,
+    ) Allocator.Error!Ast.ExprId {
+        const output_ty = self.matchOutputType(output);
+        const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
+        var fallback = try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
+
+        var branch_index = branches.len;
+        while (branch_index > 0) {
+            branch_index -= 1;
+            const branch = branches[branch_index];
+            var pattern_index = branch.patterns.len;
+            while (pattern_index > 0) {
+                pattern_index -= 1;
+                fallback = try self.lowerExplicitPatternMatchAlternative(
+                    scrutinee,
+                    scrutinee_ty,
+                    branch.patterns[pattern_index],
+                    branch.guard,
+                    branch.value,
+                    fallback,
+                    output,
+                );
+            }
+        }
+
+        return fallback;
+    }
+
+    fn lowerExplicitPatternMatchAlternative(
+        self: *BodyContext,
+        scrutinee: Ast.ExprId,
+        scrutinee_ty: Type.TypeId,
+        pattern: checked.CheckedMatchBranchPattern,
+        guard: ?checked.CheckedExprId,
+        body: checked.CheckedExprId,
+        fallback: Ast.ExprId,
+        output: MatchOutput,
+    ) Allocator.Error!Ast.ExprId {
+        const output_ty = self.matchOutputType(output);
+        var branch_ctx = try self.childContext(self.current_fn_key);
+        defer branch_ctx.deinit();
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+        try branch_ctx.saveMatchPatternBinders(pattern, &saved);
+        defer branch_ctx.restoreBinders(saved.items);
+
+        try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
+
+        var checks = std.ArrayList(CollectedExplicitPattern).empty;
+        defer checks.deinit(branch_ctx.allocator);
+        const pat = try branch_ctx.lowerPatternAtTypeCollectingExplicit(pattern.pattern, scrutinee_ty, &checks);
+
+        try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
+
+        var body_lowered = try branch_ctx.lowerMatchBranchBody(body, output);
+        if (guard) |guard_expr| {
+            const guard_cond = try branch_ctx.lowerExpr(guard_expr);
+            body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
+        }
+
+        var check_index = checks.items.len;
+        while (check_index > 0) {
+            check_index -= 1;
+            const collected = checks.items[check_index];
+            const check_expr = try branch_ctx.builder.localExpr(collected.local, collected.ty);
+            body_lowered = try branch_ctx.lowerMaterializedPatternThen(
+                collected.pattern,
+                check_expr,
+                collected.ty,
+                output_ty,
+                .{ .expr = body_lowered },
+                fallback,
+            );
+        }
+
+        return try branch_ctx.wrapPatternMatch(scrutinee, scrutinee_ty, pat, body_lowered, fallback, output_ty);
     }
 
     fn lowerListPatternMatchAlternative(
@@ -6922,7 +7064,8 @@ const BodyContext = struct {
                         },
                         .rest => |rest_pattern| {
                             if (!self.patternIsIgnored(rest_pattern)) {
-                                Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
+                                const rest_ty = try self.lowerType(self.view.bodies.patterns[@intFromEnum(rest_pattern)].ty);
+                                try self.preRegisterPatternBinders(rest_pattern, rest_ty);
                             }
                         },
                     }
@@ -7068,6 +7211,122 @@ const BodyContext = struct {
             try lowered.append(self.allocator, .{
                 .name = name,
                 .pattern = try self.lowerPatternAtTypeCollectingLists(child, child_ty, checks_out),
+            });
+        }
+        return .{ .record = try self.builder.program.addRecordDestructSpan(lowered.items) };
+    }
+
+    fn lowerPatternAtTypeCollectingExplicit(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        ty: Type.TypeId,
+        checks_out: *std.ArrayList(CollectedExplicitPattern),
+    ) Allocator.Error!Ast.PatId {
+        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        try self.constrainTypeToMono(pattern.ty, ty, "checked pattern type conflicted with an existing Monotype constraint");
+
+        if (self.patternNeedsExplicitBinding(pattern_id)) {
+            const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ty);
+            try checks_out.append(self.allocator, .{
+                .local = local,
+                .ty = ty,
+                .pattern = pattern_id,
+            });
+            return try self.builder.bindPat(local, ty);
+        }
+
+        const data: Ast.PatData = switch (pattern.data) {
+            .pending,
+            .runtime_error,
+            => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
+            .assign => |binder| blk: {
+                const local = if (self.binders.get(binder)) |existing| existing else inner: {
+                    const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                    try self.binders.put(binder, new_local);
+                    break :inner new_local;
+                };
+                break :blk .{ .bind = local };
+            },
+            .as => |as| blk: {
+                const local = if (self.binders.get(as.binder)) |existing| existing else inner: {
+                    const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                    try self.binders.put(as.binder, new_local);
+                    break :inner new_local;
+                };
+                break :blk .{ .as = .{
+                    .pattern = try self.lowerPatternAtTypeCollectingExplicit(as.pattern, ty, checks_out),
+                    .local = local,
+                } };
+            },
+            .applied_tag => |tag| try self.lowerTagPatternCollectingExplicit(tag, ty, checks_out),
+            .nominal => |nominal| .{ .nominal = try self.lowerPatternAtTypeCollectingExplicit(nominal.backing_pattern, self.builder.namedBackingType(ty) orelse ty, checks_out) },
+            .record_destructure => |destructs| try self.lowerRecordPatternCollectingExplicit(destructs, ty, checks_out),
+            .list => Common.invariant("list pattern was not materialized before Monotype pattern lowering"),
+            .tuple => |items| .{ .tuple = try self.lowerPatternSpanAtTypesCollectingExplicit(items, self.builder.tupleItemTypes(ty), checks_out) },
+            .num_literal => |num| self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .frac_f32_literal => |value| .{ .frac_f32_lit = value },
+            .frac_f64_literal => |value| .{ .frac_f64_lit = value },
+            .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .underscore => .wildcard,
+        };
+        return try self.builder.program.addPat(.{ .ty = ty, .data = data });
+    }
+
+    fn lowerPatternSpanAtTypesCollectingExplicit(
+        self: *BodyContext,
+        checked_patterns: []const checked.CheckedPatternId,
+        tys: []const Type.TypeId,
+        checks_out: *std.ArrayList(CollectedExplicitPattern),
+    ) Allocator.Error!Ast.Span(Ast.PatId) {
+        if (checked_patterns.len != tys.len) Common.invariant("pattern arity differs from concrete checked type");
+        const lowered = try self.allocator.alloc(Ast.PatId, checked_patterns.len);
+        defer self.allocator.free(lowered);
+        for (checked_patterns, tys, 0..) |child, child_ty, i| {
+            lowered[i] = try self.lowerPatternAtTypeCollectingExplicit(child, child_ty, checks_out);
+        }
+        return try self.builder.program.addPatSpan(lowered);
+    }
+
+    fn lowerTagPatternCollectingExplicit(
+        self: *BodyContext,
+        tag: anytype,
+        ty: Type.TypeId,
+        checks_out: *std.ArrayList(CollectedExplicitPattern),
+    ) Allocator.Error!Ast.PatData {
+        const name = try self.builder.tagName(self.view, tag.name);
+        return .{ .tag = .{
+            .name = name,
+            .payloads = try self.lowerPatternSpanAtTypesCollectingExplicit(tag.args, self.builder.tagPayloadTypes(ty, name), checks_out),
+        } };
+    }
+
+    fn lowerRecordPatternCollectingExplicit(
+        self: *BodyContext,
+        destructs: []const checked.CheckedRecordDestruct,
+        ty: Type.TypeId,
+        checks_out: *std.ArrayList(CollectedExplicitPattern),
+    ) Allocator.Error!Ast.PatData {
+        var lowered = std.ArrayList(Ast.RecordDestruct).empty;
+        defer lowered.deinit(self.allocator);
+        for (destructs) |destruct| {
+            const child = switch (destruct.kind) {
+                .required => |pattern| pattern,
+                .sub_pattern => |pattern| pattern,
+                .rest => |pattern| {
+                    if (self.patternIsIgnored(pattern)) continue;
+                    Common.invariant("record rest pattern was not materialized before Monotype pattern lowering");
+                },
+            };
+            const name = try self.builder.recordFieldName(self.view, destruct.label);
+            const child_ty = switch (destruct.kind) {
+                .required, .sub_pattern => self.builder.recordFieldType(ty, name),
+                .rest => unreachable,
+            };
+            try lowered.append(self.allocator, .{
+                .name = name,
+                .pattern = try self.lowerPatternAtTypeCollectingExplicit(child, child_ty, checks_out),
             });
         }
         return .{ .record = try self.builder.program.addRecordDestructSpan(lowered.items) };

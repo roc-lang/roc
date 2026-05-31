@@ -169,7 +169,9 @@ main2 = p1 != p2
 										(e-lookup-local
 											(p-assign (ident "b")))))))))
 				(if-else
-					(e-tag (name "False")))))
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "False"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Point") (local))

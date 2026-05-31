@@ -15,31 +15,9 @@ x : Foo.Bar.Baz
 x = Foo.Bar.Baz.X
 ~~~
 # EXPECTED
-MISSING NESTED TYPE - nominal_deeply_nested_tag.md:7:5:7:16
-UNDECLARED TYPE - nominal_deeply_nested_tag.md:8:12:8:16
+NIL
 # PROBLEMS
-**MISSING NESTED TYPE**
-`Foo.Bar` is in scope, but it doesn't have a nested type named `Baz`.
-
-It's referenced here:
-**nominal_deeply_nested_tag.md:7:5:7:16:**
-```roc
-x : Foo.Bar.Baz
-```
-    ^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Foo.Bar.Baz_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_deeply_nested_tag.md:8:12:8:16:**
-```roc
-x = Foo.Bar.Baz.X
-```
-           ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -100,9 +78,10 @@ x = Foo.Bar.Baz.X
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-nominal (nominal "nominal_deeply_nested_tag.Foo.Bar.Baz")
+			(e-tag (name "X")))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Foo.Bar.Baz") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -122,7 +101,7 @@ x = Foo.Bar.Baz.X
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Foo.Bar.Baz")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -131,5 +110,5 @@ x = Foo.Bar.Baz.X
 		(nominal (type "Foo.Bar.Baz")
 			(ty-header (name "nominal_deeply_nested_tag.Foo.Bar.Baz"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Foo.Bar.Baz"))))
 ~~~

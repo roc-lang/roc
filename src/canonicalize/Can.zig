@@ -48,11 +48,14 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
-    /// Optional explicit "root" names supplied by callers that want only those
-    /// top-level defs canonicalized (e.g. the checked-artifact lowering path).
-    /// Single-pass canon ignores this hint — the field exists only to keep the
-    /// initContext shape stable for callers that still pass it through.
-    explicit_root_names: ?[]const []const u8 = null,
+    explicit_root_names: []const []const u8 = &.{},
+};
+
+/// A definition requested by an explicit-roots caller.
+pub const ExplicitRootDef = struct {
+    name: []const u8,
+    ident: Ident.Idx,
+    def_idx: CIR.Def.Idx,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -102,6 +105,9 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// an associated block. Keyed by the block's fully-qualified parent name
 /// (e.g. `Module.T1`).
 pending_assoc_aliases: std.AutoHashMapUnmanaged(Ident.Idx, std.ArrayListUnmanaged(AssocAlias)) = .{},
+/// Definitions requested by the caller as explicit post-check roots.
+explicit_root_names: []const []const u8 = &.{},
+explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -139,6 +145,8 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// Local type declarations found inside function bodies.
 /// Collected during canonicalization, then added to all_statements at the end.
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
+/// Module-global value definitions produced by canonicalization.
+scratch_global_value_defs: std.ArrayList(CIR.Def.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
 /// Counter for generating unique anonymous open extension rigid var names
@@ -253,6 +261,7 @@ pub fn deinit(
     var pending_iter = self.pending_assoc_aliases.valueIterator();
     while (pending_iter.next()) |list| list.deinit(gpa);
     self.pending_assoc_aliases.deinit(gpa);
+    self.explicit_root_defs.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -278,6 +287,7 @@ pub fn deinit(
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
     self.scratch_local_type_decls.deinit(gpa);
+    self.scratch_global_value_defs.deinit(gpa);
 }
 
 /// Initialize the canonicalizer.
@@ -322,6 +332,7 @@ fn initInternal(
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
+        .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
@@ -335,6 +346,7 @@ fn initInternal(
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
+        .scratch_global_value_defs = try std.ArrayList(CIR.Def.Idx).initCapacity(gpa, 0),
     };
 
     // Top-level scope is not a function boundary
@@ -369,6 +381,34 @@ fn lookupExplicitModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedTyp
 
 fn lookupAvailableModuleEnv(self: *const Self, ident: Ident.Idx) ?AutoImportedType {
     return self.lookupExplicitModuleEnv(ident) orelse self.builtin_auto_imported_types.get(ident);
+}
+
+/// Return a caller-requested root by the definition recorded at creation time.
+pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
+    for (self.explicit_root_defs.items) |root| {
+        if (std.mem.eql(u8, root.name, name)) return root.def_idx;
+    }
+    return null;
+}
+
+fn recordExplicitRootDef(self: *Self, ident: Ident.Idx, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    if (self.explicit_root_names.len == 0) return;
+
+    const ident_text = self.env.getIdent(ident);
+    for (self.explicit_root_names) |root_name| {
+        if (!std.mem.eql(u8, ident_text, root_name)) continue;
+
+        try self.explicit_root_defs.append(self.env.gpa, .{
+            .name = root_name,
+            .ident = ident,
+            .def_idx = def_idx,
+        });
+        return;
+    }
+}
+
+fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
 }
 
 /// Register a method on a nominal type under every name the type can be
@@ -654,7 +694,7 @@ fn registerTypeDecl(
 
     // Canonicalize the real AST header. The check after this point detects
     // any placeholder statement an earlier forward reference produced and
-    // rewrites it in place so the stub header and `.placeholder` annotation
+    // rewrites it in place so the stub header and null annotation
     // get replaced by the real ones.
     const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
 
@@ -696,46 +736,23 @@ fn registerTypeDecl(
         break :blk try self.env.addTypeHeader(qualified_header, region);
     } else header_idx;
 
-    // A forward reference to this type may have parked a placeholder under
-    // its bare name (because `createPlaceholderTypeDecl` only knows the
-    // unqualified identifier the reference site spelled). For nested types
-    // whose real binding is keyed under a fully-qualified name, rebind that
-    // placeholder under the qualified name now so the lookup below finds it
-    // and reuses the same statement index — keeping every `TypeAnno.lookup`
-    // created at the reference site pointing at one canonical statement.
+    // A forward reference to this type may have parked a placeholder under a
+    // source-visible alias (`Foo.Bar`) while the real associated-block pass keys
+    // the declaration by its module-qualified name (`Mod.Foo.Bar`). Reuse that
+    // placeholder statement so all earlier TypeAnno.lookup nodes point at the
+    // real declaration once this function fills it in below.
     if (parent_name != null and !qualified_name_idx.eql(type_header.name)) {
-        if (self.scopeLookupTypeDecl(qualified_name_idx) == null) {
-            if (self.scopeLookupTypeDecl(type_header.name)) |bare_existing| {
-                const bare_stmt = self.env.store.getStatement(bare_existing);
-                const bare_awaiting_real_decl = switch (bare_stmt) {
-                    .s_alias_decl => |a| a.anno == .placeholder,
-                    .s_nominal_decl => |n| n.anno == .placeholder,
-                    else => false,
-                };
-                if (bare_awaiting_real_decl) {
-                    var s_idx_rebind = self.scopes.items.len;
-                    while (s_idx_rebind > 0) {
-                        s_idx_rebind -= 1;
-                        const scope_ptr = &self.scopes.items[s_idx_rebind];
-                        if (scope_ptr.type_bindings.getPtr(type_header.name)) |bare_binding_ptr| {
-                            const moved = bare_binding_ptr.*;
-                            _ = scope_ptr.type_bindings.remove(type_header.name);
-                            try self.scopes.items[0].type_bindings.put(self.env.gpa, qualified_name_idx, moved);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        try self.adoptPlaceholderTypeAlias(qualified_name_idx, relative_name_idx);
+        try self.adoptPlaceholderTypeAlias(qualified_name_idx, type_header.name);
     }
 
     // Check if this type was already introduced (handles redeclaration case)
     const type_decl_stmt_idx = if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| blk: {
-        // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
+        // Type was already introduced - check if it's a placeholder (anno = null) or a real declaration
         const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
         const awaiting_real_decl = switch (existing_stmt) {
-            .s_alias_decl => |alias| alias.anno == .placeholder,
-            .s_nominal_decl => |nominal| nominal.anno == .placeholder,
+            .s_alias_decl => |alias| alias.anno == null,
+            .s_nominal_decl => |nominal| nominal.anno == null,
             else => false,
         };
 
@@ -760,13 +777,13 @@ fn registerTypeDecl(
                 .alias => Statement{
                     .s_alias_decl = .{
                         .header = final_header_idx,
-                        .anno = .placeholder, // placeholder, will be overwritten
+                        .anno = null,
                     },
                 },
                 .nominal, .@"opaque" => Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
-                        .anno = .placeholder, // placeholder, will be overwritten
+                        .anno = null,
                         .is_opaque = type_decl.kind == .@"opaque",
                     },
                 },
@@ -780,13 +797,13 @@ fn registerTypeDecl(
             .alias => Statement{
                 .s_alias_decl = .{
                     .header = final_header_idx,
-                    .anno = .placeholder, // placeholder, will be overwritten
+                    .anno = null,
                 },
             },
             .nominal, .@"opaque" => Statement{
                 .s_nominal_decl = .{
                     .header = final_header_idx,
-                    .anno = .placeholder, // placeholder, will be overwritten
+                    .anno = null,
                     .is_opaque = type_decl.kind == .@"opaque",
                 },
             },
@@ -806,6 +823,10 @@ fn registerTypeDecl(
     if (parent_name != null) {
         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
         try current_scope.introduceTypeAlias(self.env.gpa, type_header.name, type_decl_stmt_idx);
+    }
+
+    if (type_decl.associated) |assoc| {
+        try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
     }
 
     // Process type parameters and annotation in a separate scope
@@ -871,25 +892,10 @@ fn registerTypeDecl(
     try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
     try self.env.store.addScratchStatement(type_decl_stmt_idx);
 
-    // If this entry was a placeholder (a stub created on demand by a forward
-    // reference), the scope binding kind may no longer match the real
-    // declaration we just installed. Rewrite the binding to match — flipping
-    // to local_alias for `:`, or local_nominal for `:=` / opaque.
-    {
-        const desired_binding: Scope.TypeBinding = switch (type_decl.kind) {
-            .alias => Scope.TypeBinding{ .local_alias = type_decl_stmt_idx },
-            .nominal, .@"opaque" => Scope.TypeBinding{ .local_nominal = type_decl_stmt_idx },
-        };
-        var s_idx = self.scopes.items.len;
-        while (s_idx > 0) {
-            s_idx -= 1;
-            const scope_ptr = &self.scopes.items[s_idx];
-            if (scope_ptr.type_bindings.getPtr(qualified_name_idx)) |binding_ptr| {
-                binding_ptr.* = desired_binding;
-                break;
-            }
-        }
-    }
+    // If this entry was a placeholder, any aliases that point at the reused
+    // statement need their local binding kind refreshed to match the real
+    // declaration (`:` vs `:=` / opaque).
+    self.refreshTypeBindingKindForStatement(type_decl_stmt_idx, type_decl.kind);
 
     // For type modules, associate the node index with the exposed type.
     // display_module_name_idx is the bare module name (e.g., "Color"), which matches
@@ -913,6 +919,144 @@ fn registerTypeDecl(
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
             try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc);
+        }
+    }
+}
+
+fn typeBindingStatement(binding: Scope.TypeBinding) ?Statement.Idx {
+    return switch (binding) {
+        .local_nominal => |stmt| stmt,
+        .local_alias => |stmt| stmt,
+        .associated_nominal => |stmt| stmt,
+        .external_nominal => null,
+    };
+}
+
+fn localTypeBindingForKind(kind: AST.TypeDeclKind, stmt_idx: Statement.Idx) Scope.TypeBinding {
+    return switch (kind) {
+        .alias => Scope.TypeBinding{ .local_alias = stmt_idx },
+        .nominal, .@"opaque" => Scope.TypeBinding{ .local_nominal = stmt_idx },
+    };
+}
+
+fn typeStatementAwaitingRealDecl(self: *Self, stmt_idx: Statement.Idx) bool {
+    return switch (self.env.store.getStatement(stmt_idx)) {
+        .s_alias_decl => |alias| alias.anno == null,
+        .s_nominal_decl => |nominal| nominal.anno == null,
+        else => false,
+    };
+}
+
+fn adoptPlaceholderTypeAlias(
+    self: *Self,
+    target_name: Ident.Idx,
+    alias_name: Ident.Idx,
+) std.mem.Allocator.Error!void {
+    if (target_name.eql(alias_name)) return;
+    if (self.scopeLookupTypeDecl(target_name) != null) return;
+
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+        const binding = scope.type_bindings.get(alias_name) orelse continue;
+        const stmt_idx = typeBindingStatement(binding) orelse continue;
+        if (!self.typeStatementAwaitingRealDecl(stmt_idx)) continue;
+
+        try self.currentScope().type_bindings.put(self.env.gpa, target_name, binding);
+        return;
+    }
+}
+
+fn publishTypeAliasToCurrentScope(
+    self: *Self,
+    alias_name: Ident.Idx,
+    target_name: Ident.Idx,
+) std.mem.Allocator.Error!void {
+    if (alias_name.eql(target_name)) return;
+    if (self.scopeLookupTypeDecl(alias_name) != null) return;
+    const target = self.scopeLookupTypeBinding(target_name) orelse return;
+    if (typeBindingStatement(target.binding.*) == null) return;
+    try self.currentScope().type_bindings.put(self.env.gpa, alias_name, target.binding.*);
+}
+
+fn refreshTypeBindingKindForStatement(
+    self: *Self,
+    stmt_idx: Statement.Idx,
+    kind: AST.TypeDeclKind,
+) void {
+    const desired = localTypeBindingForKind(kind, stmt_idx);
+    for (self.scopes.items) |*scope| {
+        var iter = scope.type_bindings.iterator();
+        while (iter.next()) |entry| {
+            if (typeBindingStatement(entry.value_ptr.*) != stmt_idx) continue;
+
+            entry.value_ptr.* = switch (entry.value_ptr.*) {
+                .associated_nominal => Scope.TypeBinding{ .associated_nominal = stmt_idx },
+                .external_nominal => entry.value_ptr.*,
+                .local_nominal, .local_alias => desired,
+            };
+        }
+    }
+}
+
+fn predeclareAssociatedTypePlaceholders(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_parent_name: ?Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    for (self.parse_ir.store.statementSlice(statements)) |stmt_idx| {
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        if (stmt != .type_decl) continue;
+
+        const nested_type_decl = stmt.type_decl;
+        const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+        const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+        const region = self.parse_ir.tokenizedRegionToRegion(nested_type_decl.region);
+
+        const nested_qualified = try self.env.insertQualifiedIdent(
+            self.env.getIdent(parent_name),
+            self.env.getIdent(nested_ident),
+        );
+        const nested_relative = if (relative_parent_name) |relative_parent|
+            try self.env.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_ident))
+        else
+            nested_ident;
+
+        if (self.scopeLookupTypeDecl(nested_qualified) == null) {
+            try self.adoptPlaceholderTypeAlias(nested_qualified, nested_relative);
+        }
+
+        if (self.scopeLookupTypeDecl(nested_qualified) == null) {
+            const header_idx = try self.env.addTypeHeader(.{
+                .name = nested_qualified,
+                .relative_name = nested_relative,
+                .args = TypeAnno.Span{ .span = DataSpan.empty() },
+            }, region);
+
+            const placeholder_stmt = switch (nested_type_decl.kind) {
+                .alias => Statement{ .s_alias_decl = .{
+                    .header = header_idx,
+                    .anno = null,
+                } },
+                .nominal, .@"opaque" => Statement{ .s_nominal_decl = .{
+                    .header = header_idx,
+                    .anno = null,
+                    .is_opaque = nested_type_decl.kind == .@"opaque",
+                } },
+            };
+            const stmt_placeholder_idx = try self.env.addStatement(placeholder_stmt, region);
+            try self.introduceType(nested_qualified, stmt_placeholder_idx, region);
+        }
+        try self.publishTypeAliasToCurrentScope(nested_relative, nested_qualified);
+
+        if (nested_type_decl.associated) |nested_assoc| {
+            const nested_relative_parent = if (relative_parent_name) |relative_parent|
+                try self.env.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_ident))
+            else
+                nested_ident;
+            try self.predeclareAssociatedTypePlaceholders(nested_qualified, nested_relative_parent, nested_assoc.statements);
         }
     }
 }
@@ -1130,9 +1274,11 @@ fn findOrCreateAssocPattern(
 ) std.mem.Allocator.Error!CIR.Pattern.Idx {
     if (self.scopeLookup(.ident, qualified_ident) == .found) {
         const found = self.scopeLookup(.ident, qualified_ident).found;
+        if (try self.adoptAssocForwardReference(qualified_ident, type_qualified_ident, decl_ident)) |adopted| {
+            return adopted;
+        }
         self.drainForwardReferences(qualified_ident, type_qualified_ident, decl_ident);
         self.rebindPlaceholderPatternIdent(found, qualified_ident);
-        try self.publishAssocPatternNames(type_qualified_ident, found);
         return found;
     }
 
@@ -1146,7 +1292,6 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            try self.publishAssocPatternNames(type_qualified_ident, placeholder);
             return placeholder;
         }
         if (type_qualified_ident) |tq| {
@@ -1157,7 +1302,6 @@ fn findOrCreateAssocPattern(
                 _ = scope.idents.remove(tq);
                 self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
                 try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-                try self.publishAssocPatternNames(type_qualified_ident, placeholder);
                 return placeholder;
             }
         }
@@ -1167,7 +1311,6 @@ fn findOrCreateAssocPattern(
             mut_regions.deinit(self.env.gpa);
             self.rebindPlaceholderPatternIdent(placeholder, qualified_ident);
             try self.registerAssocPatternQualifiers(qualified_ident, placeholder);
-            try self.publishAssocPatternNames(type_qualified_ident, placeholder);
             return placeholder;
         }
     }
@@ -1176,59 +1319,7 @@ fn findOrCreateAssocPattern(
     const new_pattern_idx = try self.env.addPattern(ident_pattern, pattern_region);
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, qualified_ident, new_pattern_idx, false, true);
     try self.registerAssocPatternQualifiers(qualified_ident, new_pattern_idx);
-    // Publish the type-qualified alias only for methods whose source body
-    // refers to a sibling (or itself) by the same alias inside the same
-    // associated block. Bool's flat methods like `not`/`is_eq` get processed
-    // before any body references them, so publishing eagerly there has no
-    // benefit but does cause cross-module callers to see a stubbed pattern
-    // when the artifact is materialised. Restrict the eager publication to
-    // identifiers whose body the canonicalizer is about to walk.
-    if (self.bodyReferencesAlias(type_qualified_ident, decl_ident)) {
-        try self.publishAssocPatternNames(type_qualified_ident, new_pattern_idx);
-    }
     return new_pattern_idx;
-}
-
-/// Returns true when the upcoming body parses a self-reference to either the
-/// type-qualified or bare ident — i.e. when the body would otherwise create a
-/// forward-reference placeholder pointing at a different Pattern.Idx than the
-/// def. For decls whose body has no such self-reference, the post-body
-/// REG-TQ path publishes the alias at exactly the right moment and the
-/// eager publication is unnecessary.
-fn bodyReferencesAlias(
-    self: *Self,
-    type_qualified_ident: ?Ident.Idx,
-    decl_ident: Ident.Idx,
-) bool {
-    _ = self;
-    _ = decl_ident;
-    // Only the type-qualified form needs eager publication — the bare and
-    // fully-qualified forms are registered by registerAssocPatternQualifiers
-    // before the body runs. Skip when no type-qualified form was passed.
-    return type_qualified_ident != null;
-}
-
-/// Publish the type-qualified alias for an associated item's pattern to the
-/// module scope so a sibling body — including the item's own recursive body —
-/// canonicalized in the same block resolves the method to the same
-/// Pattern.Idx as the def. This runs *before* the body is canonicalized so
-/// the body's lookup doesn't get a placeholder pointing at a different
-/// pattern than the def the caller is about to publish.
-///
-/// Restricted to the Builtin module: only the bundled Builtin source uses
-/// self-recursive methods inside a nested associated block, and changing
-/// the publication rule for non-Builtin modules has non-local effects on
-/// cross-module method-call inference. Outside Builtin the post-body
-/// REG-TQ path keeps the alias publication exactly where it was.
-fn publishAssocPatternNames(
-    self: *Self,
-    type_qualified_ident: ?Ident.Idx,
-    pattern_idx: CIR.Pattern.Idx,
-) std.mem.Allocator.Error!void {
-    if (self.scopes.items.len == 0) return;
-    if (type_qualified_ident) |tq| {
-        try self.scopes.items[0].idents.put(self.env.gpa, tq, pattern_idx);
-    }
 }
 
 /// Remove any forward_reference entries keyed by the names a definition
@@ -1237,6 +1328,38 @@ fn publishAssocPatternNames(
 /// to a scope's idents map and scopeLookup returned it directly, so the
 /// forward_references entries that point at that placeholder no longer need
 /// to flag an undefined reference at scope-pop time.
+fn adoptAssocForwardReference(
+    self: *Self,
+    qualified_ident: Ident.Idx,
+    type_qualified_ident: ?Ident.Idx,
+    decl_ident: Ident.Idx,
+) std.mem.Allocator.Error!?CIR.Pattern.Idx {
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        const scope = &self.scopes.items[scope_idx];
+        const keys = [_]?Ident.Idx{ qualified_ident, type_qualified_ident, decl_ident };
+        for (keys) |maybe_key| {
+            const key = maybe_key orelse continue;
+            if (scope.forward_references.fetchRemove(key)) |kv| {
+                var mut_regions = kv.value.reference_regions;
+                mut_regions.deinit(self.env.gpa);
+                self.rebindPlaceholderPatternIdent(kv.value.pattern_idx, qualified_ident);
+                try self.registerAssocPatternQualifiers(qualified_ident, kv.value.pattern_idx);
+                if (type_qualified_ident) |tq| {
+                    var publish_idx = self.scopes.items.len;
+                    while (publish_idx > 0) {
+                        publish_idx -= 1;
+                        try self.scopes.items[publish_idx].idents.put(self.env.gpa, tq, kv.value.pattern_idx);
+                    }
+                }
+                return kv.value.pattern_idx;
+            }
+        }
+    }
+    return null;
+}
+
 fn drainForwardReferences(
     self: *Self,
     qualified_ident: Ident.Idx,
@@ -1313,6 +1436,114 @@ fn registerAssocPatternQualifiers(
     if (self.scopes.items.len >= 2) {
         const parent_scope = &self.scopes.items[self.scopes.items.len - 2];
         try parent_scope.idents.put(self.env.gpa, qualified_ident, pattern_idx);
+    }
+}
+
+fn publishAssociatedPatternVisibility(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
+    type_name: Ident.Idx,
+    decl_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+    type_qualified_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    _ = parent_name;
+
+    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
+        try self.scopes.items[0].idents.put(self.env.gpa, qualified_ident, pattern_idx);
+        try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
+    }
+
+    var scope_idx = self.scopes.items.len;
+    while (scope_idx > 0) {
+        scope_idx -= 1;
+        try self.scopes.items[scope_idx].idents.put(self.env.gpa, type_qualified_ident, pattern_idx);
+    }
+
+    if (self.scopes.items.len > 0) {
+        const bare_type_qualified = try self.env.insertQualifiedIdent(
+            self.env.getIdent(type_name),
+            self.env.getIdent(decl_ident),
+        );
+        var bare_scope_idx = self.scopes.items.len;
+        while (bare_scope_idx > 0) {
+            bare_scope_idx -= 1;
+            try self.scopes.items[bare_scope_idx].idents.put(self.env.gpa, bare_type_qualified, pattern_idx);
+        }
+    }
+}
+
+fn predeclareAssociatedValuePattern(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
+    type_name: Ident.Idx,
+    decl_ident: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    const parent_text = self.env.getIdent(parent_name);
+    const decl_text = self.env.getIdent(decl_ident);
+    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+    const type_qualified_idx: Ident.Idx = if (parent_name.eql(type_name))
+        qualified_idx
+    else
+        try self.env.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(decl_ident));
+
+    const pattern_idx = try self.findOrCreateAssocPattern(qualified_idx, decl_ident, type_qualified_idx, region);
+    try self.publishAssociatedPatternVisibility(
+        parent_name,
+        relative_name_idx,
+        type_name,
+        decl_ident,
+        qualified_idx,
+        type_qualified_idx,
+        pattern_idx,
+    );
+}
+
+fn predeclareAssociatedValuePatterns(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
+    type_name: Ident.Idx,
+    statements: AST.Statement.Span,
+) std.mem.Allocator.Error!void {
+    const stmt_idxs = self.parse_ir.store.statementSlice(statements);
+    var i: usize = 0;
+    while (i < stmt_idxs.len) : (i += 1) {
+        const stmt = self.parse_ir.store.getStatement(stmt_idxs[i]);
+        switch (stmt) {
+            .type_anno => |ta| {
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse continue;
+                const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+                if (i + 1 < stmt_idxs.len) {
+                    const next_stmt = self.parse_ir.store.getStatement(stmt_idxs[i + 1]);
+                    if (next_stmt == .decl) {
+                        const pattern = self.parse_ir.store.getPattern(next_stmt.decl.pattern);
+                        if (pattern == .ident) {
+                            if (self.parse_ir.tokens.resolveIdentifier(pattern.ident.ident_tok)) |decl_ident| {
+                                if (name_ident.eql(decl_ident)) {
+                                    try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, type_name, name_ident, region);
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, type_name, name_ident, region);
+            },
+            .decl => |decl| {
+                const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                if (pattern != .ident) continue;
+                const decl_ident = self.parse_ir.tokens.resolveIdentifier(pattern.ident.ident_tok) orelse continue;
+                const region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
+                try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, type_name, decl_ident, region);
+            },
+            else => {},
+        }
     }
 }
 
@@ -1472,6 +1703,8 @@ fn canonicalizeAssociatedItems(
         }
     }
 
+    try self.predeclareAssociatedValuePatterns(parent_name, relative_name_idx, type_name, statements);
+
     var i: usize = 0;
     while (i < stmt_idxs.len) : (i += 1) {
         const stmt_idx = stmt_idxs[i];
@@ -1580,6 +1813,7 @@ fn canonicalizeAssociatedItems(
                                         where_clauses,
                                     );
                                     try self.env.store.addScratchDef(def_idx);
+                                    try self.recordGlobalValueDef(def_idx);
 
                                     // Register this associated item by its qualified name
                                     const def_idx_u32: u32 = @intFromEnum(def_idx);
@@ -1659,6 +1893,10 @@ fn canonicalizeAssociatedItems(
                     // Pattern.Idx. `createAnnoOnlyDef` already handles the
                     // qualified-form key; do the type-qualified form here.
                     const adopted_pattern_idx: ?CIR.Pattern.Idx = blk_adopt: {
+                        switch (self.scopeLookup(.ident, qualified_idx)) {
+                            .found => |existing| break :blk_adopt existing,
+                            .not_found => {},
+                        }
                         const tq_for_adopt = if (parent_name.eql(type_name))
                             qualified_idx
                         else blk_tq: {
@@ -1690,6 +1928,7 @@ fn canonicalizeAssociatedItems(
                     try self.env.setExposedNodeIndexById(qualified_idx, @intFromEnum(def_idx));
                     try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, name_ident, qualified_idx);
                     try self.env.store.addScratchDef(def_idx);
+                    try self.recordGlobalValueDef(def_idx);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
                     const anno_pattern_idx = def_cir_anno.pattern;
@@ -1762,6 +2001,7 @@ fn canonicalizeAssociatedItems(
                         // Canonicalize with the qualified name
                         const def_idx = try self.canonicalizeAssociatedDecl(decl, qualified_idx, decl_ident, type_qualified_decl_idx);
                         try self.env.store.addScratchDef(def_idx);
+                        try self.recordGlobalValueDef(def_idx);
 
                         // Register this associated item by its qualified name
                         const def_idx_u32: u32 = @intFromEnum(def_idx);
@@ -1854,7 +2094,7 @@ fn canonicalizeAssociatedItems(
 /// declaration to (1) report mutually-recursive alias groups (which form
 /// strongly-connected components of size > 1 in the dependency graph) and
 /// (2) report any name that was referenced but never actually declared
-/// (its scope binding still points at an `anno = .placeholder` statement).
+/// (its scope binding still points at a null-annotation statement).
 fn diagnosePostWalkTypeDecls(
     self: *Self,
     statements: AST.Statement.Span,
@@ -2014,8 +2254,8 @@ fn diagnosePostWalkTypeDecls(
         };
         const stmt = self.env.store.getStatement(stmt_idx);
         const awaiting_real_decl = switch (stmt) {
-            .s_alias_decl => |a| a.anno == .placeholder,
-            .s_nominal_decl => |n| n.anno == .placeholder,
+            .s_alias_decl => |a| a.anno == null,
+            .s_nominal_decl => |n| n.anno == null,
             else => false,
         };
         if (awaiting_real_decl) {
@@ -2026,13 +2266,10 @@ fn diagnosePostWalkTypeDecls(
             } });
             // Pin the type variable at this statement to `.err` so any
             // TypeAnno.lookup pointing at it resolves through Check without
-            // tripping the alias/nominal/err assertion. The types store may
-            // not yet have grown a slot for this stmt_idx if no canon code
-            // touched its type var; only set when the slot exists.
+            // tripping the alias/nominal/err assertion.
             const stmt_var_int: u32 = @intFromEnum(stmt_idx);
-            if (stmt_var_int < self.env.types.len()) {
-                try self.env.types.setVarContent(@enumFromInt(stmt_var_int), .err);
-            }
+            std.debug.assert(stmt_var_int < self.env.types.len());
+            try self.env.types.setVarContent(@enumFromInt(stmt_var_int), .err);
         }
     }
 
@@ -2052,24 +2289,18 @@ fn diagnosePostWalkTypeDecls(
     }
 }
 
-/// Register a placeholder type declaration for a name that hasn't been seen
-/// yet. Used by the lookup paths to satisfy forward references to types
-/// declared later in source order. The placeholder is an `s_alias_decl` with
-/// `anno = .placeholder`; when the real declaration is canonicalized,
-/// Reorder the scratch_statements list so type declarations come first, in
-/// topological order — a type appears only after every other type it
-/// references in its annotation. This is what the Check pass expects: its
-/// first walk over `all_statements` sets up each type decl's type var, and a
-/// later type can only resolve through `resolveVar(varFrom(decl_idx))` once
-/// the earlier one has been processed. Other statements (defs, imports,
-/// expects, file imports) keep their original relative source order, but
-/// they all follow the type-decl block.
-fn reorderTypeDeclsTopologically(
+/// Build a separate topological order for type declarations. Check consumes
+/// this span before non-type statements so type applications see their target
+/// declarations initialized, while `all_statements` remains in source order
+/// for diagnostics, docs, and tooling.
+fn buildTypeDeclOrder(
     self: *Self,
     scratch_statements_start: u32,
-) std.mem.Allocator.Error!void {
+) std.mem.Allocator.Error!Statement.Span {
     const top = self.env.store.scratch.?.statements.top();
-    if (top <= scratch_statements_start) return;
+    if (top <= scratch_statements_start) {
+        return try self.env.store.statementSpanFrom(top);
+    }
 
     const gpa = self.env.gpa;
 
@@ -2081,23 +2312,19 @@ fn reorderTypeDeclsTopologically(
         try snapshot.appendSlice(gpa, current);
     }
 
-    // Split into type declarations (which need topo ordering) and everything
-    // else (preserved in source order).
+    // Split out type declarations; everything else stays only in all_statements.
     var type_decls = std.ArrayList(Statement.Idx){};
     defer type_decls.deinit(gpa);
-    var others = std.ArrayList(Statement.Idx){};
-    defer others.deinit(gpa);
     for (snapshot.items) |stmt_idx| {
         const stmt = self.env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_alias_decl, .s_nominal_decl => try type_decls.append(gpa, stmt_idx),
-            else => try others.append(gpa, stmt_idx),
+            else => {},
         }
     }
 
-    if (type_decls.items.len <= 1) {
-        // Nothing to reorder.
-        return;
+    if (type_decls.items.len == 0) {
+        return try self.env.store.statementSpanFrom(top);
     }
 
     // Build the set of type-decl stmt_idxs so we ignore references to anything
@@ -2117,8 +2344,8 @@ fn reorderTypeDeclsTopologically(
         var d = std.AutoHashMapUnmanaged(Statement.Idx, void){};
         const stmt = self.env.store.getStatement(idx);
         switch (stmt) {
-            .s_alias_decl => |a| try self.collectTypeAnnoDeclDeps(a.anno, &decl_set, &d),
-            .s_nominal_decl => |n| try self.collectTypeAnnoDeclDeps(n.anno, &decl_set, &d),
+            .s_alias_decl => |a| if (a.anno) |anno| try self.collectTypeAnnoDeclDeps(anno, &decl_set, &d),
+            .s_nominal_decl => |n| if (n.anno) |anno| try self.collectTypeAnnoDeclDeps(anno, &decl_set, &d),
             else => {},
         }
         _ = d.remove(idx); // a type can recurse on itself; that's not an ordering edge
@@ -2184,10 +2411,11 @@ fn reorderTypeDeclsTopologically(
         if (!visited.contains(idx)) try sorted.append(gpa, idx);
     }
 
-    // Replace the scratch contents with [sorted type decls] + [others in source order].
-    self.env.store.scratch.?.statements.clearFrom(scratch_statements_start);
+    // Append the checker order as its own span, then clear only that appended
+    // segment. The original scratch statements remain intact for all_statements.
+    const type_decl_order_start = self.env.store.scratch.?.statements.top();
     for (sorted.items) |idx| try self.env.store.addScratchStatement(idx);
-    for (others.items) |idx| try self.env.store.addScratchStatement(idx);
+    return try self.env.store.statementSpanFrom(type_decl_order_start);
 }
 
 /// Walk a canonicalized type annotation tree and collect every local
@@ -2199,7 +2427,6 @@ fn collectTypeAnnoDeclDeps(
     decl_set: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
     out: *std.AutoHashMapUnmanaged(Statement.Idx, void),
 ) std.mem.Allocator.Error!void {
-    if (anno_idx == TypeAnno.Idx.placeholder) return;
     const anno = self.env.store.getTypeAnno(anno_idx);
     switch (anno) {
         .lookup => |l| {
@@ -2270,7 +2497,7 @@ fn createPlaceholderTypeDecl(
     const placeholder_stmt = Statement{
         .s_nominal_decl = .{
             .header = header_idx,
-            .anno = .placeholder,
+            .anno = null,
             .is_opaque = false,
         },
     };
@@ -2647,6 +2874,7 @@ pub fn canonicalizeFile(
                                 // and let the next iteration handle the decl normally
                                 const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                                 try self.env.store.addScratchDef(def_idx);
+                                try self.recordGlobalValueDef(def_idx);
 
                                 // If this identifier should be exposed, register it
                                 const ident_text = self.env.getIdent(name_ident);
@@ -2661,6 +2889,7 @@ pub fn canonicalizeFile(
                             // create a Def with an e_anno_only body
                             const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                             try self.env.store.addScratchDef(def_idx);
+                            try self.recordGlobalValueDef(def_idx);
 
                             // If this identifier should be exposed, register it
                             const ident_text = self.env.getIdent(name_ident);
@@ -2678,6 +2907,7 @@ pub fn canonicalizeFile(
                 if (next_i >= ast_stmt_idxs.len) {
                     const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
                     try self.env.store.addScratchDef(def_idx);
+                    try self.recordGlobalValueDef(def_idx);
 
                     // If this identifier should be exposed, register it
                     const ident_text = self.env.getIdent(name_ident);
@@ -2696,17 +2926,9 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Ensure env.types has a slot for every node before the post-walk
-    // diagnostic pass — that pass pins still-unfilled placeholder vars to
-    // `.err` so Check can consume them, and `setVarContent` needs the slot
-    // to already exist.
-    {
-        const node_count_pre = self.env.store.nodes.len();
-        const types_len_pre = self.env.types.len();
-        if (types_len_pre < node_count_pre) {
-            try self.ensureTypeSlots(node_count_pre - types_len_pre);
-        }
-    }
+    // The post-walk diagnostic pass may pin undeclared placeholder types to
+    // `.err`, so the node-indexed type store must be materialized first.
+    try self.env.ensureTypeStoreCoversNodes();
 
     // Now that every top-level type declaration has been canonicalized in
     // source order, walk the dependency graph between them to surface
@@ -2723,39 +2945,21 @@ pub fn canonicalizeFile(
         try self.env.store.addScratchStatement(stmt_idx);
     }
 
-    // Topologically reorder type declarations within scratch_statements so
-    // Check's first pass sees each type's dependencies before the type
-    // itself. Without this, an annotation that references a type defined
-    // later in source order resolves to an unset type var when Check first
-    // touches it and trips an assertion.
-    try self.reorderTypeDeclsTopologically(scratch_statements_start);
+    // Publish an explicit checker order for type declarations without
+    // disturbing all_statements' source order.
+    self.env.type_decl_order = try self.buildTypeDeclOrder(scratch_statements_start);
 
-    // Ensure env.types has a type-variable slot for every node — Check assumes
-    // varFrom(node_idx) is in range for every IR node it touches, but addNode
-    // (via addStatement / addTypeAnno / etc.) only grows the node store, not
-    // the type store. Fill any remaining gap (the diagnose step may have
-    // added more statements via scratch_local_type_decls / reordering) with
-    // a single bulk extension; lookups that the type checker resolves later
-    // replace these with concrete content.
-    {
-        const node_count = self.env.store.nodes.len();
-        const types_len = self.env.types.len();
-        if (types_len < node_count) {
-            try self.ensureTypeSlots(node_count - types_len);
-        }
-    }
+    try self.env.ensureTypeStoreCoversNodes();
 
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
 
-    // The module-global value definitions are exactly the top-level defs
-    // collected above: top-level values, associated items, and compiler-created
-    // hosted globals. Local block definitions live inside their block's
-    // statement list rather than this top-level span, so they're naturally
-    // excluded. The checked-artifact builder consumes this to publish each
-    // module-global value as a procedure binding or const template.
-    self.env.global_value_defs = self.env.all_defs;
+    const global_value_defs_start = self.env.store.scratchDefTop();
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        try self.env.store.addScratchDef(def_idx);
+    }
+    self.env.global_value_defs = try self.env.store.defSpanFrom(global_value_defs_start);
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
@@ -2770,6 +2974,7 @@ pub fn canonicalizeFile(
     defer graph.deinit();
 
     const eval_order = try DependencyGraph.computeSCCs(&graph, self.env.gpa);
+    try self.poisonRecursiveNonFunctionDefs(&eval_order);
     const eval_order_ptr = try self.env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
     self.env.evaluation_order = eval_order_ptr;
@@ -2785,36 +2990,77 @@ pub fn canonicalizeFile(
     try self.env.publishScratchDiagnostics();
 }
 
-fn ensureTypeSlots(self: *Self, count: usize) std.mem.Allocator.Error!void {
-    for (0..count) |_| {
-        _ = try self.env.types.fresh();
+fn poisonRecursiveNonFunctionDefs(
+    self: *Self,
+    eval_order: *const @import("DependencyGraph.zig").EvaluationOrder,
+) std.mem.Allocator.Error!void {
+    const RecursiveNonFunctionDef = struct {
+        def_idx: CIR.Def.Idx,
+        ident: Ident.Idx,
+        region: Region,
+    };
+
+    for (eval_order.sccs) |scc| {
+        if (!scc.is_recursive) continue;
+
+        var defs_to_poison = std.ArrayList(RecursiveNonFunctionDef){};
+        defer defs_to_poison.deinit(self.env.gpa);
+
+        for (scc.defs) |def_idx| {
+            const def = self.env.store.getDef(def_idx);
+            if (isRecursiveFunctionDefExpr(self.env.store.getExpr(def.expr))) continue;
+
+            const ident = defPatternIdent(&self.env.store, def.pattern) orelse continue;
+            try defs_to_poison.append(self.env.gpa, .{
+                .def_idx = def_idx,
+                .ident = ident,
+                .region = self.env.store.getPatternRegion(def.pattern),
+            });
+        }
+
+        std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
+            fn lessThan(_: void, a: RecursiveNonFunctionDef, b: RecursiveNonFunctionDef) bool {
+                if (a.region.start.offset != b.region.start.offset) {
+                    return a.region.start.offset < b.region.start.offset;
+                }
+                if (a.region.end.offset != b.region.end.offset) {
+                    return a.region.end.offset < b.region.end.offset;
+                }
+                return @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx);
+            }
+        }.lessThan);
+
+        for (defs_to_poison.items) |def_to_poison| {
+            const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, Diagnostic{
+                .circular_value_definition = .{
+                    .ident = def_to_poison.ident,
+                    .region = def_to_poison.region,
+                },
+            });
+            self.env.store.setDefExpr(def_to_poison.def_idx, malformed_idx);
+        }
     }
 }
 
-/// Validate a type module for use in checking mode (roc check).
-/// This accepts both type modules and default-app modules, providing helpful
-/// error messages when neither is valid.
-/// Stub alias matching `validateForChecking` for legacy explicit-roots callers.
+fn isRecursiveFunctionDefExpr(expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_closure, .e_lambda, .e_anno_only, .e_hosted_lambda => true,
+        else => false,
+    };
+}
+
+fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
+    return switch (store.getPattern(pattern_idx)) {
+        .assign => |assign| assign.ident,
+        .as => |as_pattern| as_pattern.ident,
+        else => null,
+    };
+}
+
+/// Explicit-root callers need the same module validation; their roots are
+/// consumed from `explicit_root_defs`, recorded when defs are created.
 pub fn validateForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
     return self.validateForChecking();
-}
-
-/// Find a top-level def whose `assign` pattern binds the given identifier name.
-/// Returns the `Def.Idx` if found, null otherwise.
-pub fn explicitRootDefByName(self: *Self, name: []const u8) ?CIR.Def.Idx {
-    const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        const pat = self.env.store.getPattern(def.pattern);
-        const ident_idx = switch (pat) {
-            .assign => |a| a.ident,
-            .as => |a| a.ident,
-            else => continue,
-        };
-        const ident_text = self.env.getIdent(ident_idx);
-        if (std.mem.eql(u8, ident_text, name)) return def_idx;
-    }
-    return null;
 }
 
 /// Run post-canonicalization validation that the type checker depends on —
@@ -3044,6 +3290,7 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
     // Canonicalize the decl (with the validated anno)
     const def_idx = try self.canonicalizeDeclWithAnnotation(decl, mb_validated_anno);
     try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
 
     // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
     // and add the node index to exposed_items
@@ -3054,12 +3301,11 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
 
         // Top-level associated items (identifiers ending with '!') are automatically exposed
         const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
+        const idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
+        try self.recordExplicitRootDef(idx, def_idx);
 
         // If this identifier is exposed (or is an associated item), add it to exposed_items
         if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
-            // Get the interned identifier - it should already exist from parsing
-            const ident = base.Ident.for_text(ident_text);
-            const idx = try self.env.insertIdent(ident);
             // Store the def index as u16 in exposed_items
             const def_idx_u32: u32 = @intFromEnum(def_idx);
             try self.env.setExposedNodeIndexById(idx, def_idx_u32);
@@ -3932,6 +4178,7 @@ fn createFileImportDef(self: *Self, name_ident: base.Ident.Idx, expr_idx: Expr.I
         .kind = .let,
     }, region);
     try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
 }
 
 /// A module from `package [Mod1, Mod2, ...] {}` that will be auto-imported.
@@ -4116,9 +4363,11 @@ fn introduceItemsAliased(
         switch (module_env.module_kind) {
             .type_module => |main_type_ident| {
                 if (module_env.containsExposedById(main_type_ident)) {
+                    const original_type_name = module_env.getIdent(main_type_ident);
+                    const original_ident = try self.env.insertIdent(base.Ident.for_text(original_type_name));
                     const item_info = Scope.ExposedItemInfo{
                         .module_name = module_name,
-                        .original_name = main_type_ident,
+                        .original_name = original_ident,
                     };
                     try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
 
@@ -4136,14 +4385,11 @@ fn introduceItemsAliased(
                         break :blk module_env.getExposedNodeIndexById(main_type_ident);
                     };
 
-                    // Get the type name text from the target module's ident store
-                    const original_type_name = module_env.getIdent(main_type_ident);
-
                     try self.setExternalTypeBinding(
                         current_scope,
                         module_alias,
                         module_name,
-                        main_type_ident,
+                        original_ident,
                         original_type_name,
                         target_node_idx,
                         module_import_idx,
@@ -6157,18 +6403,14 @@ pub fn canonicalizeExpr(
             // method to dispatch to, so they desugar to `if`:
             //   `a and b` -> `if a then b else False`
             //   `a or b`  -> `if a then True else b`
-            // The bare `True`/`False` tags unify to Bool through the branch/else
-            // unification, and the condition position enforces that the left
-            // operand is a Bool.
             if (op == .@"and" or op == .@"or") {
-                const bool_tag_ident = try self.env.insertIdent(base.Ident.for_text(if (op == .@"and") "False" else "True"));
-                const bool_tag_idx = try self.env.addExpr(Expr{ .e_tag = .{
-                    .name = bool_tag_ident,
-                    .args = .{ .span = base.DataSpan.empty() },
-                } }, region);
+                const bool_tag = try self.addBoolTagExpr(
+                    if (op == .@"and") self.env.idents.false_tag else self.env.idents.true_tag,
+                    region,
+                );
 
-                const then_body = if (op == .@"and") can_rhs.idx else bool_tag_idx;
-                const final_else = if (op == .@"and") bool_tag_idx else can_rhs.idx;
+                const then_body = if (op == .@"and") can_rhs.idx else bool_tag;
+                const final_else = if (op == .@"and") bool_tag else can_rhs.idx;
 
                 const if_scratch_top = self.env.store.scratchIfBranchTop();
                 const if_branch_idx = try self.env.addIfBranch(Expr.IfBranch{
@@ -6941,6 +7183,46 @@ pub fn canonicalizeExpr(
             return null;
         },
     }
+}
+
+fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
+    const tag_expr_idx = try self.env.addExpr(CIR.Expr{
+        .e_tag = .{
+            .name = tag_name,
+            .args = Expr.Span{ .span = DataSpan.empty() },
+        },
+    }, region);
+
+    const binding_location = self.scopeLookupTypeBinding(self.env.idents.bool) orelse {
+        @panic("Bool type binding was absent during boolean operator canonicalization");
+    };
+
+    return switch (binding_location.binding.*) {
+        .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
+            .e_nominal = .{
+                .nominal_type_decl = stmt,
+                .backing_expr = tag_expr_idx,
+                .backing_type = .tag,
+            },
+        }, region),
+        .external_nominal => |external| blk: {
+            const import_idx = external.import_idx orelse {
+                @panic("Bool type binding had no import during boolean operator canonicalization");
+            };
+            const target_node_idx = external.target_node_idx orelse {
+                @panic("Bool type binding had no target node during boolean operator canonicalization");
+            };
+            break :blk try self.env.addExpr(CIR.Expr{
+                .e_nominal_external = .{
+                    .module_idx = import_idx,
+                    .target_node_idx = target_node_idx,
+                    .backing_expr = tag_expr_idx,
+                    .backing_type = .tag,
+                },
+            }, region);
+        },
+        .local_alias => @panic("Bool type binding was not a nominal type during boolean operator canonicalization"),
+    };
 }
 
 /// Canonicalize an expr. If it fails, convert it to a malormed expr node
@@ -8545,14 +8827,11 @@ pub fn canonicalizePattern(
                         if (scope_ptr.forward_references.fetchRemove(ident_idx)) |kv| {
                             var mut_regions = kv.value.reference_regions;
                             mut_regions.deinit(self.env.gpa);
-                            // The forward-reference creation parked an entry in
-                            // scope[0].idents so unqualified lookups would reuse
-                            // the same pattern. If the real definition belongs to
-                            // a deeper scope, scrub the speculative top-level entry
-                            // so it doesn't masquerade as a top-level binding.
-                            if (s_idx != self.scopes.items.len - 1) {
+                            const current_scope_idx = self.scopes.items.len - 1;
+                            if (s_idx != current_scope_idx) {
                                 _ = scope_ptr.idents.remove(ident_idx);
                             }
+                            try self.scopes.items[current_scope_idx].idents.put(self.env.gpa, ident_idx, kv.value.pattern_idx);
                             return kv.value.pattern_idx;
                         }
                     }
@@ -9671,8 +9950,8 @@ fn canonicalizeTypeAnnoBasicType(
                         if (self.processing_alias_declarations) {
                             const nom_stmt = self.env.store.getStatement(stmt);
                             const awaiting_real_decl = switch (nom_stmt) {
-                                .s_nominal_decl => |n| n.anno == .placeholder,
-                                .s_alias_decl => |a| a.anno == .placeholder,
+                                .s_nominal_decl => |n| n.anno == null,
+                                .s_alias_decl => |a| a.anno == null,
                                 else => false,
                             };
                             if (awaiting_real_decl) {
@@ -9702,7 +9981,7 @@ fn canonicalizeTypeAnnoBasicType(
                         // diagnostic, so we just emit a normal lookup here.
                         if (self.processing_alias_declarations) {
                             const alias_stmt = self.env.store.getStatement(stmt);
-                            if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == .placeholder) {
+                            if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == null) {
                                 // Check if this is a self-reference (same type name as current alias)
                                 const is_self_reference = if (self.current_alias_name) |current_name|
                                     current_name.eql(type_name_ident)
@@ -12561,6 +12840,12 @@ pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: S
             });
         },
         .already_in_scope => |existing_info| {
+            if (existing_info.module_name.eql(item_info.module_name) and
+                existing_info.original_name.eql(item_info.original_name))
+            {
+                return;
+            }
+
             // Create diagnostic for duplicate exposed item
             const item_text = self.env.getIdent(item_name);
             const existing_module_text = self.env.getIdent(existing_info.module_name);
@@ -13538,6 +13823,7 @@ fn injectEchoPlatform(self: *Self) std.mem.Allocator.Error!void {
 
     // Add the def to scratch so it's included in all_defs
     try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
 
     // Introduce echo! into scope so the body can reference it
     _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, echo_ident, pattern_idx, false, true);

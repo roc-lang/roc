@@ -22,19 +22,9 @@ deepType : Foo.Level1.Level2.Level3
 deepType = C
 ~~~
 # EXPECTED
-MODULE NOT IMPORTED - nominal_associated_deep_nesting.md:14:12:14:36
+NIL
 # PROBLEMS
-**MODULE NOT IMPORTED**
-There is no module with the name `Foo.Level1.Level2` imported into this Roc file.
-
-You're attempting to use this module here:
-**nominal_associated_deep_nesting.md:14:12:14:36:**
-```roc
-deepType : Foo.Level1.Level2.Level3
-```
-           ^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -133,7 +123,7 @@ deepType = C
 		(p-assign (ident "deepType"))
 		(e-tag (name "C"))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Foo.Level1.Level2.Level3") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -157,7 +147,7 @@ deepType = C
 	(defs
 		(patt (type "U64"))
 		(patt (type "U64"))
-		(patt (type "Error")))
+		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -170,5 +160,5 @@ deepType = C
 	(expressions
 		(expr (type "U64"))
 		(expr (type "U64"))
-		(expr (type "Error"))))
+		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

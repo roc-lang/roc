@@ -55,7 +55,7 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 166)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 169)
 				(receiver
 					(e-match
 						(match
@@ -81,12 +81,14 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 									(value
 										(e-num (value "12"))))))))
 				(args
-					(e-dispatch-call (method "times") (constraint-fn-var 161)
+					(e-dispatch-call (method "times") (constraint-fn-var 164)
 						(receiver
 							(e-num (value "5")))
 						(args
 							(e-num (value "5"))))))
-			(e-tag (name "True"))))
+			(e-nominal-external
+				(builtin)
+				(e-tag (name "True")))))
 	(if-else
 		(e-if
 			(if-branches
@@ -94,18 +96,18 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 267)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 277)
 									(receiver
-										(e-dispatch-call (method "plus") (constraint-fn-var 232)
+										(e-dispatch-call (method "plus") (constraint-fn-var 242)
 											(receiver
 												(e-num (value "13")))
 											(args
 												(e-num (value "2")))))
 									(args
 										(e-num (value "5"))))
-								(e-dispatch-call (method "is_gte") (constraint-fn-var 367)
+								(e-dispatch-call (method "is_gte") (constraint-fn-var 377)
 									(receiver
-										(e-dispatch-call (method "minus") (constraint-fn-var 332)
+										(e-dispatch-call (method "minus") (constraint-fn-var 342)
 											(receiver
 												(e-num (value "10")))
 											(args
@@ -113,14 +115,18 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 									(args
 										(e-num (value "16"))))))
 						(if-else
-							(e-tag (name "False"))))
-					(e-tag (name "True"))))
+							(e-nominal-external
+								(builtin)
+								(e-tag (name "False")))))
+					(e-nominal-external
+						(builtin)
+						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "is_lte") (constraint-fn-var 470)
+				(e-dispatch-call (method "is_lte") (constraint-fn-var 487)
 					(receiver
 						(e-num (value "12")))
 					(args
-						(e-dispatch-call (method "div_by") (constraint-fn-var 465)
+						(e-dispatch-call (method "div_by") (constraint-fn-var 482)
 							(receiver
 								(e-num (value "3")))
 							(args

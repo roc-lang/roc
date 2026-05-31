@@ -127,7 +127,7 @@ result = Foo.transform(Foo.defaultBar)
 			(ty-lookup (name "Foo.Bar") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 77)
+		(e-call (constraint-fn-var 78)
 			(e-lookup-local
 				(p-assign (ident "Foo.transform")))
 			(e-lookup-local

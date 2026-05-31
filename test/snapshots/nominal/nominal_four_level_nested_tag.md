@@ -17,31 +17,9 @@ value : Foo.Bar.Baz.Qux
 value = Foo.Bar.Baz.Qux.Y
 ~~~
 # EXPECTED
-MODULE NOT IMPORTED - nominal_four_level_nested_tag.md:9:9:9:24
-UNDECLARED TYPE - nominal_four_level_nested_tag.md:10:20:10:24
+NIL
 # PROBLEMS
-**MODULE NOT IMPORTED**
-There is no module with the name `Foo.Bar.Baz` imported into this Roc file.
-
-You're attempting to use this module here:
-**nominal_four_level_nested_tag.md:9:9:9:24:**
-```roc
-value : Foo.Bar.Baz.Qux
-```
-        ^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Foo.Bar.Baz.Qux_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_four_level_nested_tag.md:10:20:10:24:**
-```roc
-value = Foo.Bar.Baz.Qux.Y
-```
-                   ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,
@@ -113,9 +91,10 @@ value = Foo.Bar.Baz.Qux.Y
 (can-ir
 	(d-let
 		(p-assign (ident "value"))
-		(e-runtime-error (tag "undeclared_type"))
+		(e-nominal (nominal "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux")
+			(e-tag (name "Y")))
 		(annotation
-			(ty-malformed)))
+			(ty-lookup (name "Foo.Bar.Baz.Qux") (local))))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -139,7 +118,7 @@ value = Foo.Bar.Baz.Qux.Y
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Foo.Bar.Baz.Qux")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
@@ -150,5 +129,5 @@ value = Foo.Bar.Baz.Qux.Y
 		(nominal (type "Foo.Bar.Baz.Qux")
 			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Foo.Bar.Baz.Qux"))))
 ~~~
