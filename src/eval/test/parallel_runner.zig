@@ -157,6 +157,10 @@ const LLVM_BACKEND_INDEX = 3;
 /// finish while the other backends keep the normal eval timeout.
 const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
 const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
+const FORKED_BACKEND_KILL_GRACE_MS: i64 = 5_000;
+const FORKED_BACKEND_KILL_POLL_NS: u64 = 10 * std.time.ns_per_ms;
+const LLVM_EVAL_SLOT_COUNT: usize = 2;
+const LLVM_EVAL_LOCK_POLL_NS: u64 = 10 * std.time.ns_per_ms;
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
 const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
@@ -259,6 +263,21 @@ fn killForkedBackend(pid: posix.pid_t) void {
     };
 }
 
+fn reapForkedBackendAfterKill(pid: posix.pid_t) bool {
+    const deadline_ms = std.time.milliTimestamp() + FORKED_BACKEND_KILL_GRACE_MS;
+    while (true) {
+        const wait_result = posix.waitpid(pid, posix.W.NOHANG);
+        if (wait_result.pid == pid) return true;
+        if (std.time.milliTimestamp() >= deadline_ms) return false;
+        std.Thread.sleep(FORKED_BACKEND_KILL_POLL_NS);
+    }
+}
+
+fn killAndReapForkedBackend(pid: posix.pid_t) void {
+    killForkedBackend(pid);
+    _ = reapForkedBackendAfterKill(pid);
+}
+
 fn drainClosedPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) bool {
     var read_buf: [4096]u8 = undefined;
     while (true) {
@@ -290,6 +309,7 @@ fn forkAndEval(
     eval_fn: BackendEvalFn,
     lowered: *const LoweredProgram,
     timeout_ms: u64,
+    inherited_fd_to_close: ?posix.fd_t,
 ) ForkResult {
     if (comptime !has_fork or coverage_mode) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
@@ -322,6 +342,7 @@ fn forkAndEval(
     if (fork_result == 0) {
         // === Child process ===
         harness.closeFd(pipe_read);
+        if (inherited_fd_to_close) |fd| harness.closeFd(fd);
         _ = std.c.setsid();
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
@@ -365,8 +386,7 @@ fn forkAndEval(
         }};
         const poll_timeout = remainingPollTimeoutMs(deadline_ms);
         if (poll_timeout == 0) {
-            killForkedBackend(fork_result);
-            _ = harness.waitpid(fork_result, 0);
+            killAndReapForkedBackend(fork_result);
             result_buf.deinit(std.heap.page_allocator);
             return .{ .timed_out = {} };
         }
@@ -376,8 +396,7 @@ fn forkAndEval(
             break;
         };
         if (poll_count == 0) {
-            killForkedBackend(fork_result);
-            _ = harness.waitpid(fork_result, 0);
+            killAndReapForkedBackend(fork_result);
             result_buf.deinit(std.heap.page_allocator);
             return .{ .timed_out = {} };
         }
@@ -405,8 +424,7 @@ fn forkAndEval(
     }
 
     if (read_error) {
-        killForkedBackend(fork_result);
-        _ = harness.waitpid(fork_result, 0);
+        killAndReapForkedBackend(fork_result);
         result_buf.deinit(std.heap.page_allocator);
         return .{ .child_error = "ChildExecFailed" };
     }
@@ -442,6 +460,91 @@ fn forkAndEval(
         return .{ .child_error = "ChildExecFailed" };
     };
     return .{ .success = owned };
+}
+
+const LlvmEvalPermit = struct {
+    file: std.fs.File,
+
+    fn acquire() !LlvmEvalPermit {
+        var queue_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const queue_path = try llvmEvalQueueLockPath(&queue_path_buf);
+        var queue_file = try openLlvmEvalLockFile(queue_path);
+        defer queue_file.close();
+        try queue_file.lock(.exclusive);
+        defer queue_file.unlock();
+
+        while (true) {
+            if (try acquireLlvmEvalSlot()) |permit| {
+                return permit;
+            }
+
+            std.Thread.sleep(LLVM_EVAL_LOCK_POLL_NS);
+        }
+    }
+
+    fn release(self: *LlvmEvalPermit) void {
+        self.file.unlock();
+        self.file.close();
+    }
+};
+
+fn acquireLlvmEvalSlot() !?LlvmEvalPermit {
+    for (0..LLVM_EVAL_SLOT_COUNT) |slot| {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try llvmEvalSlotLockPath(&path_buf, slot);
+        var file = try openLlvmEvalLockFile(path);
+        errdefer file.close();
+
+        if (try file.tryLock(.exclusive)) {
+            return .{ .file = file };
+        }
+
+        file.close();
+    }
+
+    return null;
+}
+
+fn openLlvmEvalLockFile(path: []const u8) !std.fs.File {
+    return std.fs.createFileAbsolute(path, .{
+        .read = true,
+        .truncate = false,
+    });
+}
+
+fn llvmEvalLockPrefix() []const u8 {
+    return if (builtin.os.tag == .windows)
+        "C:\\Windows\\Temp\\roc_eval_llvm_"
+    else
+        "/tmp/roc_eval_llvm_";
+}
+
+fn llvmEvalSlotLockPath(buf: *[std.fs.max_path_bytes]u8, slot: usize) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{s}slot_{d}.lock", .{ llvmEvalLockPrefix(), slot });
+}
+
+fn llvmEvalQueueLockPath(buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{s}queue.lock", .{llvmEvalLockPrefix()});
+}
+
+fn llvmEvalInheritedFd(permit: *const LlvmEvalPermit) ?posix.fd_t {
+    if (comptime !has_fork) return null;
+    return permit.file.handle;
+}
+
+fn runBackendEval(
+    index: usize,
+    eval_fn: BackendEvalFn,
+    lowered: *const LoweredProgram,
+    timeout_ms: u64,
+) !ForkResult {
+    if (index == LLVM_BACKEND_INDEX) {
+        var permit = try LlvmEvalPermit.acquire();
+        defer permit.release();
+        return forkAndEval(eval_fn, lowered, timeout_ms, llvmEvalInheritedFd(&permit));
+    }
+
+    return forkAndEval(eval_fn, lowered, timeout_ms, null);
 }
 
 fn forkAndEvalWithStats(
@@ -900,7 +1003,8 @@ fn runInspectTest(
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
+        const fork_result = runBackendEval(i, eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms)) catch |err|
+            ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
         trace.log("finished backend {s} for inspected source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
@@ -1119,7 +1223,8 @@ fn runCrashTest(
 
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
+        const fork_result = runBackendEval(i, eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms)) catch |err|
+            ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
 
         switch (fork_result) {
@@ -1590,6 +1695,8 @@ fn printHelp() void {
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
         \\                        Default: 30000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
+        \\                        When LLVM is enabled, full-test workers are capped
+        \\                        to the LLVM eval slot count.
         \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
@@ -1839,6 +1946,15 @@ fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
     return if (max_children <= 1) 10_000 else 30_000;
 }
 
+fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count: usize) usize {
+    const requested = cli.max_threads orelse @min(cpu_count, test_count);
+    const capped = if (LLVM_BACKEND_IMPLEMENTED)
+        @min(requested, LLVM_EVAL_SLOT_COUNT)
+    else
+        requested;
+    return @max(1, capped);
+}
+
 fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
     for (args) |arg| {
         if (std.mem.eql(u8, arg, target)) return true;
@@ -2039,7 +2155,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = cli.max_threads orelse @min(cpu_count, tests.len);
+    const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
