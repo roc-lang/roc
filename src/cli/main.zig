@@ -1751,18 +1751,11 @@ fn runWithPosixFdInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handle: Sha
         argv[1 + i] = arg;
     }
 
-    // Run the interpreter as a child process from the temp directory
-    const child_cwd_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.arena) catch {
-        return ctx.fail(.{ .directory_not_found = .{
-            .path = ".",
-        } });
-    };
-
     std.log.debug("Spawning child process: {s} with {} app args", .{ exe_path, app_args.len });
-    std.log.debug("Child process working directory: {s}", .{child_cwd_path});
+    std.log.debug("Child process inherits current working directory", .{});
     var child = std.process.spawn(ctx.io.std_io, .{
         .argv = argv,
-        .cwd = .{ .path = child_cwd_path },
+        .cwd = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
     }) catch |err| {
