@@ -937,6 +937,23 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .private_type_in_exposed_type = .{
+            .exposed_type = rand_ident_idx(),
+            .private_type = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .private_type_in_exposed_field = .{
+            .exposed_type = rand_ident_idx(),
+            .field_name = rand_ident_idx(),
+            .private_type = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .module_not_imported = .{
             .module_name = rand_ident_idx(),
             .region = rand_region(),

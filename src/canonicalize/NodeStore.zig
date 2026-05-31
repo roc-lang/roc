@@ -303,7 +303,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 75;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
@@ -3739,6 +3739,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
+        .private_type_in_exposed_type => |r| {
+            node.tag = .diag_private_type_in_exposed_type;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.private_type) } });
+        },
+        .private_type_in_exposed_field => |r| {
+            node.tag = .diag_private_type_in_exposed_field;
+            region = r.region;
+            node.setPayload(.{ .diag_three_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.field_name), .ident3 = @bitCast(r.private_type) } });
+        },
         .type_from_missing_module => |r| {
             node.tag = .diag_type_from_missing_module;
             region = r.region;
@@ -4060,6 +4070,23 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .type_not_exposed = .{
                 .module_name = @as(base.Ident.Idx, @bitCast(p.ident1)),
                 .type_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_type => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_type = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_field => {
+            const p = payload.diag_three_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_field = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .field_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident3)),
                 .region = store.getRegionAt(node_idx),
             } };
         },

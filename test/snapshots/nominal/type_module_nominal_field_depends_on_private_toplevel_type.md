@@ -1,9 +1,7 @@
 # META
 ~~~ini
-description=Nominal (non-opaque) type module whose field depends on a PRIVATE top-level nominal type. Because ModuleType is declared with := its fields are public, but InternalType is not exposed to other modules, so this should warn. Marked skip=true until that warning is implemented; remove skip=true to activate the test.
+description=Nominal (non-opaque) type module whose field depends on a PRIVATE top-level nominal type. Because ModuleType is declared with := its fields are public, but InternalType is not exposed to other modules, so this warns.
 type=file:ModuleType.roc
-skip=true
-# TODO: expected "PRIVATE TYPE IN EXPOSED FIELD" warning is not implemented yet
 ~~~
 # SOURCE
 ~~~roc
@@ -17,7 +15,9 @@ ModuleType := {
 PRIVATE TYPE IN EXPOSED FIELD - type_module_nominal_field_depends_on_private_toplevel_type.md:4:13:4:25
 # PROBLEMS
 **PRIVATE TYPE IN EXPOSED FIELD**
-The `field` field of `ModuleType` refers to `InternalType`, but `InternalType` is private to this module, so other modules that use `ModuleType` cannot name this type.
+The `field` field of _ModuleType_ refers to _InternalType_, but _InternalType_ is private to this module.
+
+Other modules can see this field because _ModuleType_ is exposed and not opaque, but they cannot name this private type.
 
 It's referenced here:
 **type_module_nominal_field_depends_on_private_toplevel_type.md:4:13:4:25:**
@@ -26,8 +26,8 @@ It's referenced here:
 ```
             ^^^^^^^^^^^^
 
-Because `ModuleType` is a nominal type (declared with `:=`), its fields are visible to other modules. To keep `InternalType` private, either make `ModuleType` opaque (declare it with `::`), or move `InternalType` into `ModuleType`'s associated block so it can be referenced as `ModuleType.InternalType`.
 
+**Hint:** Expose the referenced type, make _ModuleType_ opaque with `::`, or move the type into _ModuleType_'s associated block.
 
 # TOKENS
 ~~~zig
