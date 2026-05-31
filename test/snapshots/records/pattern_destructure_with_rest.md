@@ -11,9 +11,21 @@ match person {
 }
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_with_rest.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
+
 **DOES NOT EXIST**
 `Str.len` does not exist.
 
@@ -77,8 +89,7 @@ match person {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "person"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns

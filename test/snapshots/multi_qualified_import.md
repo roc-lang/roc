@@ -27,11 +27,11 @@ PARSE ERROR - multi_qualified_import.md:12:30:12:31
 PARSE ERROR - multi_qualified_import.md:12:31:12:36
 PARSE ERROR - multi_qualified_import.md:12:36:12:37
 PARSE ERROR - multi_qualified_import.md:12:37:12:38
+UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
 MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
-UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 UNDEFINED VARIABLE - multi_qualified_import.md:12:8:12:12
 # PROBLEMS
 **PARSE ERROR**
@@ -122,6 +122,17 @@ data = json.Core.Utf8.encode("hello")
                                     ^
 
 
+**UNDECLARED TYPE**
+The type _Encoder_ is not declared in this scope.
+
+This type is referenced here:
+**multi_qualified_import.md:3:16:3:23:**
+```roc
+json_encoder : Encoder
+```
+               ^^^^^^^
+
+
 **DOES NOT EXIST**
 `Json.Core.Utf8.defaultEncoder` does not exist.
 
@@ -164,17 +175,6 @@ You're attempting to use this module here:
 data : json.Core.Utf8.EncodedData
 ```
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Encoder_ is not declared in this scope.
-
-This type is referenced here:
-**multi_qualified_import.md:3:16:3:23:**
-```roc
-json_encoder : Encoder
-```
-               ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -259,7 +259,7 @@ data = json
 		(p-assign (ident "json_encoder"))
 		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
-			(ty-lookup (name "Encoder") (local))))
+			(ty-malformed)))
 	(d-let
 		(p-assign (ident "process"))
 		(e-lambda
@@ -273,8 +273,7 @@ data = json
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "data"))
-		(e-lookup-local
-			(p-assign (ident "json")))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(ty-malformed)))
 	(s-import (module "json.Core")

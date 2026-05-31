@@ -218,11 +218,6 @@ expect user1 != user3
 					(e-num (value "200")))))
 		(annotation
 			(ty-lookup (name "UserId") (local))))
-	(s-nominal-decl
-		(ty-header (name "UserId"))
-		(ty-tag-union
-			(ty-tag-name (name "Id")
-				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
@@ -238,7 +233,12 @@ expect user1 != user3
 					(p-assign (ident "user1"))))
 			(rhs
 				(e-lookup-local
-					(p-assign (ident "user3")))))))
+					(p-assign (ident "user3"))))))
+	(s-nominal-decl
+		(ty-header (name "UserId"))
+		(ty-tag-union
+			(ty-tag-name (name "Id")
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

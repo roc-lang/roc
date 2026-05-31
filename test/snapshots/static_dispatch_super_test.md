@@ -9,11 +9,35 @@ canonicalize_diagnostics=true
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:15
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_super_test.md:1:1:1:8:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_super_test.md:1:9:1:13:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+        ^^^^
+
+
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
 
@@ -101,11 +125,9 @@ NO CHANGE
 															(e-match
 																(match
 																	(cond
-																		(e-call (constraint-fn-var 84)
-																			(e-lookup-local
-																				(p-assign (ident "some_fn")))
-																			(e-lookup-local
-																				(p-assign (ident "arg1")))))
+																		(e-call
+																			(e-runtime-error (tag "ident_not_in_scope"))
+																			(e-runtime-error (tag "ident_not_in_scope"))))
 																	(branches
 																		(branch
 																			(patterns

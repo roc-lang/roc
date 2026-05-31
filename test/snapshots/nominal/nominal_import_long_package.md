@@ -56,7 +56,7 @@ NO CHANGE
 		(p-assign (ident "red"))
 		(e-not-implemented)
 		(annotation
-			(ty-lookup (name "CE") (local))))
+			(ty-malformed)))
 	(s-import (module "design.Styles")
 		(exposes
 			(exposed (name "Encoder") (alias "CE") (wildcard false)))))

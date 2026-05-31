@@ -14,7 +14,6 @@ match nestedList {
 # EXPECTED
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
  - :0:0:0:0
-NON-EXHAUSTIVE MATCH - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
 **MISSING METHOD**
 The value before this ***** operator has a type that doesn't have a **times** method:
@@ -26,28 +25,9 @@ The value before this ***** operator has a type that doesn't have a **times** me
 
 The value's type, which does not have a method named **times**, is:
 
-    List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
+    List(_a)
 
 **Hint:** The ***** operator calls a method named **times** on the value preceding it, passing the value after the operator as the one argument.
-
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
-**nested_list_scoping.md:1:1:5:2:**
-```roc
-match nestedList {
-    [[x], [y]] => x + y
-    [[x, y]] => x - y
-    [x, [y]] => x * y
-}
-```
-
-The value being matched on has type:
-        _List(Error)_
-
-Missing patterns:
-        []
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig
@@ -102,8 +82,7 @@ match nestedList {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "nestedList"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns

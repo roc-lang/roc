@@ -15,58 +15,9 @@ match items {
 }
 ~~~
 # EXPECTED
-REDUNDANT PATTERN - list_underscore_patterns.md:1:1:8:2
-REDUNDANT PATTERN - list_underscore_patterns.md:1:1:8:2
-REDUNDANT PATTERN - list_underscore_patterns.md:1:1:8:2
+NIL
 # PROBLEMS
-**REDUNDANT PATTERN**
-The third branch of this `match` is redundant:
-**list_underscore_patterns.md:1:1:8:2:**
-```roc
-match items {
-    [_] => 1 # pattern match on a list with a single (ignored) element
-    [.., last] => last # pattern match on the last item in the list
-    [first, ..] => first # pattern match on the first item in the list
-    [_, _, third] => third # pattern match on the third item in the list
-    [x, _, _, y] => x + y # first + fourth item in the list
-    [] => 0 # match an empty list
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The fourth branch of this `match` is redundant:
-**list_underscore_patterns.md:1:1:8:2:**
-```roc
-match items {
-    [_] => 1 # pattern match on a list with a single (ignored) element
-    [.., last] => last # pattern match on the last item in the list
-    [first, ..] => first # pattern match on the first item in the list
-    [_, _, third] => third # pattern match on the third item in the list
-    [x, _, _, y] => x + y # first + fourth item in the list
-    [] => 0 # match an empty list
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The fifth branch of this `match` is redundant:
-**list_underscore_patterns.md:1:1:8:2:**
-```roc
-match items {
-    [_] => 1 # pattern match on a list with a single (ignored) element
-    [.., last] => last # pattern match on the last item in the list
-    [first, ..] => first # pattern match on the first item in the list
-    [_, _, third] => third # pattern match on the third item in the list
-    [x, _, _, y] => x + y # first + fourth item in the list
-    [] => 0 # match an empty list
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -133,8 +84,7 @@ match items {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "items"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -185,11 +135,13 @@ match items {
 								(p-underscore)
 								(p-assign (ident "y"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-lookup-local
-							(p-assign (ident "y"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 85)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "y")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

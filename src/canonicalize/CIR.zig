@@ -875,6 +875,8 @@ pub const Import = struct {
             const import_count: usize = @intCast(self.imports.len());
             if (import_count == 0) return;
 
+            // Index modules by name once. First occurrence wins, matching the
+            // "first match in iteration order" semantics of the previous linear scan.
             var name_to_idx = std.StringHashMap(u32).init(env.gpa);
             defer name_to_idx.deinit();
             name_to_idx.ensureTotalCapacity(@intCast(available_modules.len)) catch return;

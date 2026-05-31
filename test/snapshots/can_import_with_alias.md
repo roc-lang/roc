@@ -48,8 +48,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-lookup-local
-			(p-assign (ident "decode"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-import (module "json.Json")
 		(exposes)))
 ~~~
@@ -57,7 +56,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "Error"))))
 ~~~

@@ -15,9 +15,20 @@ main =
     expectsPerson("not a person")
 ~~~
 # EXPECTED
-UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
+UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
+**UNDECLARED TYPE**
+The type _Person_ is not declared in this scope.
+
+This type is referenced here:
+**nominal_type_origin_mismatch.md:3:17:3:23:**
+```roc
+expectsPerson : Person -> Str
+```
+                ^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `p` is not used anywhere in your code.
 
@@ -28,17 +39,6 @@ The unused variable is declared here:
 expectsPerson = |p| "Got a person"
 ```
                  ^
-
-
-**UNDECLARED TYPE**
-The type _Person_ is not declared in this scope.
-
-This type is referenced here:
-**nominal_type_origin_mismatch.md:3:17:3:23:**
-```roc
-expectsPerson : Person -> Str
-```
-                ^^^^^^
 
 
 # TOKENS
@@ -99,7 +99,7 @@ main =
 				(e-literal (string "Got a person"))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Person") (local))
+				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))

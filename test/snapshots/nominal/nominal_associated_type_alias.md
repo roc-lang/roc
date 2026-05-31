@@ -81,15 +81,15 @@ useMyBar = Foo.Bar.X
 		(annotation
 			(ty-lookup (name "MyBar") (local))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "nominal_associated_type_alias.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
 			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever"))))
 	(s-alias-decl
 		(ty-header (name "MyBar"))
 		(ty-lookup (name "Foo.Bar") (local))))
@@ -100,10 +100,10 @@ useMyBar = Foo.Bar.X
 	(defs
 		(patt (type "MyBar")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_associated_type_alias.Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo")))
 		(alias (type "MyBar")
 			(ty-header (name "MyBar"))))
 	(expressions

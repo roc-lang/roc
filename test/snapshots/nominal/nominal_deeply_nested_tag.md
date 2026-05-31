@@ -83,10 +83,6 @@ x = Foo.Bar.Baz.X
 		(annotation
 			(ty-lookup (name "Foo.Bar.Baz") (local))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "nominal_deeply_nested_tag.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "Something"))))
@@ -95,7 +91,11 @@ x = Foo.Bar.Baz.X
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
-			(ty-tag-name (name "Z")))))
+			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -103,12 +103,12 @@ x = Foo.Bar.Baz.X
 	(defs
 		(patt (type "Foo.Bar.Baz")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_deeply_nested_tag.Foo.Bar")))
 		(nominal (type "Foo.Bar.Baz")
-			(ty-header (name "nominal_deeply_nested_tag.Foo.Bar.Baz"))))
+			(ty-header (name "nominal_deeply_nested_tag.Foo.Bar.Baz")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Foo.Bar.Baz"))))
 ~~~

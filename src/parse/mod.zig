@@ -22,6 +22,9 @@ pub const Node = @import("Node.zig");
 /// **AST.NodeStore**
 pub const NodeStore = @import("NodeStore.zig");
 
+/// Parser-owned declaration inventory.
+pub const DeclIndex = @import("DeclIndex.zig");
+
 /// Parser-owned numeric literal facts.
 pub const NumericLiteral = @import("NumericLiteral.zig");
 
@@ -49,6 +52,7 @@ fn runParse(allocators: *Allocators, env: *CommonEnv, parserCall: *const fn (*Pa
 
     errdefer result.tokens.deinit(gpa);
     errdefer parser.store.deinit();
+    errdefer parser.decl_index.deinit();
     errdefer parser.diagnostics.deinit(gpa);
 
     const idx = try parserCall(&parser);
@@ -63,6 +67,7 @@ fn runParse(allocators: *Allocators, env: *CommonEnv, parserCall: *const fn (*Pa
         .env = env,
         .tokens = result.tokens,
         .store = parser.store,
+        .decl_index = parser.decl_index,
         .root_node_idx = idx,
         .tokenize_diagnostics = tokenize_diagnostics,
         .parse_diagnostics = parser.diagnostics,
@@ -127,6 +132,7 @@ test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
+    std.testing.refAllDecls(@import("DeclIndex.zig"));
     std.testing.refAllDecls(@import("NumericLiteral.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));

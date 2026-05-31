@@ -122,7 +122,7 @@ external = Foo.defaultBar
 				(ty-lookup (name "Bar") (local)))))
 	(d-let
 		(p-assign (ident "Foo.useDefault"))
-		(e-call (constraint-fn-var 67)
+		(e-call (constraint-fn-var 68)
 			(e-lookup-local
 				(p-assign (ident "Foo.transform")))
 			(e-lookup-local
@@ -134,15 +134,15 @@ external = Foo.defaultBar
 		(annotation
 			(ty-lookup (name "Foo.Bar") (local))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
-			(ty-tag-name (name "Z")))))
+			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -153,10 +153,10 @@ external = Foo.defaultBar
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar"))))
+			(ty-header (name "Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))

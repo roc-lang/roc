@@ -46,6 +46,8 @@ UNDEFINED VARIABLE - can_import_comprehensive.md:7:14:7:23
 UNDEFINED VARIABLE - can_import_comprehensive.md:8:14:8:22
 UNDEFINED VARIABLE - can_import_comprehensive.md:11:15:11:25
 UNDEFINED VARIABLE - can_import_comprehensive.md:14:15:14:24
+UNDEFINED VARIABLE - can_import_comprehensive.md:17:15:17:18
+UNDEFINED VARIABLE - can_import_comprehensive.md:18:15:18:19
 UNDEFINED VARIABLE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
 **DUPLICATE DEFINITION**
@@ -119,6 +121,28 @@ Is there an `import` or `exposing` missing up-top?
     result2 = Http.post
 ```
               ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `get` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:17:15:17:18:**
+```roc
+    result3 = get
+```
+              ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `post` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_comprehensive.md:18:15:18:19:**
+```roc
+    result4 = post
+```
+              ^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -254,36 +278,28 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "client"))
-				(e-lookup-local
-					(p-assign (ident "get"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "parser"))
-				(e-lookup-local
-					(p-assign (ident "utf8"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "helper"))
-				(e-lookup-local
-					(p-assign (ident "trim"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result1"))
-				(e-lookup-local
-					(p-assign (ident "parse"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result2"))
-				(e-lookup-local
-					(p-assign (ident "post"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result3"))
-				(e-lookup-local
-					(p-assign (ident "get"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "result4"))
-				(e-lookup-local
-					(p-assign (ident "post"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(s-let
 				(p-assign (ident "combined"))
-				(e-lookup-local
-					(p-assign (ident "concat"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(e-tuple
 				(elems
 					(e-lookup-local
@@ -315,7 +331,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(a, _field, _field2, _field3, b, a, b, _field4)")))
+		(patt (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
 	(expressions
-		(expr (type "(a, _field, _field2, _field3, b, a, b, _field4)"))))
+		(expr (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
 ~~~

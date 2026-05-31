@@ -212,7 +212,7 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 257)
+								(e-dispatch-call (method "plus") (constraint-fn-var 253)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "acc"))))
@@ -223,7 +223,7 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 369)
+								(e-dispatch-call (method "plus") (constraint-fn-var 365)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "acc"))))
@@ -236,7 +236,7 @@ NO CHANGE
 				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "count"))
-		(e-call (constraint-fn-var 500)
+		(e-call (constraint-fn-var 495)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local
@@ -246,6 +246,13 @@ NO CHANGE
 				(p-assign (ident "count_child"))))
 		(annotation
 			(ty-lookup (name "I64") (builtin))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "count"))))
+			(rhs
+				(e-num (value "1")))))
 	(s-nominal-decl
 		(ty-header (name "Elem"))
 		(ty-tag-union
@@ -254,14 +261,7 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Elem") (local))))
 			(ty-tag-name (name "Text")
-				(ty-lookup (name "Str") (builtin)))))
-	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-lookup-local
-					(p-assign (ident "count"))))
-			(rhs
-				(e-num (value "1"))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

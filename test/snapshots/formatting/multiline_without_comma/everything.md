@@ -1821,7 +1821,7 @@ h = |x, y| {
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 144)
+					(e-call (constraint-fn-var 148)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local
@@ -1886,6 +1886,14 @@ h = |x, y| {
 								(value
 									(e-lookup-local
 										(p-assign (ident "a")))))))))))
+	(s-import (module "I1")
+		(exposes
+			(exposed (name "I11") (wildcard false))
+			(exposed (name "I12") (wildcard false))))
+	(s-import (module "I2")
+		(exposes
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args
@@ -1908,15 +1916,7 @@ h = |x, y| {
 		(ty-header (name "F"))
 		(ty-tag-union
 			(ty-tag-name (name "A"))
-			(ty-tag-name (name "B"))))
-	(s-import (module "I1")
-		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
-	(s-import (module "I2")
-		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false)))))
+			(ty-tag-name (name "B")))))
 ~~~
 # TYPES
 ~~~clojure

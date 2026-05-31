@@ -11,10 +11,10 @@ match list {
 }
 ~~~
 # EXPECTED
-NON-EXHAUSTIVE MATCH - list_destructure_scoping.md:1:1:4:2
+POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
+**POLYMORPHIC VALUE**
+This top-level value still has an unresolved polymorphic type:
 **list_destructure_scoping.md:1:1:4:2:**
 ```roc
 match list {
@@ -23,13 +23,12 @@ match list {
 }
 ```
 
-The value being matched on has type:
-        _List(a) where [a.plus : a, a -> a]_
 
-Missing patterns:
-        []
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
+Its type is:
+```roc
+a where [a.plus : a, a -> a]
+```
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -68,8 +67,7 @@ match list {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "list"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -88,11 +86,13 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-lookup-local
-							(p-assign (ident "second")))))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 26)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "second"))))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -62,8 +62,7 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 							(cond
 								(e-tag (name "Err")
 									(args
-										(e-lookup-local
-											(p-assign (ident "foo"))))))
+										(e-runtime-error (tag "ident_not_in_scope")))))
 							(branches
 								(branch
 									(patterns

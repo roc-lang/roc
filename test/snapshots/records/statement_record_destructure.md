@@ -57,13 +57,12 @@ NO CHANGE
 				(record-destruct (label "email") (ident "email")
 					(required
 						(p-assign (ident "email"))))))
-		(e-lookup-local
-			(p-assign (ident "person")))))
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(expressions
-		(expr (type "{ age: _field, email: _field2, name: _field3, .. }"))))
+		(expr (type "Error"))))
 ~~~

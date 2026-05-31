@@ -310,7 +310,7 @@ expect output == "div | span | p"
 											(p-assign (ident "s")))))))))
 				(s-let
 					(p-assign (ident "joined"))
-					(e-call (constraint-fn-var 290)
+					(e-call (constraint-fn-var 289)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -356,10 +356,10 @@ expect output == "div | span | p"
 														(p-assign (ident "item_str"))))))
 										(if-else
 											(e-block
-												(e-call (constraint-fn-var 289)
+												(e-call (constraint-fn-var 288)
 													(e-lookup-external
 														(builtin))
-													(e-call (constraint-fn-var 288)
+													(e-call (constraint-fn-var 287)
 														(e-lookup-external
 															(builtin))
 														(e-lookup-local
@@ -435,7 +435,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 435)
+		(e-call (constraint-fn-var 434)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local
@@ -446,18 +446,13 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "output"))
-		(e-dispatch-call (method "to_str") (constraint-fn-var 443)
+		(e-dispatch-call (method "to_str") (constraint-fn-var 442)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "result"))))
 			(args))
 		(annotation
 			(ty-lookup (name "Str") (builtin))))
-	(s-nominal-decl
-		(ty-header (name "Html"))
-		(ty-tag-union
-			(ty-tag-name (name "Raw")
-				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
@@ -465,7 +460,12 @@ expect output == "div | span | p"
 					(p-assign (ident "output"))))
 			(rhs
 				(e-string
-					(e-literal (string "div | span | p")))))))
+					(e-literal (string "div | span | p"))))))
+	(s-nominal-decl
+		(ty-header (name "Html"))
+		(ty-tag-union
+			(ty-tag-name (name "Raw")
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

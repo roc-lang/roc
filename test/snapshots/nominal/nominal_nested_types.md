@@ -71,13 +71,13 @@ Foo := [Whatever].{
 		(p-assign (ident "Foo.x"))
 		(e-num (value "5")))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
-			(ty-tag-name (name "Something")))))
+			(ty-tag-name (name "Something"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -86,10 +86,10 @@ Foo := [Whatever].{
 		(patt (type "Dec"))
 		(patt (type "Dec")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar"))))
+			(ty-header (name "Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))))

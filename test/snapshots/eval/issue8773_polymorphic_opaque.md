@@ -191,7 +191,7 @@ NO CHANGE
 		(e-match
 			(match
 				(cond
-					(e-call (constraint-fn-var 202)
+					(e-call (constraint-fn-var 203)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -202,7 +202,7 @@ NO CHANGE
 							(pattern (degenerate false)
 								(p-applied-tag)))
 						(value
-							(e-call (constraint-fn-var 205)
+							(e-call (constraint-fn-var 206)
 								(e-lookup-local
 									(p-assign (ident "get_text")))
 								(e-lookup-local
@@ -216,6 +216,14 @@ NO CHANGE
 								(e-literal (string "empty"))))))))
 		(annotation
 			(ty-lookup (name "Str") (builtin))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-string
+					(e-literal (string "hello"))))))
 	(s-nominal-decl
 		(ty-header (name "Item"))
 		(ty-tag-union
@@ -224,15 +232,7 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Item") (local))))
 			(ty-tag-name (name "Text")
-				(ty-lookup (name "Str") (builtin)))))
-	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-lookup-local
-					(p-assign (ident "result"))))
-			(rhs
-				(e-string
-					(e-literal (string "hello")))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

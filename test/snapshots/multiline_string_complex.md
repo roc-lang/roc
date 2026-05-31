@@ -281,16 +281,22 @@ x = {
 	(d-let
 		(p-assign (ident "value3"))
 		(e-string
-			(e-literal (string "This is a string
-With multiple lines
+			(e-literal (string "This is a string"))
+			(e-literal (string "
+"))
+			(e-literal (string "With multiple lines"))
+			(e-literal (string "
 "))
 			(e-lookup-local
 				(p-assign (ident "value1")))))
 	(d-let
 		(p-assign (ident "value4"))
 		(e-string
-			(e-literal (string "This is a string
-With multiple lines
+			(e-literal (string "This is a string"))
+			(e-literal (string "
+"))
+			(e-literal (string "With multiple lines"))
+			(e-literal (string "
 "))
 			(e-lookup-local
 				(p-assign (ident "value2")))))

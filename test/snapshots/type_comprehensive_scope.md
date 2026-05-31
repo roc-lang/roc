@@ -43,41 +43,10 @@ Complex : {
 }
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:34
-UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 # PROBLEMS
-**TYPE REDECLARED**
-The type _Try_ is being redeclared.
-
-The redeclaration is here:
-**type_comprehensive_scope.md:10:1:10:34:**
-```roc
-Try(ok, err) : [Ok(ok), Err(err)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _Try_ was already declared here:
-**type_comprehensive_scope.md:1:1:1:1:**
-```roc
-# Built-in types should work
-```
-^
-
-
-**UNDECLARED TYPE**
-The type _Node_ is not declared in this scope.
-
-This type is referenced here:
-**type_comprehensive_scope.md:13:19:13:23:**
-```roc
-Tree(a) : [Branch(Node(a)), Leaf(a)]
-```
-                  ^^^^
-
-
 **TYPE REDECLARED**
 The type _Person_ is being redeclared.
 
@@ -329,25 +298,20 @@ Complex : {
 			(ty-tag-name (name "Err")
 				(ty-rigid-var-lookup (ty-rigid-var (name "err"))))))
 	(s-alias-decl
+		(ty-header (name "Node")
+			(ty-args
+				(ty-rigid-var (name "a"))))
+		(ty-malformed))
+	(s-alias-decl
 		(ty-header (name "Tree")
 			(ty-args
 				(ty-rigid-var (name "a"))))
 		(ty-tag-union
 			(ty-tag-name (name "Branch")
-				(ty-malformed))
+				(ty-apply (name "Node") (local)
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
 			(ty-tag-name (name "Leaf")
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
-	(s-alias-decl
-		(ty-header (name "Node")
-			(ty-args
-				(ty-rigid-var (name "a"))))
-		(ty-record
-			(field (field "value")
-				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
-			(field (field "children")
-				(ty-apply (name "List") (builtin)
-					(ty-apply (name "Tree") (local)
-						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
 		(ty-header (name "MyTry"))
 		(ty-apply (name "Try") (local)
@@ -399,12 +363,12 @@ Complex : {
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))))
-		(alias (type "Tree(a)")
-			(ty-header (name "Tree")
-				(ty-args
-					(ty-rigid-var (name "a")))))
 		(alias (type "Node(a)")
 			(ty-header (name "Node")
+				(ty-args
+					(ty-rigid-var (name "a")))))
+		(alias (type "Tree(a)")
+			(ty-header (name "Tree")
 				(ty-args
 					(ty-rigid-var (name "a")))))
 		(alias (type "MyTry")

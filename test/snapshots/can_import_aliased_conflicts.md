@@ -90,8 +90,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "x"))
-				(e-lookup-local
-					(p-assign (ident "parse"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(e-lookup-local
 				(p-assign (ident "x")))))
 	(s-import (module "json.Json")
@@ -103,7 +102,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_a"))))
+		(expr (type "Error"))))
 ~~~

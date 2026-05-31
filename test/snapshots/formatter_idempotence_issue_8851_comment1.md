@@ -52,11 +52,10 @@ a = 0->b()
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-dispatch-call (method "c") (constraint-fn-var 47)
+		(e-method-call (method "c")
 			(receiver
-				(e-call (constraint-fn-var 46)
-					(e-lookup-local
-						(p-assign (ident "b")))
+				(e-call
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-num (value "0"))))
 			(args))))
 ~~~
@@ -64,7 +63,7 @@ a = 0->b()
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_d")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_d"))))
+		(expr (type "Error"))))
 ~~~

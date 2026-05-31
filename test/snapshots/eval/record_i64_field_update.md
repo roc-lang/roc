@@ -171,7 +171,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 170)
+						(e-dispatch-call (method "plus") (constraint-fn-var 166)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -194,7 +194,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 327)
+						(e-dispatch-call (method "minus") (constraint-fn-var 323)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -206,17 +206,10 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
 				(ty-lookup (name "Robot") (local)))))
-	(s-alias-decl
-		(ty-header (name "Robot"))
-		(ty-record
-			(field (field "x")
-				(ty-lookup (name "I64") (builtin)))
-			(field (field "y")
-				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 473)
+				(e-call (constraint-fn-var 469)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -234,7 +227,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 890)
+				(e-call (constraint-fn-var 886)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -252,9 +245,9 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1308)
+				(e-call (constraint-fn-var 1304)
 					(e-runtime-error (tag "erroneous_value_use"))
-					(e-call (constraint-fn-var 1307)
+					(e-call (constraint-fn-var 1303)
 						(e-runtime-error (tag "erroneous_value_use"))
 						(e-record
 							(fields
@@ -268,7 +261,14 @@ NO CHANGE
 						(field (name "x")
 							(e-num (value "0")))
 						(field (name "y")
-							(e-num (value "0")))))))))
+							(e-num (value "0"))))))))
+	(s-alias-decl
+		(ty-header (name "Robot"))
+		(ty-record
+			(field (field "x")
+				(ty-lookup (name "I64") (builtin)))
+			(field (field "y")
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

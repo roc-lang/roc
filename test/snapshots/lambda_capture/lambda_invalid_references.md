@@ -48,10 +48,9 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "x"))))
 				(args
-					(e-lookup-local
-						(p-assign (ident "z"))))))))
+					(e-runtime-error (tag "ident_not_in_scope")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> (_arg -> a) where [a.plus : a, b -> a]"))
+(expr (type "a -> (_arg -> a) where [a.plus : a, Error -> a]"))
 ~~~

@@ -31,13 +31,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-lookup-local
-		(p-assign (ident "foo")))
+	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-num (value "42"))
 	(e-string
 		(e-literal (string "hello"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

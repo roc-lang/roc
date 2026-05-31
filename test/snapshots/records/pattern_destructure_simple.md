@@ -11,8 +11,20 @@ match person {
 }
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_simple.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `age` is not used anywhere in your code.
 
@@ -54,8 +66,7 @@ match person {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "person"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns

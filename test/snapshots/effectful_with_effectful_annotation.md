@@ -97,9 +97,8 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "msg")))
-			(e-call (constraint-fn-var 42)
-				(e-lookup-local
-					(p-assign (ident "line!")))
+			(e-call
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "msg")))))
 		(annotation
@@ -108,7 +107,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 49)
+		(e-call (constraint-fn-var 45)
 			(e-lookup-local
 				(p-assign (ident "print_msg!")))
 			(e-string

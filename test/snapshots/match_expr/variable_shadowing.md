@@ -59,10 +59,8 @@ match (value, other) {
 		(cond
 			(e-tuple
 				(elems
-					(e-lookup-local
-						(p-assign (ident "value")))
-					(e-lookup-local
-						(p-assign (ident "other"))))))
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-runtime-error (tag "ident_not_in_scope")))))
 		(branches
 			(branch
 				(patterns
@@ -96,5 +94,5 @@ match (value, other) {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, a -> a, a.times : a, Dec -> a]"))
+(expr (type "Error"))
 ~~~

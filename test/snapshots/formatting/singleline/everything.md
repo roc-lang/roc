@@ -448,7 +448,7 @@ NO CHANGE
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 167)
+					(e-call (constraint-fn-var 174)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local
@@ -513,6 +513,14 @@ NO CHANGE
 								(value
 									(e-lookup-local
 										(p-assign (ident "a")))))))))))
+	(s-import (module "I1")
+		(exposes
+			(exposed (name "I11") (wildcard false))
+			(exposed (name "I12") (wildcard false))))
+	(s-import (module "I2")
+		(exposes
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args
@@ -554,15 +562,7 @@ NO CHANGE
 	(s-alias-decl
 		(ty-header (name "G"))
 		(ty-fn (effectful false)
-			(ty-lookup (name "Str") (builtin))))
-	(s-import (module "I1")
-		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
-	(s-import (module "I2")
-		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false)))))
+			(ty-lookup (name "Str") (builtin)))))
 ~~~
 # TYPES
 ~~~clojure

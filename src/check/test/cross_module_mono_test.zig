@@ -63,7 +63,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .all_defs = serialized_ptr.all_defs,
         .global_value_defs = serialized_ptr.global_value_defs,
         .all_statements = serialized_ptr.all_statements,
-        .type_decl_order = serialized_ptr.type_decl_order,
         .exports = serialized_ptr.exports,
         .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
         .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),

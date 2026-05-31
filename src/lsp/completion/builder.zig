@@ -1387,8 +1387,7 @@ pub const CompletionBuilder = struct {
                     }
 
                     // Get the backing type annotation
-                    const anno_idx = nom_decl.anno orelse return false;
-                    const anno = module_env.store.getTypeAnno(anno_idx);
+                    const anno = module_env.store.getTypeAnno(nom_decl.anno);
                     return try self.addTagsFromTypeAnno(module_env, anno);
                 },
                 else => {},

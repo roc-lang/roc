@@ -32,8 +32,7 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-lookup-local
-				(p-assign (ident "bool")))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-num (value "1"))))
 	(if-else
 		(e-num (value "2"))))

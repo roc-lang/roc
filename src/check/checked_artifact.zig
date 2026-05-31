@@ -2628,7 +2628,7 @@ const LocalTypeDeclarationIndex = struct {
                 .s_nominal_decl => |nominal| .{ nominal.header, nominal.anno },
                 else => continue,
             };
-            if (anno_idx == null) continue;
+            if (anno_idx == .placeholder) continue;
 
             const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
             if (finalized_by_relative_name.get(header.relative_name)) |existing| {
@@ -2658,7 +2658,7 @@ const LocalTypeDeclarationIndex = struct {
             .s_nominal_decl => |nominal| .{ nominal.header, nominal.anno },
             else => checkedArtifactInvariant("checked declaration template lookup referenced a non-type declaration", .{}),
         };
-        if (anno_idx != null) return statement_idx;
+        if (anno_idx != .placeholder) return statement_idx;
 
         const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
         return self.finalized_by_relative_name.get(header.relative_name) orelse {
@@ -2679,10 +2679,10 @@ fn appendCheckedNominalDeclarationFromStatement(
     local_type_declarations: *const LocalTypeDeclarationIndex,
     statement_idx: CIR.Statement.Idx,
     header_idx: CIR.TypeHeader.Idx,
-    maybe_anno_idx: ?CIR.TypeAnno.Idx,
+    anno_idx: CIR.TypeAnno.Idx,
     _: bool,
 ) Allocator.Error!void {
-    const anno_idx = maybe_anno_idx orelse return;
+    if (anno_idx == .placeholder) return;
 
     const statement_root = try appendCheckedTypeRoot(
         allocator,
@@ -4386,7 +4386,7 @@ fn localNominalDeclarationIdForIdent(
             .s_nominal_decl => |nominal| nominal,
             else => continue,
         };
-        if (nominal.anno == null) continue;
+        if (nominal.anno == .placeholder) continue;
         const header = module.moduleEnvConst().store.getTypeHeader(nominal.header);
         const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
         next_id += 1;
@@ -4409,7 +4409,7 @@ fn localNominalDeclarationIdForStatement(
             .s_nominal_decl => |nominal| nominal,
             else => continue,
         };
-        if (nominal.anno == null) continue;
+        if (nominal.anno == .placeholder) continue;
         const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
         next_id += 1;
         if (candidate == statement_idx) return id;

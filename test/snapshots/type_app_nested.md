@@ -107,7 +107,7 @@ main! = |_| processNested([])
 				(ty-apply (name "List") (builtin)
 					(ty-apply (name "Try") (builtin)
 						(ty-lookup (name "Str") (builtin))
-						(ty-lookup (name "Err") (local))))
+						(ty-malformed)))
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
@@ -115,7 +115,7 @@ main! = |_| processNested([])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 97)
+			(e-call (constraint-fn-var 95)
 				(e-lookup-local
 					(p-assign (ident "processNested")))
 				(e-empty_list)))))

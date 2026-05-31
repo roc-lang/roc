@@ -81,29 +81,28 @@ Outer := [A].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "simple_scope_test.Outer.outer_val"))
-		(e-lookup-local
-			(p-assign (ident "inner_val"))))
-	(s-nominal-decl
-		(ty-header (name "Outer"))
-		(ty-tag-union
-			(ty-tag-name (name "A"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-nominal-decl
 		(ty-header (name "simple_scope_test.Outer.Inner"))
 		(ty-tag-union
-			(ty-tag-name (name "B")))))
+			(ty-tag-name (name "B"))))
+	(s-nominal-decl
+		(ty-header (name "Outer"))
+		(ty-tag-union
+			(ty-tag-name (name "A")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "Dec"))
-		(patt (type "_a")))
+		(patt (type "Error")))
 	(type_decls
-		(nominal (type "Outer")
-			(ty-header (name "Outer")))
 		(nominal (type "Outer.Inner")
-			(ty-header (name "simple_scope_test.Outer.Inner"))))
+			(ty-header (name "simple_scope_test.Outer.Inner")))
+		(nominal (type "Outer")
+			(ty-header (name "Outer"))))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "_a"))))
+		(expr (type "Error"))))
 ~~~

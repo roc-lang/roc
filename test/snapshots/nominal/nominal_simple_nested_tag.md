@@ -63,15 +63,15 @@ x = Foo.Bar.X
 		(e-nominal (nominal "nominal_simple_nested_tag.Foo.Bar")
 			(e-tag (name "X"))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "nominal_simple_nested_tag.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
-			(ty-tag-name (name "Z")))))
+			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -79,10 +79,10 @@ x = Foo.Bar.X
 	(defs
 		(patt (type "Foo.Bar")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "nominal_simple_nested_tag.Foo.Bar"))))
+			(ty-header (name "nominal_simple_nested_tag.Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Foo.Bar"))))
 ~~~

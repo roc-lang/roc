@@ -13,41 +13,9 @@ match coord {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
-TYPE MISMATCH - tuple_patterns.md:3:18:3:19
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `y` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
-The unused variable is declared here:
-**tuple_patterns.md:5:9:5:10:**
-```roc
-    (x, y) => x
-```
-        ^
-
-
-**TYPE MISMATCH**
-The second branch of this `match` does not match the previous branches :
-**tuple_patterns.md:3:18:3:19:**
-```roc
-    (x, Zero) => x
-```
-                 ^
-
-The second branch is:
-
-    [Zero, ..]
-
-But the previous branches result in:
-
-    Str
-
-All branches in a `match` must have compatible types.
-__Note:__ You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -99,8 +67,7 @@ match coord {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "coord"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -145,5 +112,5 @@ match coord {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

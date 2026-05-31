@@ -48,8 +48,7 @@ match numbers {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "numbers"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -72,5 +71,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(_a)"))
+(expr (type "Error"))
 ~~~

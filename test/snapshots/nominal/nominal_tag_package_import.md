@@ -28,7 +28,7 @@ blue : CC.Color
 
 
 **MODULE NOT FOUND**
-The type `.Color` is qualified by the module `styles.Color`, but that module was not found in this Roc project.
+The type `Color` is qualified by the module `styles.Color`, but that module was not found in this Roc project.
 
 You're attempting to use this type here:
 **nominal_tag_package_import.md:6:10:6:16:**

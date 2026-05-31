@@ -228,6 +228,14 @@ NO CHANGE
 						(value
 							(e-string
 								(e-literal (string "empty")))))))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-string
+					(e-literal (string "text"))))))
 	(s-nominal-decl
 		(ty-header (name "Elem"))
 		(ty-tag-union
@@ -236,15 +244,7 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Elem") (local))))
 			(ty-tag-name (name "Text")
-				(ty-lookup (name "Str") (builtin)))))
-	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-lookup-local
-					(p-assign (ident "result"))))
-			(rhs
-				(e-string
-					(e-literal (string "text")))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

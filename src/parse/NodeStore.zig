@@ -249,7 +249,7 @@ pub fn addFile(store: *NodeStore, file: AST.File) std.mem.Allocator.Error!void {
     try store.extra_data.append(store.gpa, @intFromEnum(file.header));
     store.nodes.set(root_node_idx, .{
         .tag = .root,
-        .main_token = 0,
+        .main_token = @intFromEnum(file.scope),
         .data = .{ .lhs = file.statements.span.start, .rhs = file.statements.span.len },
         .region = file.region,
     });
@@ -507,7 +507,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                 // Format: [where_idx, has_associated, associated_data...]
                 // where_idx is 0 if null, otherwise the Collection.Idx value
                 // has_associated is 0 or 1
-                // associated_data is [statements_start, statements_len, region_start, region_end] if has_associated == 1
+                // associated_data is [statements_start, statements_len, scope_idx, region_start, region_end] if has_associated == 1
                 const extra_start = @as(u32, @intCast(store.extra_data.items.len));
 
                 // Store where clause index (0 if null)
@@ -519,6 +519,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                     try store.extra_data.append(store.gpa, 1); // has_associated = 1
                     try store.extra_data.append(store.gpa, assoc.statements.span.start);
                     try store.extra_data.append(store.gpa, assoc.statements.span.len);
+                    try store.extra_data.append(store.gpa, @intFromEnum(assoc.scope));
                     try store.extra_data.append(store.gpa, assoc.region.start);
                     try store.extra_data.append(store.gpa, assoc.region.end);
                 } else {
@@ -895,7 +896,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
         .block => |body| {
             node.tag = .block;
             node.region = body.region;
-            node.main_token = 0;
+            node.main_token = @intFromEnum(body.scope);
             node.data.lhs = body.statements.span.start;
             node.data.rhs = body.statements.span.len;
         },
@@ -1205,6 +1206,7 @@ pub fn getFile(store: *const NodeStore) AST.File {
     return .{
         .header = @enumFromInt(header),
         .statements = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+        .scope = @enumFromInt(node.main_token),
         .region = node.region,
     };
 }
@@ -1462,10 +1464,12 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 if (has_associated == 1) {
                     const stmt_start = store.extra_data.items[extra_start + 2];
                     const stmt_len = store.extra_data.items[extra_start + 3];
-                    const reg_start = store.extra_data.items[extra_start + 4];
-                    const reg_end = store.extra_data.items[extra_start + 5];
+                    const scope_idx = store.extra_data.items[extra_start + 4];
+                    const reg_start = store.extra_data.items[extra_start + 5];
+                    const reg_end = store.extra_data.items[extra_start + 6];
                     associated = AST.Associated{
                         .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+                        .scope = @enumFromInt(scope_idx),
                         .region = .{ .start = reg_start, .end = reg_end },
                     };
                 }
@@ -1496,10 +1500,12 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 if (has_associated == 1) {
                     const stmt_start = store.extra_data.items[extra_start + 2];
                     const stmt_len = store.extra_data.items[extra_start + 3];
-                    const reg_start = store.extra_data.items[extra_start + 4];
-                    const reg_end = store.extra_data.items[extra_start + 5];
+                    const scope_idx = store.extra_data.items[extra_start + 4];
+                    const reg_start = store.extra_data.items[extra_start + 5];
+                    const reg_end = store.extra_data.items[extra_start + 6];
                     associated = AST.Associated{
                         .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+                        .scope = @enumFromInt(scope_idx),
                         .region = .{ .start = reg_start, .end = reg_end },
                     };
                 }
@@ -1530,10 +1536,12 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 if (has_associated == 1) {
                     const stmt_start = store.extra_data.items[extra_start + 2];
                     const stmt_len = store.extra_data.items[extra_start + 3];
-                    const reg_start = store.extra_data.items[extra_start + 4];
-                    const reg_end = store.extra_data.items[extra_start + 5];
+                    const scope_idx = store.extra_data.items[extra_start + 4];
+                    const reg_start = store.extra_data.items[extra_start + 5];
+                    const reg_end = store.extra_data.items[extra_start + 6];
                     associated = AST.Associated{
                         .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+                        .scope = @enumFromInt(scope_idx),
                         .region = .{ .start = reg_start, .end = reg_end },
                     };
                 }
@@ -1971,6 +1979,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
             return .{ .block = .{
                 .statements = statements,
+                .scope = @enumFromInt(node.main_token),
                 .region = node.region,
             } };
         },

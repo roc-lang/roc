@@ -53,8 +53,7 @@ a = 0->b()
 		(e-method-call (method "c")
 			(receiver
 				(e-call
-					(e-lookup-local
-						(p-assign (ident "b")))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-num (value "0"))))
 			(args))))
 ~~~
@@ -62,7 +61,7 @@ a = 0->b()
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_d")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_d"))))
+		(expr (type "Error"))))
 ~~~

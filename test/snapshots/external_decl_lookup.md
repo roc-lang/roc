@@ -17,20 +17,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
+UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**external_decl_lookup.md:9:5:9:17:**
-```roc
-    Stdout.line!(result)
-```
-    ^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `utf8` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -40,6 +29,17 @@ Is there an `import` or `exposing` missing up-top?
     result = Json.utf8("Hello from external module!")
 ```
              ^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**external_decl_lookup.md:9:5:9:17:**
+```roc
+    Stdout.line!(result)
+```
+    ^^^^^^^^^^^^
 
 
 # TOKENS
@@ -112,13 +112,11 @@ main! = |_| {
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
-						(e-lookup-local
-							(p-assign (ident "utf8")))
+						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
 							(e-literal (string "Hello from external module!")))))
 				(e-call
-					(e-lookup-local
-						(p-assign (ident "line!")))
+					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-lookup-local
 						(p-assign (ident "result")))))))
 	(s-import (module "pf.Stdout")
@@ -130,7 +128,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> Error"))))
 ~~~

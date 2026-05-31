@@ -31,11 +31,10 @@ NO CHANGE
 ~~~clojure
 (e-method-call (method "inspect")
 	(receiver
-		(e-lookup-local
-			(p-assign (ident "x"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(args))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

@@ -98,8 +98,7 @@ NO CHANGE
 ~~~clojure
 (e-record
 	(ext
-		(e-lookup-local
-			(p-assign (ident "item"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(fields
 		(field (name "person")
 			(e-record
@@ -143,5 +142,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ address: { city: Str, coordinates: { lat: Dec, lng: Dec }, street: Str }, contact: { email: Str, phone: { home: Str, work: Str } }, person: { age: Dec, name: Str }, .. }"))
+(expr (type "Error"))
 ~~~

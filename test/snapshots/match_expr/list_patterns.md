@@ -13,6 +13,8 @@ match numbers {
 ~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
+UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
+UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
@@ -25,6 +27,28 @@ For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
             ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**list_patterns.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `acc` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**list_patterns.md:2:11:2:14:**
+```roc
+    [] => acc
+```
+          ^^^
 
 
 **UNUSED VARIABLE**
@@ -85,8 +109,7 @@ match numbers {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "numbers"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -94,8 +117,7 @@ match numbers {
 						(p-list
 							(patterns))))
 				(value
-					(e-lookup-local
-						(p-assign (ident "acc")))))
+					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -109,5 +131,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

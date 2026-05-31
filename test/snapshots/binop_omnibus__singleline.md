@@ -62,8 +62,7 @@ NO CHANGE
 							(cond
 								(e-tag (name "Err")
 									(args
-										(e-lookup-local
-											(p-assign (ident "foo"))))))
+										(e-runtime-error (tag "ident_not_in_scope")))))
 							(branches
 								(branch
 									(patterns

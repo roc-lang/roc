@@ -42,8 +42,7 @@ match value {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "value"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -59,5 +58,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, Dec -> a]"))
+(expr (type "Error"))
 ~~~

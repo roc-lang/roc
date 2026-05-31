@@ -12,20 +12,9 @@ match value {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - wildcard_patterns.md:4:5:4:10
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `other` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
-The unused variable is declared here:
-**wildcard_patterns.md:4:5:4:10:**
-```roc
-    other => "something else"
-```
-    ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -66,8 +55,7 @@ match value {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "value"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns

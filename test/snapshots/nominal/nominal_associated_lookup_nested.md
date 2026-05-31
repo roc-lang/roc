@@ -99,13 +99,13 @@ myNum = Foo.Bar.baz
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
-			(ty-tag-name (name "Something")))))
+			(ty-tag-name (name "Something"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -115,10 +115,10 @@ myNum = Foo.Bar.baz
 		(patt (type "Foo.Bar"))
 		(patt (type "U64")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar"))))
+			(ty-header (name "Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "U64"))
 		(expr (type "Foo.Bar"))

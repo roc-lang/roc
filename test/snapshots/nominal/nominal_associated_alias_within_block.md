@@ -100,10 +100,6 @@ external = Foo.defaultBaz
 		(annotation
 			(ty-lookup (name "Foo.Baz") (local))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "nominal_associated_alias_within_block.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
@@ -111,7 +107,11 @@ external = Foo.defaultBaz
 			(ty-tag-name (name "Z"))))
 	(s-alias-decl
 		(ty-header (name "nominal_associated_alias_within_block.Foo.Baz"))
-		(ty-lookup (name "Foo.Bar") (local))))
+		(ty-lookup (name "Foo.Bar") (local)))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -120,12 +120,12 @@ external = Foo.defaultBaz
 		(patt (type "Foo.Baz"))
 		(patt (type "Foo.Baz")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_associated_alias_within_block.Foo.Bar")))
 		(alias (type "Foo.Baz")
-			(ty-header (name "nominal_associated_alias_within_block.Foo.Baz"))))
+			(ty-header (name "nominal_associated_alias_within_block.Foo.Baz")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Foo.Baz"))
 		(expr (type "Foo.Baz"))))

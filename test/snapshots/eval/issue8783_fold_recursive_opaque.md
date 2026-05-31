@@ -170,7 +170,7 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "acc")))
 				(e-literal (string " "))
-				(e-call (constraint-fn-var 226)
+				(e-call (constraint-fn-var 227)
 					(e-lookup-local
 						(p-assign (ident "process")))
 					(e-lookup-local
@@ -202,7 +202,7 @@ NO CHANGE
 									(e-lookup-local
 										(p-assign (ident "tag")))
 									(e-literal (string ":"))
-									(e-call (constraint-fn-var 214)
+									(e-call (constraint-fn-var 215)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -239,13 +239,21 @@ NO CHANGE
 			(ty-lookup (name "Elem") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 288)
+		(e-call (constraint-fn-var 289)
 			(e-lookup-local
 				(p-assign (ident "process")))
 			(e-lookup-local
 				(p-assign (ident "root"))))
 		(annotation
 			(ty-lookup (name "Str") (builtin))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-lookup-local
+					(p-assign (ident "result"))))
+			(rhs
+				(e-string
+					(e-literal (string "div: hello"))))))
 	(s-nominal-decl
 		(ty-header (name "Elem"))
 		(ty-tag-union
@@ -254,15 +262,7 @@ NO CHANGE
 				(ty-apply (name "List") (builtin)
 					(ty-lookup (name "Elem") (local))))
 			(ty-tag-name (name "Text")
-				(ty-lookup (name "Str") (builtin)))))
-	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-lookup-local
-					(p-assign (ident "result"))))
-			(rhs
-				(e-string
-					(e-literal (string "div: hello")))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

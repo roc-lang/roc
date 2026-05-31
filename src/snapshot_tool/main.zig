@@ -1051,14 +1051,6 @@ fn processSnapshotContent(
                         const scratch_statements_start = can_ir.store.scratch.?.statements.top();
                         try can_ir.store.addScratchStatement(can_stmt.idx);
                         can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                        switch (can_ir.store.getStatement(can_stmt.idx)) {
-                            .s_alias_decl, .s_nominal_decl => {
-                                const type_order_start = can_ir.store.scratch.?.statements.top();
-                                try can_ir.store.addScratchStatement(can_stmt.idx);
-                                can_ir.type_decl_order = try can_ir.store.statementSpanFrom(type_order_start);
-                            },
-                            else => {},
-                        }
                     }
                 },
                 else => unreachable,

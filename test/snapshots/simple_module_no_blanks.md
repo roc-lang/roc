@@ -58,8 +58,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "hello!"))
 		(e-call
-			(e-lookup-local
-				(p-assign (ident "line!")))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-string
 				(e-literal (string "Hello")))))
 	(d-let
@@ -73,9 +72,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
+		(patt (type "Error"))
 		(patt (type "Str")))
 	(expressions
-		(expr (type "_a"))
+		(expr (type "Error"))
 		(expr (type "Str"))))
 ~~~

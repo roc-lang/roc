@@ -30,8 +30,7 @@ NO CHANGE
 ~~~clojure
 (e-field-access (field "name")
 	(receiver
-		(e-lookup-local
-			(p-assign (ident "person")))))
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure

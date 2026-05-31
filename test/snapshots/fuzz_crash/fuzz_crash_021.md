@@ -19,7 +19,6 @@ PARSE ERROR - fuzz_crash_021.md:1:14:1:16
 PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:4:1:4:1
-TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_021.md:1:1:3:15
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -129,23 +128,6 @@ This is an unexpected parsing error. Please check your syntax.
 
 ```
 ^
-
-
-**TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a nominal type declaration matching the module name.
-
-This file is named `fuzz_crash_021`.roc, but no top-level nominal type named `fuzz_crash_021` was found.
-
-Add a nominal type like:
-`fuzz_crash_021 := ...`
-or:
-`fuzz_crash_021 :: ...` (opaque nominal type)
-**fuzz_crash_021.md:1:1:3:15:**
-```roc
-Fli/main.roc" }
-
-Pair(a, b+ : (
-```
 
 
 # TOKENS

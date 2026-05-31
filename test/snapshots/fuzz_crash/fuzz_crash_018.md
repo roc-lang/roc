@@ -85,7 +85,7 @@ b : S
 		(p-assign (ident "b"))
 		(e-anno-only)
 		(annotation
-			(ty-lookup (name "S") (local)))))
+			(ty-malformed))))
 ~~~
 # TYPES
 ~~~clojure

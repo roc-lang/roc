@@ -72,8 +72,7 @@ match l {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "l"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns

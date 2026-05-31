@@ -16,9 +16,9 @@ AnotherType : SomeModule.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:1:10:1:21
+UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
-UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _UnknownType_ is not declared in this scope.
@@ -29,6 +29,17 @@ This type is referenced here:
 MyType : UnknownType
 ```
          ^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _UndeclaredResult_ is not declared in this scope.
+
+This type is referenced here:
+**type_undeclared_usage.md:3:16:3:32:**
+```roc
+processValue : UndeclaredResult -> Str
+```
+               ^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -52,17 +63,6 @@ You're attempting to use this module here:
 AnotherType : SomeModule.MissingType
 ```
               ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _UndeclaredResult_ is not declared in this scope.
-
-This type is referenced here:
-**type_undeclared_usage.md:3:16:3:32:**
-```roc
-processValue : UndeclaredResult -> Str
-```
-               ^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -126,7 +126,7 @@ AnotherType : SomeModule.MissingType
 					(e-literal (string "processed")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "UndeclaredResult") (local))
+				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(s-alias-decl
 		(ty-header (name "MyType"))

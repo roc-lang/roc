@@ -27,11 +27,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-unary-minus
-	(e-lookup-local
-		(p-assign (ident "foo"))))
+(e-dispatch-call (method "negate") (constraint-fn-var 9)
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(args))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.negate : a -> a]"))
+(expr (type "Error"))
 ~~~

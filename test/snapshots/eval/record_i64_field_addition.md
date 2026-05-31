@@ -100,7 +100,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 125)
+						(e-dispatch-call (method "plus") (constraint-fn-var 121)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -112,17 +112,10 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
 				(ty-lookup (name "Robot") (local)))))
-	(s-alias-decl
-		(ty-header (name "Robot"))
-		(ty-record
-			(field (field "x")
-				(ty-lookup (name "I64") (builtin)))
-			(field (field "y")
-				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 271)
+				(e-call (constraint-fn-var 267)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -136,7 +129,14 @@ NO CHANGE
 						(field (name "x")
 							(e-num (value "7")))
 						(field (name "y")
-							(e-num (value "4")))))))))
+							(e-num (value "4"))))))))
+	(s-alias-decl
+		(ty-header (name "Robot"))
+		(ty-record
+			(field (field "x")
+				(ty-lookup (name "I64") (builtin)))
+			(field (field "y")
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

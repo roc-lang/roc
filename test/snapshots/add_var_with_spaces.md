@@ -9,7 +9,6 @@ add2 = x +      2
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - add_var_with_spaces.md:1:8:1:9
-POLYMORPHIC VALUE - add_var_with_spaces.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
@@ -21,21 +20,6 @@ add2 = x +      2
 ```
        ^
 
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**add_var_with_spaces.md:1:1:1:5:**
-```roc
-add2 = x +      2
-```
-^^^^
-
-
-Its type is:
-```roc
-a where [a.plus : a, Dec -> a]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -62,10 +46,9 @@ add2 = x + 2
 (can-ir
 	(d-let
 		(p-assign (ident "add2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 43)
+		(e-dispatch-call (method "plus") (constraint-fn-var 42)
 			(receiver
-				(e-lookup-local
-					(p-assign (ident "x"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(args
 				(e-num (value "2"))))))
 ~~~
@@ -73,7 +56,7 @@ add2 = x + 2
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.plus : a, Dec -> a]")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "a where [a.plus : a, Dec -> a]"))))
+		(expr (type "Error"))))
 ~~~

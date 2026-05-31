@@ -39,7 +39,6 @@ DECLARATION HAS NO VALUE - record_different_fields_error.md:2:5:2:21
 DECLARATION HAS NO VALUE - record_different_fields_error.md:3:5:3:14
 TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
 TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
-MISSING METHOD - record_different_fields_error.md:5:10:5:15
 TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
 DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
@@ -315,18 +314,6 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
-**MISSING METHOD**
-This **negate** method is being called on a value whose type doesn't have that method:
-**record_different_fields_error.md:5:10:5:15:**
-```roc
-    kebab-case: "kebab",
-```
-         ^^^^^
-
-The value's type, which does not have a method named **negate**, is:
-
-    {}
-
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
 **record_different_fields_error.md:5:17:5:24:**
@@ -470,13 +457,11 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-lookup-local
-			(p-assign (ident "kebab"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-dispatch-call (method "negate") (constraint-fn-var 120)
 			(receiver
-				(e-lookup-local
-					(p-assign (ident "case"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(args)))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
@@ -495,8 +480,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-lookup-local
-			(p-assign (ident "field"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

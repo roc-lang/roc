@@ -333,7 +333,7 @@ test "introduceType API is accessible" {
     const alias_stmt = Statement{
         .s_alias_decl = .{
             .header = header_idx,
-            .anno = null,
+            .anno = .placeholder,
         },
     };
     const stmt_idx = try env.addStatement(alias_stmt, base.Region.zero());
@@ -411,7 +411,7 @@ test "local type scoping - not visible after exiting block" {
     const alias_stmt = Statement{
         .s_alias_decl = .{
             .header = header_idx,
-            .anno = null,
+            .anno = .placeholder,
         },
     };
     const stmt_idx = try env.addStatement(alias_stmt, base.Region.zero());

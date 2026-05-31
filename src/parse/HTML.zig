@@ -77,6 +77,7 @@ pub fn tokensToHtml(ast: *const AST, env: *const CommonEnv, writer: *std.io.Writ
 const testing = std.testing;
 const tokenize = @import("tokenize.zig");
 const NodeStore = @import("NodeStore.zig");
+const DeclIndex = @import("DeclIndex.zig");
 
 test "tokensToHtml generates valid HTML" {
     const gpa = testing.allocator;
@@ -111,10 +112,12 @@ test "tokensToHtml generates valid HTML" {
         .env = &env,
         .tokens = result.tokens,
         .store = store,
+        .decl_index = DeclIndex.init(gpa),
         .root_node_idx = 0,
         .tokenize_diagnostics = tokenize_diagnostics,
         .parse_diagnostics = parse_diagnostics,
     };
+    defer ast.decl_index.deinit();
 
     // Generate HTML
     var output_writer: std.Io.Writer.Allocating = .init(gpa);
@@ -163,10 +166,12 @@ test "tokensToHtml handles position errors gracefully" {
         .env = &env,
         .tokens = result.tokens,
         .store = store,
+        .decl_index = DeclIndex.init(gpa),
         .root_node_idx = 0,
         .tokenize_diagnostics = tokenize_diagnostics,
         .parse_diagnostics = parse_diagnostics,
     };
+    defer ast.decl_index.deinit();
 
     // Generate HTML - should still work even with position errors
     var output_writer: std.Io.Writer.Allocating = .init(gpa);

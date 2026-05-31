@@ -33,13 +33,17 @@ validateAuth = |creds| HttpAuth.validate(creds)
 # EXPECTED
 MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
+MODULE NOT FOUND - can_import_nested_modules.md:10:36:10:42
+UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
-DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
-UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
-UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
+DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
+MODULE NOT FOUND - can_import_nested_modules.md:23:24:23:36
+MODULE NOT FOUND - can_import_nested_modules.md:23:52:23:58
+MODULE NOT FOUND - can_import_nested_modules.md:23:68:23:74
+UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 **MODULE NOT IMPORTED**
 There is no module with the name `Config` imported into this Roc file.
@@ -60,6 +64,28 @@ parseConfig : Config.Settings -> Str
 parseConfig = |settings| Config.toString(settings)
 ```
                          ^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Token` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:10:36:10:42:**
+```roc
+authenticate : Str, Str -> HttpAuth.Token
+```
+                                   ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `login` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_nested_modules.md:11:29:11:43:**
+```roc
+authenticate = |user, pass| HttpAuth.login(user, pass)
+```
+                            ^^^^^^^^^^^^^^
 
 
 **MODULE NOT IMPORTED**
@@ -94,6 +120,17 @@ processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `padLeft` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_nested_modules.md:20:23:20:30:**
+```roc
+formatOutput = |text| padLeft(text, Config.defaultPadding)
+```
+                      ^^^^^^^
+
+
 **DOES NOT EXIST**
 `Config.defaultPadding` does not exist.
 
@@ -104,15 +141,37 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                                     ^^^^^^^^^^^^^^^^^^^^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `login` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**MODULE NOT FOUND**
+The type `Credentials` is qualified by the module `http.Client`, but that module was not found in this Roc project.
 
-**can_import_nested_modules.md:11:29:11:43:**
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:24:23:36:**
 ```roc
-authenticate = |user, pass| HttpAuth.login(user, pass)
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 ```
-                            ^^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Token` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:52:23:58:**
+```roc
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+```
+                                                   ^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `Error` is qualified by the module `http.Client`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_nested_modules.md:23:68:23:74:**
+```roc
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+```
+                                                                   ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -124,17 +183,6 @@ Is there an `import` or `exposing` missing up-top?
 validateAuth = |creds| HttpAuth.validate(creds)
 ```
                        ^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `padLeft` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_nested_modules.md:20:23:20:30:**
-```roc
-formatOutput = |text| padLeft(text, Config.defaultPadding)
-```
-                      ^^^^^^^
 
 
 # TOKENS
@@ -292,8 +340,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(p-assign (ident "user"))
 				(p-assign (ident "pass")))
 			(e-call
-				(e-lookup-local
-					(p-assign (ident "login")))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "user")))
 				(e-lookup-local
@@ -302,7 +349,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Token") (external-module "http.Client")))))
+				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -328,8 +375,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign (ident "text")))
 			(e-call
-				(e-lookup-local
-					(p-assign (ident "padLeft")))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "text")))
 				(e-runtime-error (tag "qualified_ident_does_not_exist"))))
@@ -343,16 +389,15 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign (ident "creds")))
 			(e-call
-				(e-lookup-local
-					(p-assign (ident "validate")))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "creds")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Credentials") (external-module "http.Client"))
+				(ty-malformed)
 				(ty-apply (name "Try") (builtin)
-					(ty-lookup (name "Token") (external-module "http.Client"))
-					(ty-lookup (name "Error") (external-module "http.Client"))))))
+					(ty-malformed)
+					(ty-malformed)))))
 	(s-import (module "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))

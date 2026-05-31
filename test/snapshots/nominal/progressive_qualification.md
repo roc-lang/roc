@@ -773,7 +773,7 @@ test6_combined = Container.Nested.combined # 35
 			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Parent.sumChildren"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 402)
+		(e-dispatch-call (method "plus") (constraint-fn-var 410)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
@@ -859,9 +859,9 @@ test6_combined = Container.Nested.combined # 35
 			(p-assign (ident "progressive_qualification.Container.outerB"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Container.Nested.combined"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 616)
+		(e-dispatch-call (method "plus") (constraint-fn-var 624)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 614)
+				(e-dispatch-call (method "plus") (constraint-fn-var 622)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))))
@@ -884,17 +884,9 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Container.Nested.combined"))))
 	(s-nominal-decl
-		(ty-header (name "Outer"))
-		(ty-tag-union
-			(ty-tag-name (name "O"))))
-	(s-nominal-decl
 		(ty-header (name "progressive_qualification.Outer.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "I"))))
-	(s-nominal-decl
-		(ty-header (name "Level1"))
-		(ty-tag-union
-			(ty-tag-name (name "L1"))))
 	(s-nominal-decl
 		(ty-header (name "progressive_qualification.Level1.Level2"))
 		(ty-tag-union
@@ -904,10 +896,6 @@ test6_combined = Container.Nested.combined # 35
 		(ty-tag-union
 			(ty-tag-name (name "L3"))))
 	(s-nominal-decl
-		(ty-header (name "Parent"))
-		(ty-tag-union
-			(ty-tag-name (name "P"))))
-	(s-nominal-decl
 		(ty-header (name "progressive_qualification.Parent.Child1"))
 		(ty-tag-union
 			(ty-tag-name (name "C1"))))
@@ -915,6 +903,30 @@ test6_combined = Container.Nested.combined # 35
 		(ty-header (name "progressive_qualification.Parent.Child2"))
 		(ty-tag-union
 			(ty-tag-name (name "C2"))))
+	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Parent1.Nested"))
+		(ty-tag-union
+			(ty-tag-name (name "N1"))))
+	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Parent2.Nested"))
+		(ty-tag-union
+			(ty-tag-name (name "N2"))))
+	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Container.Nested"))
+		(ty-tag-union
+			(ty-tag-name (name "NEST"))))
+	(s-nominal-decl
+		(ty-header (name "Outer"))
+		(ty-tag-union
+			(ty-tag-name (name "O"))))
+	(s-nominal-decl
+		(ty-header (name "Level1"))
+		(ty-tag-union
+			(ty-tag-name (name "L1"))))
+	(s-nominal-decl
+		(ty-header (name "Parent"))
+		(ty-tag-union
+			(ty-tag-name (name "P"))))
 	(s-nominal-decl
 		(ty-header (name "TypeA"))
 		(ty-tag-union
@@ -928,25 +940,13 @@ test6_combined = Container.Nested.combined # 35
 		(ty-tag-union
 			(ty-tag-name (name "P1"))))
 	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Parent1.Nested"))
-		(ty-tag-union
-			(ty-tag-name (name "N1"))))
-	(s-nominal-decl
 		(ty-header (name "Parent2"))
 		(ty-tag-union
 			(ty-tag-name (name "P2"))))
 	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Parent2.Nested"))
-		(ty-tag-union
-			(ty-tag-name (name "N2"))))
-	(s-nominal-decl
 		(ty-header (name "Container"))
 		(ty-tag-union
-			(ty-tag-name (name "CONT"))))
-	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Container.Nested"))
-		(ty-tag-union
-			(ty-tag-name (name "NEST")))))
+			(ty-tag-name (name "CONT")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -1001,38 +1001,38 @@ test6_combined = Container.Nested.combined # 35
 		(patt (type "Dec"))
 		(patt (type "Dec")))
 	(type_decls
-		(nominal (type "Outer")
-			(ty-header (name "Outer")))
 		(nominal (type "Outer.Inner")
 			(ty-header (name "progressive_qualification.Outer.Inner")))
-		(nominal (type "Level1")
-			(ty-header (name "Level1")))
 		(nominal (type "Level1.Level2")
 			(ty-header (name "progressive_qualification.Level1.Level2")))
 		(nominal (type "Level1.Level2.Level3")
 			(ty-header (name "progressive_qualification.Level1.Level2.Level3")))
-		(nominal (type "Parent")
-			(ty-header (name "Parent")))
 		(nominal (type "Parent.Child1")
 			(ty-header (name "progressive_qualification.Parent.Child1")))
 		(nominal (type "Parent.Child2")
 			(ty-header (name "progressive_qualification.Parent.Child2")))
+		(nominal (type "Parent1.Nested")
+			(ty-header (name "progressive_qualification.Parent1.Nested")))
+		(nominal (type "Parent2.Nested")
+			(ty-header (name "progressive_qualification.Parent2.Nested")))
+		(nominal (type "Container.Nested")
+			(ty-header (name "progressive_qualification.Container.Nested")))
+		(nominal (type "Outer")
+			(ty-header (name "Outer")))
+		(nominal (type "Level1")
+			(ty-header (name "Level1")))
+		(nominal (type "Parent")
+			(ty-header (name "Parent")))
 		(nominal (type "TypeA")
 			(ty-header (name "TypeA")))
 		(nominal (type "TypeB")
 			(ty-header (name "TypeB")))
 		(nominal (type "Parent1")
 			(ty-header (name "Parent1")))
-		(nominal (type "Parent1.Nested")
-			(ty-header (name "progressive_qualification.Parent1.Nested")))
 		(nominal (type "Parent2")
 			(ty-header (name "Parent2")))
-		(nominal (type "Parent2.Nested")
-			(ty-header (name "progressive_qualification.Parent2.Nested")))
 		(nominal (type "Container")
-			(ty-header (name "Container")))
-		(nominal (type "Container.Nested")
-			(ty-header (name "progressive_qualification.Container.Nested"))))
+			(ty-header (name "Container"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))

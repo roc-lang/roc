@@ -71,8 +71,7 @@ NO CHANGE
 			(args
 				(p-underscore))
 			(e-call
-				(e-lookup-local
-					(p-assign (ident "line!")))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-string
 					(e-literal (string "Hello, world!"))))))
 	(s-import (module "pf.Stdout")
@@ -82,7 +81,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> Error"))))
 ~~~

@@ -74,16 +74,16 @@ Foo := [A, B].{
 		(p-assign (ident "Foo.defaultValue"))
 		(e-num (value "42")))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "A"))
-			(ty-tag-name (name "B"))))
-	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
-			(ty-tag-name (name "Z")))))
+			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "A"))
+			(ty-tag-name (name "B")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -91,10 +91,10 @@ Foo := [A, B].{
 	(defs
 		(patt (type "Dec")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar"))))
+			(ty-header (name "Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Dec"))))
 ~~~

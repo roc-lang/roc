@@ -69,13 +69,13 @@ useBar = Something
 		(annotation
 			(ty-lookup (name "Foo.Bar") (local))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "nominal_associated_vs_module.Foo.Bar"))
 		(ty-tag-union
-			(ty-tag-name (name "Something")))))
+			(ty-tag-name (name "Something"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -83,10 +83,10 @@ useBar = Something
 	(defs
 		(patt (type "Foo.Bar")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "nominal_associated_vs_module.Foo.Bar"))))
+			(ty-header (name "nominal_associated_vs_module.Foo.Bar")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "Foo.Bar"))))
 ~~~

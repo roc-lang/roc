@@ -35,8 +35,7 @@ NO CHANGE
 	(match
 		(cond
 			(e-call
-				(e-lookup-local
-					(p-assign (ident "get_name!")))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-empty_record)))
 		(branches
 			(branch

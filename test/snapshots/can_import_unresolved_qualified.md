@@ -32,17 +32,51 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
+MODULE NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
+UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
-UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
-DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
+UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
+DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
-UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `method` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:5:8:5:31:**
+```roc
+main = Json.NonExistent.method
+```
+       ^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The type `InvalidType` is qualified by the module `json.Json`, but that module was not found in this Roc project.
+
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:8:17:8:29:**
+```roc
+parseData : Json.InvalidType -> Str
+```
+                ^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `stringify` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:9:20:9:34:**
+```roc
+parseData = |data| Json.stringify(data)
+```
+                   ^^^^^^^^^^^^^^
+
+
 **MODULE NOT IMPORTED**
 There is no module with the name `Http.Server` imported into this Roc file.
 
@@ -65,6 +99,17 @@ processRequest : Http.Server.Request -> Http.Server.Response
                                         ^^^^^^^^^^^^^^^^^^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `defaultResponse` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**can_import_unresolved_qualified.md:13:24:13:51:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **UNUSED VARIABLE**
 Variable `req` is not used anywhere in your code.
 
@@ -77,27 +122,6 @@ processRequest = |req| Http.Server.defaultResponse
                   ^^^
 
 
-**DOES NOT EXIST**
-`Unknown.Module.config` does not exist.
-
-**can_import_unresolved_qualified.md:19:10:19:31:**
-```roc
-config = Unknown.Module.config
-```
-         ^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `defaultResponse` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_unresolved_qualified.md:13:24:13:51:**
-```roc
-processRequest = |req| Http.Server.defaultResponse
-```
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `prase` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -107,6 +131,16 @@ Is there an `import` or `exposing` missing up-top?
 result = Json.prase("test")
 ```
          ^^^^^^^^^^
+
+
+**DOES NOT EXIST**
+`Unknown.Module.config` does not exist.
+
+**can_import_unresolved_qualified.md:19:10:19:31:**
+```roc
+config = Unknown.Module.config
+```
+         ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -121,17 +155,6 @@ client = Http.invalidMethod
 
 
 **UNDEFINED VARIABLE**
-Nothing is named `method` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_unresolved_qualified.md:5:8:5:31:**
-```roc
-main = Json.NonExistent.method
-```
-       ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
 Nothing is named `create` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -140,17 +163,6 @@ Is there an `import` or `exposing` missing up-top?
 parser = Json.Parser.Advanced.NonExistent.create
 ```
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `stringify` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**can_import_unresolved_qualified.md:9:20:9:34:**
-```roc
-parseData = |data| Json.stringify(data)
-```
-                   ^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -225,29 +237,26 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-lookup-local
-			(p-assign (ident "method"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parseData"))
 		(e-lambda
 			(args
 				(p-assign (ident "data")))
 			(e-call
-				(e-lookup-local
-					(p-assign (ident "stringify")))
+				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-lookup-local
 					(p-assign (ident "data")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "InvalidType") (external-module "json.Json"))
+				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-lookup-local
-				(p-assign (ident "defaultResponse"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -255,8 +264,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
-			(e-lookup-local
-				(p-assign (ident "prase")))
+			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
@@ -264,12 +272,10 @@ NO CHANGE
 		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "client"))
-		(e-lookup-local
-			(p-assign (ident "invalidMethod"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parser"))
-		(e-lookup-local
-			(p-assign (ident "create"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-import (module "json.Json")
 		(exposes))
 	(s-import (module "http.Client")
@@ -279,19 +285,19 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a"))
+		(patt (type "Error"))
 		(patt (type "Error -> Str"))
 		(patt (type "Error -> Error"))
-		(patt (type "_a"))
 		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_a"))
+		(expr (type "Error"))
 		(expr (type "Error -> Str"))
 		(expr (type "Error -> Error"))
-		(expr (type "_a"))
 		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

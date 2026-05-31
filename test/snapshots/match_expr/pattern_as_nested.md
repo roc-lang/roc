@@ -11,33 +11,9 @@ match person {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - pattern_as_nested.md:2:7:2:11
-REDUNDANT PATTERN - pattern_as_nested.md:1:1:4:2
+NIL
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable `name` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-**pattern_as_nested.md:2:7:2:11:**
-```roc
-    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
-```
-      ^^^^
-
-
-**REDUNDANT PATTERN**
-The second branch of this `match` is redundant:
-**pattern_as_nested.md:1:1:4:2:**
-```roc
-match person {
-    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
-    { name } as simplePerson => (simplePerson, name, "unknown")
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -85,8 +61,7 @@ match person {
 (e-match
 	(match
 		(cond
-			(e-lookup-local
-				(p-assign (ident "person"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
 		(branches
 			(branch
 				(patterns
@@ -158,5 +133,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "({ address: { city: Str, ..a }, name: { city: Str, ..a }, .. }, { city: Str, ..a }, Str)"))
+(expr (type "(Error, { city: Str, .. }, Str)"))
 ~~~

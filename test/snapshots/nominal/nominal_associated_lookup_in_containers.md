@@ -151,10 +151,6 @@ nested = { bar: A, count: 1 }
 				(field (field "count")
 					(ty-lookup (name "U64") (builtin))))))
 	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
-	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "A"))
@@ -164,7 +160,11 @@ nested = { bar: A, count: 1 }
 		(ty-header (name "Foo.Error"))
 		(ty-tag-union
 			(ty-tag-name (name "Oops"))
-			(ty-tag-name (name "Yikes")))))
+			(ty-tag-name (name "Yikes"))))
+	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -174,12 +174,12 @@ nested = { bar: A, count: 1 }
 		(patt (type "Try(Foo.Bar, Foo.Error)"))
 		(patt (type "{ bar: Foo.Bar, count: U64 }")))
 	(type_decls
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo.Error")
-			(ty-header (name "Foo.Error"))))
+			(ty-header (name "Foo.Error")))
+		(nominal (type "Foo")
+			(ty-header (name "Foo"))))
 	(expressions
 		(expr (type "List(Foo.Bar)"))
 		(expr (type "Try(Foo.Bar, Foo.Error)"))

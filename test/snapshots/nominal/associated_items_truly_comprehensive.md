@@ -479,94 +479,20 @@ anno1 = Annotated.typed                         # 888
 anno2 = Annotated.L2.alsoTyped                  # 889
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:83:16:83:48
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:398:12:398:34
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:131:12:131:41
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:106:16:106:47
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:306:12:306:31
-UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:246:21:246:42
+UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:13:167:17
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:167:27:167:31
 CIRCULAR VALUE DEFINITION - associated_items_truly_comprehensive.md:170:9:170:13
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:106:9:106:13
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:113:1:113:6
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:131:5:131:9
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:139:1:139:6
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:306:5:306:9
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:312:13:312:17
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:315:17:315:21
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:320:1:320:5
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:322:1:322:5
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:323:1:323:5
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:398:5:398:9
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:406:21:406:25
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:416:1:416:5
-POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:420:1:420:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named `D2_OuterRefsInner.innerVal` in this scope.
+Nothing is named `val4` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_truly_comprehensive.md:83:16:83:48:**
+**associated_items_truly_comprehensive.md:382:20:382:24:**
 ```roc
-    outerVal = D2_OuterRefsInner.Inner.innerVal    # Forward ref to inner's val
+            val3 = val4 + 1                                 # Unqualified
 ```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D5_Pattern3.val3` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:398:12:398:34:**
-```roc
-    val1 = D5_Pattern3.L2.L3.val3 + 10          # Forward ref
-```
-           ^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D2_Interleaved.innerVal` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:131:12:131:41:**
-```roc
-    val1 = D2_Interleaved.Inner.innerVal + 10   # Forward ref to inner
-```
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D2_Siblings_Forward.valB` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:106:16:106:47:**
-```roc
-        valA = D2_Siblings_Forward.InnerB.valB + 1    # Forward ref to sibling
-```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D4_Pattern3.val2` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:306:12:306:31:**
-```roc
-    val1 = D4_Pattern3.L2.val2 + 1              # Forward ref
-```
-           ^^^^^^^^^^^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `D3_Siblings.val2b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_truly_comprehensive.md:246:21:246:42:**
-```roc
-            val3a = D3_Siblings.L2b.val2b       # Cross-sibling at parent level (qualified)
-```
-                    ^^^^^^^^^^^^^^^^^^^^^
+                   ^^^^
 
 
 **CIRCULAR VALUE DEFINITION**
@@ -604,216 +530,6 @@ Only functions can be recursive. Non-function top-level values must be fully com
 ```
         ^^^^
 
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:106:9:106:13:**
-```roc
-        valA = D2_Siblings_Forward.InnerB.valB + 1    # Forward ref to sibling
-```
-        ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:113:1:113:6:**
-```roc
-d2_13 = D2_Siblings_Forward.InnerA.valA         # 49
-```
-^^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:131:5:131:9:**
-```roc
-    val1 = D2_Interleaved.Inner.innerVal + 10   # Forward ref to inner
-```
-    ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:139:1:139:6:**
-```roc
-d2_17 = D2_Interleaved.val1                     # 35 (25 + 10)
-```
-^^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:306:5:306:9:**
-```roc
-    val1 = D4_Pattern3.L2.val2 + 1              # Forward ref
-```
-    ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:312:13:312:17:**
-```roc
-            val3 = val1 + val2                  # Unqualified refs
-```
-            ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:315:17:315:21:**
-```roc
-                val4 = val3 * 2                 # Unqualified ref
-```
-                ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:320:1:320:5:**
-```roc
-d4_6 = D4_Pattern3.val1                         # 11
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:322:1:322:5:**
-```roc
-d4_8 = D4_Pattern3.L2.L3.val3                   # 21
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:323:1:323:5:**
-```roc
-d4_9 = D4_Pattern3.L2.L3.L4.val4                # 42
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:398:5:398:9:**
-```roc
-    val1 = D5_Pattern3.L2.L3.val3 + 10          # Forward ref
-```
-    ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:406:21:406:25:**
-```roc
-                    val5 = val1 + val2 + val3 + val4        # Mixed refs
-```
-                    ^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:416:1:416:5:**
-```roc
-d5_7 = D5_Pattern3.val1                         # 15 (5 + 10)
-```
-^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
-
-**POLYMORPHIC VALUE**
-This top-level value still has an unresolved polymorphic type:
-**associated_items_truly_comprehensive.md:420:1:420:6:**
-```roc
-d5_11 = D5_Pattern3.L2.L3.L4.L5.val5            # 41 (15 + 11 + 5 + 10)
-```
-^^^^^
-
-
-Its type is:
-```roc
-e where [e.plus : e, Dec -> e]
-```
-Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -2910,7 +2626,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D1_Backward.second"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.a"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1290)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1309)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.b"))))
@@ -2922,7 +2638,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.c"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1288)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1307)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D1_Multi.d"))))
@@ -3010,7 +2726,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.outerVal"))
 		(e-lookup-local
-			(p-assign (ident "D2_OuterRefsInner.innerVal"))))
+			(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner.innerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner.innerVal"))
 		(e-num (value "46")))
@@ -3039,10 +2755,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner.innerVal"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1502)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1551)
 			(receiver
 				(e-lookup-local
-					(p-assign (ident "D2_Siblings_Forward.valB"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB.valB"))))
 			(args
 				(e-num (value "1")))))
 	(d-let
@@ -3061,7 +2777,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "50")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1594)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1613)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA.valA"))))
@@ -3077,15 +2793,15 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB.valB"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1626)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1707)
 			(receiver
 				(e-lookup-local
-					(p-assign (ident "D2_Interleaved.innerVal"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))))
 			(args
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.Inner.innerVal"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1688)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1675)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))))
@@ -3114,7 +2830,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1750)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1769)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern1.val1"))))
@@ -3147,7 +2863,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "1000")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1812)
+		(e-dispatch-call (method "times") (constraint-fn-var 1831)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.L3.val3"))))
@@ -3155,7 +2871,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.val1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1844)
+		(e-dispatch-call (method "times") (constraint-fn-var 1863)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern3.L2.val2"))))
@@ -3178,7 +2894,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1906)
+		(e-dispatch-call (method "times") (constraint-fn-var 1925)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.val1"))))
@@ -3186,7 +2902,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1908)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1927)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern4.L2.L3.val3"))))
@@ -3213,7 +2929,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1970)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1989)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.val1"))))
@@ -3226,7 +2942,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern5.L2.L3.val3"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1972)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1991)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))))
@@ -3235,7 +2951,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern6.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2004)
+		(e-dispatch-call (method "times") (constraint-fn-var 2023)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D3_Pattern2.val1"))))
@@ -3262,7 +2978,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a.val3a"))
 		(e-lookup-local
-			(p-assign (ident "D3_Siblings.val2b"))))
+			(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.val2b"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D3_Siblings.L2b.val2b"))
 		(e-num (value "20")))
@@ -3289,9 +3005,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2188)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2207)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2186)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2205)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern1.val1"))))
@@ -3310,7 +3026,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2250)
+		(e-dispatch-call (method "times") (constraint-fn-var 2269)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4.val4"))))
@@ -3318,7 +3034,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2282)
+		(e-dispatch-call (method "times") (constraint-fn-var 2301)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.val3"))))
@@ -3326,7 +3042,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.val1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2314)
+		(e-dispatch-call (method "times") (constraint-fn-var 2333)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.L2.val2"))))
@@ -3350,10 +3066,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern2.val1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2346)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2395)
 			(receiver
 				(e-lookup-local
-					(p-assign (ident "D4_Pattern3.val2"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))))
 			(args
 				(e-num (value "1")))))
 	(d-let
@@ -3361,7 +3077,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2378)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2397)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.val1"))))
@@ -3370,7 +3086,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.val2"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4.val4"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2410)
+		(e-dispatch-call (method "times") (constraint-fn-var 2429)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.val3"))))
@@ -3397,7 +3113,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2442)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2461)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.val1"))))
@@ -3406,7 +3122,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2444)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2463)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.val3"))))
@@ -3438,11 +3154,11 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "4")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2600)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2619)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2598)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2617)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2596)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2615)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern1.val1"))))
@@ -3464,7 +3180,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "999")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2662)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2681)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5.val5"))))
@@ -3472,15 +3188,14 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2756)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2713)
 			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))
+				(e-runtime-error (tag "ident_not_in_scope")))
 			(args
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2788)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2745)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.val3"))))
@@ -3488,7 +3203,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2820)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2777)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D2_Interleaved.val2"))))
@@ -3516,10 +3231,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.val1"))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2852)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2839)
 			(receiver
 				(e-lookup-local
-					(p-assign (ident "D5_Pattern3.val3"))))
+					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
 			(args
 				(e-num (value "10")))))
 	(d-let
@@ -3527,11 +3242,11 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2858)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2877)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2856)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2843)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2854)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2841)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.val1"))))
@@ -3546,7 +3261,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2724)
+		(e-dispatch-call (method "times") (constraint-fn-var 2875)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.val3"))))
@@ -3554,7 +3269,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2890)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2909)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.val4"))))
@@ -3655,7 +3370,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 3154)
+		(e-dispatch-call (method "plus") (constraint-fn-var 3173)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_truly_comprehensive.Annotated.typed"))))
@@ -3672,69 +3387,29 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))))
 	(s-nominal-decl
-		(ty-header (name "D1_Forward"))
-		(ty-tag-union
-			(ty-tag-name (name "A"))))
-	(s-nominal-decl
-		(ty-header (name "D1_Backward"))
-		(ty-tag-union
-			(ty-tag-name (name "B"))))
-	(s-nominal-decl
-		(ty-header (name "D1_Multi"))
-		(ty-tag-union
-			(ty-tag-name (name "C"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerFirst_Qual"))
-		(ty-tag-union
-			(ty-tag-name (name "D"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Qual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "E"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerFirst_Unqual"))
-		(ty-tag-union
-			(ty-tag-name (name "F"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "G"))))
 	(s-nominal-decl
-		(ty-header (name "D2_InnerAfter_Qual"))
-		(ty-tag-union
-			(ty-tag-name (name "H"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Qual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "I"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerAfter_Unqual"))
-		(ty-tag-union
-			(ty-tag-name (name "J"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "K"))))
 	(s-nominal-decl
-		(ty-header (name "D2_OuterRefsInner"))
-		(ty-tag-union
-			(ty-tag-name (name "L"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "M"))))
 	(s-nominal-decl
-		(ty-header (name "D2_OuterRefsInner_Back"))
-		(ty-tag-union
-			(ty-tag-name (name "N"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "O"))))
-	(s-nominal-decl
-		(ty-header (name "D2_Siblings_Forward"))
-		(ty-tag-union
-			(ty-tag-name (name "P"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA"))
 		(ty-tag-union
@@ -3744,10 +3419,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "R"))))
 	(s-nominal-decl
-		(ty-header (name "D2_Siblings_Backward"))
-		(ty-tag-union
-			(ty-tag-name (name "S"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA"))
 		(ty-tag-union
 			(ty-tag-name (name "T"))))
@@ -3756,17 +3427,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "U"))))
 	(s-nominal-decl
-		(ty-header (name "D2_Interleaved"))
-		(ty-tag-union
-			(ty-tag-name (name "V"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_Interleaved.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "W"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern1"))
-		(ty-tag-union
-			(ty-tag-name (name "X"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2"))
 		(ty-tag-union
@@ -3776,10 +3439,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "Z"))))
 	(s-nominal-decl
-		(ty-header (name "D3_Pattern2"))
-		(ty-tag-union
-			(ty-tag-name (name "AA"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BB"))))
@@ -3787,10 +3446,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2.L3"))
 		(ty-tag-union
 			(ty-tag-name (name "CC"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern3"))
-		(ty-tag-union
-			(ty-tag-name (name "DD"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2"))
 		(ty-tag-union
@@ -3800,10 +3455,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "FF"))))
 	(s-nominal-decl
-		(ty-header (name "D3_Pattern4"))
-		(ty-tag-union
-			(ty-tag-name (name "GG"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "HH"))))
@@ -3811,10 +3462,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2.L3"))
 		(ty-tag-union
 			(ty-tag-name (name "II"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern5"))
-		(ty-tag-union
-			(ty-tag-name (name "JJ"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2"))
 		(ty-tag-union
@@ -3824,10 +3471,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "LL"))))
 	(s-nominal-decl
-		(ty-header (name "D3_Pattern6"))
-		(ty-tag-union
-			(ty-tag-name (name "MM"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "NN"))))
@@ -3836,29 +3479,21 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "OO"))))
 	(s-nominal-decl
-		(ty-header (name "D3_Siblings"))
-		(ty-tag-union
-			(ty-tag-name (name "PP"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a"))
 		(ty-tag-union
 			(ty-tag-name (name "QQ"))))
-	(s-nominal-decl
-		(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b"))
-		(ty-tag-union
-			(ty-tag-name (name "SS"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a"))
 		(ty-tag-union
 			(ty-tag-name (name "RR"))))
 	(s-nominal-decl
+		(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b"))
+		(ty-tag-union
+			(ty-tag-name (name "SS"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b.L3b"))
 		(ty-tag-union
 			(ty-tag-name (name "TT"))))
-	(s-nominal-decl
-		(ty-header (name "D4_Pattern1"))
-		(ty-tag-union
-			(ty-tag-name (name "UU"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2"))
 		(ty-tag-union
@@ -3872,10 +3507,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "XX"))))
 	(s-nominal-decl
-		(ty-header (name "D4_Pattern2"))
-		(ty-tag-union
-			(ty-tag-name (name "YY"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "ZZ"))))
@@ -3887,10 +3518,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4"))
 		(ty-tag-union
 			(ty-tag-name (name "BBB"))))
-	(s-nominal-decl
-		(ty-header (name "D4_Pattern3"))
-		(ty-tag-union
-			(ty-tag-name (name "CCC"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2"))
 		(ty-tag-union
@@ -3904,10 +3531,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "FFF"))))
 	(s-nominal-decl
-		(ty-header (name "D4_Pattern4"))
-		(ty-tag-union
-			(ty-tag-name (name "GGG"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "HHH"))))
@@ -3919,10 +3542,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4"))
 		(ty-tag-union
 			(ty-tag-name (name "JJJ"))))
-	(s-nominal-decl
-		(ty-header (name "D5_Pattern1"))
-		(ty-tag-union
-			(ty-tag-name (name "KKK"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2"))
 		(ty-tag-union
@@ -3940,10 +3559,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "OOO"))))
 	(s-nominal-decl
-		(ty-header (name "D5_Pattern2"))
-		(ty-tag-union
-			(ty-tag-name (name "PPP"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "QQQ"))))
@@ -3959,10 +3574,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5"))
 		(ty-tag-union
 			(ty-tag-name (name "TTT"))))
-	(s-nominal-decl
-		(ty-header (name "D5_Pattern3"))
-		(ty-tag-union
-			(ty-tag-name (name "UUU"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2"))
 		(ty-tag-union
@@ -3980,10 +3591,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "YYY"))))
 	(s-nominal-decl
-		(ty-header (name "Shadowing"))
-		(ty-tag-union
-			(ty-tag-name (name "ZZZ"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AAAA"))))
@@ -3992,17 +3599,125 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "BBBB"))))
 	(s-nominal-decl
+		(ty-header (name "associated_items_truly_comprehensive.Annotated.L2"))
+		(ty-tag-union
+			(ty-tag-name (name "EEEE"))))
+	(s-nominal-decl
+		(ty-header (name "D1_Forward"))
+		(ty-tag-union
+			(ty-tag-name (name "A"))))
+	(s-nominal-decl
+		(ty-header (name "D1_Backward"))
+		(ty-tag-union
+			(ty-tag-name (name "B"))))
+	(s-nominal-decl
+		(ty-header (name "D1_Multi"))
+		(ty-tag-union
+			(ty-tag-name (name "C"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerFirst_Qual"))
+		(ty-tag-union
+			(ty-tag-name (name "D"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerFirst_Unqual"))
+		(ty-tag-union
+			(ty-tag-name (name "F"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerAfter_Qual"))
+		(ty-tag-union
+			(ty-tag-name (name "H"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerAfter_Unqual"))
+		(ty-tag-union
+			(ty-tag-name (name "J"))))
+	(s-nominal-decl
+		(ty-header (name "D2_OuterRefsInner"))
+		(ty-tag-union
+			(ty-tag-name (name "L"))))
+	(s-nominal-decl
+		(ty-header (name "D2_OuterRefsInner_Back"))
+		(ty-tag-union
+			(ty-tag-name (name "N"))))
+	(s-nominal-decl
+		(ty-header (name "D2_Siblings_Forward"))
+		(ty-tag-union
+			(ty-tag-name (name "P"))))
+	(s-nominal-decl
+		(ty-header (name "D2_Siblings_Backward"))
+		(ty-tag-union
+			(ty-tag-name (name "S"))))
+	(s-nominal-decl
+		(ty-header (name "D2_Interleaved"))
+		(ty-tag-union
+			(ty-tag-name (name "V"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern1"))
+		(ty-tag-union
+			(ty-tag-name (name "X"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern2"))
+		(ty-tag-union
+			(ty-tag-name (name "AA"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern3"))
+		(ty-tag-union
+			(ty-tag-name (name "DD"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern4"))
+		(ty-tag-union
+			(ty-tag-name (name "GG"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern5"))
+		(ty-tag-union
+			(ty-tag-name (name "JJ"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern6"))
+		(ty-tag-union
+			(ty-tag-name (name "MM"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Siblings"))
+		(ty-tag-union
+			(ty-tag-name (name "PP"))))
+	(s-nominal-decl
+		(ty-header (name "D4_Pattern1"))
+		(ty-tag-union
+			(ty-tag-name (name "UU"))))
+	(s-nominal-decl
+		(ty-header (name "D4_Pattern2"))
+		(ty-tag-union
+			(ty-tag-name (name "YY"))))
+	(s-nominal-decl
+		(ty-header (name "D4_Pattern3"))
+		(ty-tag-union
+			(ty-tag-name (name "CCC"))))
+	(s-nominal-decl
+		(ty-header (name "D4_Pattern4"))
+		(ty-tag-union
+			(ty-tag-name (name "GGG"))))
+	(s-nominal-decl
+		(ty-header (name "D5_Pattern1"))
+		(ty-tag-union
+			(ty-tag-name (name "KKK"))))
+	(s-nominal-decl
+		(ty-header (name "D5_Pattern2"))
+		(ty-tag-union
+			(ty-tag-name (name "PPP"))))
+	(s-nominal-decl
+		(ty-header (name "D5_Pattern3"))
+		(ty-tag-union
+			(ty-tag-name (name "UUU"))))
+	(s-nominal-decl
+		(ty-header (name "Shadowing"))
+		(ty-tag-union
+			(ty-tag-name (name "ZZZ"))))
+	(s-nominal-decl
 		(ty-header (name "External1"))
 		(ty-tag-union
 			(ty-tag-name (name "CCCC"))))
 	(s-nominal-decl
 		(ty-header (name "Annotated"))
 		(ty-tag-union
-			(ty-tag-name (name "DDDD"))))
-	(s-nominal-decl
-		(ty-header (name "associated_items_truly_comprehensive.Annotated.L2"))
-		(ty-tag-union
-			(ty-tag-name (name "EEEE")))))
+			(ty-tag-name (name "DDDD")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -4040,26 +3755,26 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_e"))
-		(patt (type "Dec"))
-		(patt (type "_e"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
-		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -4094,32 +3809,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_e"))
-		(patt (type "Dec"))
-		(patt (type "_e"))
-		(patt (type "_e"))
-		(patt (type "_e"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(patt (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(patt (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(patt (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -4142,16 +3831,42 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
-		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "e where [e.plus : e, Dec -> e]"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -4175,132 +3890,84 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "U64"))
 		(patt (type "U64")))
 	(type_decls
-		(nominal (type "D1_Forward")
-			(ty-header (name "D1_Forward")))
-		(nominal (type "D1_Backward")
-			(ty-header (name "D1_Backward")))
-		(nominal (type "D1_Multi")
-			(ty-header (name "D1_Multi")))
-		(nominal (type "D2_InnerFirst_Qual")
-			(ty-header (name "D2_InnerFirst_Qual")))
 		(nominal (type "D2_InnerFirst_Qual.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Qual.Inner")))
-		(nominal (type "D2_InnerFirst_Unqual")
-			(ty-header (name "D2_InnerFirst_Unqual")))
 		(nominal (type "D2_InnerFirst_Unqual.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.Inner")))
-		(nominal (type "D2_InnerAfter_Qual")
-			(ty-header (name "D2_InnerAfter_Qual")))
 		(nominal (type "D2_InnerAfter_Qual.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Qual.Inner")))
-		(nominal (type "D2_InnerAfter_Unqual")
-			(ty-header (name "D2_InnerAfter_Unqual")))
 		(nominal (type "D2_InnerAfter_Unqual.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner")))
-		(nominal (type "D2_OuterRefsInner")
-			(ty-header (name "D2_OuterRefsInner")))
 		(nominal (type "D2_OuterRefsInner.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner")))
-		(nominal (type "D2_OuterRefsInner_Back")
-			(ty-header (name "D2_OuterRefsInner_Back")))
 		(nominal (type "D2_OuterRefsInner_Back.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner")))
-		(nominal (type "D2_Siblings_Forward")
-			(ty-header (name "D2_Siblings_Forward")))
 		(nominal (type "D2_Siblings_Forward.InnerA")
 			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA")))
 		(nominal (type "D2_Siblings_Forward.InnerB")
 			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB")))
-		(nominal (type "D2_Siblings_Backward")
-			(ty-header (name "D2_Siblings_Backward")))
 		(nominal (type "D2_Siblings_Backward.InnerA")
 			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA")))
 		(nominal (type "D2_Siblings_Backward.InnerB")
 			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB")))
-		(nominal (type "D2_Interleaved")
-			(ty-header (name "D2_Interleaved")))
 		(nominal (type "D2_Interleaved.Inner")
 			(ty-header (name "associated_items_truly_comprehensive.D2_Interleaved.Inner")))
-		(nominal (type "D3_Pattern1")
-			(ty-header (name "D3_Pattern1")))
 		(nominal (type "D3_Pattern1.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2")))
 		(nominal (type "D3_Pattern1.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2.L3")))
-		(nominal (type "D3_Pattern2")
-			(ty-header (name "D3_Pattern2")))
 		(nominal (type "D3_Pattern2.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2")))
 		(nominal (type "D3_Pattern2.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2.L3")))
-		(nominal (type "D3_Pattern3")
-			(ty-header (name "D3_Pattern3")))
 		(nominal (type "D3_Pattern3.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2")))
 		(nominal (type "D3_Pattern3.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2.L3")))
-		(nominal (type "D3_Pattern4")
-			(ty-header (name "D3_Pattern4")))
 		(nominal (type "D3_Pattern4.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2")))
 		(nominal (type "D3_Pattern4.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2.L3")))
-		(nominal (type "D3_Pattern5")
-			(ty-header (name "D3_Pattern5")))
 		(nominal (type "D3_Pattern5.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2")))
 		(nominal (type "D3_Pattern5.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2.L3")))
-		(nominal (type "D3_Pattern6")
-			(ty-header (name "D3_Pattern6")))
 		(nominal (type "D3_Pattern6.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2")))
 		(nominal (type "D3_Pattern6.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2.L3")))
-		(nominal (type "D3_Siblings")
-			(ty-header (name "D3_Siblings")))
 		(nominal (type "D3_Siblings.L2a")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a")))
-		(nominal (type "D3_Siblings.L2b")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b")))
 		(nominal (type "D3_Siblings.L2a.L3a")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a")))
+		(nominal (type "D3_Siblings.L2b")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b")))
 		(nominal (type "D3_Siblings.L2b.L3b")
 			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b.L3b")))
-		(nominal (type "D4_Pattern1")
-			(ty-header (name "D4_Pattern1")))
 		(nominal (type "D4_Pattern1.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2")))
 		(nominal (type "D4_Pattern1.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3")))
 		(nominal (type "D4_Pattern1.L2.L3.L4")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4")))
-		(nominal (type "D4_Pattern2")
-			(ty-header (name "D4_Pattern2")))
 		(nominal (type "D4_Pattern2.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2")))
 		(nominal (type "D4_Pattern2.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3")))
 		(nominal (type "D4_Pattern2.L2.L3.L4")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4")))
-		(nominal (type "D4_Pattern3")
-			(ty-header (name "D4_Pattern3")))
 		(nominal (type "D4_Pattern3.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2")))
 		(nominal (type "D4_Pattern3.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2.L3")))
 		(nominal (type "D4_Pattern3.L2.L3.L4")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4")))
-		(nominal (type "D4_Pattern4")
-			(ty-header (name "D4_Pattern4")))
 		(nominal (type "D4_Pattern4.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2")))
 		(nominal (type "D4_Pattern4.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3")))
 		(nominal (type "D4_Pattern4.L2.L3.L4")
 			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4")))
-		(nominal (type "D5_Pattern1")
-			(ty-header (name "D5_Pattern1")))
 		(nominal (type "D5_Pattern1.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2")))
 		(nominal (type "D5_Pattern1.L2.L3")
@@ -4309,8 +3976,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4")))
 		(nominal (type "D5_Pattern1.L2.L3.L4.L5")
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5")))
-		(nominal (type "D5_Pattern2")
-			(ty-header (name "D5_Pattern2")))
 		(nominal (type "D5_Pattern2.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2")))
 		(nominal (type "D5_Pattern2.L2.L3")
@@ -4319,8 +3984,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4")))
 		(nominal (type "D5_Pattern2.L2.L3.L4.L5")
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5")))
-		(nominal (type "D5_Pattern3")
-			(ty-header (name "D5_Pattern3")))
 		(nominal (type "D5_Pattern3.L2")
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2")))
 		(nominal (type "D5_Pattern3.L2.L3")
@@ -4329,18 +3992,70 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4")))
 		(nominal (type "D5_Pattern3.L2.L3.L4.L5")
 			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5")))
-		(nominal (type "Shadowing")
-			(ty-header (name "Shadowing")))
 		(nominal (type "Shadowing.L2")
 			(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2")))
 		(nominal (type "Shadowing.L2.L3")
 			(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2.L3")))
+		(nominal (type "Annotated.L2")
+			(ty-header (name "associated_items_truly_comprehensive.Annotated.L2")))
+		(nominal (type "D1_Forward")
+			(ty-header (name "D1_Forward")))
+		(nominal (type "D1_Backward")
+			(ty-header (name "D1_Backward")))
+		(nominal (type "D1_Multi")
+			(ty-header (name "D1_Multi")))
+		(nominal (type "D2_InnerFirst_Qual")
+			(ty-header (name "D2_InnerFirst_Qual")))
+		(nominal (type "D2_InnerFirst_Unqual")
+			(ty-header (name "D2_InnerFirst_Unqual")))
+		(nominal (type "D2_InnerAfter_Qual")
+			(ty-header (name "D2_InnerAfter_Qual")))
+		(nominal (type "D2_InnerAfter_Unqual")
+			(ty-header (name "D2_InnerAfter_Unqual")))
+		(nominal (type "D2_OuterRefsInner")
+			(ty-header (name "D2_OuterRefsInner")))
+		(nominal (type "D2_OuterRefsInner_Back")
+			(ty-header (name "D2_OuterRefsInner_Back")))
+		(nominal (type "D2_Siblings_Forward")
+			(ty-header (name "D2_Siblings_Forward")))
+		(nominal (type "D2_Siblings_Backward")
+			(ty-header (name "D2_Siblings_Backward")))
+		(nominal (type "D2_Interleaved")
+			(ty-header (name "D2_Interleaved")))
+		(nominal (type "D3_Pattern1")
+			(ty-header (name "D3_Pattern1")))
+		(nominal (type "D3_Pattern2")
+			(ty-header (name "D3_Pattern2")))
+		(nominal (type "D3_Pattern3")
+			(ty-header (name "D3_Pattern3")))
+		(nominal (type "D3_Pattern4")
+			(ty-header (name "D3_Pattern4")))
+		(nominal (type "D3_Pattern5")
+			(ty-header (name "D3_Pattern5")))
+		(nominal (type "D3_Pattern6")
+			(ty-header (name "D3_Pattern6")))
+		(nominal (type "D3_Siblings")
+			(ty-header (name "D3_Siblings")))
+		(nominal (type "D4_Pattern1")
+			(ty-header (name "D4_Pattern1")))
+		(nominal (type "D4_Pattern2")
+			(ty-header (name "D4_Pattern2")))
+		(nominal (type "D4_Pattern3")
+			(ty-header (name "D4_Pattern3")))
+		(nominal (type "D4_Pattern4")
+			(ty-header (name "D4_Pattern4")))
+		(nominal (type "D5_Pattern1")
+			(ty-header (name "D5_Pattern1")))
+		(nominal (type "D5_Pattern2")
+			(ty-header (name "D5_Pattern2")))
+		(nominal (type "D5_Pattern3")
+			(ty-header (name "D5_Pattern3")))
+		(nominal (type "Shadowing")
+			(ty-header (name "Shadowing")))
 		(nominal (type "External1")
 			(ty-header (name "External1")))
 		(nominal (type "Annotated")
-			(ty-header (name "Annotated")))
-		(nominal (type "Annotated.L2")
-			(ty-header (name "associated_items_truly_comprehensive.Annotated.L2"))))
+			(ty-header (name "Annotated"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -4374,26 +4089,26 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_e"))
-		(expr (type "Dec"))
-		(expr (type "_e"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
-		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -4428,32 +4143,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_e"))
-		(expr (type "Dec"))
-		(expr (type "_e"))
-		(expr (type "_e"))
-		(expr (type "_e"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(expr (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(expr (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
-		(expr (type "e where [e.plus : e, Dec -> e, e.times : e, Dec -> e]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -4476,16 +4165,42 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
-		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "e where [e.plus : e, Dec -> e]"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))

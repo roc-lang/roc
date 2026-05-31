@@ -23,55 +23,9 @@ Wrapper(a) : Inner(a)
 Inner(a) : List(a)
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_forward_reference.md:2:5:2:6
-UNDECLARED TYPE - type_forward_reference.md:7:9:7:15
-UNDECLARED TYPE - type_forward_reference.md:9:10:9:15
-UNDECLARED TYPE - type_forward_reference.md:14:14:14:19
+NIL
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _B_ is not declared in this scope.
-
-This type is referenced here:
-**type_forward_reference.md:2:5:2:6:**
-```roc
-A : B
-```
-    ^
-
-
-**UNDECLARED TYPE**
-The type _Second_ is not declared in this scope.
-
-This type is referenced here:
-**type_forward_reference.md:7:9:7:15:**
-```roc
-First : Second
-```
-        ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Third_ is not declared in this scope.
-
-This type is referenced here:
-**type_forward_reference.md:9:10:9:15:**
-```roc
-Second : Third
-```
-         ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Inner_ is not declared in this scope.
-
-This type is referenced here:
-**type_forward_reference.md:14:14:14:19:**
-```roc
-Wrapper(a) : Inner(a)
-```
-             ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,
@@ -131,30 +85,31 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-alias-decl
-		(ty-header (name "A"))
-		(ty-malformed))
-	(s-alias-decl
 		(ty-header (name "B"))
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
-		(ty-header (name "First"))
-		(ty-malformed))
-	(s-alias-decl
-		(ty-header (name "Second"))
-		(ty-malformed))
+		(ty-header (name "A"))
+		(ty-lookup (name "B") (local)))
 	(s-alias-decl
 		(ty-header (name "Third"))
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
-		(ty-header (name "Wrapper")
-			(ty-args
-				(ty-rigid-var (name "a"))))
-		(ty-malformed))
+		(ty-header (name "Second"))
+		(ty-lookup (name "Third") (local)))
+	(s-alias-decl
+		(ty-header (name "First"))
+		(ty-lookup (name "Second") (local)))
 	(s-alias-decl
 		(ty-header (name "Inner")
 			(ty-args
 				(ty-rigid-var (name "a"))))
 		(ty-apply (name "List") (builtin)
+			(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
+	(s-alias-decl
+		(ty-header (name "Wrapper")
+			(ty-args
+				(ty-rigid-var (name "a"))))
+		(ty-apply (name "Inner") (local)
 			(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 ~~~
 # TYPES
@@ -162,22 +117,22 @@ NO CHANGE
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "A")
-			(ty-header (name "A")))
 		(alias (type "B")
 			(ty-header (name "B")))
-		(alias (type "First")
-			(ty-header (name "First")))
-		(alias (type "Second")
-			(ty-header (name "Second")))
+		(alias (type "A")
+			(ty-header (name "A")))
 		(alias (type "Third")
 			(ty-header (name "Third")))
-		(alias (type "Wrapper(a)")
-			(ty-header (name "Wrapper")
-				(ty-args
-					(ty-rigid-var (name "a")))))
+		(alias (type "Second")
+			(ty-header (name "Second")))
+		(alias (type "First")
+			(ty-header (name "First")))
 		(alias (type "Inner(a)")
 			(ty-header (name "Inner")
+				(ty-args
+					(ty-rigid-var (name "a")))))
+		(alias (type "Wrapper(a)")
+			(ty-header (name "Wrapper")
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions))

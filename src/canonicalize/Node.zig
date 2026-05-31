@@ -615,21 +615,19 @@ pub const Payload = extern union {
     pub const ExprFieldAccess = extern struct {
         receiver: u32,
         field_name: u32,
-        region_span2_idx: u32,
+        field_name_region_span2_idx: u32,
     };
 
     pub const ExprMethodCall = extern struct {
         receiver: u32,
         method_name: u32,
-        args_span2_idx: u32,
-        region_span2_idx: u32,
+        method_call_data_idx: u32,
     };
 
     pub const ExprDispatchCall = extern struct {
         receiver: u32,
         method_name: u32,
-        args_span2_idx: u32,
-        region_span2_idx: u32,
+        method_call_data_idx: u32,
         constraint_fn_var: u32,
     };
 
@@ -651,23 +649,19 @@ pub const Payload = extern union {
     pub const ExprTypeMethodCall = extern struct {
         type_var_alias_stmt: u32,
         method_name: u32,
-        args_span2_idx: u32,
-        region_span2_idx: u32,
+        method_call_data_idx: u32,
     };
 
     pub const ExprTypeDispatchCall = extern struct {
         type_var_alias_stmt: u32,
         method_name: u32,
-        args_span2_idx: u32,
-        region_span2_idx: u32,
+        method_call_data_idx: u32,
         constraint_fn_var: u32,
     };
 
     pub const ExprHostedLambda = extern struct {
         symbol_name: u32,
-        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
-        index: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
     };
 
     pub const ExprLowLevel = extern struct {
@@ -1068,8 +1062,8 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    // Compile-time size verification.
+    // Compile-time size verification
     comptime {
-        std.debug.assert(@sizeOf(Payload) == 20);
+        std.debug.assert(@sizeOf(Payload) == 16);
     }
 };

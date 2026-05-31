@@ -277,7 +277,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 228)
+						(e-dispatch-call (method "plus") (constraint-fn-var 224)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -300,7 +300,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 385)
+						(e-dispatch-call (method "minus") (constraint-fn-var 381)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -323,7 +323,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "plus") (constraint-fn-var 542)
+						(e-dispatch-call (method "plus") (constraint-fn-var 538)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -346,7 +346,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "minus") (constraint-fn-var 699)
+						(e-dispatch-call (method "minus") (constraint-fn-var 695)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -358,17 +358,10 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
 				(ty-lookup (name "Robot") (local)))))
-	(s-alias-decl
-		(ty-header (name "Robot"))
-		(ty-record
-			(field (field "x")
-				(ty-lookup (name "I64") (builtin)))
-			(field (field "y")
-				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 845)
+				(e-call (constraint-fn-var 841)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -386,7 +379,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1262)
+				(e-call (constraint-fn-var 1258)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -404,7 +397,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1679)
+				(e-call (constraint-fn-var 1675)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -422,7 +415,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2096)
+				(e-call (constraint-fn-var 2092)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -440,9 +433,9 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2514)
+				(e-call (constraint-fn-var 2510)
 					(e-runtime-error (tag "erroneous_value_use"))
-					(e-call (constraint-fn-var 2513)
+					(e-call (constraint-fn-var 2509)
 						(e-runtime-error (tag "erroneous_value_use"))
 						(e-record
 							(fields
@@ -456,7 +449,14 @@ NO CHANGE
 						(field (name "x")
 							(e-num (value "5")))
 						(field (name "y")
-							(e-num (value "5")))))))))
+							(e-num (value "5"))))))))
+	(s-alias-decl
+		(ty-header (name "Robot"))
+		(ty-record
+			(field (field "x")
+				(ty-lookup (name "I64") (builtin)))
+			(field (field "y")
+				(ty-lookup (name "I64") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure

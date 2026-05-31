@@ -30,15 +30,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "map") (constraint-fn-var 11)
+(e-method-call (method "map")
 	(receiver
-		(e-lookup-local
-			(p-assign (ident "list"))))
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(args
-		(e-lookup-local
-			(p-assign (ident "fn")))))
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

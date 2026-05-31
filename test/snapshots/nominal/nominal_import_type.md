@@ -26,7 +26,7 @@ red : Color.RGB
 
 
 **MODULE NOT FOUND**
-The type `.RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
+The type `RGB` is qualified by the module `Color`, but that module was not found in this Roc project.
 
 You're attempting to use this type here:
 **nominal_import_type.md:4:12:4:16:**
