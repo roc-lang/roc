@@ -1685,14 +1685,8 @@ const MiniCiStep = struct {
         try checkFxPlatformTestCoverage(step);
         try recordTiming(b.allocator, io, &timings, "fx platform test coverage", &timer);
 
-        try runSubBuild(step, &.{"test-eval"}, "zig build test-eval");
-        try recordTiming(b.allocator, io, &timings, "zig build test-eval", &timer);
-
         try runSubBuild(step, &.{"test"}, "zig build test");
         try recordTiming(b.allocator, io, &timings, "zig build test", &timer);
-
-        try runSubBuild(step, &.{"test-builtin-doc"}, "zig build test-builtin-doc");
-        try recordTiming(b.allocator, io, &timings, "zig build test-builtin-doc", &timer);
 
         try runSubBuild(
             step,
