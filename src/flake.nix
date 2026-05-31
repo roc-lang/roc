@@ -44,7 +44,7 @@
           curl
           zlib
         ];
-        zig = pkgs.zig_0_15;
+        zig = pkgs.zig_0_16;
         dependencies = [
           zig
           pkgs.zls
