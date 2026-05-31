@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Nominal type module whose field depends on a nested associated type (qualified ModuleType.InternalType). This should compile, since the nested type is exposed as ModuleType.InternalType. It currently reproduces a MISSING NESTED TYPE error because the associated type is not yet in scope while the enclosing type's own annotation is canonicalized.
+description=Nominal type module whose field depends on a nested associated type (qualified ModuleType.InternalType). This compiles because the nested type is exposed as ModuleType.InternalType.
 type=file:ModuleType.roc
 ~~~
 # SOURCE

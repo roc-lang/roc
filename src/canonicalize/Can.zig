@@ -984,10 +984,15 @@ fn processTypeDeclFirstPass(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        var associated_type_scope_entered = false;
+        defer if (associated_type_scope_entered) {
+            self.scopeExit(self.env.gpa) catch unreachable;
+        };
+
         if (type_decl.associated) |assoc| {
             try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
             try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch unreachable;
+            associated_type_scope_entered = true;
             try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
         }
 
@@ -1104,10 +1109,15 @@ fn processTypeDeclFirstPassWithExisting(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        var associated_type_scope_entered = false;
+        defer if (associated_type_scope_entered) {
+            self.scopeExit(self.env.gpa) catch unreachable;
+        };
+
         if (type_decl.associated) |assoc| {
             try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
             try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch unreachable;
+            associated_type_scope_entered = true;
             try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
         }
 

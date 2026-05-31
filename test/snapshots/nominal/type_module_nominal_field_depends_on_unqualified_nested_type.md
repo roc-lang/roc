@@ -1,12 +1,12 @@
 # META
 ~~~ini
-description=Opaque type module whose field depends on a nested associated type (qualified ModuleType.InternalType). This compiles because the nested type is exposed as ModuleType.InternalType.
+description=Nominal type module whose field depends on an unqualified nested associated type declared in the same type module. This covers issue #9486's associated-definition arrangement.
 type=file:ModuleType.roc
 ~~~
 # SOURCE
 ~~~roc
-ModuleType :: {
-    field : ModuleType.InternalType,
+ModuleType := {
+    field : InternalType,
 }.{
     InternalType := [Some, Other]
 }
@@ -17,8 +17,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpDoubleColon,OpenCurly,
-LowerIdent,OpColon,UpperIdent,NoSpaceDotUpperIdent,Comma,
+UpperIdent,OpColonEqual,OpenCurly,
+LowerIdent,OpColon,UpperIdent,Comma,
 CloseCurly,Dot,OpenCurly,
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
 CloseCurly,
@@ -34,7 +34,7 @@ EndOfFile,
 				(args))
 			(ty-record
 				(anno-record-field (name "field")
-					(ty (name "ModuleType.InternalType"))))
+					(ty (name "InternalType"))))
 			(associated
 				(s-type-decl
 					(header (name "InternalType")
@@ -46,8 +46,8 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-ModuleType :: {
-	field : ModuleType.InternalType,
+ModuleType := {
+	field : InternalType,
 }.{
 	InternalType := [Some, Other]
 }
@@ -59,7 +59,7 @@ ModuleType :: {
 		(ty-header (name "ModuleType"))
 		(ty-record
 			(field (field "field")
-				(ty-lookup (name "ModuleType.InternalType") (local)))))
+				(ty-lookup (name "InternalType") (local)))))
 	(s-nominal-decl
 		(ty-header (name "ModuleType.InternalType"))
 		(ty-tag-union
