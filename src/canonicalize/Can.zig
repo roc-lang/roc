@@ -806,15 +806,29 @@ fn publishTopLevelTypeDeclStatements(self: *Self, scope_idx: AST.DeclIndex.Scope
 
     var states: std.AutoHashMapUnmanaged(AST.Statement.Idx, TypeDeclVisitState) = .{};
     defer states.deinit(self.env.gpa);
-    var poisoned: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{};
-    defer poisoned.deinit(self.env.gpa);
+
+    var alias_sccs = AliasSccContext{
+        .can = self,
+        .name_to_stmt = &name_to_stmt,
+        .stmt_to_decl = &stmt_to_decl,
+    };
+    defer alias_sccs.deinit();
+
+    for (decls) |decl_idx| {
+        const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+        if (decl.kind != .type_alias) continue;
+        const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
+        if (!self.prepared_type_decls.contains(ast_stmt_idx)) continue;
+        if (alias_sccs.index_by_stmt.contains(ast_stmt_idx)) continue;
+        try alias_sccs.visit(ast_stmt_idx);
+    }
 
     for (decls) |decl_idx| {
         const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
         if (declIndexTypeKind(decl.kind) == null) continue;
         const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
         if (!self.prepared_type_decls.contains(ast_stmt_idx)) continue;
-        try self.publishTypeDeclStatementTopo(ast_stmt_idx, &name_to_stmt, &stmt_to_decl, &states, &poisoned);
+        try self.publishTypeDeclStatementTopo(ast_stmt_idx, &name_to_stmt, &stmt_to_decl, &states);
     }
 }
 
@@ -824,7 +838,6 @@ fn publishTypeDeclStatementTopo(
     name_to_stmt: *const std.AutoHashMapUnmanaged(Ident.Idx, AST.Statement.Idx),
     stmt_to_decl: *const std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.DeclIndex.DeclIdx),
     states: *std.AutoHashMapUnmanaged(AST.Statement.Idx, TypeDeclVisitState),
-    poisoned: *std.AutoHashMapUnmanaged(AST.Statement.Idx, void),
 ) std.mem.Allocator.Error!void {
     const entry = try states.getOrPut(self.env.gpa, ast_stmt_idx);
     if (entry.found_existing) {
@@ -843,11 +856,10 @@ fn publishTypeDeclStatementTopo(
         if (dep_stmt_idx == ast_stmt_idx) continue;
         if (states.get(dep_stmt_idx)) |state| {
             if (state == .visiting) {
-                try self.poisonMutuallyRecursiveAlias(ast_stmt_idx, dep_stmt_idx, poisoned);
                 continue;
             }
         }
-        try self.publishTypeDeclStatementTopo(dep_stmt_idx, name_to_stmt, stmt_to_decl, states, poisoned);
+        try self.publishTypeDeclStatementTopo(dep_stmt_idx, name_to_stmt, stmt_to_decl, states);
     }
 
     try states.put(self.env.gpa, ast_stmt_idx, .done);
@@ -856,59 +868,150 @@ fn publishTypeDeclStatementTopo(
     }
 }
 
-fn poisonMutuallyRecursiveAlias(
-    self: *Self,
-    current_stmt_idx: AST.Statement.Idx,
-    dependency_stmt_idx: AST.Statement.Idx,
-    poisoned: *std.AutoHashMapUnmanaged(AST.Statement.Idx, void),
-) std.mem.Allocator.Error!void {
-    if (!self.astTypeDeclIsAlias(current_stmt_idx) or !self.astTypeDeclIsAlias(dependency_stmt_idx)) return;
+const AliasSccContext = struct {
+    can: *Self,
+    name_to_stmt: *const std.AutoHashMapUnmanaged(Ident.Idx, AST.Statement.Idx),
+    stmt_to_decl: *const std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.DeclIndex.DeclIdx),
+    index_by_stmt: std.AutoHashMapUnmanaged(AST.Statement.Idx, u32) = .{},
+    lowlink_by_stmt: std.AutoHashMapUnmanaged(AST.Statement.Idx, u32) = .{},
+    on_stack: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{},
+    stack: std.ArrayListUnmanaged(AST.Statement.Idx) = .{},
+    next_index: u32 = 0,
 
-    const poison_entry = try poisoned.getOrPut(self.env.gpa, current_stmt_idx);
-    if (poison_entry.found_existing) return;
-    poison_entry.value_ptr.* = {};
-
-    const current = self.astTypeDeclNameAndRegion(current_stmt_idx) orelse return;
-    const dependency = self.astTypeDeclNameAndRegion(dependency_stmt_idx) orelse return;
-    const cir_stmt_idx = self.prepared_type_decls.get(current_stmt_idx) orelse return;
-
-    switch (self.env.store.getStatement(cir_stmt_idx)) {
-        .s_alias_decl => |alias| {
-            const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .mutually_recursive_type_aliases = .{
-                .name = current.name,
-                .other_name = dependency.name,
-                .region = current.region,
-                .other_region = dependency.region,
-            } });
-            try self.env.store.setStatementNode(cir_stmt_idx, Statement{ .s_alias_decl = .{
-                .header = alias.header,
-                .anno = malformed_anno,
-            } });
-        },
-        else => {},
+    fn deinit(self: *AliasSccContext) void {
+        const gpa = self.can.env.gpa;
+        self.index_by_stmt.deinit(gpa);
+        self.lowlink_by_stmt.deinit(gpa);
+        self.on_stack.deinit(gpa);
+        self.stack.deinit(gpa);
     }
-}
 
-fn astTypeDeclIsAlias(self: *Self, ast_stmt_idx: AST.Statement.Idx) bool {
-    return switch (self.parse_ir.store.getStatement(ast_stmt_idx)) {
-        .type_decl => |type_decl| type_decl.kind == .alias,
-        else => false,
-    };
-}
+    fn visit(self: *AliasSccContext, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!void {
+        const gpa = self.can.env.gpa;
+        const index = self.next_index;
+        self.next_index += 1;
 
-fn astTypeDeclNameAndRegion(self: *Self, ast_stmt_idx: AST.Statement.Idx) ?struct { name: Ident.Idx, region: Region } {
-    return switch (self.parse_ir.store.getStatement(ast_stmt_idx)) {
-        .type_decl => |type_decl| {
-            const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch return null;
-            const name = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse return null;
-            return .{
-                .name = name,
-                .region = self.parse_ir.tokenizedRegionToRegion(type_decl.region),
-            };
-        },
-        else => null,
-    };
-}
+        try self.index_by_stmt.put(gpa, stmt_idx, index);
+        try self.lowlink_by_stmt.put(gpa, stmt_idx, index);
+        try self.stack.append(gpa, stmt_idx);
+        try self.on_stack.put(gpa, stmt_idx, {});
+
+        const decl = self.aliasDecl(stmt_idx) orelse unreachable;
+        for (self.can.parse_ir.decl_index.typeDependencies(decl.type_dependencies)) |dep_ident| {
+            const dep_stmt_idx = self.name_to_stmt.get(dep_ident) orelse continue;
+            if (self.aliasDecl(dep_stmt_idx) == null) continue;
+
+            if (!self.index_by_stmt.contains(dep_stmt_idx)) {
+                try self.visit(dep_stmt_idx);
+                const dep_lowlink = self.lowlink_by_stmt.get(dep_stmt_idx).?;
+                const lowlink_ptr = self.lowlink_by_stmt.getPtr(stmt_idx).?;
+                lowlink_ptr.* = @min(lowlink_ptr.*, dep_lowlink);
+            } else if (self.on_stack.contains(dep_stmt_idx)) {
+                const dep_index = self.index_by_stmt.get(dep_stmt_idx).?;
+                const lowlink_ptr = self.lowlink_by_stmt.getPtr(stmt_idx).?;
+                lowlink_ptr.* = @min(lowlink_ptr.*, dep_index);
+            }
+        }
+
+        if (self.lowlink_by_stmt.get(stmt_idx).? == self.index_by_stmt.get(stmt_idx).?) {
+            var scc_members: std.ArrayListUnmanaged(AST.Statement.Idx) = .{};
+            defer scc_members.deinit(gpa);
+
+            while (true) {
+                const member = self.stack.pop() orelse unreachable;
+                const removed = self.on_stack.remove(member);
+                std.debug.assert(removed);
+                try scc_members.append(gpa, member);
+                if (member == stmt_idx) break;
+            }
+
+            if (scc_members.items.len > 1) {
+                try self.poisonMutuallyRecursiveAliasScc(scc_members.items);
+            }
+        }
+    }
+
+    fn aliasDecl(self: *AliasSccContext, stmt_idx: AST.Statement.Idx) ?AST.DeclIndex.Decl {
+        const decl_idx = self.stmt_to_decl.get(stmt_idx) orelse return null;
+        const decl = self.can.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
+        if (decl.kind != .type_alias) return null;
+        return decl;
+    }
+
+    fn poisonMutuallyRecursiveAliasScc(
+        self: *AliasSccContext,
+        members: []const AST.Statement.Idx,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(members.len > 1);
+
+        for (members) |member| {
+            const referenced_member = self.referencedSccMember(member, members);
+            try self.poisonMutuallyRecursiveAlias(member, referenced_member);
+        }
+    }
+
+    fn referencedSccMember(
+        self: *AliasSccContext,
+        stmt_idx: AST.Statement.Idx,
+        members: []const AST.Statement.Idx,
+    ) AST.Statement.Idx {
+        const decl = self.aliasDecl(stmt_idx) orelse unreachable;
+        for (self.can.parse_ir.decl_index.typeDependencies(decl.type_dependencies)) |dep_ident| {
+            const dep_stmt_idx = self.name_to_stmt.get(dep_ident) orelse continue;
+            if (dep_stmt_idx == stmt_idx) continue;
+            if (self.aliasDecl(dep_stmt_idx) == null) continue;
+            if (stmtSliceContains(members, dep_stmt_idx)) {
+                return dep_stmt_idx;
+            }
+        }
+
+        unreachable;
+    }
+
+    fn poisonMutuallyRecursiveAlias(
+        self: *AliasSccContext,
+        stmt_idx: AST.Statement.Idx,
+        referenced_stmt_idx: AST.Statement.Idx,
+    ) std.mem.Allocator.Error!void {
+        const decl = self.aliasDecl(stmt_idx) orelse unreachable;
+        const referenced_decl = self.aliasDecl(referenced_stmt_idx) orelse unreachable;
+        const name = decl.name_ident orelse unreachable;
+        const referenced_name = referenced_decl.name_ident orelse unreachable;
+        const region = self.can.parse_ir.tokenizedRegionToRegion(.{
+            .start = decl.region.start,
+            .end = decl.region.end,
+        });
+        const referenced_region = self.can.parse_ir.tokenizedRegionToRegion(.{
+            .start = referenced_decl.region.start,
+            .end = referenced_decl.region.end,
+        });
+
+        const malformed_anno = try self.can.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .mutually_recursive_type_aliases = .{
+            .name = name,
+            .other_name = referenced_name,
+            .region = region,
+            .other_region = referenced_region,
+        } });
+
+        const cir_stmt_idx = self.can.prepared_type_decls.get(stmt_idx) orelse unreachable;
+        switch (self.can.env.store.getStatement(cir_stmt_idx)) {
+            .s_alias_decl => |alias| {
+                try self.can.env.store.setStatementNode(cir_stmt_idx, Statement{ .s_alias_decl = .{
+                    .header = alias.header,
+                    .anno = malformed_anno,
+                } });
+            },
+            else => unreachable,
+        }
+    }
+
+    fn stmtSliceContains(members: []const AST.Statement.Idx, needle: AST.Statement.Idx) bool {
+        for (members) |member| {
+            if (member == needle) return true;
+        }
+        return false;
+    }
+};
 
 /// Process a single type declaration: canonicalize its header and annotation,
 /// either updating the placeholder a forward reference created earlier or

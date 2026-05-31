@@ -46,6 +46,7 @@ Complex : {
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
+MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:13:1:13:37
 # PROBLEMS
 **TYPE REDECLARED**
 The type _Person_ is being redeclared.
@@ -94,6 +95,26 @@ And it references _Tree_ declared here:
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MUTUALLY RECURSIVE TYPE ALIASES**
+The type alias _Tree_ and _Node_ form a recursive cycle.
+
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
+
+This type is declared here:
+**type_comprehensive_scope.md:13:1:13:37:**
+```roc
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+And it references _Node_ declared here:
+**type_comprehensive_scope.md:16:1:16:48:**
+```roc
+Node(a) : { value: a, children: List(Tree(a)) }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS
@@ -306,12 +327,7 @@ Complex : {
 		(ty-header (name "Tree")
 			(ty-args
 				(ty-rigid-var (name "a"))))
-		(ty-tag-union
-			(ty-tag-name (name "Branch")
-				(ty-apply (name "Node") (local)
-					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))
-			(ty-tag-name (name "Leaf")
-				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
+		(ty-malformed))
 	(s-alias-decl
 		(ty-header (name "MyTry"))
 		(ty-apply (name "Try") (local)
