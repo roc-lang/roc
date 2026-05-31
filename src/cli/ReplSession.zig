@@ -9,6 +9,7 @@ const base = @import("base");
 const can = @import("can");
 const eval = @import("eval");
 const parse = @import("parse");
+const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
 
@@ -21,6 +22,20 @@ io: std.Io,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
 builtin_modules: eval.BuiltinModules,
+
+pub const StepResult = union(enum) {
+    output: []u8,
+    diagnostic: []u8,
+    none,
+    exit,
+
+    pub fn deinit(self: StepResult, allocator: Allocator) void {
+        switch (self) {
+            .output, .diagnostic => |bytes| allocator.free(bytes),
+            .none, .exit => {},
+        }
+    }
+};
 
 pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) !ReplSession {
     return .{
@@ -47,34 +62,46 @@ fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin
 
 /// Process one complete REPL statement or command and return the user-visible output.
 pub fn step(self: *ReplSession, input: []const u8) ![]u8 {
-    const line = std.mem.trim(u8, input, " \t\r\n");
-    if (line.len == 0) return self.allocator.dupe(u8, "");
+    const result = try self.stepWithConfig(input, reporting.ReportingConfig.initColorTerminal());
+    return switch (result) {
+        .output => |bytes| bytes,
+        .diagnostic => |bytes| bytes,
+        .none => self.allocator.dupe(u8, ""),
+        .exit => self.allocator.dupe(u8, "Goodbye!"),
+    };
+}
 
-    if (std.mem.eql(u8, line, ":help")) return self.helpText();
+/// Process one complete REPL statement or command and keep stdout/stderr output separate.
+pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) !StepResult {
+    const line = std.mem.trim(u8, input, " \t\r\n");
+    if (line.len == 0) return .none;
+
+    if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, "exit"))
     {
-        return self.allocator.dupe(u8, "Goodbye!");
+        return .exit;
     }
 
-    const input_info = try self.classifyInput(line) orelse {
-        return self.allocator.dupe(u8, "Parse error");
+    const input_info = switch (try self.inputStatus(line)) {
+        .complete => |info| info,
+        .incomplete, .invalid => return .{ .diagnostic = try self.renderStatementParseDiagnostics(line, report_config) },
     };
 
     switch (input_info.kind) {
-        .expression => return self.evaluateExpression(line),
+        .expression => return try self.evaluateExpression(line, report_config),
         .definition => {
             const name = input_info.name orelse line;
             if (input_info.definition_kind == .annotation) {
                 try self.addOrReplaceDefinition(line, name, .annotation);
-                return self.allocator.dupe(u8, "");
+                return .none;
             }
 
             var snapshot = try self.definitions.snapshot(self.allocator);
             errdefer snapshot.deinit(self.allocator);
             try self.addOrReplaceDefinition(line, name, input_info.definition_kind);
-            const validation = self.validateDefinitions() catch DefinitionValidation{ .valid = false, .error_message = null };
+            const validation = self.validateDefinitions(report_config) catch DefinitionValidation{ .valid = false, .error_message = null };
             if (!validation.valid) {
                 self.definitions.restore(self.allocator, &snapshot);
                 // Drop any pending annotation for this name. A `y : Str` typed before a
@@ -83,12 +110,12 @@ pub fn step(self: *ReplSession, input: []const u8) ![]u8 {
                 if (input_info.definition_kind == .value and !self.definitions.hasKind(name, .value)) {
                     self.definitions.removeByNameAndKind(self.allocator, name, .annotation);
                 }
-                if (validation.error_message) |msg| return msg;
-                return self.allocator.dupe(u8, "Definition failed to compile");
+                if (validation.error_message) |msg| return .{ .diagnostic = msg };
+                return .{ .diagnostic = try self.allocator.dupe(u8, "Definition failed to compile") };
             }
             const message = try std.fmt.allocPrint(self.allocator, "assigned `{s}`", .{name});
             snapshot.deinit(self.allocator);
-            return message;
+            return .{ .output = message };
         },
     }
 }
@@ -124,9 +151,12 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]cons
 
         const candidate = std.mem.trim(u8, current.items, " \t\r\n");
         if (candidate.len == 0) continue;
-        if (try self.classifyInput(candidate) != null) {
-            try result.append(self.allocator, try self.allocator.dupe(u8, candidate));
-            current.clearRetainingCapacity();
+        switch (try self.inputStatus(candidate)) {
+            .complete => {
+                try result.append(self.allocator, try self.allocator.dupe(u8, candidate));
+                current.clearRetainingCapacity();
+            },
+            .incomplete, .invalid => {},
         }
     }
 
@@ -201,7 +231,7 @@ const DefinitionValidation = struct {
     error_message: ?[]u8,
 };
 
-fn validateDefinitions(self: *ReplSession) !DefinitionValidation {
+fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) !DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
@@ -219,7 +249,14 @@ fn validateDefinitions(self: *ReplSession) !DefinitionValidation {
         return .{ .valid = true, .error_message = null };
     } else |err| switch (err) {
         error.TypeCheckError => {
-            const msg = eval.test_helpers.renderProblems(self.allocator, .module, source) catch |render_err| switch (render_err) {
+            const msg = self.renderModuleProblems(source, report_config) catch |render_err| switch (render_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return .{ .valid = false, .error_message = null },
+            };
+            return .{ .valid = false, .error_message = msg };
+        },
+        error.ParseError => {
+            const msg = self.renderModuleParseDiagnostics(source, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return .{ .valid = false, .error_message = null },
             };
@@ -229,7 +266,7 @@ fn validateDefinitions(self: *ReplSession) !DefinitionValidation {
     }
 }
 
-fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
+fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: reporting.ReportingConfig) !StepResult {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
@@ -249,17 +286,110 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8) ![]u8 {
         target_usize,
         self.prePublishedBuiltin(),
     ) catch |err| switch (err) {
-        error.TypeCheckError => return eval.test_helpers.renderProblems(self.allocator, .module, source),
+        error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, report_config) },
+        error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
         else => return err,
     };
     defer compiled.deinit(self.allocator);
 
     return switch (self.backend_kind) {
-        .interpreter => eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered),
-        .dev => eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered),
-        .llvm => eval.test_helpers.llvmEvaluatorInspectedStr(self.allocator, &compiled.lowered),
-        .wasm => eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered),
+        .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },
+        .dev => .{ .output = try eval.test_helpers.devEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
+        .llvm => .{ .output = try eval.test_helpers.llvmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
+        .wasm => .{ .output = try eval.test_helpers.wasmEvaluatorInspectedStr(self.allocator, &compiled.lowered) },
     };
+}
+
+fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+    return eval.test_helpers.renderProblemsWithConfig(self.allocator, .module, source, report_config) catch |err| switch (err) {
+        error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
+        else => err,
+    };
+}
+
+fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+    var env = try ModuleEnv.init(self.allocator, source);
+    defer env.deinit();
+    env.common.source = source;
+    try env.common.calcLineStarts(self.allocator);
+
+    const ast = try parse.parse(self.allocator, &env.common);
+    defer ast.deinit();
+
+    return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
+}
+
+fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+    var env = try ModuleEnv.init(self.allocator, source);
+    defer env.deinit();
+    env.common.source = source;
+    try env.common.calcLineStarts(self.allocator);
+
+    const ast = parse.parseStatement(self.allocator, &env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return self.renderFallbackParseDiagnostic(source, report_config),
+    };
+    defer ast.deinit();
+
+    return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
+}
+
+fn renderAstDiagnostics(
+    self: *ReplSession,
+    ast: *parse.AST,
+    env: *const base.CommonEnv,
+    filename: []const u8,
+    report_config: reporting.ReportingConfig,
+) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(self.allocator);
+    errdefer out.deinit();
+
+    var rendered_any = false;
+    for (ast.tokenize_diagnostics.items) |diagnostic| {
+        var report = try ast.tokenizeDiagnosticToReport(diagnostic, self.allocator, filename);
+        defer report.deinit();
+        try reporting.renderReportWithConfig(&report, &out.writer, report_config);
+        rendered_any = true;
+    }
+    for (ast.parse_diagnostics.items) |diagnostic| {
+        var report = try ast.parseDiagnosticToReport(env, diagnostic, self.allocator, filename);
+        defer report.deinit();
+        try reporting.renderReportWithConfig(&report, &out.writer, report_config);
+        rendered_any = true;
+    }
+
+    if (!rendered_any) {
+        out.deinit();
+        return self.renderFallbackParseDiagnostic(env.source, report_config);
+    }
+
+    const raw = try out.toOwnedSlice();
+    return trimOwnedRight(self.allocator, raw);
+}
+
+fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+    var report = reporting.Report.init(self.allocator, "PARSE ERROR", .runtime_error);
+    defer report.deinit();
+    try report.document.addReflowingText("The REPL input could not be parsed.");
+    if (source.len > 0) {
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(source);
+    }
+
+    var out: std.Io.Writer.Allocating = .init(self.allocator);
+    errdefer out.deinit();
+    try reporting.renderReportWithConfig(&report, &out.writer, report_config);
+    const raw = try out.toOwnedSlice();
+    return trimOwnedRight(self.allocator, raw);
+}
+
+fn trimOwnedRight(allocator: Allocator, raw: []u8) ![]u8 {
+    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
+    if (trimmed.len == raw.len) return raw;
+    const result = try allocator.dupe(u8, trimmed);
+    allocator.free(raw);
+    return result;
 }
 
 const InputKind = enum {
@@ -281,18 +411,29 @@ const InputInfo = struct {
     name: ?[]const u8 = null,
 };
 
-fn classifyInput(self: *ReplSession, line: []const u8) !?InputInfo {
+pub const InputStatus = union(enum) {
+    complete: InputInfo,
+    incomplete,
+    invalid,
+};
+
+pub fn inputStatus(self: *ReplSession, line: []const u8) !InputStatus {
     var env = try ModuleEnv.init(self.allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = parse.parseStatement(self.allocator, &env.common) catch return null;
+    const ast = parse.parseStatement(self.allocator, &env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .invalid,
+    };
     defer ast.deinit();
-    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
+    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
+        return if (inputDiagnosticsAreIncomplete(ast)) .incomplete else .invalid;
+    }
 
     const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
-    return switch (statement) {
+    return .{ .complete = switch (statement) {
         .expr,
         .crash,
         .dbg,
@@ -339,8 +480,81 @@ fn classifyInput(self: *ReplSession, line: []const u8) !?InputInfo {
             .definition_kind = .import,
             .name = ast.resolve(file_import.name_tok),
         },
-        .malformed => null,
+        .malformed => return .invalid,
+    } };
+}
+
+fn inputDiagnosticsAreIncomplete(ast: *const parse.AST) bool {
+    var saw_incomplete = false;
+
+    for (ast.tokenize_diagnostics.items) |diagnostic| {
+        if (!tokenizeDiagnosticIsIncomplete(diagnostic, ast.env.source.len)) return false;
+        saw_incomplete = true;
+    }
+
+    for (ast.parse_diagnostics.items) |diagnostic| {
+        if (!parseDiagnosticIsIncompleteAtEof(ast, diagnostic)) return false;
+        saw_incomplete = true;
+    }
+
+    return saw_incomplete;
+}
+
+fn tokenizeDiagnosticIsIncomplete(diagnostic: parse.tokenize.Diagnostic, source_len: usize) bool {
+    const reaches_eof = diagnostic.region.end.offset >= source_len;
+    return reaches_eof and switch (diagnostic.tag) {
+        .UnclosedString,
+        .SingleQuoteUnclosed,
+        .InvalidUnicodeEscapeSequence,
+        => true,
+        else => false,
     };
+}
+
+fn parseDiagnosticIsIncompleteAtEof(ast: *const parse.AST, diagnostic: parse.AST.Diagnostic) bool {
+    if (!diagnosticRegionTouchesEof(ast, diagnostic.region)) return false;
+
+    return switch (diagnostic.tag) {
+        .pattern_unexpected_eof,
+        .string_unclosed,
+        .string_expected_close_interpolation,
+        .incomplete_import,
+        .expected_expr_bar,
+        .expected_expr_close_curly,
+        .expected_expr_close_curly_or_comma,
+        .expected_expr_close_round_or_comma,
+        .expected_expr_close_square_or_comma,
+        .expected_close_curly_at_end_of_match,
+        .expected_open_curly_after_match,
+        .expected_expr_apply_close_round,
+        .expected_ty_apply_close_round,
+        .expected_ty_anno_close_round,
+        .expected_ty_anno_close_round_or_comma,
+        .expected_ty_close_curly_or_comma,
+        .expected_ty_close_square_or_comma,
+        .expected_expr_comma,
+        .expected_arrow,
+        .expr_unexpected_token,
+        .statement_unexpected_token,
+        .ty_anno_unexpected_token,
+        .var_expected_equals,
+        .for_expected_in,
+        .match_branch_missing_arrow,
+        .where_expected_close_bracket,
+        => true,
+        else => false,
+    };
+}
+
+fn diagnosticRegionTouchesEof(ast: *const parse.AST, region: parse.AST.TokenizedRegion) bool {
+    const token_count = ast.tokens.tokens.len;
+    if (token_count == 0) return true;
+
+    const eof_idx: u32 = @intCast(token_count - 1);
+    if (region.start >= eof_idx or region.end > eof_idx) return true;
+
+    const tags = ast.tokens.tokens.items(.tag);
+    return tags[@intCast(region.start)] == .EndOfFile;
 }
 
 fn declarationName(ast: *const parse.AST, pattern_idx: parse.AST.Pattern.Idx) ?[]const u8 {
@@ -491,7 +705,10 @@ fn expectAllNative(expr: []const u8, expected: []const u8) !void {
     defer repl.deinit();
 
     const line = std.mem.trim(u8, expr, " \t\r\n");
-    const input_info = try repl.classifyInput(line) orelse return error.ParseError;
+    const input_info = switch (try repl.inputStatus(line)) {
+        .complete => |info| info,
+        .incomplete, .invalid => return error.ParseError,
+    };
     try testing.expectEqual(InputKind.expression, input_info.kind);
 
     const definitions = try repl.definitionsSource();

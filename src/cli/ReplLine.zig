@@ -397,9 +397,14 @@ pub const ReadLineError =
         .windows => Windows.Error,
     };
 
+pub const ReadLineResult = union(enum) {
+    line: []u8,
+    eof,
+};
+
 /// Reads a line of input from stdin with line editing and history support.
 /// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
-pub fn readLine(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, stdin: std.Io.File) ReadLineError![]u8 {
+pub fn readLine(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, stdin: std.Io.File) ReadLineError!ReadLineResult {
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writerStreaming(std_io, &stdout_buffer);
 
@@ -412,10 +417,11 @@ pub fn readLine(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []c
 }
 
 /// Simple line reading for non-TTY input (no raw mode, no escape sequences).
-fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError![]u8 {
-    // Print the prompt
-    try out.writeAll(prompt);
-    try out.flush();
+fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError!ReadLineResult {
+    if (prompt.len > 0) {
+        try out.writeAll(prompt);
+        try out.flush();
+    }
 
     // Read until newline or EOF
     var line_buffer = std.ArrayList(u8).empty;
@@ -425,15 +431,21 @@ fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *
         const bytes_read = in.readStreaming(std_io, &.{&read_buffer}) catch |err| switch (err) {
             // std.Io streaming returns error.EndOfStream on EOF rather than returning 0 bytes.
             error.EndOfStream => {
-                line_buffer.deinit(outlive);
-                return try outlive.dupe(u8, "exit");
+                if (line_buffer.items.len == 0) {
+                    line_buffer.deinit(outlive);
+                    return .eof;
+                }
+                return .{ .line = try line_buffer.toOwnedSlice(outlive) };
             },
             else => return err,
         };
         if (bytes_read == 0) {
             // Belt-and-suspenders: treat a zero-byte read as EOF as well.
-            line_buffer.deinit(outlive);
-            return try outlive.dupe(u8, "exit");
+            if (line_buffer.items.len == 0) {
+                line_buffer.deinit(outlive);
+                return .eof;
+            }
+            return .{ .line = try line_buffer.toOwnedSlice(outlive) };
         }
 
         const char = read_buffer[0];
@@ -443,13 +455,15 @@ fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *
         try line_buffer.append(outlive, char);
     }
 
-    try out.writeAll(NEW_LINE);
-    try out.flush();
+    if (prompt.len > 0) {
+        try out.writeAll(NEW_LINE);
+        try out.flush();
+    }
 
-    return try line_buffer.toOwnedSlice(outlive);
+    return .{ .line = try line_buffer.toOwnedSlice(outlive) };
 }
 
-fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ![]u8 {
+fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) !ReadLineResult {
     var arena_allocator = std.heap.ArenaAllocator.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
@@ -564,7 +578,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
             const cmd = ReplLine.findCommandFn(&state);
             cmd(&state) catch |err| {
                 switch (err) {
-                    error.ExitRepl => return try outlive.dupe(u8, "exit"),
+                    error.ExitRepl => return .eof,
                     error.NewLine => {
                         done = true;
                         break;
@@ -577,7 +591,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
     }
     try out.writeAll(NEW_LINE);
     try out.flush();
-    return try outlive.dupe(u8, state.line_buffer.items);
+    return .{ .line = try outlive.dupe(u8, state.line_buffer.items) };
 }
 
 const testing = std.testing;
