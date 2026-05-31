@@ -131,4 +131,18 @@ comptime {
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
     @export(&dw.roc_builtins_float_from_str, .{ .name = "roc_builtins_float_from_str" });
+    // List equality and reverse wrappers
+    @export(&dw.roc_builtins_list_eq, .{ .name = "roc_builtins_list_eq" });
+    @export(&dw.roc_builtins_list_str_eq, .{ .name = "roc_builtins_list_str_eq" });
+    @export(&dw.roc_builtins_list_list_eq, .{ .name = "roc_builtins_list_list_eq" });
+    @export(&dw.roc_builtins_list_reverse, .{ .name = "roc_builtins_list_reverse" });
+    // Integer modulo wrappers
+    @export(&dw.roc_builtins_i8_mod_by, .{ .name = "roc_builtins_i8_mod_by" });
+    @export(&dw.roc_builtins_u8_mod_by, .{ .name = "roc_builtins_u8_mod_by" });
+    @export(&dw.roc_builtins_i16_mod_by, .{ .name = "roc_builtins_i16_mod_by" });
+    @export(&dw.roc_builtins_u16_mod_by, .{ .name = "roc_builtins_u16_mod_by" });
+    @export(&dw.roc_builtins_i32_mod_by, .{ .name = "roc_builtins_i32_mod_by" });
+    @export(&dw.roc_builtins_u32_mod_by, .{ .name = "roc_builtins_u32_mod_by" });
+    @export(&dw.roc_builtins_i64_mod_by, .{ .name = "roc_builtins_i64_mod_by" });
+    @export(&dw.roc_builtins_u64_mod_by, .{ .name = "roc_builtins_u64_mod_by" });
 }

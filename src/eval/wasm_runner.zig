@@ -122,6 +122,10 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_str_eq", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostStrEq, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_eq", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostListEq, null) catch return error.WasmExecFailed;
 
+        // Compiler-rt intrinsics needed by merged builtins
+        env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch return error.WasmExecFailed;
+
         env_imports.addHostFunction("roc_alloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocAlloc, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dealloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_realloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocRealloc, null) catch return error.WasmExecFailed;
@@ -1532,3 +1536,42 @@ const WasmCrashState = enum {
 var wasm_heap_ptr: u32 = 65536;
 var wasm_allocation_count: u32 = 0;
 var wasm_crash_state: WasmCrashState = .none;
+
+// --- Compiler-rt intrinsics ---
+
+/// __multi3: 128-bit signed multiply. result_ptr = a * b (truncating to 128 bits).
+fn hostMulti3(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    const result = i128h.mul_i128(a, b);
+    const result_u128: u128 = @bitCast(result);
+    writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
+    writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
+}
+
+/// __muloti4: 128-bit signed multiply with overflow detection.
+fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const a_lo: u64 = @bitCast(params[1].I64);
+    const a_hi: u64 = @bitCast(params[2].I64);
+    const b_lo: u64 = @bitCast(params[3].I64);
+    const b_hi: u64 = @bitCast(params[4].I64);
+    const overflow_ptr: usize = @intCast(params[5].I32);
+    const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
+    const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
+    // Widening multiply detects overflow.
+    const result = i128h.mul_i128(a, b);
+    // Overflow if result / b != a (when b != 0).
+    const overflow: i32 = if (b != 0 and @divTrunc(result, b) != a) 1 else 0;
+    const result_u128: u128 = @bitCast(result);
+    writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
+    writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
+    writeIntLittle(i32, buffer, overflow_ptr, overflow);
+}
