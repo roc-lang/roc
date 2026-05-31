@@ -2488,8 +2488,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(test_runner_exe);
 
-    // Store glue test step reference so we can add glue host dependency later
+    // Store glue test step references so we can add glue host dependency later.
     var run_glue_test_step: ?*std.Build.Step = null;
+    var run_glue_test_cli_step: ?*std.Build.Step = null;
 
     // CLI integration tests - parallel test runner replaces 5 sequential
     // test_runner invocations with a single fork-based parallel runner.
@@ -2549,9 +2550,6 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
-        if (run_args.len != 0) {
-            run_roc_subcommands_test.addArgs(run_args);
-        }
         run_roc_subcommands_test.step.dependOn(&install.step);
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
         test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
@@ -2570,9 +2568,6 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_echo_tests = b.addRunArtifact(echo_tests);
-        if (run_args.len != 0) {
-            run_echo_tests.addArgs(run_args);
-        }
         run_echo_tests.step.dependOn(&install.step);
         run_echo_tests.step.dependOn(build_test_hosts_step);
 
@@ -2595,18 +2590,49 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_glue_test = b.addRunArtifact(glue_test);
-        if (run_args.len != 0) {
-            run_glue_test.addArgs(run_args);
-        }
         run_glue_test.step.dependOn(&install.step);
         run_glue_test_step = &run_glue_test.step;
         test_glue_step.dependOn(&run_glue_test.step);
 
-        // test-cli: umbrella depending on all four
-        test_cli_step.dependOn(test_platforms_step);
-        test_cli_step.dependOn(test_subcommands_step);
-        test_cli_step.dependOn(test_echo_step);
-        test_cli_step.dependOn(test_glue_step);
+        // test-cli: umbrella depending on all four. On Windows, use separate
+        // aggregate run steps so focused steps like `test-echo` stay focused,
+        // while the umbrella avoids Zig 0.16 test-runner IPC timeouts caused
+        // by starting the heavy platform runner and Zig test binaries together.
+        if (builtin.os.tag == .windows) {
+            const run_parallel_cli_for_cli = b.addRunArtifact(parallel_cli_runner_exe);
+            run_parallel_cli_for_cli.addArg("zig-out/bin/roc");
+            for (test_filters) |f| {
+                run_parallel_cli_for_cli.addArg("--filter");
+                run_parallel_cli_for_cli.addArg(f);
+            }
+            if (run_args.len != 0) {
+                run_parallel_cli_for_cli.addArgs(run_args);
+            }
+            run_parallel_cli_for_cli.step.dependOn(&install.step);
+            run_parallel_cli_for_cli.step.dependOn(build_test_hosts_step);
+
+            const run_roc_subcommands_test_for_cli = b.addRunArtifact(roc_subcommands_test);
+            run_roc_subcommands_test_for_cli.step.dependOn(&install.step);
+            run_roc_subcommands_test_for_cli.step.dependOn(build_test_hosts_step);
+            run_roc_subcommands_test_for_cli.step.dependOn(&run_parallel_cli_for_cli.step);
+
+            const run_echo_tests_for_cli = b.addRunArtifact(echo_tests);
+            run_echo_tests_for_cli.step.dependOn(&install.step);
+            run_echo_tests_for_cli.step.dependOn(build_test_hosts_step);
+            run_echo_tests_for_cli.step.dependOn(&run_roc_subcommands_test_for_cli.step);
+
+            const run_glue_test_for_cli = b.addRunArtifact(glue_test);
+            run_glue_test_for_cli.step.dependOn(&install.step);
+            run_glue_test_for_cli.step.dependOn(&run_echo_tests_for_cli.step);
+            run_glue_test_cli_step = &run_glue_test_for_cli.step;
+
+            test_cli_step.dependOn(&run_glue_test_for_cli.step);
+        } else {
+            test_cli_step.dependOn(test_platforms_step);
+            test_cli_step.dependOn(test_subcommands_step);
+            test_cli_step.dependOn(test_echo_step);
+            test_cli_step.dependOn(test_glue_step);
+        }
 
         // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
         // stays out of test-cli because these tests document currently failing
@@ -3825,7 +3851,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Build glue platform host at runtime for the native platform.
-    if (run_glue_test_step) |glue_test_step| {
+    if (run_glue_test_step != null or run_glue_test_cli_step != null) {
         if (isNativeishOrMusl(target)) {
             // Determine the appropriate target for the glue platform host library.
             // On Linux, we need to use musl explicitly because the platform's
@@ -3887,7 +3913,12 @@ pub fn build(b: *std.Build) void {
                     break :blk &fix_target.step;
                 } else &copy_glue_host.step;
 
-                glue_test_step.dependOn(final_step);
+                if (run_glue_test_step) |glue_test_step| {
+                    glue_test_step.dependOn(final_step);
+                }
+                if (run_glue_test_cli_step) |glue_test_cli_step| {
+                    glue_test_cli_step.dependOn(final_step);
+                }
             }
         }
     }
