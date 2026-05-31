@@ -6,9 +6,11 @@
 //! behavior.
 
 const std = @import("std");
+const base = @import("base");
 const Token = @import("tokenize.zig").Token;
 
 const DeclIndex = @This();
+const Ident = base.Ident;
 
 /// Stable index of a parser declaration scope.
 pub const ScopeIdx = enum(u32) { _ };
@@ -58,6 +60,7 @@ pub const Scope = struct {
     kind: ScopeKind,
     owner: ScopeOwner,
     decls: Span,
+    value_decls: std.AutoHashMapUnmanaged(Ident.Idx, DeclIdx),
     region: TokenRegion,
 };
 
@@ -80,6 +83,7 @@ pub const Decl = struct {
     statement: u32,
     kind: DeclKind,
     name_tok: ?Token.Idx,
+    name_ident: ?Ident.Idx = null,
     pattern: ?u32,
     anno: ?u32,
     paired_decl: ?DeclIdx = null,
@@ -112,6 +116,9 @@ pub fn deinit(self: *DeclIndex) void {
     for (self.scope_decl_builders.items) |*builder| {
         builder.deinit(self.gpa);
     }
+    for (self.scopes.items) |*scope| {
+        scope.value_decls.deinit(self.gpa);
+    }
     self.scope_decl_builders.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
@@ -133,6 +140,7 @@ pub fn enterScope(
         .kind = kind,
         .owner = owner,
         .decls = Span.empty(),
+        .value_decls = .{},
         .region = region,
     });
     try self.scope_decl_builders.append(self.gpa, .{});
@@ -176,7 +184,34 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     const idx: DeclIdx = @enumFromInt(self.decls.items.len);
     try self.decls.append(self.gpa, decl);
     try self.scope_decl_builders.items[@intFromEnum(decl.scope)].append(self.gpa, idx);
+    if (decl.name_ident) |ident| {
+        if (declKindMayBindValue(decl.kind)) {
+            try self.scopes.items[@intFromEnum(decl.scope)].value_decls.put(self.gpa, ident, idx);
+        }
+    }
     return idx;
+}
+
+fn declKindMayBindValue(kind: DeclKind) bool {
+    return switch (kind) {
+        .value,
+        .value_anno,
+        .var_decl,
+        .var_anno,
+        => true,
+        .type_alias,
+        .nominal,
+        .@"opaque",
+        .import,
+        .file_import,
+        => false,
+    };
+}
+
+/// Return whether a scope directly declares a value-like name.
+pub fn scopeDeclaresValue(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) bool {
+    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    return scope.value_decls.contains(ident);
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -199,4 +234,91 @@ pub fn scopeCount(self: *const DeclIndex) usize {
 /// Number of declarations in this declaration index.
 pub fn declCount(self: *const DeclIndex) usize {
     return self.decls.items.len;
+}
+
+test "scopeDeclaresValue records only value-binding declarations" {
+    const gpa = std.testing.allocator;
+
+    var index = DeclIndex.init(gpa);
+    defer index.deinit();
+
+    const scope_idx = try index.enterScope(.module, .file, TokenRegion.empty());
+    const attrs = Ident.Attributes.fromString("name");
+
+    const value_ident = Ident.Idx{ .attributes = attrs, .idx = 1 };
+    const value_anno_ident = Ident.Idx{ .attributes = attrs, .idx = 2 };
+    const var_decl_ident = Ident.Idx{ .attributes = attrs, .idx = 3 };
+    const var_anno_ident = Ident.Idx{ .attributes = attrs, .idx = 4 };
+    const import_ident = Ident.Idx{ .attributes = attrs, .idx = 5 };
+    const type_ident = Ident.Idx{ .attributes = attrs, .idx = 6 };
+
+    _ = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 0,
+        .kind = .value,
+        .name_tok = null,
+        .name_ident = value_ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    _ = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 1,
+        .kind = .value_anno,
+        .name_tok = null,
+        .name_ident = value_anno_ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    _ = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 2,
+        .kind = .var_decl,
+        .name_tok = null,
+        .name_ident = var_decl_ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    _ = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 3,
+        .kind = .var_anno,
+        .name_tok = null,
+        .name_ident = var_anno_ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    _ = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 4,
+        .kind = .import,
+        .name_tok = null,
+        .name_ident = import_ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    _ = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 5,
+        .kind = .type_alias,
+        .name_tok = null,
+        .name_ident = type_ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+
+    try index.exitScope(scope_idx, TokenRegion.empty());
+
+    try std.testing.expect(index.scopeDeclaresValue(scope_idx, value_ident));
+    try std.testing.expect(index.scopeDeclaresValue(scope_idx, value_anno_ident));
+    try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_decl_ident));
+    try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_anno_ident));
+    try std.testing.expect(!index.scopeDeclaresValue(scope_idx, import_ident));
+    try std.testing.expect(!index.scopeDeclaresValue(scope_idx, type_ident));
 }

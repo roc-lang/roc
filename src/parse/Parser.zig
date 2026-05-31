@@ -239,7 +239,7 @@ fn tokenIdentsEqual(self: *Parser, a: ?Token.Idx, b: ?Token.Idx) bool {
 fn recordStatementDecl(self: *Parser, statement_idx: AST.Statement.Idx, statement: AST.Statement) Error!void {
     const scope_idx = self.decl_index.currentScope() orelse return;
 
-    const record = switch (statement) {
+    var record = switch (statement) {
         .decl => |decl| blk: {
             const pattern = self.store.getPattern(decl.pattern);
             const name_tok: ?Token.Idx = if (pattern == .ident)
@@ -315,6 +315,10 @@ fn recordStatementDecl(self: *Parser, statement_idx: AST.Statement.Idx, statemen
         if (self.currentPendingAnno()) |pending| pending.* = null;
         return;
     };
+
+    if (record.name_tok) |name_tok| {
+        record.name_ident = self.tok_buf.resolveIdentifier(name_tok);
+    }
 
     const decl_idx = try self.decl_index.addDecl(record);
     if (record.kind == .value_anno or record.kind == .var_anno) {

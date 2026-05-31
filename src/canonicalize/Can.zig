@@ -769,43 +769,15 @@ fn declScopeExit(self: *Self) void {
     _ = self.decl_scope_stack.pop();
 }
 
-fn declKindMayBindValue(kind: AST.DeclIndex.DeclKind) bool {
-    return switch (kind) {
-        .value,
-        .value_anno,
-        .var_decl,
-        .var_anno,
-        => true,
-        .type_alias,
-        .nominal,
-        .@"opaque",
-        .import,
-        .file_import,
-        => false,
-    };
-}
-
-fn parserScopeDeclaresValue(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx, ident: Ident.Idx) bool {
-    const decl_index = &self.parse_ir.decl_index;
-    std.debug.assert(@intFromEnum(scope_idx) < decl_index.scopeCount());
-
-    for (decl_index.scopeDecls(scope_idx)) |decl_idx| {
-        const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
-        if (!declKindMayBindValue(decl.kind)) continue;
-        const name_tok = decl.name_tok orelse continue;
-        const declared_ident = self.parse_ir.tokens.resolveIdentifier(name_tok) orelse continue;
-        if (declared_ident.eql(ident)) return true;
-    }
-
-    return false;
-}
-
 fn activeDeclScopeDeclaresValue(self: *Self, ident: Ident.Idx) ?ActiveDeclScope {
+    const decl_index = &self.parse_ir.decl_index;
     var i = self.decl_scope_stack.items.len;
     while (i > 0) {
         i -= 1;
         const active_scope = self.decl_scope_stack.items[i];
-        if (self.parserScopeDeclaresValue(active_scope.parser_scope, ident)) return active_scope;
+        const parser_scope = decl_index.scopes.items[@intFromEnum(active_scope.parser_scope)];
+        if (parser_scope.kind == .block) continue;
+        if (decl_index.scopeDeclaresValue(active_scope.parser_scope, ident)) return active_scope;
     }
     return null;
 }

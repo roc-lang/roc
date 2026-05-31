@@ -2,7 +2,6 @@
 ~~~ini
 description=Top-level value forward-references another top-level value
 type=snippet
-skip=true
 ~~~
 # SOURCE
 ~~~roc
