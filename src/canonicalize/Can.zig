@@ -64,16 +64,6 @@ const PlaceholderInfo = struct {
     item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
-/// Aliases for one item in an associated block: the bare item name, the
-/// type-qualified name (e.g. `T.foo` when the parent type is `T`), and the
-/// pattern they both resolve to. Reserved for callers outside the single
-/// source-order walk that still hand-build qualified-name → pattern aliases.
-const AssocAlias = struct {
-    decl_ident: Ident.Idx,
-    type_qualified_ident: Ident.Idx,
-    pattern_idx: CIR.Pattern.Idx,
-};
-
 const TypeDeclVisitState = enum {
     visiting,
     done,
@@ -112,11 +102,6 @@ exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// In the common case this stays empty — it is only populated by builtin canon paths that still
 /// want to pre-register hierarchical qualified item names for cross-module lookup.
 placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
-/// Per-block alias data — kept (but typically empty) for callers outside the
-/// single source-order walk that still pre-build qualified-name aliases for
-/// an associated block. Keyed by the block's fully-qualified parent name
-/// (e.g. `Module.T1`).
-pending_assoc_aliases: std.AutoHashMapUnmanaged(Ident.Idx, std.ArrayListUnmanaged(AssocAlias)) = .{},
 /// Definitions requested by the caller as explicit post-check roots.
 explicit_root_names: []const []const u8 = &.{},
 explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .{},
@@ -275,10 +260,6 @@ pub fn deinit(
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
     self.placeholder_idents.deinit(gpa);
-
-    var pending_iter = self.pending_assoc_aliases.valueIterator();
-    while (pending_iter.next()) |list| list.deinit(gpa);
-    self.pending_assoc_aliases.deinit(gpa);
     self.explicit_root_defs.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
