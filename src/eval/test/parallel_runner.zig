@@ -1990,7 +1990,7 @@ pub fn main(init: std.process.Init) !void {
 
     // In Zig 0.16, std.process.getEnvVarOwned was removed.
     // Use Environ.getPosix on POSIX (no alloc). On Windows, the matching
-    // getPosix variant currently mis-compiles in the stdlib, and the fork
+    // getPosix variant currently compiles incorrectly in the stdlib, and the fork
     // path doesn't apply anyway (Windows uses the Child pool), so the
     // env var has no effect there.
     const disable_fork_env: ?[:0]const u8 = if (builtin.os.tag == .windows)
