@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Object format handled by one of the embedded LLD frontends.
 pub const Format = enum {
     elf,
     coff,
@@ -23,11 +24,13 @@ pub const Format = enum {
     }
 };
 
+/// Options forwarded directly to the embedded LLD entrypoint.
 pub const Options = struct {
     can_exit_early: bool = false,
     disable_output: bool = false,
 };
 
+/// Errors returned by the embedded LLD wrapper.
 pub const Error = error{
     LinkFailed,
     OutOfMemory,
@@ -38,6 +41,7 @@ extern fn ZigLLDLinkELF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_earl
 extern fn ZigLLDLinkMachO(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
 extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
 
+/// Link using the embedded LLD entrypoint for `format`.
 pub fn link(
     allocator: std.mem.Allocator,
     format: Format,

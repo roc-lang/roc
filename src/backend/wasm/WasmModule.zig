@@ -1782,7 +1782,7 @@ fn traceLiveFunctions(
 
     // Iterate until no new functions are discovered.
     while (true) {
-        const any_new = std.mem.indexOfScalar(bool, current_pass, true) != null;
+        const any_new = std.mem.findScalar(bool, current_pass, true) != null;
         if (!any_new) break;
 
         // Mark current pass as live.
@@ -3606,13 +3606,7 @@ test "linkHostToAppCalls — linking last import is a no-op swap" {
 
 test "preload — parses real Zig-compiled wasm host object" {
     const allocator = std.testing.allocator;
-    const host_bytes = try std.Io.Dir.cwd().readFileAlloc(
-        std.testing.io,
-        "test/wasm/platform/targets/wasm32/host.wasm",
-        allocator,
-        .limited(10 * 1024 * 1024),
-    );
-    defer allocator.free(host_bytes);
+    const host_bytes = @import("wasm_host_fixture").host_wasm;
 
     var module = try preload(allocator, host_bytes, true);
     defer module.deinit();
@@ -3866,13 +3860,7 @@ test "setup — finalized module encodes and re-parses as valid WASM" {
 
 test "phase5 — real host module: removeMemoryAndTableImports preserves function imports" {
     const allocator = std.testing.allocator;
-    const host_bytes = try std.Io.Dir.cwd().readFileAlloc(
-        std.testing.io,
-        "test/wasm/platform/targets/wasm32/host.wasm",
-        allocator,
-        .limited(10 * 1024 * 1024),
-    );
-    defer allocator.free(host_bytes);
+    const host_bytes = @import("wasm_host_fixture").host_wasm;
 
     var module = try preload(allocator, host_bytes, true);
     defer module.deinit();
@@ -3892,13 +3880,7 @@ test "phase5 — real host module: removeMemoryAndTableImports preserves functio
 
 test "phase5 — real host module: full setup and finalization produces valid WASM" {
     const allocator = std.testing.allocator;
-    const host_bytes = try std.Io.Dir.cwd().readFileAlloc(
-        std.testing.io,
-        "test/wasm/platform/targets/wasm32/host.wasm",
-        allocator,
-        .limited(10 * 1024 * 1024),
-    );
-    defer allocator.free(host_bytes);
+    const host_bytes = @import("wasm_host_fixture").host_wasm;
 
     var module = try preload(allocator, host_bytes, true);
     defer module.deinit();

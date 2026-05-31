@@ -86,6 +86,10 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
+      - name: Run eval tests with LLVM backend
+        run: |
+          zig build test-eval -- --llvm
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}

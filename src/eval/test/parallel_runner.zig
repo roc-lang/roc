@@ -1,7 +1,7 @@
 //! Parallel eval test runner.
 //!
 //! Runs eval tests in parallel using a fork-based process pool, exercising
-//! every backend on every test case and comparing their results via
+//! every enabled backend on every test case and comparing their results via
 //! Str.inspect string comparison.
 //!
 //! ## Architecture overview
@@ -12,7 +12,8 @@
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
 //!   3. **WASM backend** — statement-only LIR compiled to wasm.
-//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode.
+//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode when
+//!      the runner is invoked with `--llvm`.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -48,7 +49,7 @@
 //!
 //! ## Usage
 //!
-//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--timeout <ms>] [--verbose]]
+//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--timeout <ms>] [--verbose] [--llvm]]
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -172,6 +173,10 @@ var verbose_logging: bool = false;
 /// POSIX child workers inherit this value through fork; Windows worker
 /// processes recompute it from the same CLI args before entering worker mode.
 var llvm_eval_slot_count: usize = 1;
+
+/// Set from CLI parsing. LLVM eval is opt-in because it dominates eval test
+/// runtime; CI runs a dedicated LLVM-enabled lane for backend coverage.
+var include_llvm_backend: bool = false;
 
 const TestOutcome = struct {
     status: Status,
@@ -772,6 +777,10 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
     return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
+fn shouldSkipLlvm(test_skip: bool) bool {
+    return test_skip or !include_llvm_backend;
+}
+
 fn backendImplemented(index: usize) bool {
     return switch (index) {
         0 => true,
@@ -845,7 +854,7 @@ fn runAllocationTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
@@ -980,7 +989,7 @@ fn runInspectTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -1202,7 +1211,7 @@ fn runCrashTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -1534,6 +1543,10 @@ fn retryFailedForAttribution(
                 attributed[bi] = .{ .status = .not_implemented };
                 continue;
             }
+            if (bi == LLVM_BACKEND_INDEX and !include_llvm_backend) {
+                attributed[bi] = .{ .status = .skip };
+                continue;
+            }
             // Skip backends that already passed cleanly in Phase 1.
             if (r.has_backend_details and attributed[bi].status == .pass) continue;
             // Skip backends marked NOT_IMPLEMENTED / SKIP up front.
@@ -1674,13 +1687,15 @@ fn collectTests() []const TestCase {
 
 // CLI parsing uses harness.parseStandardArgs for consistent flag handling.
 // The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help,
-// plus the positional marker `known-bugs` to include opt-in compiler-bug repros.
+// plus `--llvm` and the positional marker `known-bugs` to include opt-in
+// compiler-bug repros.
 
 fn printHelp() void {
     const help =
         \\Roc Eval Test Runner
         \\
-        \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
+        \\Runs eval tests across enabled backends (interpreter, dev, wasm, and
+        \\opt-in llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
         \\
@@ -1700,6 +1715,7 @@ fn printHelp() void {
         \\                        Default: 30000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
+        \\  --llvm                Include the LLVM backend. Default: skip LLVM.
         \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
@@ -1723,10 +1739,10 @@ fn printHelp() void {
         \\  the 5 slowest tests with full breakdowns.
         \\
         \\BACKEND COVERAGE:
-        \\  The baseline goal is 100% of backends testing 100% of tests. Tests may
-        \\  use `skip = .{ .wasm = true }` etc. to disable specific backends, but
-        \\  any test with a skip reports as SKIP rather than PASS to keep partial
-        \\  coverage visible.
+        \\  The baseline goal is 100% of enabled backends testing 100% of tests.
+        \\  Tests may use `skip = .{ .wasm = true }` etc. to disable specific
+        \\  backends, but any test with a skip reports as SKIP rather than PASS
+        \\  to keep partial coverage visible. LLVM coverage is opt-in via --llvm.
         \\
         \\  Test outcomes:
         \\    PASS  - all backends ran and agreed
@@ -1985,6 +2001,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     verbose_logging = cli.verbose;
+    include_llvm_backend = cli.include_llvm;
 
     const all_tests = collectTests();
     trace_worker.stamp("collectTests");
