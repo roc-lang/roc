@@ -8186,6 +8186,33 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
 }
 
 // Canonicalize a tag expr
+fn validateImportedNominalTagTarget(
+    self: *Self,
+    imported_env: *const ModuleEnv,
+    target_node_idx: u32,
+    module_name: Ident.Idx,
+    type_name: Ident.Idx,
+    type_region: Region,
+) std.mem.Allocator.Error!?Expr.Idx {
+    const target_stmt_idx: Statement.Idx = @enumFromInt(target_node_idx);
+    switch (imported_env.store.getStatement(target_stmt_idx)) {
+        .s_nominal_decl => return null,
+        .s_alias_decl => {
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
+                .name = type_name,
+                .region = type_region,
+            } });
+        },
+        else => {
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_not_exposed = .{
+                .module_name = module_name,
+                .type_name = type_name,
+                .region = type_region,
+            } });
+        },
+    }
+}
+
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse {
         // Parser should have validated this, but handle gracefully
@@ -8335,17 +8362,17 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
             // Look up the target node index in the imported module
             // Convert identifier from current module to target module's interner
+            const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+                // Module not in envs - can't resolve external type
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_tok_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = DataSpan.empty() };
+            };
             const target_node_idx: u32 = blk: {
-                const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                    // Module not in envs - can't resolve external type
-                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = type_tok_ident,
-                        .region = type_tok_region,
-                    } }), .free_vars = DataSpan.empty() };
-                };
                 const original_name_text = self.env.getIdent(exposed_info.original_name);
-                const target_ident = auto_imported_type.env.common.findIdent(original_name_text) orelse {
+                const target_ident = imported_type.env.common.findIdent(original_name_text) orelse {
                     // Type identifier doesn't exist in the target module
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
@@ -8353,7 +8380,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         .region = type_tok_region,
                     } }), .free_vars = DataSpan.empty() };
                 };
-                break :blk auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+                break :blk imported_type.env.getExposedNodeIndexById(target_ident) orelse {
                     // Type is not exposed by the imported module
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
@@ -8362,6 +8389,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     } }), .free_vars = DataSpan.empty() };
                 };
             };
+
+            if (try self.validateImportedNominalTagTarget(imported_type.env, target_node_idx, module_name, type_tok_ident, type_tok_region)) |malformed_idx| {
+                return CanonicalizedExpr{
+                    .idx = malformed_idx,
+                    .free_vars = DataSpan.empty(),
+                };
+            }
 
             // Create e_nominal_external for the imported type
             const expr_idx = try self.env.addExpr(CIR.Expr{
@@ -8423,25 +8457,11 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 } }), .free_vars = DataSpan.empty() };
             };
 
-            const target_stmt_idx: Statement.Idx = @enumFromInt(target_node_idx);
-            switch (imported_type.env.store.getStatement(target_stmt_idx)) {
-                .s_nominal_decl => {},
-                .s_alias_decl => {
-                    return CanonicalizedExpr{
-                        .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .type_alias_but_needed_nominal = .{
-                            .name = tag_name,
-                            .region = type_tok_region,
-                        } }),
-                        .free_vars = DataSpan.empty(),
-                    };
-                },
-                else => {
-                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = tag_name,
-                        .region = type_tok_region,
-                    } }), .free_vars = DataSpan.empty() };
-                },
+            if (try self.validateImportedNominalTagTarget(imported_type.env, target_node_idx, module_name, tag_name, type_tok_region)) |malformed_idx| {
+                return CanonicalizedExpr{
+                    .idx = malformed_idx,
+                    .free_vars = DataSpan.empty(),
+                };
             }
 
             const expr_idx = try self.env.addExpr(CIR.Expr{
@@ -8572,17 +8592,17 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         const type_name = full_type_name[first_alias_len + 1 ..];
         const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
 
+        const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
+            return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
+                .module_name = module_name,
+                .type_name = type_name_ident,
+                .region = type_tok_region,
+            } }), .free_vars = DataSpan.empty() };
+        };
+
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
-            const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
-                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
-                    .module_name = module_name,
-                    .type_name = type_name_ident,
-                    .region = type_tok_region,
-                } }), .free_vars = DataSpan.empty() };
-            };
-
-            const target_ident = auto_imported_type.env.common.findIdent(type_name) orelse {
+            const target_ident = imported_type.env.common.findIdent(type_name) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -8591,7 +8611,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                 } }), .free_vars = DataSpan.empty() };
             };
 
-            const other_module_node_id = auto_imported_type.env.getExposedNodeIndexById(target_ident) orelse {
+            const other_module_node_id = imported_type.env.getExposedNodeIndexById(target_ident) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -8603,6 +8623,13 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             // Successfully found the target node
             break :blk other_module_node_id;
         };
+
+        if (try self.validateImportedNominalTagTarget(imported_type.env, target_node_idx, module_name, type_name_ident, type_tok_region)) |malformed_idx| {
+            return CanonicalizedExpr{
+                .idx = malformed_idx,
+                .free_vars = DataSpan.empty(),
+            };
+        }
 
         const expr_idx = try self.env.addExpr(CIR.Expr{
             .e_nominal_external = .{
