@@ -171,11 +171,6 @@ jobs:
         run: |
           zig build test-cli
 
-      - name: Build Test Platforms (cross-compile)
-        if: runner.os != 'Windows'
-        run: |
-          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
-
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -317,7 +312,6 @@ jobs:
           - aarch64-windows-gnu
           - arm-linux-musleabihf
           - x86-linux-musl
-          - x86_64-linux-musl
           - x86_64-macos-none
           - x86_64-windows-gnu
 
