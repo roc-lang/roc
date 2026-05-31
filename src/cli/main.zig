@@ -703,14 +703,14 @@ pub fn main(init: std.process.Init) !void {
         }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
-            tracy.waitForShutdown() catch {};
+            tracy.waitForShutdown(init.io) catch {};
         }
         restoreWindowsConsoleCodePage();
         std.process.exit(1);
     };
 
     if (tracy.enable) {
-        try tracy.waitForShutdown();
+        try tracy.waitForShutdown(init.io);
     }
 }
 
