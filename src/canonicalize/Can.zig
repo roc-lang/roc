@@ -786,16 +786,18 @@ fn publishTopLevelTypeDeclStatements(self: *Self, scope_idx: AST.DeclIndex.Scope
 
     var name_to_stmt: std.AutoHashMapUnmanaged(Ident.Idx, AST.Statement.Idx) = .{};
     defer name_to_stmt.deinit(self.env.gpa);
+    var stmt_to_decl: std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.DeclIndex.DeclIdx) = .{};
+    defer stmt_to_decl.deinit(self.env.gpa);
 
     const decls = decl_index.scopeDecls(scope_idx);
     for (decls) |decl_idx| {
         const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
         if (declIndexTypeKind(decl.kind) == null) continue;
-        const name_tok = decl.name_tok orelse continue;
-        const ident = self.parse_ir.tokens.resolveIdentifier(name_tok) orelse continue;
+        const ident = decl.name_ident orelse continue;
         const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
         if (!self.prepared_type_decls.contains(ast_stmt_idx)) continue;
 
+        try stmt_to_decl.put(self.env.gpa, ast_stmt_idx, decl_idx);
         const entry = try name_to_stmt.getOrPut(self.env.gpa, ident);
         if (!entry.found_existing) {
             entry.value_ptr.* = ast_stmt_idx;
@@ -812,7 +814,7 @@ fn publishTopLevelTypeDeclStatements(self: *Self, scope_idx: AST.DeclIndex.Scope
         if (declIndexTypeKind(decl.kind) == null) continue;
         const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
         if (!self.prepared_type_decls.contains(ast_stmt_idx)) continue;
-        try self.publishTypeDeclStatementTopo(ast_stmt_idx, &name_to_stmt, &states, &poisoned);
+        try self.publishTypeDeclStatementTopo(ast_stmt_idx, &name_to_stmt, &stmt_to_decl, &states, &poisoned);
     }
 }
 
@@ -820,6 +822,7 @@ fn publishTypeDeclStatementTopo(
     self: *Self,
     ast_stmt_idx: AST.Statement.Idx,
     name_to_stmt: *const std.AutoHashMapUnmanaged(Ident.Idx, AST.Statement.Idx),
+    stmt_to_decl: *const std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.DeclIndex.DeclIdx),
     states: *std.AutoHashMapUnmanaged(AST.Statement.Idx, TypeDeclVisitState),
     poisoned: *std.AutoHashMapUnmanaged(AST.Statement.Idx, void),
 ) std.mem.Allocator.Error!void {
@@ -832,81 +835,24 @@ fn publishTypeDeclStatementTopo(
     }
     entry.value_ptr.* = .visiting;
 
-    const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
-    if (ast_stmt == .type_decl) {
-        try self.publishTypeAnnoDependencies(ast_stmt.type_decl.anno, ast_stmt_idx, name_to_stmt, states, poisoned);
+    const decl_index = &self.parse_ir.decl_index;
+    const decl_idx = stmt_to_decl.get(ast_stmt_idx) orelse return;
+    const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+    for (decl_index.typeDependencies(decl.type_dependencies)) |dep_ident| {
+        const dep_stmt_idx = name_to_stmt.get(dep_ident) orelse continue;
+        if (dep_stmt_idx == ast_stmt_idx) continue;
+        if (states.get(dep_stmt_idx)) |state| {
+            if (state == .visiting) {
+                try self.poisonMutuallyRecursiveAlias(ast_stmt_idx, dep_stmt_idx, poisoned);
+                continue;
+            }
+        }
+        try self.publishTypeDeclStatementTopo(dep_stmt_idx, name_to_stmt, stmt_to_decl, states, poisoned);
     }
 
     try states.put(self.env.gpa, ast_stmt_idx, .done);
     if (self.prepared_type_decls.get(ast_stmt_idx)) |stmt_idx| {
         try self.env.store.addScratchStatement(stmt_idx);
-    }
-}
-
-fn publishTypeAnnoDependencies(
-    self: *Self,
-    anno_idx: AST.TypeAnno.Idx,
-    current_stmt_idx: AST.Statement.Idx,
-    name_to_stmt: *const std.AutoHashMapUnmanaged(Ident.Idx, AST.Statement.Idx),
-    states: *std.AutoHashMapUnmanaged(AST.Statement.Idx, TypeDeclVisitState),
-    poisoned: *std.AutoHashMapUnmanaged(AST.Statement.Idx, void),
-) std.mem.Allocator.Error!void {
-    const anno = self.parse_ir.store.getTypeAnno(anno_idx);
-    switch (anno) {
-        .ty => |ty| {
-            if (self.parse_ir.store.tokenSlice(ty.qualifiers).len != 0) return;
-            const ident = self.parse_ir.tokens.resolveIdentifier(ty.token) orelse return;
-            const dep_stmt_idx = name_to_stmt.get(ident) orelse return;
-            if (dep_stmt_idx == current_stmt_idx) return;
-            if (states.get(dep_stmt_idx)) |state| {
-                if (state == .visiting) {
-                    try self.poisonMutuallyRecursiveAlias(current_stmt_idx, dep_stmt_idx, poisoned);
-                    return;
-                }
-            }
-            try self.publishTypeDeclStatementTopo(dep_stmt_idx, name_to_stmt, states, poisoned);
-        },
-        .apply => |apply| {
-            for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
-                try self.publishTypeAnnoDependencies(arg_idx, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-        },
-        .tag_union => |tag_union| {
-            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
-                try self.publishTypeAnnoDependencies(tag_idx, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-            if (tag_union.ext == .named) {
-                try self.publishTypeAnnoDependencies(tag_union.ext.named.anno, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-        },
-        .tuple => |tuple| {
-            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
-                try self.publishTypeAnnoDependencies(elem_idx, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-        },
-        .record => |record| {
-            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch continue;
-                try self.publishTypeAnnoDependencies(field.ty, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-            if (record.ext == .named) {
-                try self.publishTypeAnnoDependencies(record.ext.named.anno, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-        },
-        .@"fn" => |func| {
-            for (self.parse_ir.store.typeAnnoSlice(func.args)) |arg_idx| {
-                try self.publishTypeAnnoDependencies(arg_idx, current_stmt_idx, name_to_stmt, states, poisoned);
-            }
-            try self.publishTypeAnnoDependencies(func.ret, current_stmt_idx, name_to_stmt, states, poisoned);
-        },
-        .parens => |parens| {
-            try self.publishTypeAnnoDependencies(parens.anno, current_stmt_idx, name_to_stmt, states, poisoned);
-        },
-        .ty_var,
-        .underscore_type_var,
-        .underscore,
-        .malformed,
-        => {},
     }
 }
 

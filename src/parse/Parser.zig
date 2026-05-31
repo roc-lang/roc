@@ -31,6 +31,7 @@ tok_buf: TokenizedBuffer,
 store: NodeStore,
 decl_index: DeclIndex,
 scope_pending_annos: std.ArrayList(?DeclIndex.DeclIdx),
+collect_type_dependencies: bool,
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
@@ -48,6 +49,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .store = store,
         .decl_index = DeclIndex.init(gpa),
         .scope_pending_annos = .empty,
+        .collect_type_dependencies = false,
         .scratch_nodes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
@@ -236,7 +238,12 @@ fn tokenIdentsEqual(self: *Parser, a: ?Token.Idx, b: ?Token.Idx) bool {
     return a_ident.eql(b_ident);
 }
 
-fn recordStatementDecl(self: *Parser, statement_idx: AST.Statement.Idx, statement: AST.Statement) Error!void {
+fn recordStatementDecl(
+    self: *Parser,
+    statement_idx: AST.Statement.Idx,
+    statement: AST.Statement,
+    type_dependencies: DeclIndex.Span,
+) Error!void {
     const scope_idx = self.decl_index.currentScope() orelse return;
 
     var record = switch (statement) {
@@ -298,6 +305,7 @@ fn recordStatementDecl(self: *Parser, statement_idx: AST.Statement.Idx, statemen
                 .pattern = null,
                 .anno = @intFromEnum(td.anno),
                 .associated_scope = if (td.associated) |assoc| assoc.scope else null,
+                .type_dependencies = type_dependencies,
                 .region = .{ .start = td.region.start, .end = td.region.end },
             };
         },
@@ -343,8 +351,16 @@ fn recordStatementDecl(self: *Parser, statement_idx: AST.Statement.Idx, statemen
 }
 
 fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx {
+    return try self.addStatementWithTypeDependencies(statement, DeclIndex.Span.empty());
+}
+
+fn addStatementWithTypeDependencies(
+    self: *Parser,
+    statement: AST.Statement,
+    type_dependencies: DeclIndex.Span,
+) Error!AST.Statement.Idx {
     const idx = try self.store.addStatement(statement);
-    try self.recordStatementDecl(idx, statement);
+    try self.recordStatementDecl(idx, statement, type_dependencies);
     return idx;
 }
 
@@ -1889,7 +1905,22 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     else => .alias,
                 };
                 self.advance();
-                const anno = try self.parseTypeAnno(.not_looking_for_args);
+                const type_dependencies_start = self.decl_index.typeDependencyTop();
+                const was_collecting_type_dependencies = self.collect_type_dependencies;
+                self.collect_type_dependencies = true;
+                const anno = self.parseTypeAnno(.not_looking_for_args) catch |err| {
+                    self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
+                    self.collect_type_dependencies = was_collecting_type_dependencies;
+                    return err;
+                };
+                const type_dependencies = blk: {
+                    if (self.store.getTypeAnno(anno) == .malformed) {
+                        self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
+                        break :blk DeclIndex.Span.empty();
+                    }
+                    break :blk self.decl_index.typeDependencySpanFrom(type_dependencies_start);
+                };
+                self.collect_type_dependencies = was_collecting_type_dependencies;
                 const where_clause = try self.parseWhereConstraint();
 
                 // Check if there's a .{ associated } after the type annotation
@@ -1911,14 +1942,14 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     }
                 }
 
-                const statement_idx = try self.addStatement(.{ .type_decl = .{
+                const statement_idx = try self.addStatementWithTypeDependencies(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
                     .kind = kind,
                     .where = where_clause,
                     .associated = associated,
                     .region = .{ .start = start, .end = self.pos },
-                } });
+                } }, type_dependencies);
                 if (associated) |assoc| {
                     self.decl_index.setScopeOwner(assoc.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
                 }
@@ -3524,6 +3555,11 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 .token = qual_result.final_token,
                 .qualifiers = qual_result.qualifiers,
             } });
+            if (self.collect_type_dependencies and first_token_tag == .UpperIdent and qual_result.qualifiers.span.len == 0) {
+                if (self.tok_buf.resolveIdentifier(qual_result.final_token)) |ident| {
+                    try self.decl_index.addTypeDependency(ident);
+                }
+            }
 
             if (self.peek() == .NoSpaceOpenRound) {
                 self.advance(); // Advance past NoSpaceOpenRound

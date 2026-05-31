@@ -89,6 +89,7 @@ pub const Decl = struct {
     paired_decl: ?DeclIdx = null,
     paired_anno: ?DeclIdx = null,
     associated_scope: ?ScopeIdx = null,
+    type_dependencies: Span = Span.empty(),
     region: TokenRegion,
 };
 
@@ -97,6 +98,7 @@ scopes: std.ArrayList(Scope),
 decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
 scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
+type_dependency_ids: std.ArrayList(Ident.Idx),
 scope_stack: std.ArrayList(ScopeIdx),
 
 /// Create an empty declaration index.
@@ -107,6 +109,7 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .decls = .empty,
         .scope_decl_ids = .empty,
         .scope_decl_builders = .empty,
+        .type_dependency_ids = .empty,
         .scope_stack = .empty,
     };
 }
@@ -123,6 +126,7 @@ pub fn deinit(self: *DeclIndex) void {
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
+    self.type_dependency_ids.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
 }
 
@@ -226,6 +230,34 @@ pub fn scopeDecls(self: *const DeclIndex, scope_idx: ScopeIdx) []const DeclIdx {
     return self.scope_decl_ids.items[scope.decls.start..][0..scope.decls.len];
 }
 
+/// Return the current type-dependency side-table top.
+pub fn typeDependencyTop(self: *const DeclIndex) u32 {
+    return @intCast(self.type_dependency_ids.items.len);
+}
+
+/// Append one syntactic type dependency to the side table.
+pub fn addTypeDependency(self: *DeclIndex, ident: Ident.Idx) std.mem.Allocator.Error!void {
+    try self.type_dependency_ids.append(self.gpa, ident);
+}
+
+/// Return a dependency span from a previously captured side-table top.
+pub fn typeDependencySpanFrom(self: *const DeclIndex, start: u32) Span {
+    const end: u32 = @intCast(self.type_dependency_ids.items.len);
+    std.debug.assert(start <= end);
+    return .{ .start = start, .len = end - start };
+}
+
+/// Discard dependencies appended after a previously captured side-table top.
+pub fn clearTypeDependenciesFrom(self: *DeclIndex, start: u32) void {
+    std.debug.assert(start <= self.type_dependency_ids.items.len);
+    self.type_dependency_ids.shrinkRetainingCapacity(@intCast(start));
+}
+
+/// Return the dependency identifiers covered by a span.
+pub fn typeDependencies(self: *const DeclIndex, span: Span) []const Ident.Idx {
+    return self.type_dependency_ids.items[span.start..][0..span.len];
+}
+
 /// Number of scopes in this declaration index.
 pub fn scopeCount(self: *const DeclIndex) usize {
     return self.scopes.items.len;
@@ -321,4 +353,28 @@ test "scopeDeclaresValue records only value-binding declarations" {
     try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_anno_ident));
     try std.testing.expect(!index.scopeDeclaresValue(scope_idx, import_ident));
     try std.testing.expect(!index.scopeDeclaresValue(scope_idx, type_ident));
+}
+
+test "type dependency spans preserve parser-recorded type references" {
+    const gpa = std.testing.allocator;
+
+    var index = DeclIndex.init(gpa);
+    defer index.deinit();
+
+    const attrs = Ident.Attributes.fromString("TypeName");
+    const first_ident = Ident.Idx{ .attributes = attrs, .idx = 1 };
+    const second_ident = Ident.Idx{ .attributes = attrs, .idx = 2 };
+
+    const start = index.typeDependencyTop();
+    try index.addTypeDependency(first_ident);
+    try index.addTypeDependency(second_ident);
+    const span = index.typeDependencySpanFrom(start);
+
+    const deps = index.typeDependencies(span);
+    try std.testing.expectEqual(@as(usize, 2), deps.len);
+    try std.testing.expectEqual(first_ident, deps[0]);
+    try std.testing.expectEqual(second_ident, deps[1]);
+
+    index.clearTypeDependenciesFrom(start);
+    try std.testing.expectEqual(start, index.typeDependencyTop());
 }

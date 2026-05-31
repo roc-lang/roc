@@ -226,3 +226,44 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
+
+test "parser records top-level type declaration dependencies" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\module []
+        \\
+        \\A : (B, Mod.C) -> D
+        \\B : {}
+        \\D : {}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const file = ast.store.getFile();
+    const decls = ast.decl_index.scopeDecls(file.scope);
+    for (decls) |decl_idx| {
+        const decl = ast.decl_index.decls.items[@intFromEnum(decl_idx)];
+        if (decl.kind != .type_alias) continue;
+        const name_ident = decl.name_ident orelse continue;
+        if (!std.mem.eql(u8, env.getIdent(name_ident), "A")) continue;
+
+        const deps = ast.decl_index.typeDependencies(decl.type_dependencies);
+        try std.testing.expectEqual(@as(usize, 2), deps.len);
+        try std.testing.expectEqualStrings("B", env.getIdent(deps[0]));
+        try std.testing.expectEqualStrings("D", env.getIdent(deps[1]));
+        return;
+    }
+
+    return error.ExpectedTypeDecl;
+}
