@@ -2083,7 +2083,7 @@ fn parseTypeSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!v
         const param_bytes = bytes[params_start..cursor.*];
         const params = try self.allocator.alloc(ValType, param_count);
         for (param_bytes, 0..) |b, i| {
-            params[i] = std.meta.intToEnum(ValType, b) catch return error.InvalidSection;
+            params[i] = std.enums.fromInt(ValType, b) orelse return error.InvalidSection;
         }
         try self.func_types.append(self.allocator, .{ .params = params });
 
@@ -2091,7 +2091,7 @@ fn parseTypeSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError!v
         const result_count = try readU32(bytes, cursor);
         if (result_count > 0) {
             if (cursor.* >= bytes.len) return error.UnexpectedEnd;
-            const result_type = std.meta.intToEnum(ValType, bytes[cursor.*]) catch return error.InvalidSection;
+            const result_type = std.enums.fromInt(ValType, bytes[cursor.*]) orelse return error.InvalidSection;
             cursor.* += 1;
             // Skip any additional results (multi-value)
             if (result_count > 1) try skipBytes(bytes, cursor, result_count - 1);
@@ -2218,7 +2218,7 @@ fn parseExportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
     for (0..count) |_| {
         const name = try readString(bytes, cursor);
         if (cursor.* >= bytes.len) return error.UnexpectedEnd;
-        const kind = std.meta.intToEnum(ExportKind, bytes[cursor.*]) catch return error.InvalidSection;
+        const kind = std.enums.fromInt(ExportKind, bytes[cursor.*]) orelse return error.InvalidSection;
         cursor.* += 1;
         const idx = try readU32(bytes, cursor);
         try self.exports.append(self.allocator, .{ .name = name, .kind = kind, .idx = idx });
@@ -3606,10 +3606,11 @@ test "linkHostToAppCalls — linking last import is a no-op swap" {
 
 test "preload — parses real Zig-compiled wasm host object" {
     const allocator = std.testing.allocator;
-    const host_bytes = try std.fs.cwd().readFileAlloc(
-        allocator,
+    const host_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
         "test/wasm/platform/targets/wasm32/host.wasm",
-        10 * 1024 * 1024, // 10 MB max
+        allocator,
+        .limited(10 * 1024 * 1024),
     );
     defer allocator.free(host_bytes);
 
@@ -3865,10 +3866,11 @@ test "setup — finalized module encodes and re-parses as valid WASM" {
 
 test "phase5 — real host module: removeMemoryAndTableImports preserves function imports" {
     const allocator = std.testing.allocator;
-    const host_bytes = try std.fs.cwd().readFileAlloc(
-        allocator,
+    const host_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
         "test/wasm/platform/targets/wasm32/host.wasm",
-        10 * 1024 * 1024,
+        allocator,
+        .limited(10 * 1024 * 1024),
     );
     defer allocator.free(host_bytes);
 
@@ -3890,10 +3892,11 @@ test "phase5 — real host module: removeMemoryAndTableImports preserves functio
 
 test "phase5 — real host module: full setup and finalization produces valid WASM" {
     const allocator = std.testing.allocator;
-    const host_bytes = try std.fs.cwd().readFileAlloc(
-        allocator,
+    const host_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
         "test/wasm/platform/targets/wasm32/host.wasm",
-        10 * 1024 * 1024,
+        allocator,
+        .limited(10 * 1024 * 1024),
     );
     defer allocator.free(host_bytes);
 

@@ -31,8 +31,7 @@ const glibc_cross_targets = [_]CrossTarget{
 /// Windows cross-compile targets
 const windows_cross_targets = [_]CrossTarget{
     .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
-    // TODO: re-enable when Zig 0.16 fixes @ptrCast alignment bug in std/debug/SelfInfo/Windows.zig:569
-    // .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
+    .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
 };
 
 /// All Linux cross-compile targets (musl + glibc)
@@ -2822,6 +2821,9 @@ pub fn build(b: *std.Build) void {
     wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    wasm32_builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io_wasm32_eval", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
     wasm32_builtins_obj.bundle_compiler_rt = false;
     configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
 
@@ -3091,6 +3093,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
 
@@ -3141,6 +3144,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
+            .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
 
@@ -4706,6 +4710,7 @@ fn addLlvmSupportToStep(
             .{ .name = "llvm_codegen", .module = llvm_codegen_module },
             .{ .name = "build_options", .module = roc_modules.build_options },
             .{ .name = "llvm_embedded", .module = llvm_embedded_module },
+            .{ .name = "embedded_lld", .module = roc_modules.embedded_lld },
         },
     });
     step.root_module.linkLibrary(zstd.artifact("zstd"));

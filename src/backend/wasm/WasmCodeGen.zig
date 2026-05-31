@@ -5922,11 +5922,15 @@ fn generateLiteral(self: *Self, value: LIR.LiteralValue) Allocator.Error!void {
         .i128_literal => |lit| try self.generateIntLiteralForLayout(lit.value, lit.layout_idx),
         .f64_literal => |lit| {
             self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
-            try self.currentCode().writer(self.allocator).writeInt(u64, @bitCast(lit), .little);
+            var buf: [8]u8 = undefined;
+            std.mem.writeInt(u64, &buf, @bitCast(lit), .little);
+            try self.currentCode().appendSlice(self.allocator, &buf);
         },
         .f32_literal => |lit| {
             self.currentCode().append(self.allocator, Op.f32_const) catch return error.OutOfMemory;
-            try self.currentCode().writer(self.allocator).writeInt(u32, @bitCast(lit), .little);
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, @bitCast(lit), .little);
+            try self.currentCode().appendSlice(self.allocator, &buf);
         },
         .dec_literal => |lit| try self.generateI128Literal(lit),
         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),

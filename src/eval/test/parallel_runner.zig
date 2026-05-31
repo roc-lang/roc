@@ -159,7 +159,6 @@ const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
 const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
 const FORKED_BACKEND_KILL_GRACE_MS: i64 = 5_000;
 const FORKED_BACKEND_KILL_POLL_NS: u64 = 10 * std.time.ns_per_ms;
-const LLVM_EVAL_SLOT_COUNT: usize = 2;
 const LLVM_EVAL_LOCK_POLL_NS: u64 = 10 * std.time.ns_per_ms;
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
@@ -168,6 +167,11 @@ const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
 /// Set from `cli.verbose` in `main` after arg parsing. Read by `onTestStarted`,
 /// which is registered as a comptime Pool callback and can't take a closure.
 var verbose_logging: bool = false;
+
+/// Set from `main` to the selected process-pool size before any worker runs.
+/// POSIX child workers inherit this value through fork; Windows worker
+/// processes recompute it from the same CLI args before entering worker mode.
+var llvm_eval_slot_count: usize = 1;
 
 const TestOutcome = struct {
     status: Status,
@@ -264,12 +268,12 @@ fn killForkedBackend(pid: posix.pid_t) void {
 }
 
 fn reapForkedBackendAfterKill(pid: posix.pid_t) bool {
-    const deadline_ms = std.time.milliTimestamp() + FORKED_BACKEND_KILL_GRACE_MS;
+    const deadline_ms = milliTimestamp() + FORKED_BACKEND_KILL_GRACE_MS;
     while (true) {
-        const wait_result = posix.waitpid(pid, posix.W.NOHANG);
+        const wait_result = harness.waitpid(pid, posix.W.NOHANG);
         if (wait_result.pid == pid) return true;
-        if (std.time.milliTimestamp() >= deadline_ms) return false;
-        std.Thread.sleep(FORKED_BACKEND_KILL_POLL_NS);
+        if (milliTimestamp() >= deadline_ms) return false;
+        std.Io.sleep(app_io, std.Io.Duration.fromNanoseconds(FORKED_BACKEND_KILL_POLL_NS), .awake) catch {};
     }
 }
 
@@ -463,50 +467,50 @@ fn forkAndEval(
 }
 
 const LlvmEvalPermit = struct {
-    file: std.fs.File,
+    file: std.Io.File,
 
     fn acquire() !LlvmEvalPermit {
         var queue_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const queue_path = try llvmEvalQueueLockPath(&queue_path_buf);
         var queue_file = try openLlvmEvalLockFile(queue_path);
-        defer queue_file.close();
-        try queue_file.lock(.exclusive);
-        defer queue_file.unlock();
+        defer queue_file.close(app_io);
+        try queue_file.lock(app_io, .exclusive);
+        defer queue_file.unlock(app_io);
 
         while (true) {
             if (try acquireLlvmEvalSlot()) |permit| {
                 return permit;
             }
 
-            std.Thread.sleep(LLVM_EVAL_LOCK_POLL_NS);
+            try std.Io.sleep(app_io, std.Io.Duration.fromNanoseconds(LLVM_EVAL_LOCK_POLL_NS), .awake);
         }
     }
 
     fn release(self: *LlvmEvalPermit) void {
-        self.file.unlock();
-        self.file.close();
+        self.file.unlock(app_io);
+        self.file.close(app_io);
     }
 };
 
 fn acquireLlvmEvalSlot() !?LlvmEvalPermit {
-    for (0..LLVM_EVAL_SLOT_COUNT) |slot| {
+    for (0..llvm_eval_slot_count) |slot| {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const path = try llvmEvalSlotLockPath(&path_buf, slot);
         var file = try openLlvmEvalLockFile(path);
-        errdefer file.close();
+        errdefer file.close(app_io);
 
-        if (try file.tryLock(.exclusive)) {
+        if (try file.tryLock(app_io, .exclusive)) {
             return .{ .file = file };
         }
 
-        file.close();
+        file.close(app_io);
     }
 
     return null;
 }
 
-fn openLlvmEvalLockFile(path: []const u8) !std.fs.File {
-    return std.fs.createFileAbsolute(path, .{
+fn openLlvmEvalLockFile(path: []const u8) !std.Io.File {
+    return std.Io.Dir.createFileAbsolute(app_io, path, .{
         .read = true,
         .truncate = false,
     });
@@ -1695,8 +1699,7 @@ fn printHelp() void {
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
         \\                        Default: 30000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
-        \\                        When LLVM is enabled, full-test workers are capped
-        \\                        to the LLVM eval slot count.
+        \\                        LLVM eval lock slots match the worker count.
         \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
@@ -1948,11 +1951,7 @@ fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
 
 fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count: usize) usize {
     const requested = cli.max_threads orelse @min(cpu_count, test_count);
-    const capped = if (LLVM_BACKEND_IMPLEMENTED)
-        @min(requested, LLVM_EVAL_SLOT_COUNT)
-    else
-        requested;
-    return @max(1, capped);
+    return @max(1, requested);
 }
 
 fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
@@ -2022,6 +2021,10 @@ pub fn main(init: std.process.Init) !void {
         }
         return;
     }
+
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
+    llvm_eval_slot_count = max_children;
 
     // Worker mode: the parent spawned us with `--worker <idx>` (and optionally
     // `--worker-backend <name>`) to run a single test, serialize the result to
@@ -2153,9 +2156,6 @@ pub fn main(init: std.process.Init) !void {
         });
         return;
     }
-
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);

@@ -7,49 +7,17 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
 const stack_probe = @import("stack_probe.zig");
+const embedded_lld = @import("embedded_lld");
 const RocTarget = @import("roc_target").RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
 
-/// External C functions from zig_llvm.cpp - only available when LLVM is enabled
+/// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 
-// External C functions from zig_llvm.cpp - only available when LLVM is enabled
-const llvm_externs = if (llvm_available) struct {
-    extern fn ZigLLDLinkCOFF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-    extern fn ZigLLDLinkELF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-    extern fn ZigLLDLinkMachO(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-    extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-} else struct {};
-
 /// Supported target formats for linking
-pub const TargetFormat = enum {
-    elf,
-    coff,
-    macho,
-    wasm,
-
-    /// Automatically detect target format based on the current system
-    pub fn detectFromSystem() TargetFormat {
-        return switch (builtin.target.os.tag) {
-            .windows => .coff,
-            .macos, .ios, .watchos, .tvos => .macho,
-            .freestanding => .wasm,
-            else => .elf,
-        };
-    }
-
-    /// Detect target format from OS tag
-    pub fn detectFromOs(os: std.Target.Os.Tag) TargetFormat {
-        return switch (os) {
-            .windows => .coff,
-            .macos, .ios, .watchos, .tvos => .macho,
-            .freestanding => .wasm,
-            else => .elf,
-        };
-    }
-};
+pub const TargetFormat = embedded_lld.Format;
 
 /// Target ABI for runtime-configurable linking
 pub const TargetAbi = enum {
@@ -602,45 +570,13 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         std.log.debug("  {s}", .{arg});
     }
 
-    // Convert to null-terminated strings for C API
-    // Arena allocator will clean up all these temporary allocations
-    var c_args = ctx.arena.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
-
-    for (args.items, 0..) |arg, i| {
-        c_args[i] = (ctx.arena.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
-    }
-
-    // Call appropriate LLD function based on target format
-    const success = switch (config.target_format) {
-        .elf => llvm_externs.ZigLLDLinkELF(
-            @intCast(c_args.len),
-            c_args.ptr,
-            config.can_exit_early,
-            config.disable_output,
-        ),
-        .coff => llvm_externs.ZigLLDLinkCOFF(
-            @intCast(c_args.len),
-            c_args.ptr,
-            config.can_exit_early,
-            config.disable_output,
-        ),
-        .macho => llvm_externs.ZigLLDLinkMachO(
-            @intCast(c_args.len),
-            c_args.ptr,
-            config.can_exit_early,
-            config.disable_output,
-        ),
-        .wasm => llvm_externs.ZigLLDLinkWasm(
-            @intCast(c_args.len),
-            c_args.ptr,
-            config.can_exit_early,
-            config.disable_output,
-        ),
+    embedded_lld.link(ctx.arena, config.target_format, args.items, .{
+        .can_exit_early = config.can_exit_early,
+        .disable_output = config.disable_output,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        error.LinkFailed => return LinkError.LinkFailed,
     };
-
-    if (!success) {
-        return LinkError.LinkFailed;
-    }
 
     // On macOS, ld64.lld does not write LC_MAIN.stacksize from a `-stack_size`
     // arg (zig's own MachO linker does, but we link via the LLVM ld64.lld C

@@ -101,16 +101,16 @@ pub const RelocationEntry = union(enum) {
         const symbol_index = try WasmModule.readU32(bytes, cursor);
 
         // Try index relocation types first (no addend)
-        if (std.meta.intToEnum(IndexRelocType, type_byte)) |type_id| {
+        if (std.enums.fromInt(IndexRelocType, type_byte)) |type_id| {
             return .{ .index = .{
                 .type_id = type_id,
                 .offset = offset,
                 .symbol_index = symbol_index,
             } };
-        } else |_| {}
+        }
 
         // Try offset relocation types (with addend)
-        if (std.meta.intToEnum(OffsetRelocType, type_byte)) |type_id| {
+        if (std.enums.fromInt(OffsetRelocType, type_byte)) |type_id| {
             const addend = try WasmModule.readI32(bytes, cursor);
             return .{ .offset = .{
                 .type_id = type_id,
@@ -118,7 +118,7 @@ pub const RelocationEntry = union(enum) {
                 .symbol_index = symbol_index,
                 .addend = addend,
             } };
-        } else |_| {}
+        } else {}
 
         return error.InvalidSection;
     }
@@ -195,7 +195,7 @@ pub const SymInfo = struct {
         if (cursor.* >= bytes.len) return error.UnexpectedEnd;
         const kind_byte = bytes[cursor.*];
         cursor.* += 1;
-        const kind = std.meta.intToEnum(SymKind, kind_byte) catch return error.InvalidSection;
+        const kind = std.enums.fromInt(SymKind, kind_byte) orelse return error.InvalidSection;
         const flags = try WasmModule.readU32(bytes, cursor);
 
         switch (kind) {
@@ -408,7 +408,7 @@ pub const LinkingSection = struct {
             const subsection_len = try WasmModule.readU32(bytes, cursor);
             const subsection_end = cursor.* + subsection_len;
 
-            if (std.meta.intToEnum(LinkingSubsection, subsection_id)) |sub| {
+            if (std.enums.fromInt(LinkingSubsection, subsection_id)) |sub| {
                 switch (sub) {
                     .symbol_table => {
                         const count = try WasmModule.readU32(bytes, cursor);
@@ -449,7 +449,7 @@ pub const LinkingSection = struct {
                         cursor.* = subsection_end;
                     },
                 }
-            } else |_| {
+            } else {
                 // Unknown subsection, skip
                 cursor.* = subsection_end;
             }
