@@ -1,8 +1,11 @@
+//! Build-system helpers for MiniCI command phases and reporting.
+
 const std = @import("std");
 const builtin = @import("builtin");
 
 const Step = std.Build.Step;
 
+/// Callback type for MiniCI phases implemented as in-process build checks.
 pub const CheckStepFn = *const fn (*Step) anyerror!void;
 
 const non_tty_test_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
@@ -77,6 +80,7 @@ pub const SemanticAuditStep = struct {
     }
 };
 
+/// Custom build step that runs the MiniCI phase sequence with progress output.
 pub const MiniCiStep = struct {
     step: Step,
     check_fx_platform_test_coverage: CheckStepFn,
