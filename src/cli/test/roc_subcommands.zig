@@ -1980,6 +1980,103 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     try std.testing.expect(std.mem.find(u8, result.stderr, "published instantiated nominal backing") == null);
 }
 
+test "roc test issue 9487 URL package dispatch result compares to tag" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(tmp_path);
+
+    const package_hash = "4znLp4JJDWYE7BTnpnNeW9y4q6wmK37ZYq8SqKhKTqrr";
+    const package_dir = "xdg-cache/roc/packages/" ++ package_hash;
+    try tmp_dir.dir.createDirPath(std.testing.io, package_dir);
+    try tmp_dir.dir.createDirPath(std.testing.io, "app");
+
+    const pkg_main_source =
+        \\package
+        \\    [
+        \\        Req,
+        \\        Tag,
+        \\    ]
+        \\    {}
+    ;
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = package_dir ++ "/main.roc", .data = pkg_main_source });
+
+    const tag_source =
+        \\Tag := [A, B]
+    ;
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = package_dir ++ "/Tag.roc", .data = tag_source });
+
+    const req_source =
+        \\import Tag
+        \\
+        \\Req :: { tag : Tag }.{
+        \\    from_tag : Tag -> Req
+        \\    from_tag = |initial_tag| { tag: initial_tag }
+        \\
+        \\    tag : Req -> Tag
+        \\    tag = |req| req.tag
+        \\}
+    ;
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = package_dir ++ "/Req.roc", .data = req_source });
+
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(cwd_path);
+    const platform_path = try std.fs.path.join(gpa, &.{ cwd_path, "test", "fx", "platform", "main.roc" });
+    defer gpa.free(platform_path);
+
+    const app_source = try std.fmt.allocPrint(gpa,
+        \\app [main!] {{
+        \\    pf: platform "{s}",
+        \\    pkg: "http://127.0.0.1/{s}.tar.zst",
+        \\}}
+        \\
+        \\import pf.Stdout
+        \\import pkg.Req
+        \\import pkg.Tag
+        \\
+        \\label = |req|
+        \\    if req.tag() == A {{
+        \\        "A"
+        \\    }} else {{
+        \\        "other"
+        \\    }}
+        \\
+        \\main! = || {{
+        \\    req = Req.from_tag(A)
+        \\    Stdout.line!(label(req))
+        \\}}
+        \\
+        \\expect label(Req.from_tag(A)) == "A"
+    , .{ platform_path, package_hash });
+    defer gpa.free(app_source);
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "app/main.roc", .data = app_source });
+
+    const app_path = try std.fs.path.join(gpa, &.{ tmp_path, "app", "main.roc" });
+    defer gpa.free(app_path);
+    const xdg_cache_path = try std.fs.path.join(gpa, &.{ tmp_path, "xdg-cache" });
+    defer gpa.free(xdg_cache_path);
+
+    var env_map = try util.buildIsolatedTestEnvMap(gpa, null);
+    defer env_map.deinit();
+    try env_map.put("XDG_CACHE_HOME", xdg_cache_path);
+
+    const check_result = try util.runRocWithEnv(gpa, &.{ "check", "--no-cache" }, app_path, &env_map);
+    defer gpa.free(check_result.stdout);
+    defer gpa.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const test_result = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, app_path, &env_map);
+    defer gpa.free(test_result.stdout);
+    defer gpa.free(test_result.stderr);
+    try util.checkSuccess(test_result);
+}
+
 test "roc docs Builtin.roc succeeds" {
     const testing = std.testing;
     const gpa = testing.allocator;

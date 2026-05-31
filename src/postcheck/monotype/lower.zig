@@ -6321,6 +6321,13 @@ const BodyContext = struct {
 
         try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty, conflict_message);
 
+        if (try self.structuralEqualityExprResultType(eq.lhs, null)) |lhs_ty| {
+            return try self.constrainStructuralEqualityOperandType(lhs_ty, eq.rhs, rhs_checked_ty, conflict_message);
+        }
+        if (try self.structuralEqualityExprResultType(eq.rhs, null)) |rhs_ty| {
+            return try self.constrainStructuralEqualityOperandType(rhs_ty, eq.lhs, lhs_checked_ty, conflict_message);
+        }
+
         if (self.constrainedMonoType(lhs_checked_ty)) |lhs_ty| {
             try self.constrainTypeToMono(rhs_checked_ty, lhs_ty, conflict_message);
             return lhs_ty;
@@ -6364,6 +6371,45 @@ const BodyContext = struct {
         }
 
         Common.invariant("checked structural equality operand type was not concrete after equality relation instantiation");
+    }
+
+    fn structuralEqualityExprResultType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        expected_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return switch (expr.data) {
+            .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
+            .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .lookup_local => |lookup| try self.lookupArgumentMonoType(expr.ty, lookup.resolved, expected_ty, false),
+            .lookup_external => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, false),
+            .lookup_required => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, false),
+            .field_access => |field| blk: {
+                if (expected_ty) |ty| {
+                    try self.constrainTypeToMono(expr.ty, ty, "checked field access expected type conflicted with an existing Monotype constraint");
+                    break :blk ty;
+                }
+                break :blk try self.fieldAccessMonoType(field.receiver, field.field_name);
+            },
+            else => null,
+        };
+    }
+
+    fn constrainStructuralEqualityOperandType(
+        self: *BodyContext,
+        operand_ty: Type.TypeId,
+        other_expr_id: checked.CheckedExprId,
+        other_checked_ty: checked.CheckedTypeId,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!Type.TypeId {
+        try self.constrainTypeToMono(other_checked_ty, operand_ty, conflict_message);
+        if (try self.structuralEqualityExprResultType(other_expr_id, operand_ty)) |other_ty| {
+            if (!self.sameType(operand_ty, other_ty)) Common.invariant(conflict_message);
+        }
+        return operand_ty;
     }
 
     fn lowerEqualityExpr(
