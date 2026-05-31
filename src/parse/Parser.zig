@@ -3735,8 +3735,10 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     self.expect(.Comma) catch {};
                     break;
                 } else {
-                    // Regular tag in the union
-                    try NodeStore.addScratchTypeAnno(&self.store, try parseTypeAnnoInCollection(self));
+                    // Regular tag in the union. The tag name itself is a
+                    // constructor, not a type reference; only payload
+                    // annotations contribute type dependencies.
+                    try NodeStore.addScratchTypeAnno(&self.store, try parseTagUnionAnnoInCollection(self));
                     self.expect(.Comma) catch {
                         break;
                     };
@@ -3817,6 +3819,86 @@ pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
     defer trace.end();
 
     return try self.parseTypeAnno(.looking_for_type_arg);
+}
+
+fn parseTagUnionAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const was_collecting = self.collect_type_dependencies;
+    self.collect_type_dependencies = false;
+    defer self.collect_type_dependencies = was_collecting;
+
+    const anno = try self.parseTypeAnno(.looking_for_type_arg);
+    if (was_collecting) {
+        try self.recordTypeDependenciesFromTagAnno(anno);
+    }
+    return anno;
+}
+
+fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
+    const anno = self.store.getTypeAnno(anno_idx);
+    switch (anno) {
+        .apply => |apply| {
+            const args = self.store.typeAnnoSlice(apply.args);
+            if (args.len == 0) return;
+            for (args[1..]) |arg_idx| {
+                try self.recordTypeDependenciesFromAnno(arg_idx);
+            }
+        },
+        else => {},
+    }
+}
+
+fn recordTypeDependenciesFromAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
+    const anno = self.store.getTypeAnno(anno_idx);
+    switch (anno) {
+        .ty => |ty| {
+            const token_tag = self.tok_buf.tokens.items(.tag)[ty.token];
+            if (token_tag == .UpperIdent and ty.qualifiers.span.len == 0) {
+                if (self.tok_buf.resolveIdentifier(ty.token)) |ident| {
+                    try self.decl_index.addTypeDependency(ident);
+                }
+            }
+        },
+        .apply => |apply| {
+            for (self.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                try self.recordTypeDependenciesFromAnno(arg_idx);
+            }
+        },
+        .tag_union => |tag_union| {
+            for (self.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                try self.recordTypeDependenciesFromTagAnno(tag_idx);
+            }
+            if (tag_union.ext == .named) {
+                try self.recordTypeDependenciesFromAnno(tag_union.ext.named.anno);
+            }
+        },
+        .tuple => |tuple| {
+            for (self.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                try self.recordTypeDependenciesFromAnno(elem_idx);
+            }
+        },
+        .record => |record| {
+            for (self.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.store.getAnnoRecordField(field_idx) catch continue;
+                try self.recordTypeDependenciesFromAnno(field.ty);
+            }
+            if (record.ext == .named) {
+                try self.recordTypeDependenciesFromAnno(record.ext.named.anno);
+            }
+        },
+        .@"fn" => |func| {
+            for (self.store.typeAnnoSlice(func.args)) |arg_idx| {
+                try self.recordTypeDependenciesFromAnno(arg_idx);
+            }
+            try self.recordTypeDependenciesFromAnno(func.ret);
+        },
+        .parens => |parens| {
+            try self.recordTypeDependenciesFromAnno(parens.anno);
+        },
+        .ty_var, .underscore_type_var, .underscore, .malformed => {},
+    }
 }
 
 /// todo
