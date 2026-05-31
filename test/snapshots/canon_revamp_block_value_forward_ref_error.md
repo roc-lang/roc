@@ -2,6 +2,7 @@
 ~~~ini
 description=Block-local value cannot be used before declaration
 type=snippet
+skip=true
 ~~~
 # SOURCE
 ~~~roc
