@@ -1745,6 +1745,19 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     try testing.expect(result.stderr.len > 0);
 }
 
+test "roc check succeeds with unused app package shorthand (issue 9488)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/package_shorthand_check_app/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+}
+
 test "roc check succeeds on Parser type module" {
     const testing = std.testing;
     const gpa = testing.allocator;

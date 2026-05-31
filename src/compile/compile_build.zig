@@ -1109,7 +1109,14 @@ pub const BuildEnv = struct {
                         break :blk cached_path;
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
-                        break :blk try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        errdefer self.gpa.free(abs_path);
+                        if (std.fs.path.dirname(abs_path)) |pkg_dir| {
+                            if (!PathUtils.isWithinRoot(pkg_dir, self.workspace_roots.items)) {
+                                try self.workspace_roots.append(try self.gpa.dupe(u8, pkg_dir));
+                            }
+                        }
+                        break :blk abs_path;
                     };
 
                     // TODO: actually handle duplicate keys
@@ -1494,6 +1501,29 @@ pub const BuildEnv = struct {
         });
     }
 
+    fn putPackageShorthand(self: *BuildEnv, pack: *Package, alias: []const u8, target_name: []const u8, root_file: []const u8) ![]const u8 {
+        const key = try self.gpa.dupe(u8, alias);
+        errdefer self.gpa.free(key);
+
+        const name = try self.gpa.dupe(u8, target_name);
+        errdefer self.gpa.free(name);
+
+        const root_file_owned = try self.gpa.dupe(u8, root_file);
+        errdefer self.gpa.free(root_file_owned);
+
+        if (pack.shorthands.fetchRemove(key)) |old_entry| {
+            freeConstSlice(self.gpa, old_entry.key);
+            freeConstSlice(self.gpa, old_entry.value.name);
+            freeConstSlice(self.gpa, old_entry.value.root_file);
+        }
+        try pack.shorthands.put(self.gpa, key, .{
+            .name = name,
+            .root_file = root_file_owned,
+        });
+
+        return name;
+    }
+
     const PkgSinkCtx = struct {
         gpa: Allocator,
         sink: *OrderedSink,
@@ -1586,9 +1616,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            const dep_key = try self.gpa.dupe(u8, alias);
-            const dep_name = try self.gpa.dupe(u8, alias);
-            try self.ensurePackage(dep_name, .platform, abs);
+            try self.ensurePackage(alias, .platform, abs);
 
             // Transfer provides entries and targets_config from parsed header to platform package
             if (self.packages.getPtr(alias)) |plat_pkg| {
@@ -1605,17 +1633,7 @@ pub const BuildEnv = struct {
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
-            // If key already exists, free the old value before overwriting
-            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
-                freeConstSlice(self.gpa, old_entry.key);
-                freeConstSlice(self.gpa, old_entry.value.name);
-                freeConstSlice(self.gpa, old_entry.value.root_file);
-            }
-            try pack.shorthands.put(self.gpa, dep_key, .{
-                .name = dep_name,
-                .root_file = try self.gpa.dupe(u8, abs),
-            });
-
+            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
             try self.populatePackageShorthands(dep_name, &child_info);
 
             // Register platform-exposed modules as packages so apps can import them
@@ -1640,16 +1658,7 @@ pub const BuildEnv = struct {
                 pack = self.packages.getPtr(pkg_name).?;
 
                 // Also add to app's shorthands so imports resolve correctly
-                const mod_key = try self.gpa.dupe(u8, module_name);
-                if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
-                    freeConstSlice(self.gpa, old_entry.key);
-                    freeConstSlice(self.gpa, old_entry.value.name);
-                    freeConstSlice(self.gpa, old_entry.value.root_file);
-                }
-                try pack.shorthands.put(self.gpa, mod_key, .{
-                    .name = try self.gpa.dupe(u8, module_name),
-                    .root_file = try self.gpa.dupe(u8, module_path),
-                });
+                _ = try self.putPackageShorthand(pack, module_name, module_name, module_path);
 
                 // Add to pending list - will be registered after schedulers are created
                 // Use the QUALIFIED name (e.g., "pf.Stdout") because that's how imports are tracked
@@ -1696,10 +1705,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            const dep_key = try self.gpa.dupe(u8, alias);
-            const dep_name = try self.gpa.dupe(u8, alias);
-
-            try self.ensurePackage(dep_name, child_info.kind, abs);
+            try self.ensurePackage(alias, child_info.kind, abs);
 
             // Transfer provides entries from parsed header to platform package
             if (child_info.kind == .platform) {
@@ -1714,17 +1720,7 @@ pub const BuildEnv = struct {
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
-            // If key already exists, free the old value before overwriting
-            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
-                freeConstSlice(self.gpa, old_entry.key);
-                freeConstSlice(self.gpa, old_entry.value.name);
-                freeConstSlice(self.gpa, old_entry.value.root_file);
-            }
-            try pack.shorthands.put(self.gpa, dep_key, .{
-                .name = dep_name,
-                .root_file = try self.gpa.dupe(u8, abs),
-            });
-
+            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
             try self.populatePackageShorthands(dep_name, &child_info);
         }
     }
