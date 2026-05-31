@@ -13968,25 +13968,23 @@ const MatchingTypeResult = struct {
 /// Check if there's a type declaration matching the module name
 /// Find the type declaration matching the module name and return its ident and kind
 fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
-    const file = self.parse_ir.store.getFile();
+    const decl_index = &self.parse_ir.decl_index;
+    const module_scope_idx = self.parse_ir.store.getFile().scope;
+    std.debug.assert(@intFromEnum(module_scope_idx) < decl_index.scopeCount());
+
     const module_name_text = self.env.module_name;
 
-    // Look through all statements for a type declaration matching the module name
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        if (stmt == .type_decl) {
-            const type_decl = stmt.type_decl;
-            // Get the type name from the header
-            const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
-            const type_name_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
-            const type_name_text = self.env.getIdent(type_name_ident);
+    for (decl_index.scopeDecls(module_scope_idx)) |decl_idx| {
+        const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+        const kind = declIndexTypeKind(decl.kind) orelse continue;
+        const type_ident = decl.name_ident orelse continue;
+        const type_name_text = self.env.getIdent(type_ident);
 
-            if (std.mem.eql(u8, type_name_text, module_name_text)) {
-                return .{
-                    .ident = type_name_ident,
-                    .kind = type_decl.kind,
-                };
-            }
+        if (std.mem.eql(u8, type_name_text, module_name_text)) {
+            return .{
+                .ident = type_ident,
+                .kind = kind,
+            };
         }
     }
 
@@ -13995,28 +13993,28 @@ fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
 
 /// Check if any type declarations exist in the file
 fn hasAnyTypeDeclarations(self: *Self) bool {
-    const file = self.parse_ir.store.getFile();
+    const decl_index = &self.parse_ir.decl_index;
+    const module_scope_idx = self.parse_ir.store.getFile().scope;
+    std.debug.assert(@intFromEnum(module_scope_idx) < decl_index.scopeCount());
 
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        if (stmt == .type_decl) {
-            return true;
-        }
+    for (decl_index.scopeDecls(module_scope_idx)) |decl_idx| {
+        const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+        if (declIndexTypeKind(decl.kind) != null) return true;
     }
 
     return false;
 }
 
 fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
+    const decl_index = &self.parse_ir.decl_index;
+    const module_scope_idx = self.parse_ir.store.getFile().scope;
+    std.debug.assert(@intFromEnum(module_scope_idx) < decl_index.scopeCount());
 
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        if (stmt != .type_decl) continue;
-
-        const type_decl = stmt.type_decl;
-        const header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
-        const type_ident = self.parse_ir.tokens.resolveIdentifier(header.name) orelse continue;
+    for (decl_index.scopeDecls(module_scope_idx)) |decl_idx| {
+        const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+        if (declIndexTypeKind(decl.kind) == null) continue;
+        const type_ident = decl.name_ident orelse continue;
+        const stmt_id: AST.Statement.Idx = @enumFromInt(decl.statement);
         const stmt_idx = self.prepared_type_decls.get(stmt_id) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
