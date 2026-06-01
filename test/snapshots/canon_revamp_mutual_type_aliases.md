@@ -2,7 +2,6 @@
 ~~~ini
 description=Two type aliases that reference each other - tests topological resolution via placeholders
 type=snippet
-skip=true
 ~~~
 # SOURCE
 ~~~roc
@@ -10,18 +9,27 @@ A : B
 B : A
 ~~~
 # EXPECTED
-UNDECLARED TYPE - canon_revamp_mutual_type_aliases.md:1:5:1:6
+MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:1:1:1:6
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _B_ is not declared in this scope.
+**MUTUALLY RECURSIVE TYPE ALIASES**
+The type alias _A_ and _B_ form a recursive cycle.
 
-This type is referenced here:
-**canon_revamp_mutual_type_aliases.md:1:5:1:6:**
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
+
+This type is declared here:
+**canon_revamp_mutual_type_aliases.md:1:1:1:6:**
 ```roc
 A : B
 ```
-    ^
+^^^^^
+
+And it references _B_ declared here:
+**canon_revamp_mutual_type_aliases.md:2:1:2:6:**
+```roc
+B : A
+```
+^^^^^
 
 
 **MUTUALLY RECURSIVE TYPE ALIASES**
@@ -78,7 +86,7 @@ B : A
 		(ty-malformed))
 	(s-alias-decl
 		(ty-header (name "B"))
-		(ty-lookup (name "A") (local))))
+		(ty-malformed)))
 ~~~
 # TYPES
 ~~~clojure

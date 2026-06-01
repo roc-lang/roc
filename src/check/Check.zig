@@ -1638,14 +1638,34 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
+    // Reserve every local type constructor before generating any type body.
+    // Source-order canonicalization can emit `A : B` before `B : ...`; type
+    // annotation lookup needs `B`'s constructor shape even though its backing
+    // type is filled later in this same checking phase.
+    for (0..self.cir.all_statements.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+
+        switch (stmt) {
+            .s_alias_decl => |alias| {
+                try self.setVarRank(stmt_var, &env);
+                try self.predeclareAliasDecl(stmt_var, alias, &env);
+            },
+            .s_nominal_decl => |nominal| {
+                try self.setVarRank(stmt_var, &env);
+                try self.predeclareNominalDecl(stmt_var, nominal, &env);
+            },
+            else => {},
+        }
+    }
+
     // First pass: generate types for each type declaration
     // Note that any types generated will be generalized
     for (0..self.cir.all_statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
-
-        try self.setVarRank(stmt_var, &env);
 
         switch (stmt) {
             .s_alias_decl => |alias| {
@@ -1655,9 +1675,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 try self.generateNominalDecl(stmt_idx, stmt_var, nominal, &env);
             },
             .s_runtime_error => {
+                try self.setVarRank(stmt_var, &env);
                 try self.unifyWith(stmt_var, .err, &env);
             },
             .s_type_anno => |type_anno| {
+                try self.setVarRank(stmt_var, &env);
                 try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
             else => {
@@ -2353,6 +2375,72 @@ fn generateStmtTypeDeclType(
     }
 }
 
+fn aliasOriginModule(self: *const Self) Ident.Idx {
+    return if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name;
+}
+
+fn predeclareAliasDecl(
+    self: *Self,
+    decl_var: Var,
+    alias: std.meta.fieldInfo(CIR.Statement, .s_alias_decl).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const header = self.cir.store.getTypeHeader(alias.header);
+    const header_args = self.cir.store.sliceTypeAnnos(header.args);
+    const header_vars = try self.generateHeaderVars(header_args, env);
+    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
+
+    try self.unifyWith(
+        decl_var,
+        try self.types.mkAlias(
+            .{ .ident_idx = header.relative_name },
+            backing_var,
+            header_vars,
+            self.aliasOriginModule(),
+        ),
+        env,
+    );
+}
+
+fn predeclareNominalDecl(
+    self: *Self,
+    decl_var: Var,
+    nominal: std.meta.fieldInfo(CIR.Statement, .s_nominal_decl).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const header = self.cir.store.getTypeHeader(nominal.header);
+    const header_args = self.cir.store.sliceTypeAnnos(header.args);
+    const header_vars = try self.generateHeaderVars(header_args, env);
+    const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
+
+    try self.unifyWith(
+        decl_var,
+        try self.types.mkNominal(
+            .{ .ident_idx = header.relative_name },
+            backing_var,
+            header_vars,
+            self.builtin_ctx.module_name,
+            nominal.is_opaque,
+        ),
+        env,
+    );
+}
+
+fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
+    const resolved = self.types.resolveVar(decl_var).desc.content;
+    if (resolved != .alias) return null;
+    return self.types.sliceAliasArgs(resolved.alias);
+}
+
+fn predeclaredNominalArgs(self: *const Self, decl_var: Var) ?[]Var {
+    const resolved = self.types.resolveVar(decl_var).desc.content;
+    if (resolved != .structure or resolved.structure != .nominal_type) return null;
+    return self.types.sliceNominalArgs(resolved.structure.nominal_type);
+}
+
 /// Generate types for an alias type declaration
 fn generateAliasDecl(
     self: *Self,
@@ -2369,7 +2457,8 @@ fn generateAliasDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const header_vars = try self.generateHeaderVars(header_args, env);
+    const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
+    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     defer self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -2398,23 +2487,18 @@ fn generateAliasDecl(
         return;
     }
 
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where List is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
-    try self.unifyWith(
-        decl_var,
-        try self.types.mkAlias(
-            .{ .ident_idx = header.relative_name },
-            backing_var,
-            header_vars,
-            origin_module_id,
-        ),
-        env,
-    );
+    if (predeclared_header_vars == null) {
+        try self.unifyWith(
+            decl_var,
+            try self.types.mkAlias(
+                .{ .ident_idx = header.relative_name },
+                backing_var,
+                header_vars,
+                self.aliasOriginModule(),
+            ),
+            env,
+        );
+    }
 }
 
 /// Generate types for nominal type declaration
@@ -2433,7 +2517,8 @@ fn generateNominalDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const header_vars = try self.generateHeaderVars(header_args, env);
+    const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
+    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     defer self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -2457,17 +2542,19 @@ fn generateNominalDecl(
         .num_args = @intCast(header_args.len),
     } });
 
-    try self.unifyWith(
-        decl_var,
-        try self.types.mkNominal(
-            .{ .ident_idx = header.relative_name },
-            backing_var,
-            header_vars,
-            self.builtin_ctx.module_name,
-            nominal.is_opaque,
-        ),
-        env,
-    );
+    if (predeclared_header_vars == null) {
+        try self.unifyWith(
+            decl_var,
+            try self.types.mkNominal(
+                .{ .ident_idx = header.relative_name },
+                backing_var,
+                header_vars,
+                self.builtin_ctx.module_name,
+                nominal.is_opaque,
+            ),
+            env,
+        );
+    }
 }
 
 /// Generate types for a standalone type annotation (one without a corresponding definition).

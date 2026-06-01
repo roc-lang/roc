@@ -453,6 +453,11 @@ expect output == "div | span | p"
 			(args))
 		(annotation
 			(ty-lookup (name "Str") (builtin))))
+	(s-nominal-decl
+		(ty-header (name "Html"))
+		(ty-tag-union
+			(ty-tag-name (name "Raw")
+				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
@@ -460,12 +465,7 @@ expect output == "div | span | p"
 					(p-assign (ident "output"))))
 			(rhs
 				(e-string
-					(e-literal (string "div | span | p"))))))
-	(s-nominal-decl
-		(ty-header (name "Html"))
-		(ty-tag-union
-			(ty-tag-name (name "Raw")
-				(ty-lookup (name "Str") (builtin))))))
+					(e-literal (string "div | span | p")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -358,6 +358,13 @@ NO CHANGE
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
 				(ty-lookup (name "Robot") (local)))))
+	(s-alias-decl
+		(ty-header (name "Robot"))
+		(ty-record
+			(field (field "x")
+				(ty-lookup (name "I64") (builtin)))
+			(field (field "y")
+				(ty-lookup (name "I64") (builtin)))))
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
@@ -449,14 +456,7 @@ NO CHANGE
 						(field (name "x")
 							(e-num (value "5")))
 						(field (name "y")
-							(e-num (value "5"))))))))
-	(s-alias-decl
-		(ty-header (name "Robot"))
-		(ty-record
-			(field (field "x")
-				(ty-lookup (name "I64") (builtin)))
-			(field (field "y")
-				(ty-lookup (name "I64") (builtin))))))
+							(e-num (value "5")))))))))
 ~~~
 # TYPES
 ~~~clojure

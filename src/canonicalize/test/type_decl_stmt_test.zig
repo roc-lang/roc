@@ -291,7 +291,7 @@ test "scopeLookupTypeDecl API is accessible" {
 
     // Look up a type that doesn't exist - should return null
     const my_type_ident = try env.insertIdent(Ident.for_text("MyType"));
-    const type_lookup = can.scopeLookupTypeDecl(my_type_ident);
+    const type_lookup = try can.scopeLookupTypeDecl(my_type_ident);
 
     try testing.expect(type_lookup == null);
 }
@@ -342,7 +342,7 @@ test "introduceType API is accessible" {
     try can.introduceType(type_name, stmt_idx, base.Region.zero());
 
     // Verify the type is now in scope
-    const type_lookup = can.scopeLookupTypeDecl(type_name);
+    const type_lookup = try can.scopeLookupTypeDecl(type_name);
     try testing.expect(type_lookup != null);
     try testing.expect(type_lookup.? == stmt_idx);
 }
@@ -418,13 +418,13 @@ test "local type scoping - not visible after exiting block" {
     try can.introduceType(type_name, stmt_idx, base.Region.zero());
 
     // Type should be visible in inner scope
-    const lookup_in_inner = can.scopeLookupTypeDecl(type_name);
+    const lookup_in_inner = try can.scopeLookupTypeDecl(type_name);
     try testing.expect(lookup_in_inner != null);
 
     // Exit inner scope
     try can.scopeExit(gpa);
 
     // Type should NOT be visible in outer scope anymore
-    const lookup_in_outer = can.scopeLookupTypeDecl(type_name);
+    const lookup_in_outer = try can.scopeLookupTypeDecl(type_name);
     try testing.expect(lookup_in_outer == null);
 }

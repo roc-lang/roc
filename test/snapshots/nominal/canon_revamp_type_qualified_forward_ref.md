@@ -2,7 +2,6 @@
 ~~~ini
 description=Within an associated block, a method body uses the type-qualified name (Type.method) for a sibling defined later
 type=file:Foo.roc
-skip=true
 ~~~
 # SOURCE
 ~~~roc

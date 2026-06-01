@@ -135,10 +135,12 @@ scopes: std.ArrayList(Scope),
 decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
 scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
+decl_by_statement: std.AutoHashMapUnmanaged(u32, DeclIdx),
 type_dependency_ids: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
 type_path_by_statement: std.AutoHashMapUnmanaged(u32, TypePathIdx),
+type_decl_by_path: std.AutoHashMapUnmanaged(TypePathIdx, DeclIdx),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
 assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 scope_stack: std.ArrayList(ScopeIdx),
@@ -151,10 +153,12 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .decls = .empty,
         .scope_decl_ids = .empty,
         .scope_decl_builders = .empty,
+        .decl_by_statement = .{},
         .type_dependency_ids = .empty,
         .type_paths = .empty,
         .type_path_intern = .{},
         .type_path_by_statement = .{},
+        .type_decl_by_path = .{},
         .assoc_value_decls = .{},
         .assoc_owner_value_decls = .{},
         .scope_stack = .empty,
@@ -176,10 +180,12 @@ pub fn deinit(self: *DeclIndex) void {
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
+    self.decl_by_statement.deinit(self.gpa);
     self.type_dependency_ids.deinit(self.gpa);
     self.type_paths.deinit(self.gpa);
     self.type_path_intern.deinit(self.gpa);
     self.type_path_by_statement.deinit(self.gpa);
+    self.type_decl_by_path.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
 }
 
@@ -261,6 +267,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     const idx: DeclIdx = @enumFromInt(self.decls.items.len);
     try self.decls.append(self.gpa, decl);
     try self.scope_decl_builders.items[@intFromEnum(decl.scope)].append(self.gpa, idx);
+    try self.decl_by_statement.put(self.gpa, decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].value_decls, ident, idx);
@@ -275,6 +282,10 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].type_decls, ident, idx);
             if (decl.type_path) |path| {
                 try self.type_path_by_statement.put(self.gpa, decl.statement, path);
+                const path_entry = try self.type_decl_by_path.getOrPut(self.gpa, path);
+                if (!path_entry.found_existing) {
+                    path_entry.value_ptr.* = idx;
+                }
             }
         }
     }
@@ -410,6 +421,16 @@ pub fn findTypePathRelative(self: *const DeclIndex, owner: TypePathIdx, segments
 /// Return the parser-owned type path for an AST statement, when it declares a type.
 pub fn typePathForStatement(self: *const DeclIndex, statement: u32) ?TypePathIdx {
     return self.type_path_by_statement.get(statement);
+}
+
+/// Return the parser declaration recorded for an AST statement, if any.
+pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
+    return self.decl_by_statement.get(statement);
+}
+
+/// Return the first parser type declaration recorded for a type path.
+pub fn typeDeclForPath(self: *const DeclIndex, path: TypePathIdx) ?DeclIdx {
+    return self.type_decl_by_path.get(path);
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.

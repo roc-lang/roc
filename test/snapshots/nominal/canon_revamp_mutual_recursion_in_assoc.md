@@ -2,7 +2,6 @@
 ~~~ini
 description=Mutually recursive methods within an associated block - each refs the other via unqualified name
 type=file:Tree.roc
-skip=true
 ~~~
 # SOURCE
 ~~~roc
@@ -84,7 +83,7 @@ Tree := [Leaf, Node].{
 		(e-lambda
 			(args
 				(p-assign (ident "t")))
-			(e-call (constraint-fn-var 65)
+			(e-call (constraint-fn-var 66)
 				(e-lookup-local
 					(p-assign (ident "Tree.isOdd")))
 				(e-lookup-local
@@ -98,7 +97,7 @@ Tree := [Leaf, Node].{
 		(e-lambda
 			(args
 				(p-assign (ident "t")))
-			(e-call (constraint-fn-var 64)
+			(e-call (constraint-fn-var 65)
 				(e-lookup-local
 					(p-assign (ident "Tree.isEven")))
 				(e-lookup-local

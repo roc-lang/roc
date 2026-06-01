@@ -2623,27 +2623,6 @@ expect {
 		(exposes))
 	(s-import (module "BadNameMultiline")
 		(exposes))
-	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(rhs
-				(e-num (value "1")))))
-	(s-expect
-		(e-block
-			(s-let
-				(p-assign (ident "foo"))
-				(e-num (value "1")))
-			(s-let
-				(p-assign (ident "blah"))
-				(e-num (value "1")))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-lookup-local
-						(p-assign (ident "blah"))))
-				(rhs
-					(e-lookup-local
-						(p-assign (ident "foo")))))))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2734,7 +2713,28 @@ expect {
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-apply (name "Maybe") (local)
-				(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
+				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
+	(s-expect
+		(e-method-eq (negated "false")
+			(lhs
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(rhs
+				(e-num (value "1")))))
+	(s-expect
+		(e-block
+			(s-let
+				(p-assign (ident "foo"))
+				(e-num (value "1")))
+			(s-let
+				(p-assign (ident "blah"))
+				(e-num (value "1")))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-lookup-local
+						(p-assign (ident "blah"))))
+				(rhs
+					(e-lookup-local
+						(p-assign (ident "foo"))))))))
 ~~~
 # TYPES
 ~~~clojure

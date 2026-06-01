@@ -1278,6 +1278,22 @@ is_named_color = |str| {
 					(args
 						(e-lookup-local
 							(p-assign (ident "str"))))))))
+	(s-nominal-decl
+		(ty-header (name "Color"))
+		(ty-tag-union
+			(ty-tag-name (name "RGB")
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin)))
+			(ty-tag-name (name "RGBA")
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "U8") (builtin))
+				(ty-lookup (name "Dec") (builtin)))
+			(ty-tag-name (name "Named")
+				(ty-lookup (name "Str") (builtin)))
+			(ty-tag-name (name "Hex")
+				(ty-lookup (name "Str") (builtin)))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
@@ -1326,23 +1342,7 @@ is_named_color = |str| {
 				(e-tag (name "Ok")
 					(args
 						(e-string
-							(e-literal (string "#ff00ff"))))))))
-	(s-nominal-decl
-		(ty-header (name "Color"))
-		(ty-tag-union
-			(ty-tag-name (name "RGB")
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "U8") (builtin)))
-			(ty-tag-name (name "RGBA")
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "U8") (builtin))
-				(ty-lookup (name "Dec") (builtin)))
-			(ty-tag-name (name "Named")
-				(ty-lookup (name "Str") (builtin)))
-			(ty-tag-name (name "Hex")
-				(ty-lookup (name "Str") (builtin))))))
+							(e-literal (string "#ff00ff")))))))))
 ~~~
 # TYPES
 ~~~clojure

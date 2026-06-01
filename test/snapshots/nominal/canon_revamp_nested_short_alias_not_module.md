@@ -2,7 +2,6 @@
 ~~~ini
 description=Module scope must not resolve a nested associated item through only the nested type's bare name
 type=file:AliasLeak.roc
-skip=true
 ~~~
 # SOURCE
 ~~~roc
@@ -28,9 +27,6 @@ DOES NOT EXIST - canon_revamp_nested_short_alias_not_module.md:13:7:13:17
 **DOES NOT EXIST**
 `Nested.val` does not exist.
 
-`Nested` is in scope, but it has no associated `val`.
-
-It's referenced here:
 **canon_revamp_nested_short_alias_not_module.md:13:7:13:17:**
 ```roc
 bad = Nested.val
@@ -135,7 +131,7 @@ good2 = Parent2.Nested.val
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-runtime-error (tag "nested_value_not_found")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "good1"))
 		(e-lookup-local

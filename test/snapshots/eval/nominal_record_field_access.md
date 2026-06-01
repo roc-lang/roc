@@ -153,6 +153,15 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 			(ty-fn (effectful false)
 				(ty-lookup (name "Wrapper") (local))
 				(ty-lookup (name "Str") (builtin)))))
+	(s-nominal-decl
+		(ty-header (name "Wrapper"))
+		(ty-tag-union
+			(ty-tag-name (name "Simple")
+				(ty-lookup (name "Str") (builtin)))
+			(ty-tag-name (name "WithRecord")
+				(ty-record
+					(field (field "name")
+						(ty-lookup (name "Str") (builtin)))))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
@@ -183,16 +192,7 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 												(e-literal (string "hello")))))))))))
 			(rhs
 				(e-string
-					(e-literal (string "hello"))))))
-	(s-nominal-decl
-		(ty-header (name "Wrapper"))
-		(ty-tag-union
-			(ty-tag-name (name "Simple")
-				(ty-lookup (name "Str") (builtin)))
-			(ty-tag-name (name "WithRecord")
-				(ty-record
-					(field (field "name")
-						(ty-lookup (name "Str") (builtin))))))))
+					(e-literal (string "hello")))))))
 ~~~
 # TYPES
 ~~~clojure

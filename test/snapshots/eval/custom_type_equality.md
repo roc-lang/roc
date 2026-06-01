@@ -336,6 +336,12 @@ expect c1 != c3
 			(e-tag (name "Blue")))
 		(annotation
 			(ty-lookup (name "Color") (local))))
+	(s-nominal-decl
+		(ty-header (name "Color"))
+		(ty-tag-union
+			(ty-tag-name (name "Red"))
+			(ty-tag-name (name "Green"))
+			(ty-tag-name (name "Blue"))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
@@ -351,13 +357,7 @@ expect c1 != c3
 					(p-assign (ident "c1"))))
 			(rhs
 				(e-lookup-local
-					(p-assign (ident "c3"))))))
-	(s-nominal-decl
-		(ty-header (name "Color"))
-		(ty-tag-union
-			(ty-tag-name (name "Red"))
-			(ty-tag-name (name "Green"))
-			(ty-tag-name (name "Blue")))))
+					(p-assign (ident "c3")))))))
 ~~~
 # TYPES
 ~~~clojure

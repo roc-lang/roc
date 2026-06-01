@@ -2,7 +2,6 @@
 ~~~ini
 description=Decl-only (no anno) before a matching anno+decl pair, where the decl-only refs the pair
 type=file:Foo.roc
-skip=true
 ~~~
 # SOURCE
 ~~~roc

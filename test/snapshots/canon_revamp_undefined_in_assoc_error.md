@@ -2,7 +2,6 @@
 ~~~ini
 description=Reference to a name that is never declared inside an associated block should produce a not-in-scope error
 type=file:Foo.roc
-skip=true
 ~~~
 # SOURCE
 ~~~roc
@@ -76,8 +75,7 @@ Foo := [Whatever].{
 (can-ir
 	(d-let
 		(p-assign (ident "Foo.callsGhost"))
-		(e-lookup-local
-			(p-assign (ident "ghostName")))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(ty-lookup (name "Foo") (local))))
 	(d-let

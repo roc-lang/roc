@@ -772,57 +772,97 @@ UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:72:8:72:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:73:8:73:26
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:76:5:76:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:78:5:84:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:81:9:83:10
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:86:8:86:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:87:8:87:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:88:8:88:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:91:5:95:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:92:9:94:10
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:97:14:97:24
 TYPE REDECLARED - associated_items_complete_all_patterns.md:101:5:107:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:102:9:104:10
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:106:18:106:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:111:5:117:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:112:9:114:10
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:119:5:119:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:121:8:121:27
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:122:8:122:27
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:123:8:123:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:126:5:136:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:127:9:133:10
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:138:5:138:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:140:8:140:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:143:5:143:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:145:5:155:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:148:9:154:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:151:13:153:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:157:8:157:30
 TYPE REDECLARED - associated_items_complete_all_patterns.md:160:5:170:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:161:9:167:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:162:13:164:14
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:172:5:172:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:174:8:174:24
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:177:5:177:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:179:5:189:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:180:9:186:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:183:13:185:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:191:8:191:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:194:5:201:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:195:9:200:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:196:13:198:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:203:8:203:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:206:5:216:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:207:9:213:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:208:13:210:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:218:8:218:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:221:5:231:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:222:9:228:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:223:13:225:14
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:233:5:233:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:235:8:235:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:238:5:244:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:239:9:243:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:240:13:242:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:246:11:246:17
 TYPE REDECLARED - associated_items_complete_all_patterns.md:250:5:258:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:251:9:255:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:252:13:254:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:257:15:257:24
 TYPE REDECLARED - associated_items_complete_all_patterns.md:262:5:270:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:263:9:269:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:264:13:266:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:268:23:268:33
 TYPE REDECLARED - associated_items_complete_all_patterns.md:274:5:288:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:275:9:285:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:276:13:282:14
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:290:5:290:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:292:8:292:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:295:5:295:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:297:5:311:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:300:9:310:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:303:13:309:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:306:17:308:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:313:8:313:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:316:5:316:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:318:5:332:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:319:9:329:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:322:13:328:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:323:17:325:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:334:8:334:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:337:5:347:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:338:9:346:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:339:13:345:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:340:17:342:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:349:8:349:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:352:5:364:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:353:9:363:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:354:13:360:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:355:17:357:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:366:8:366:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:369:5:383:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:372:9:382:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:375:13:381:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:378:17:380:18
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:385:5:385:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:387:8:387:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:388:8:388:22
@@ -830,11 +870,20 @@ UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:389:8:389:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:390:8:390:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:391:9:391:23
 TYPE REDECLARED - associated_items_complete_all_patterns.md:394:5:402:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:395:9:401:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:396:13:400:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:397:17:399:18
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:404:5:404:8
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:404:11:404:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:409:9:417:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:410:13:414:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:411:17:413:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:416:19:416:28
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
+TYPE REDECLARED - associated_items_complete_all_patterns.md:423:9:431:10
+TYPE REDECLARED - associated_items_complete_all_patterns.md:424:13:430:14
+TYPE REDECLARED - associated_items_complete_all_patterns.md:425:17:427:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:429:23:429:30
 TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
 # PROBLEMS
@@ -4917,6 +4966,26 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:81:9:83:10:**
+```roc
+        L3 := [U].{
+            val3 = val1 + val2
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d3_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -4976,6 +5045,26 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:92:9:94:10:**
+```roc
+        L3 := [X].{
+            l3_private = 999
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `l3_private` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5015,6 +5104,26 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:102:9:104:10:**
+```roc
+        L3 := [AA].{
+            l3_secret = 888
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `l3_secret` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5051,6 +5160,26 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:112:9:114:10:**
+```roc
+        L3 := [AD].{
+            val3 = val2 * 2
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
 ```
 
 
@@ -5137,6 +5266,30 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:127:9:133:10:**
+```roc
+        L3 := [AG].{
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+
+            val3 = 3
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
 **DUPLICATE DEFINITION**
 The name `val1` is being redeclared in this scope.
 
@@ -5216,6 +5369,50 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:148:9:154:10:**
+```roc
+        L3 := [AK].{
+            val3 = val1 + val2
+
+            L4 := [AL].{
+                val4 = val1 + val2 + val3
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:151:13:153:14:**
+```roc
+            L4 := [AL].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d4_all_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5256,6 +5453,50 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:161:9:167:10:**
+```roc
+        L3 := [AO].{
+            L4 := [AP].{
+                val4 = val3 + 1
+            }
+
+            val3 = val2 + 1
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:162:13:164:14:**
+```roc
+            L4 := [AP].{
+                val4 = val3 + 1
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
 ```
 
 
@@ -5338,6 +5579,50 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:180:9:186:10:**
+```roc
+        L3 := [AS].{
+            val3 = val1 + val2
+
+            L4 := [AT].{
+                val4 = val1 + val2 + val3
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:183:13:185:14:**
+```roc
+            L4 := [AT].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d4_interleaved` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5375,6 +5660,49 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:195:9:200:10:**
+```roc
+        L3 := [BC].{
+            L4 := [BD].{
+                val4 = val3 * 3
+            }
+            val3 = 12
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:196:13:198:14:**
+```roc
+            L4 := [BD].{
+                val4 = val3 * 3
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
 ```
 
 
@@ -5421,6 +5749,50 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:207:9:213:10:**
+```roc
+        L3 := [BG].{
+            L4 := [BH].{
+                val4 = val2 + val3
+            }
+
+            val3 = 8
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:208:13:210:14:**
+```roc
+            L4 := [BH].{
+                val4 = val2 + val3
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d4_l2_val_after_l3` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5461,6 +5833,50 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:222:9:228:10:**
+```roc
+        L3 := [BK].{
+            L4 := [BL].{
+                val4 = val1 + 100
+            }
+
+            val3 = val1 + 50
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:223:13:225:14:**
+```roc
+            L4 := [BL].{
+                val4 = val1 + 100
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
 ```
 
 
@@ -5521,6 +5937,48 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:239:9:243:10:**
+```roc
+        L3 := [BO].{
+            L4 := [BP].{
+                l4_val = 444
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:240:13:242:14:**
+```roc
+            L4 := [BP].{
+                l4_val = 444
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `l4_val` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5562,6 +6020,48 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:251:9:255:10:**
+```roc
+        L3 := [BS].{
+            L4 := [BT].{
+                l4_secret = 333
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:252:13:254:14:**
+```roc
+            L4 := [BT].{
+                l4_secret = 333
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `l4_secret` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5600,6 +6100,50 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:263:9:269:10:**
+```roc
+        L3 := [BW].{
+            L4 := [BX].{
+                l4_private = 555
+            }
+
+            attempt = l4_private
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:264:13:266:14:**
+```roc
+            L4 := [BX].{
+                l4_private = 555
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
 ```
 
 
@@ -5647,6 +6191,58 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:275:9:285:10:**
+```roc
+        L3 := [CA].{
+            L4 := [CB].{
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+
+                val4 = 4
+            }
+
+            val3 = 3
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:276:13:282:14:**
+```roc
+            L4 := [CB].{
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+
+                val4 = 4
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
 ```
 
 
@@ -5733,6 +6329,78 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:300:9:310:10:**
+```roc
+        L3 := [CF].{
+            val3 = val1 + val2
+
+            L4 := [CG].{
+                val4 = val1 + val2 + val3
+
+                L5 := [CH].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:303:13:309:14:**
+```roc
+            L4 := [CG].{
+                val4 = val1 + val2 + val3
+
+                L5 := [CH].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:306:17:308:18:**
+```roc
+                L5 := [CH].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d5_all_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5798,6 +6466,78 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:319:9:329:10:**
+```roc
+        L3 := [CK].{
+            val3 = val1 + val2
+
+            L4 := [CL].{
+                L5 := [CM].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+
+                val4 = val1 + val2 + val3
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:322:13:328:14:**
+```roc
+            L4 := [CL].{
+                L5 := [CM].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+
+                val4 = val1 + val2 + val3
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:323:17:325:18:**
+```roc
+                L5 := [CM].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d5_deep_interleave` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5838,6 +6578,76 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:338:9:346:10:**
+```roc
+        L3 := [CP].{
+            L4 := [CQ].{
+                L5 := [CR].{
+                    val5 = val4 * 5
+                }
+
+                val4 = 6
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:339:13:345:14:**
+```roc
+            L4 := [CQ].{
+                L5 := [CR].{
+                    val5 = val4 * 5
+                }
+
+                val4 = 6
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:340:17:342:18:**
+```roc
+                L5 := [CR].{
+                    val5 = val4 * 5
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
 ```
 
 
@@ -5886,6 +6696,78 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:353:9:363:10:**
+```roc
+        L3 := [CU].{
+            L4 := [CV].{
+                L5 := [CW].{
+                    val5 = val3 + val4
+                }
+
+                val4 = 7
+            }
+
+            val3 = 3
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:354:13:360:14:**
+```roc
+            L4 := [CV].{
+                L5 := [CW].{
+                    val5 = val3 + val4
+                }
+
+                val4 = 7
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:355:17:357:18:**
+```roc
+                L5 := [CW].{
+                    val5 = val3 + val4
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d5_l3_val_after_l4` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5930,6 +6812,78 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:372:9:382:10:**
+```roc
+        L3 := [DE].{
+            val3 = val1 + val2
+
+            L4 := [DF].{
+                val4 = val1 + val2 + val3
+
+                L5 := [DG].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:375:13:381:14:**
+```roc
+            L4 := [DF].{
+                val4 = val1 + val2 + val3
+
+                L5 := [DG].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:378:17:380:18:**
+```roc
+                L5 := [DG].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
 ```
 
 
@@ -6036,6 +6990,72 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:395:9:401:10:**
+```roc
+        L3 := [DJ].{
+            L4 := [DK].{
+                L5 := [DL].{
+                    deep_secret = 12345
+                }
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:396:13:400:14:**
+```roc
+            L4 := [DK].{
+                L5 := [DL].{
+                    deep_secret = 12345
+                }
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:397:17:399:18:**
+```roc
+                L5 := [DL].{
+                    deep_secret = 12345
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+
 **DUPLICATE DEFINITION**
 The name `bad` is being redeclared in this scope.
 
@@ -6097,6 +7117,74 @@ But _L2_ was already declared here:
 ```
 
 
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:409:9:417:10:**
+```roc
+        L3 := [DO].{
+            L4 := [DP].{
+                L5 := [DQ].{
+                    l5_secret = 9999
+                }
+            }
+
+            bad = l5_secret
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:410:13:414:14:**
+```roc
+            L4 := [DP].{
+                L5 := [DQ].{
+                    l5_secret = 9999
+                }
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:411:17:413:18:**
+```roc
+                L5 := [DQ].{
+                    l5_secret = 9999
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `l5_secret` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -6137,6 +7225,76 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:423:9:431:10:**
+```roc
+        L3 := [DT].{
+            L4 := [DU].{
+                L5 := [DV].{
+                    l5_only = 8888
+                }
+
+                bad = l5_only
+            }
+        }
+```
+
+But _Test.L2.L3_ was already declared here:
+**associated_items_complete_all_patterns.md:62:9:64:10:**
+```roc
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:424:13:430:14:**
+```roc
+            L4 := [DU].{
+                L5 := [DV].{
+                    l5_only = 8888
+                }
+
+                bad = l5_only
+            }
+```
+
+But _Test.L2.L3.L4_ was already declared here:
+**associated_items_complete_all_patterns.md:128:13:130:14:**
+```roc
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+```
+
+
+**TYPE REDECLARED**
+The type _Test.L2.L3.L4.L5_ is being redeclared.
+
+The redeclaration is here:
+**associated_items_complete_all_patterns.md:425:17:427:18:**
+```roc
+                L5 := [DV].{
+                    l5_only = 8888
+                }
+```
+
+But _Test.L2.L3.L4.L5_ was already declared here:
+**associated_items_complete_all_patterns.md:277:17:279:18:**
+```roc
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
 ```
 
 
@@ -8860,7 +10018,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1294)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1317)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -8951,9 +10109,9 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1427)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1450)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1425)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1448)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val1"))))
@@ -9129,11 +10287,11 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1673)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1696)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1671)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1694)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 1669)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1692)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val1"))))
@@ -9275,7 +10433,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1292)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1315)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))

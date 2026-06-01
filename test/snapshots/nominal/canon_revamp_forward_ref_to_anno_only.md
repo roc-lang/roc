@@ -2,7 +2,6 @@
 ~~~ini
 description=Method forward-references an anno-only sibling within the same associated block
 type=file:Foo.roc
-skip=true
 ~~~
 # SOURCE
 ~~~roc
@@ -82,8 +81,7 @@ Foo := [Whatever].{
 (can-ir
 	(d-let
 		(p-assign (ident "Foo.callMe"))
-		(e-lookup-local
-			(p-assign (ident "absent")))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(ty-lookup (name "Foo") (local))))
 	(d-let

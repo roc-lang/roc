@@ -2187,21 +2187,6 @@ expect {
 		(exposes))
 	(s-import (module "Ba")
 		(exposes))
-	(s-expect
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expect
-		(e-block
-			(s-expr
-				(e-method-eq (negated "false")
-					(lhs
-						(e-runtime-error (tag "ident_not_in_scope")))
-					(rhs
-						(e-num (value "1")))))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(rhs
-					(e-runtime-error (tag "ident_not_in_scope"))))))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2248,7 +2233,22 @@ expect {
 		(ty-header (name "Mayine")
 			(ty-args
 				(ty-rigid-var (name "a"))))
-		(ty-tag-union)))
+		(ty-tag-union))
+	(s-expect
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expect
+		(e-block
+			(s-expr
+				(e-method-eq (negated "false")
+					(lhs
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(rhs
+						(e-num (value "1")))))
+			(e-method-eq (negated "false")
+				(lhs
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(rhs
+					(e-runtime-error (tag "ident_not_in_scope")))))))
 ~~~
 # TYPES
 ~~~clojure
