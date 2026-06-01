@@ -5788,6 +5788,10 @@ fn generateDocs(
     }
 }
 
+test {
+    _ = @import("linker.zig");
+}
+
 test "appendWindowsQuotedArg" {
     const testing = std.testing;
 

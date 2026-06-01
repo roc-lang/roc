@@ -220,6 +220,35 @@ fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, std_io: std.Io, args:
     }
 }
 
+fn isStaticArchive(std_io: std.Io, path: []const u8) LinkError!bool {
+    var file = std.Io.Dir.cwd().openFile(std_io, path, .{ .mode = .read_only }) catch return LinkError.InvalidArguments;
+    defer file.close(std_io);
+
+    var magic: [8]u8 = undefined;
+    const n = file.readPositionalAll(std_io, &magic, 0) catch return LinkError.InvalidArguments;
+    return n == magic.len and
+        (std.mem.eql(u8, magic[0..], "!<arch>\n") or
+            std.mem.eql(u8, magic[0..], "!<thin>\n"));
+}
+
+fn appendPlatformFile(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    platform_file: []const u8,
+    is_macos: bool,
+    is_windows: bool,
+) LinkError!void {
+    if (is_windows) {
+        const whole_arg = std.fmt.allocPrint(ctx.arena, "/wholearchive:{s}", .{platform_file}) catch return LinkError.OutOfMemory;
+        try args.append(whole_arg);
+    } else if (is_macos and try isStaticArchive(ctx.io.std_io, platform_file)) {
+        try args.append("-force_load");
+        try args.append(platform_file);
+    } else {
+        try args.append(platform_file);
+    }
+}
+
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
 /// This is used both by link() and formatLinkCommand().
@@ -494,27 +523,16 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
         try args.append("--whole-archive");
     }
 
-    // Add platform-provided files that come before object files
-    // Use --whole-archive (or -all_load on macOS, /wholearchive on Windows) to include
-    // all members from static libraries. This ensures host-exported functions like
-    // init, handleEvent, update are included even though they're not referenced by
-    // the Roc app's compiled code.
+    // Add platform-provided files that come before object files.
+    // Static platform archives need all members included so host-exported
+    // functions like init, handleEvent, and update are retained.
     if (config.platform_files_pre.len > 0) {
-        if (is_macos) {
-            // macOS uses -all_load to include all members from static libraries
-            try args.append("-all_load");
-        } else if (!is_windows) {
+        if (!is_macos and !is_windows) {
             // ELF targets use --whole-archive
             try args.append("--whole-archive");
         }
         for (config.platform_files_pre) |platform_file| {
-            if (is_windows) {
-                // Windows COFF uses /wholearchive:filename for each file
-                const whole_arg = std.fmt.allocPrint(ctx.arena, "/wholearchive:{s}", .{platform_file}) catch return LinkError.OutOfMemory;
-                try args.append(whole_arg);
-            } else {
-                try args.append(platform_file);
-            }
+            try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
         }
         if (!is_macos and !is_windows) {
             try args.append("--no-whole-archive");
@@ -529,18 +547,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Add platform-provided files that come after object files
     // Also use --whole-archive in case there are static libs here too
     if (config.platform_files_post.len > 0) {
-        if (is_macos) {
-            try args.append("-all_load");
-        } else if (!is_windows) {
+        if (!is_macos and !is_windows) {
             try args.append("--whole-archive");
         }
         for (config.platform_files_post) |platform_file| {
-            if (is_windows) {
-                const whole_arg = std.fmt.allocPrint(ctx.arena, "/wholearchive:{s}", .{platform_file}) catch return LinkError.OutOfMemory;
-                try args.append(whole_arg);
-            } else {
-                try args.append(platform_file);
-            }
+            try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
         }
         if (!is_macos and !is_windows) {
             try args.append("--no-whole-archive");
@@ -640,6 +651,13 @@ fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) !void {
     }
 }
 
+fn findArg(args: []const []const u8, needle: []const u8) ?usize {
+    for (args, 0..) |arg, i| {
+        if (std.mem.eql(u8, arg, needle)) return i;
+    }
+    return null;
+}
+
 /// Format link configuration as a shell command string for manual reproduction.
 /// Useful for debugging linking issues by allowing users to run the linker manually.
 pub fn formatLinkCommand(ctx: *CliCtx, config: LinkConfig) LinkError![]const u8 {
@@ -720,6 +738,77 @@ test "target format detection" {
     switch (detected) {
         .elf, .coff, .macho, .wasm => {},
     }
+}
+
+test "macOS platform archives use scoped force_load" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var archive_file = try tmp.dir.createFile(std.testing.io, "libhost.a", .{});
+    defer archive_file.close(std.testing.io);
+    try archive_file.writeStreamingAll(std.testing.io, "!<arch>\n");
+
+    const archive_path = try tmp.dir.realPathFileAlloc(std.testing.io, "libhost.a", std.testing.allocator);
+    defer std.testing.allocator.free(archive_path);
+
+    var arena_instance = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"libroc_interpreter_shim.a"},
+        .platform_files_pre = &.{archive_path},
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
+    const force_idx = findArg(args.items, "-force_load") orelse return error.MissingForceLoad;
+    try std.testing.expect(force_idx + 1 < args.items.len);
+    try std.testing.expectEqualStrings(archive_path, args.items[force_idx + 1]);
+}
+
+test "macOS non-archive platform files are passed directly" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var object_file = try tmp.dir.createFile(std.testing.io, "host.o", .{});
+    defer object_file.close(std.testing.io);
+    try object_file.writeStreamingAll(std.testing.io, "mach-o!!");
+
+    const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "host.o", std.testing.allocator);
+    defer std.testing.allocator.free(object_path);
+
+    var arena_instance = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"libroc_interpreter_shim.a"},
+        .platform_files_pre = &.{object_path},
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
+    _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
 }
 
 test "link error when LLVM not available" {
