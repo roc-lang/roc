@@ -9,4 +9,3 @@ skip=true
 A : [B]
 B : A
 ~~~
-

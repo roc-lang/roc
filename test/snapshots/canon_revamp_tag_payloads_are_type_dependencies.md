@@ -9,4 +9,3 @@ skip=true
 A : [Tag(B)]
 B : A
 ~~~
-
