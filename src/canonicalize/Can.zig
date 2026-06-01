@@ -4211,7 +4211,7 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
     var public_type_decls: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
     defer public_type_decls.deinit(gpa);
 
-    var public_roots = std.ArrayList(PublicTypeRoot){};
+    var public_roots = std.ArrayList(PublicTypeRoot).empty;
     defer public_roots.deinit(gpa);
 
     var exposed_type_iter = self.exposed_types.iterator();
@@ -4349,7 +4349,7 @@ fn checkPublicNominalTypeSurface(
 ) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
-    var stack = std.ArrayList(TypeSurfaceFrame){};
+    var stack = std.ArrayList(TypeSurfaceFrame).empty;
     defer stack.deinit(gpa);
     try stack.append(gpa, .{
         .anno = root_anno,
