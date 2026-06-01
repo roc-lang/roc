@@ -4378,6 +4378,12 @@ pub const Interpreter = struct {
             .num_shift_right_by => self.numShiftOp(args[0], args[1], ll.ret_layout, arg_layout, .shr),
             .num_shift_right_zf_by => self.numShiftOp(args[0], args[1], ll.ret_layout, arg_layout, .shr_zf),
 
+            // ── Bitwise logical ──
+            .num_bitwise_and => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .@"and"),
+            .num_bitwise_or => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .@"or"),
+            .num_bitwise_xor => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .xor),
+            .num_bitwise_not => self.numBitwiseOp(args[0], args[0], ll.ret_layout, arg_layout, .not),
+
             // ── Comparison ──
             .num_is_eq => self.numCmpOp(args[0], args[1], arg_layout, .eq),
             .num_is_lt => self.numCmpOp(args[0], args[1], arg_layout, .lt),
@@ -4812,6 +4818,7 @@ pub const Interpreter = struct {
     const NumOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
     const CmpOp = enum { eq, lt, lte, gt, gte };
     const ShiftOp = enum { shl, shr, shr_zf };
+    const BitwiseOp = enum { @"and", @"or", xor, not };
     const NumericOperandKind = union(enum) {
         unsigned_int: u16,
         signed_int: u16,
@@ -5113,6 +5120,33 @@ pub const Interpreter = struct {
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: shift used non-integer layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
+        return val;
+    }
+
+    fn numBitwiseOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: BitwiseOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => val.write(u8, bitwiseOp(u8, a.read(u8), b.read(u8), op)),
+                16 => val.write(u16, bitwiseOp(u16, a.read(u16), b.read(u16), op)),
+                32 => val.write(u32, bitwiseOp(u32, a.read(u32), b.read(u32), op)),
+                64 => val.write(u64, bitwiseOp(u64, a.read(u64), b.read(u64), op)),
+                128 => val.write(u128, bitwiseOp(u128, a.read(u128), b.read(u128), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer bitwise width {d}", .{bits}),
+            },
+            .signed_int => |bits| switch (bits) {
+                8 => val.write(i8, bitwiseOp(i8, a.read(i8), b.read(i8), op)),
+                16 => val.write(i16, bitwiseOp(i16, a.read(i16), b.read(i16), op)),
+                32 => val.write(i32, bitwiseOp(i32, a.read(i32), b.read(i32), op)),
+                64 => val.write(i64, bitwiseOp(i64, a.read(i64), b.read(i64), op)),
+                128 => val.write(i128, bitwiseOp(i128, a.read(i128), b.read(i128), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer bitwise width {d}", .{bits}),
+            },
+            .float, .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: bitwise used non-integer layout {d}",
                 .{@intFromEnum(arg_layout)},
             ),
         }
@@ -6275,6 +6309,15 @@ pub const Interpreter = struct {
                 const U = std.meta.Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
+        };
+    }
+
+    fn bitwiseOp(comptime T: type, av: T, bv: T, op: BitwiseOp) T {
+        return switch (op) {
+            .@"and" => av & bv,
+            .@"or" => av | bv,
+            .xor => av ^ bv,
+            .not => ~av,
         };
     }
 

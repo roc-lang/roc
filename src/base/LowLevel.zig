@@ -103,6 +103,12 @@ pub const LowLevel = enum {
     num_shift_right_by,
     num_shift_right_zf_by,
 
+    // Bitwise logical operations
+    num_bitwise_and,
+    num_bitwise_or,
+    num_bitwise_xor,
+    num_bitwise_not,
+
     // Numeric parsing operations
     num_from_numeral,
     u8_from_str,
@@ -602,6 +608,10 @@ pub const LowLevel = enum {
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
+            .num_bitwise_and,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
             .num_from_numeral,
             .u8_from_str,
             .i8_from_str,
