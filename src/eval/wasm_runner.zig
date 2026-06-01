@@ -1566,10 +1566,9 @@ fn hostMuloti4(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
     const overflow_ptr: usize = @intCast(params[5].I32);
     const a: i128 = @bitCast(@as(u128, a_hi) << 64 | @as(u128, a_lo));
     const b: i128 = @bitCast(@as(u128, b_hi) << 64 | @as(u128, b_lo));
-    // Widening multiply detects overflow.
-    const result = i128h.mul_i128(a, b);
-    // Overflow if result / b != a (when b != 0).
-    const overflow: i32 = if (b != 0 and @divTrunc(result, b) != a) 1 else 0;
+    var overflow_c: c_int = 0;
+    const result = i128h.mulWithOverflow_i128(a, b, &overflow_c);
+    const overflow: i32 = @intCast(overflow_c);
     const result_u128: u128 = @bitCast(result);
     writeIntLittle(u64, buffer, result_ptr, @truncate(result_u128));
     writeIntLittle(u64, buffer, result_ptr + 8, @truncate(result_u128 >> 64));
