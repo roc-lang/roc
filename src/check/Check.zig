@@ -117,6 +117,29 @@ expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 current_expect_region: ?Region,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Local block-statement (`s_decl`) function patterns whose body is currently
+/// being type-checked. Used to detect self-recursion (and references to an
+/// enclosing in-flight def) of LOCAL function defs so their recursive references
+/// defer unification (fresh flex + a pending `local_recursive_refs` entry)
+/// instead of lowering the pattern var's rank, which would prevent
+/// generalization of the def's rigid type variables. Analogous to
+/// `top_level_ptrns` but for block-local defs.
+///
+/// Presence == "currently being checked" (defer); absence == normal
+/// lookup/instantiate. A reference can only resolve to the current def or an
+/// enclosing in-flight one: forward references to a *later* sibling, and local
+/// mutual recursion, are rejected during canonicalization (local defs are
+/// sequentially scoped), so this is always a single self/enclosing chain.
+local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
+/// Recursive references recorded while checking a LOCAL block def's body (a
+/// self-reference, or a reference to an enclosing in-flight local def), pending
+/// validation once the def's lambda has generalized. Kept in a dedicated stack
+/// rather than the shared `constraints` list because sequential scoping
+/// guarantees local recursion is a single self/enclosing chain — never a mutual
+/// group — so these need no cycle machinery, no per-use instantiation, and no
+/// entanglement with the other constraint kinds (notably early-return / `?`
+/// constraints, which `processReturnConstraints` compacts mid-body).
+local_recursive_refs: std.ArrayListUnmanaged(LocalRecursiveRef) = .empty,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
@@ -197,6 +220,23 @@ const InstantiationDispatcher = struct {
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
+
+/// A local block-statement (`s_decl`) function def whose body is currently being
+/// checked. Block defs are `s_decl` statements (not `CIR.Def`), so there is no
+/// `Def.Idx` — only the name (for error context) and pattern are tracked.
+const LocalDefProcessed = struct {
+    def_name: ?Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
+/// A recursive reference made inside a LOCAL block def's body, pending
+/// validation once the def's lambda has generalized. `pat_var` is the def's
+/// (eventually generalized) pattern var; `expr_var` is the reference's flex var.
+const LocalRecursiveRef = struct {
+    pat_var: Var,
+    expr_var: Var,
+    def_name: ?Ident.Idx,
+};
 
 /// A deferred def-level unification (def_var = ptrn_var = expr_var).
 const DeferredDefUnification = struct {
@@ -477,6 +517,8 @@ pub fn deinit(self: *Self) void {
     self.constraint_expr_by_fn_var.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
+    self.local_processing_ptrns.deinit(self.gpa);
+    self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
     self.instantiation_dispatchers.deinit(self.gpa);
@@ -5352,6 +5394,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             }
 
+            // Local block-def recursion. If this lookup targets a local `s_decl`
+            // function whose body is currently being checked, it's a recursive
+            // reference (to the def itself, or to an enclosing in-flight def).
+            // Defer unification — fresh flex now + a pending `local_recursive_refs`
+            // entry validated after the def generalizes — so we don't unify with
+            // the not-yet-generalized pattern var, which would lower its rank and
+            // prevent generalization of the def's rigid type parameters.
+            //
+            // A reference to an already-finished sibling local def is NOT in this
+            // map (removed after it generalizes), so it falls through to the tail
+            // below and instantiates normally.
+            if (self.local_processing_ptrns.get(lookup.pattern_idx)) |local_def| {
+                // The pattern is mid-check, so it must not be generalized yet.
+                std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                // Set the expr to be a flex
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                // Record for validation once the def's lambda has generalized.
+                // A dedicated stack, not the shared constraints list (sequential
+                // scoping makes this a single self/enclosing chain — see the
+                // `local_recursive_refs` field doc).
+                try self.local_recursive_refs.append(self.gpa, .{
+                    .pat_var = pat_var,
+                    .expr_var = expr_var,
+                    .def_name = local_def.def_name,
+                });
+
+                break :blk;
+            }
+
             // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized) {
@@ -6549,6 +6622,22 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
+                // Register function defs as "currently processing" so recursive
+                // references in their own body defer unification (see the local
+                // recursion branch in `e_lookup_local`). Only function defs can
+                // legitimately be self-recursive; value defs (`x = x`) keep their
+                // existing diagnostics. Snapshot the pending-recursive-ref stack
+                // so we only validate the references recorded while checking THIS
+                // def's body.
+                const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
+                const local_recursive_refs_top = self.local_recursive_refs.items.len;
+                if (decl_is_fn) {
+                    try self.local_processing_ptrns.put(self.gpa, decl_stmt.pattern, .{
+                        .def_name = self.getPatternIdent(decl_stmt.pattern),
+                        .pattern_idx = decl_stmt.pattern,
+                    });
+                }
+
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -6556,6 +6645,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
+
+                if (decl_is_fn) {
+                    // The def's lambda has generalized (inside checkExpr) and the
+                    // pattern var now carries the generalized function type, so it
+                    // is safe to validate the recursive references it recorded.
+                    try self.validateLocalRecursiveRefs(env, local_recursive_refs_top);
+                    _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
+                }
             },
             .s_var => |var_stmt| {
                 // Check the pattern
@@ -8705,6 +8802,24 @@ fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
     }
     std.debug.assert(self.constraints.items.items.len == original_len);
     self.constraints.items.shrinkRetainingCapacity(write_idx);
+}
+
+/// Validate the recursive references recorded while checking a LOCAL block def's
+/// body (those at index >= `from`), now that the def's lambda has generalized
+/// and its pattern var carries the generalized type. Sequential scoping forbids
+/// local mutual recursion, so every such reference is a self/enclosing one and a
+/// plain unification suffices (no per-use instantiation). The validated refs are
+/// then popped.
+fn validateLocalRecursiveRefs(self: *Self, env: *Env, from: usize) std.mem.Allocator.Error!void {
+    // Capture the end up front: validation only unifies, it never records new
+    // local recursive refs, so the range is stable.
+    const end = self.local_recursive_refs.items.len;
+    var i = from;
+    while (i < end) : (i += 1) {
+        const ref = self.local_recursive_refs.items[i];
+        _ = try self.unifyInContext(ref.pat_var, ref.expr_var, env, .{ .recursive_def = .{ .def_name = ref.def_name } });
+    }
+    self.local_recursive_refs.shrinkRetainingCapacity(from);
 }
 
 /// Check any accumulated constraints
