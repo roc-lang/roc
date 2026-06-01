@@ -69,9 +69,20 @@ const TypeDeclVisitState = enum {
     done,
 };
 
-const ActiveDeclScope = struct {
+const ActiveDeclBinding = struct {
     parser_scope: AST.DeclIndex.ScopeIdx,
     canonical_scope: usize,
+};
+
+const ActiveDeclScope = struct {
+    binding: ActiveDeclBinding,
+    value_entry_start: usize,
+};
+
+const ActiveDeclValueEntry = struct {
+    ident: Ident.Idx,
+    binding: ActiveDeclBinding,
+    previous: ?usize,
 };
 
 allocators: *base.Allocators,
@@ -87,6 +98,10 @@ in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .{},
 /// Parser declaration scopes corresponding to the active canonical scopes.
 decl_scope_stack: std.ArrayListUnmanaged(ActiveDeclScope) = .{},
+/// Top active declaration owner for each non-block value name.
+active_decl_values: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
+/// Change log backing active_decl_values so scope exit restores shadowed names.
+active_decl_value_entries: std.ArrayListUnmanaged(ActiveDeclValueEntry) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
 /// Set of identifiers exposed from this module header (values not used)
@@ -347,6 +362,8 @@ pub fn deinit(
 
     self.scopes.deinit(gpa);
     self.decl_scope_stack.deinit(gpa);
+    self.active_decl_values.deinit(gpa);
+    self.active_decl_value_entries.deinit(gpa);
     self.function_regions.deinit();
 
     self.var_function_regions.deinit(gpa);
@@ -841,27 +858,50 @@ fn prepareBlockFunctionScope(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std
 }
 
 fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Allocator.Error!void {
-    try self.decl_scope_stack.append(self.env.gpa, .{
+    const decl_index = &self.parse_ir.decl_index;
+    const parser_scope = decl_index.scopes.items[@intFromEnum(scope_idx)];
+    const active_binding = ActiveDeclBinding{
         .parser_scope = scope_idx,
         .canonical_scope = self.currentScopeIdx(),
+    };
+    const value_entry_start = self.active_decl_value_entries.items.len;
+
+    if (parser_scope.kind != .block) {
+        var iter = parser_scope.value_decls.iterator();
+        while (iter.next()) |entry| {
+            const ident = entry.key_ptr.*;
+            const previous = self.active_decl_values.get(ident);
+            const value_entry_idx = self.active_decl_value_entries.items.len;
+            try self.active_decl_value_entries.append(self.env.gpa, .{
+                .ident = ident,
+                .binding = active_binding,
+                .previous = previous,
+            });
+            try self.active_decl_values.put(self.env.gpa, ident, value_entry_idx);
+        }
+    }
+
+    try self.decl_scope_stack.append(self.env.gpa, .{
+        .binding = active_binding,
+        .value_entry_start = value_entry_start,
     });
 }
 
 fn declScopeExit(self: *Self) void {
-    _ = self.decl_scope_stack.pop();
+    const active_scope = self.decl_scope_stack.pop().?;
+    while (self.active_decl_value_entries.items.len > active_scope.value_entry_start) {
+        const entry = self.active_decl_value_entries.pop().?;
+        if (entry.previous) |previous| {
+            self.active_decl_values.getPtr(entry.ident).?.* = previous;
+        } else {
+            _ = self.active_decl_values.remove(entry.ident);
+        }
+    }
 }
 
-fn activeDeclScopeDeclaresValue(self: *Self, ident: Ident.Idx) ?ActiveDeclScope {
-    const decl_index = &self.parse_ir.decl_index;
-    var i = self.decl_scope_stack.items.len;
-    while (i > 0) {
-        i -= 1;
-        const active_scope = self.decl_scope_stack.items[i];
-        const parser_scope = decl_index.scopes.items[@intFromEnum(active_scope.parser_scope)];
-        if (parser_scope.kind == .block) continue;
-        if (decl_index.scopeDeclaresValue(active_scope.parser_scope, ident)) return active_scope;
-    }
-    return null;
+fn activeDeclScopeDeclaresValue(self: *Self, ident: Ident.Idx) ?ActiveDeclBinding {
+    const entry_idx = self.active_decl_values.get(ident) orelse return null;
+    return self.active_decl_value_entries.items[entry_idx].binding;
 }
 
 fn publishTypeDeclStatements(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Allocator.Error!void {
