@@ -224,8 +224,16 @@ pub const StaticDispatch = union(enum) {
 /// where `poly` returns a free variable. Unresolved type variables have no
 /// methods, so the dispatch is genuinely ambiguous.
 pub const UnresolvedDispatcher = struct {
-    /// Region of the offending dispatch call expression (the underline target).
+    /// Region of the offending dispatch call expression (the primary underline
+    /// target).
     region: base.Region,
+    /// Optional secondary region (the call/argument that left the receiver's type
+    /// undetermined) for the per-instantiation, helper-hidden case. When non-null
+    /// and distinct from `region`, the renderer shows a connecting note and a
+    /// second source region (mirroring `buildNumberUsedAsNonNumber`). When null —
+    /// or equal to `region`, i.e. the dispatch IS the call site — only the primary
+    /// region is shown, so the direct cases render identically to before.
+    secondary_region: ?base.Region,
     /// Snapshot of the dispatcher (receiver) type for rendering.
     dispatcher_snapshot: SnapshotContentIdx,
     /// The dispatch method's name (e.g. `to_i128` for a method call, or `is_eq` /

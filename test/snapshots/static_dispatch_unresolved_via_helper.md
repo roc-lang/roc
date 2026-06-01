@@ -14,10 +14,17 @@ ambiguous = conv(poly())
 ok = conv(5.U8)
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:18:5:24
+MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
 **MISSING METHOD**
 This is trying to dispatch a method named `to_i128` on an unresolved type variable, but unresolved type variables have no methods.
+**static_dispatch_unresolved_via_helper.md:5:13:5:25:**
+```roc
+ambiguous = conv(poly())
+```
+            ^^^^^^^^^^^^
+
+The type was left undetermined by this call:
 **static_dispatch_unresolved_via_helper.md:5:18:5:24:**
 ```roc
 ambiguous = conv(poly())
@@ -102,10 +109,7 @@ ok = conv(5.U8)
 				(e-crash (msg "x")))))
 	(d-let
 		(p-assign (ident "ambiguous"))
-		(e-call (constraint-fn-var 37)
-			(e-lookup-local
-				(p-assign (ident "conv")))
-			(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "ok"))
 		(e-call (constraint-fn-var 74)

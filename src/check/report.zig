@@ -2032,7 +2032,8 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        // Add source region highlighting on the offending dispatch call.
+        // Add source region highlighting on the offending dispatch call (the
+        // primary region).
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
             region_info,
@@ -2042,6 +2043,32 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
+
+        // When the dispatch is hidden inside a helper, the call site (primary
+        // region) and the argument that left the receiver's type undetermined
+        // (secondary region) differ. In that case, show the argument too, with a
+        // connecting note. When they coincide — the dispatch IS the call site, as
+        // in the direct cases — omit the secondary so the rendering is unchanged.
+        if (data.secondary_region) |secondary| {
+            if (secondary.start.offset != data.region.start.offset or
+                secondary.end.offset != data.region.end.offset)
+            {
+                try D.renderSlice(&.{
+                    D.bytes("The type was left undetermined by this call:"),
+                }, self, &report);
+                try report.document.addLineBreak();
+
+                const secondary_info = self.module_env.calcRegionInfo(secondary);
+                try report.document.addSourceRegion(
+                    secondary_info,
+                    .error_highlight,
+                    self.filename,
+                    self.source,
+                    self.module_env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+            }
+        }
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
