@@ -1864,6 +1864,22 @@ fn registerAssocPatternQualifiers(
     }
 }
 
+fn putIdentInScopeAndAncestors(
+    self: *Self,
+    start_scope_idx: usize,
+    ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    std.debug.assert(start_scope_idx < self.scopes.items.len);
+
+    var scope_idx = start_scope_idx;
+    while (true) {
+        try self.scopes.items[scope_idx].idents.put(self.env.gpa, ident, pattern_idx);
+        if (scope_idx == 0) break;
+        scope_idx -= 1;
+    }
+}
+
 fn publishAssociatedPatternVisibility(
     self: *Self,
     relative_name_idx: ?Ident.Idx,
@@ -1878,22 +1894,15 @@ fn publishAssociatedPatternVisibility(
         try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
     }
 
-    var scope_idx = self.scopes.items.len;
-    while (scope_idx > 0) {
-        scope_idx -= 1;
-        try self.scopes.items[scope_idx].idents.put(self.env.gpa, type_qualified_ident, pattern_idx);
-    }
+    const associated_scope_idx = self.currentScopeIdx();
+    try self.putIdentInScopeAndAncestors(associated_scope_idx, type_qualified_ident, pattern_idx);
 
-    if (self.scopes.items.len > 0) {
-        const bare_type_qualified = try self.insertQualifiedIdent(
-            self.env.getIdent(type_name),
-            self.env.getIdent(decl_ident),
-        );
-        var bare_scope_idx = self.scopes.items.len;
-        while (bare_scope_idx > 0) {
-            bare_scope_idx -= 1;
-            try self.scopes.items[bare_scope_idx].idents.put(self.env.gpa, bare_type_qualified, pattern_idx);
-        }
+    const bare_type_qualified = try self.insertQualifiedIdent(
+        self.env.getIdent(type_name),
+        self.env.getIdent(decl_ident),
+    );
+    if (!bare_type_qualified.eql(type_qualified_ident)) {
+        try self.putIdentInScopeAndAncestors(associated_scope_idx, bare_type_qualified, pattern_idx);
     }
 }
 
@@ -2285,24 +2294,8 @@ fn canonicalizeAssociatedItems(
                                         break :blk2 try self.insertQualifiedIdent(type_text, decl_text);
                                     };
 
-                                    // Find the scope where the parent type is defined (linear search backward)
-                                    var type_home_scope_idx: usize = 0; // Default to module scope if not found
-                                    var search_idx = self.scopes.items.len;
-                                    while (search_idx > 0) {
-                                        search_idx -= 1;
-                                        if (self.scopes.items[search_idx].idents.get(type_name)) |_| {
-                                            type_home_scope_idx = search_idx;
-                                            break;
-                                        }
-                                    }
-
                                     // Add type-qualified name to the type's home scope and all ancestors
-                                    var scope_idx = type_home_scope_idx;
-                                    while (true) {
-                                        try self.scopes.items[scope_idx].idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                                        if (scope_idx == 0) break;
-                                        scope_idx -= 1;
-                                    }
+                                    try self.putIdentInScopeAndAncestors(self.currentScopeIdx(), type_qualified_ident_idx, pattern_idx);
 
                                     break :blk true; // Found and processed matching decl
                                 }
@@ -2381,16 +2374,7 @@ fn canonicalizeAssociatedItems(
                         break :blk_atq try self.insertQualifiedIdent(type_text_now, name_text_now);
                     };
 
-                    var anno_search_idx = self.scopes.items.len;
-                    var anno_type_home_scope_idx: usize = 0;
-                    while (anno_search_idx > 0) {
-                        anno_search_idx -= 1;
-                        if (self.scopes.items[anno_search_idx].idents.get(type_name)) |_| {
-                            anno_type_home_scope_idx = anno_search_idx;
-                            break;
-                        }
-                    }
-                    var anno_scope_idx = anno_type_home_scope_idx;
+                    var anno_scope_idx = self.currentScopeIdx();
                     while (true) {
                         const anno_scope_ptr = &self.scopes.items[anno_scope_idx];
                         // Pick up any forward-reference placeholder for the
@@ -2468,7 +2452,7 @@ fn canonicalizeAssociatedItems(
                             try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
                         }
 
-                        // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
+                        // Add type-qualified name (e.g., "Foo.bar") to the associated scope and all ancestor scopes
                         const type_qualified_ident_idx = if (parent_name.eql(type_name))
                             qualified_idx
                         else blk2: {
@@ -2476,24 +2460,8 @@ fn canonicalizeAssociatedItems(
                             break :blk2 try self.insertQualifiedIdent(type_text, decl_text);
                         };
 
-                        // Find the scope where the parent type is defined (linear search backward)
-                        var type_home_scope_idx: usize = 0; // Default to module scope if not found
-                        var search_idx = self.scopes.items.len;
-                        while (search_idx > 0) {
-                            search_idx -= 1;
-                            if (self.scopes.items[search_idx].idents.get(type_name)) |_| {
-                                type_home_scope_idx = search_idx;
-                                break;
-                            }
-                        }
-
-                        // Add type-qualified name to the type's home scope and all ancestors
-                        var scope_idx = type_home_scope_idx;
-                        while (true) {
-                            try self.scopes.items[scope_idx].idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
-                            if (scope_idx == 0) break;
-                            scope_idx -= 1;
-                        }
+                        // Add type-qualified name to the associated scope and all ancestors
+                        try self.putIdentInScopeAndAncestors(self.currentScopeIdx(), type_qualified_ident_idx, pattern_idx);
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
