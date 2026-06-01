@@ -1,7 +1,7 @@
 //! Parallel eval test runner.
 //!
 //! Runs eval tests in parallel using a fork-based process pool, exercising
-//! every backend on every test case and comparing their results via
+//! every enabled backend on every test case and comparing their results via
 //! Str.inspect string comparison.
 //!
 //! ## Architecture overview
@@ -12,7 +12,8 @@
 //!   1. **Interpreter** — walks the LIR directly.
 //!   2. **Dev backend** — lowers LIR to native machine code.
 //!   3. **WASM backend** — statement-only LIR compiled to wasm.
-//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode.
+//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode when
+//!      the runner is invoked with `--llvm`.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
 //! This catches bugs where a backend produces a value of the right type but
@@ -48,7 +49,7 @@
 //!
 //! ## Usage
 //!
-//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--timeout <ms>] [--verbose]]
+//!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--timeout <ms>] [--verbose] [--llvm]]
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -76,6 +77,14 @@ const helpers = eval.test_helpers;
 const LoweredProgram = helpers.LoweredProgram;
 
 const posix = std.posix;
+
+/// Process-wide `std.Io` initialized from `main(init)` and consumed by helpers
+/// that don't get an `io` parameter (e.g. pool worker callbacks).
+var app_io: std.Io = undefined;
+
+fn milliTimestamp() i64 {
+    return std.Io.Timestamp.now(app_io, .awake).toMilliseconds();
+}
 
 // Test definition modules
 const eval_tests = @import("eval_tests.zig");
@@ -149,6 +158,9 @@ const LLVM_BACKEND_INDEX = 3;
 /// finish while the other backends keep the normal eval timeout.
 const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
 const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
+const FORKED_BACKEND_KILL_GRACE_MS: i64 = 5_000;
+const FORKED_BACKEND_KILL_POLL_NS: u64 = 10 * std.time.ns_per_ms;
+const LLVM_EVAL_LOCK_POLL_NS: u64 = 10 * std.time.ns_per_ms;
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 const WASM_BACKEND_IMPLEMENTED = true;
 const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
@@ -156,6 +168,15 @@ const LLVM_BACKEND_IMPLEMENTED = eval.backendAvailable(.llvm);
 /// Set from `cli.verbose` in `main` after arg parsing. Read by `onTestStarted`,
 /// which is registered as a comptime Pool callback and can't take a closure.
 var verbose_logging: bool = false;
+
+/// Set from `main` to the selected process-pool size before any worker runs.
+/// POSIX child workers inherit this value through fork; Windows worker
+/// processes recompute it from the same CLI args before entering worker mode.
+var llvm_eval_slot_count: usize = 1;
+
+/// Set from CLI parsing. LLVM eval is opt-in because it dominates eval test
+/// runtime; CI runs a dedicated LLVM-enabled lane for backend coverage.
+var include_llvm_backend: bool = false;
 
 const TestOutcome = struct {
     status: Status,
@@ -240,7 +261,7 @@ const ForkResult = union(enum) {
 
 fn remainingPollTimeoutMs(deadline_ms: ?i64) i32 {
     const deadline = deadline_ms orelse return -1;
-    const remaining = deadline - std.time.milliTimestamp();
+    const remaining = deadline - milliTimestamp();
     if (remaining <= 0) return 0;
     return @intCast(@min(remaining, std.math.maxInt(i32)));
 }
@@ -249,6 +270,21 @@ fn killForkedBackend(pid: posix.pid_t) void {
     posix.kill(-pid, posix.SIG.KILL) catch {
         posix.kill(pid, posix.SIG.KILL) catch {};
     };
+}
+
+fn reapForkedBackendAfterKill(pid: posix.pid_t) bool {
+    const deadline_ms = milliTimestamp() + FORKED_BACKEND_KILL_GRACE_MS;
+    while (true) {
+        const wait_result = harness.waitpid(pid, posix.W.NOHANG);
+        if (wait_result.pid == pid) return true;
+        if (milliTimestamp() >= deadline_ms) return false;
+        std.Io.sleep(app_io, std.Io.Duration.fromNanoseconds(FORKED_BACKEND_KILL_POLL_NS), .awake) catch {};
+    }
+}
+
+fn killAndReapForkedBackend(pid: posix.pid_t) void {
+    killForkedBackend(pid);
+    _ = reapForkedBackendAfterKill(pid);
 }
 
 fn drainClosedPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) bool {
@@ -282,6 +318,7 @@ fn forkAndEval(
     eval_fn: BackendEvalFn,
     lowered: *const LoweredProgram,
     timeout_ms: u64,
+    inherited_fd_to_close: ?posix.fd_t,
 ) ForkResult {
     if (comptime !has_fork or coverage_mode) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
@@ -290,8 +327,8 @@ fn forkAndEval(
         return .{ .success = result };
     }
 
-    const disable_fork =
-        (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_NO_FORK") catch null) != null;
+    // std.process.getEnvVarOwned was removed in Zig 0.16; use std.c.getenv instead.
+    const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
     if (disable_fork) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
@@ -299,21 +336,22 @@ fn forkAndEval(
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch {
+    const pipe_fds = harness.pipe() catch {
         return .{ .fork_failed = {} };
     };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
         // === Child process ===
-        posix.close(pipe_read);
+        harness.closeFd(pipe_read);
+        if (inherited_fd_to_close) |fd| harness.closeFd(fd);
         _ = std.c.setsid();
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
@@ -324,29 +362,20 @@ fn forkAndEval(
             // Write error name to pipe so parent can report it, then exit 2
             // to distinguish "error with name" from other failures.
             const name = @errorName(err);
-            var w: usize = 0;
-            while (w < name.len) {
-                w += posix.write(pipe_write, name[w..]) catch break;
-            }
-            posix.close(pipe_write);
+            harness.writeAll(pipe_write, name);
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
         // Write the result string to the pipe.
-        var written: usize = 0;
-        while (written < result_str.len) {
-            written += posix.write(pipe_write, result_str[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
+        harness.writeAll(pipe_write, result_str);
 
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
     // === Parent process ===
-    posix.close(pipe_write);
-    defer posix.close(pipe_read);
+    harness.closeFd(pipe_write);
+    defer harness.closeFd(pipe_read);
 
     // Read pipe FIRST (before waitpid) to avoid deadlock when child output
     // exceeds the pipe buffer (~64KB). Use poll() so a hung backend child is
@@ -355,7 +384,7 @@ fn forkAndEval(
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
     const deadline_ms: ?i64 = if (timeout_ms > 0)
-        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
+        milliTimestamp() + @as(i64, @intCast(timeout_ms))
     else
         null;
     while (true) {
@@ -366,8 +395,7 @@ fn forkAndEval(
         }};
         const poll_timeout = remainingPollTimeoutMs(deadline_ms);
         if (poll_timeout == 0) {
-            killForkedBackend(fork_result);
-            _ = posix.waitpid(fork_result, 0);
+            killAndReapForkedBackend(fork_result);
             result_buf.deinit(std.heap.page_allocator);
             return .{ .timed_out = {} };
         }
@@ -377,8 +405,7 @@ fn forkAndEval(
             break;
         };
         if (poll_count == 0) {
-            killForkedBackend(fork_result);
-            _ = posix.waitpid(fork_result, 0);
+            killAndReapForkedBackend(fork_result);
             result_buf.deinit(std.heap.page_allocator);
             return .{ .timed_out = {} };
         }
@@ -406,14 +433,13 @@ fn forkAndEval(
     }
 
     if (read_error) {
-        killForkedBackend(fork_result);
-        _ = posix.waitpid(fork_result, 0);
+        killAndReapForkedBackend(fork_result);
         result_buf.deinit(std.heap.page_allocator);
         return .{ .child_error = "ChildExecFailed" };
     }
 
     // Now reap the child.
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
 
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
@@ -445,6 +471,91 @@ fn forkAndEval(
     return .{ .success = owned };
 }
 
+const LlvmEvalPermit = struct {
+    file: std.Io.File,
+
+    fn acquire() !LlvmEvalPermit {
+        var queue_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const queue_path = try llvmEvalQueueLockPath(&queue_path_buf);
+        var queue_file = try openLlvmEvalLockFile(queue_path);
+        defer queue_file.close(app_io);
+        try queue_file.lock(app_io, .exclusive);
+        defer queue_file.unlock(app_io);
+
+        while (true) {
+            if (try acquireLlvmEvalSlot()) |permit| {
+                return permit;
+            }
+
+            try std.Io.sleep(app_io, std.Io.Duration.fromNanoseconds(LLVM_EVAL_LOCK_POLL_NS), .awake);
+        }
+    }
+
+    fn release(self: *LlvmEvalPermit) void {
+        self.file.unlock(app_io);
+        self.file.close(app_io);
+    }
+};
+
+fn acquireLlvmEvalSlot() !?LlvmEvalPermit {
+    for (0..llvm_eval_slot_count) |slot| {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = try llvmEvalSlotLockPath(&path_buf, slot);
+        var file = try openLlvmEvalLockFile(path);
+        errdefer file.close(app_io);
+
+        if (try file.tryLock(app_io, .exclusive)) {
+            return .{ .file = file };
+        }
+
+        file.close(app_io);
+    }
+
+    return null;
+}
+
+fn openLlvmEvalLockFile(path: []const u8) !std.Io.File {
+    return std.Io.Dir.createFileAbsolute(app_io, path, .{
+        .read = true,
+        .truncate = false,
+    });
+}
+
+fn llvmEvalLockPrefix() []const u8 {
+    return if (builtin.os.tag == .windows)
+        "C:\\Windows\\Temp\\roc_eval_llvm_"
+    else
+        "/tmp/roc_eval_llvm_";
+}
+
+fn llvmEvalSlotLockPath(buf: *[std.fs.max_path_bytes]u8, slot: usize) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{s}slot_{d}.lock", .{ llvmEvalLockPrefix(), slot });
+}
+
+fn llvmEvalQueueLockPath(buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{s}queue.lock", .{llvmEvalLockPrefix()});
+}
+
+fn llvmEvalInheritedFd(permit: *const LlvmEvalPermit) ?posix.fd_t {
+    if (comptime !has_fork) return null;
+    return permit.file.handle;
+}
+
+fn runBackendEval(
+    index: usize,
+    eval_fn: BackendEvalFn,
+    lowered: *const LoweredProgram,
+    timeout_ms: u64,
+) !ForkResult {
+    if (index == LLVM_BACKEND_INDEX) {
+        var permit = try LlvmEvalPermit.acquire();
+        defer permit.release();
+        return forkAndEval(eval_fn, lowered, timeout_ms, llvmEvalInheritedFd(&permit));
+    }
+
+    return forkAndEval(eval_fn, lowered, timeout_ms, null);
+}
+
 fn forkAndEvalWithStats(
     eval_fn: BackendEvalWithStatsFn,
     lowered: *const LoweredProgram,
@@ -456,8 +567,7 @@ fn forkAndEvalWithStats(
         return .{ .success = result };
     }
 
-    const disable_fork =
-        (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_NO_FORK") catch null) != null;
+    const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
     if (disable_fork) {
         const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
@@ -465,54 +575,38 @@ fn forkAndEvalWithStats(
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch {
+    const pipe_fds = harness.pipe() catch {
         return .{ .fork_failed = {} };
     };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
-        posix.close(pipe_read);
+        harness.closeFd(pipe_read);
 
         var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
         const result = eval_fn(child_alloc, lowered) catch |err| {
-            const name = @errorName(err);
-            var w: usize = 0;
-            while (w < name.len) {
-                w += posix.write(pipe_write, name[w..]) catch break;
-            }
-            posix.close(pipe_write);
+            harness.writeAll(pipe_write, @errorName(err));
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
 
         const header: [4]u8 = @bitCast(result.allocation_count);
-        var written: usize = 0;
-        while (written < header.len) {
-            written += posix.write(pipe_write, header[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
-        written = 0;
-        while (written < result.output.len) {
-            written += posix.write(pipe_write, result.output[written..]) catch {
-                posix.close(pipe_write);
-                std.c._exit(1);
-            };
-        }
+        harness.writeAll(pipe_write, &header);
+        harness.writeAll(pipe_write, result.output);
 
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
-    posix.close(pipe_write);
+    harness.closeFd(pipe_write);
 
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
@@ -528,9 +622,9 @@ fn forkAndEvalWithStats(
             break;
         };
     }
-    posix.close(pipe_read);
+    harness.closeFd(pipe_read);
 
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
 
@@ -578,7 +672,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
     if (tc.skip.interpreter and tc.skip.dev and tc.skip.wasm and tc.skip.llvm) {
         const timings = switch (tc.expected) {
             .inspect_str => blk: {
-                var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var compiled = helpers.compileInspectedProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors",
@@ -594,7 +688,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
                 };
             },
             .allocations_at_most => blk: {
-                var compiled = helpers.compileProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var compiled = helpers.compileProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped allocation test has parse/check/lower errors",
@@ -610,7 +704,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
                 };
             },
             .crash, .problem_and_crash => blk: {
-                var compiled = helpers.compileInspectedProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var compiled = helpers.compileInspectedProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors",
@@ -651,7 +745,7 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
     }
 
     const deadline_ms: ?i64 = if (timeout_ms > 0)
-        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
+        milliTimestamp() + @as(i64, @intCast(timeout_ms))
     else
         null;
 
@@ -683,6 +777,10 @@ fn hasAnySkip(skip: TestCase.Skip) bool {
     return skip.interpreter or skip.dev or skip.wasm or skip.llvm;
 }
 
+fn shouldSkipLlvm(test_skip: bool) bool {
+    return test_skip or !include_llvm_backend;
+}
+
 fn backendImplemented(index: usize) bool {
     return switch (index) {
         0 => true,
@@ -708,12 +806,12 @@ fn initBackendRows(skips: [NUM_BACKENDS]bool) [NUM_BACKENDS]BackendDetail {
 
 fn remainingBackendBudgetMs(deadline_ms: ?i64) u64 {
     const deadline = deadline_ms orelse return 0;
-    const remaining = deadline - std.time.milliTimestamp();
+    const remaining = deadline - milliTimestamp();
     return if (remaining <= 0) 0 else @intCast(remaining);
 }
 
 fn deadlineExpired(deadline_ms: ?i64) bool {
-    return if (deadline_ms) |deadline| std.time.milliTimestamp() >= deadline else false;
+    return if (deadline_ms) |deadline| milliTimestamp() >= deadline else false;
 }
 
 fn backendUsesStandardTimeout(index: usize) bool {
@@ -744,7 +842,7 @@ fn runAllocationTest(
     expected: TestCase.AllocationExpectation,
     skip: TestCase.Skip,
 ) !TestOutcome {
-    var compiled = try helpers.compileProgram(allocator, source_kind, src, imports);
+    var compiled = try helpers.compileProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -756,7 +854,7 @@ fn runAllocationTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, false };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
@@ -878,7 +976,7 @@ fn runInspectTest(
     skip: TestCase.Skip,
     deadline_ms: ?i64,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -891,7 +989,7 @@ fn runInspectTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -918,7 +1016,8 @@ fn runInspectTest(
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
+        const fork_result = runBackendEval(i, eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms)) catch |err|
+            ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
         trace.log("finished backend {s} for inspected source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
@@ -1055,7 +1154,7 @@ fn runCrashTest(
     require_problems: bool,
     deadline_ms: ?i64,
 ) !TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
+    var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
     const can_diags = try compiled.resources.module_env.getDiagnostics();
@@ -1112,7 +1211,7 @@ fn runCrashTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, skip.llvm };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -1137,7 +1236,8 @@ fn runCrashTest(
 
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
+        const fork_result = runBackendEval(i, eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms)) catch |err|
+            ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
 
         switch (fork_result) {
@@ -1375,12 +1475,12 @@ fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
 /// per-worker; we strip any pre-existing instance so we don't double-add).
-fn buildWorkerArgvTemplate(arena: std.mem.Allocator) ![]const []const u8 {
-    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path_slice = try std.fs.selfExePath(&self_path_buf);
-    const self_path = try arena.dupe(u8, self_path_slice);
+fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) ![]const []const u8 {
+    // std.fs.selfExePath was removed in Zig 0.16; use std.process.executablePathAlloc instead.
+    const self_path = try std.process.executablePathAlloc(io, arena);
 
-    const original_args = try std.process.argsAlloc(arena);
+    const raw = try process_args.toSlice(arena);
+    const original_args: []const []const u8 = @ptrCast(raw);
 
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     try argv.append(arena, self_path);
@@ -1409,6 +1509,7 @@ fn buildWorkerArgvTemplate(arena: std.mem.Allocator) ![]const []const u8 {
 /// main() (the GPA) so that gpa.free on bd.value in cleanup matches the
 /// allocator that duped the bytes during deserialize.
 fn retryFailedForAttribution(
+    io: std.Io,
     gpa: std.mem.Allocator,
     results: []TestResult,
     worker_argv_template: []const []const u8,
@@ -1442,12 +1543,17 @@ fn retryFailedForAttribution(
                 attributed[bi] = .{ .status = .not_implemented };
                 continue;
             }
+            if (bi == LLVM_BACKEND_INDEX and !include_llvm_backend) {
+                attributed[bi] = .{ .status = .skip };
+                continue;
+            }
             // Skip backends that already passed cleanly in Phase 1.
             if (r.has_backend_details and attributed[bi].status == .pass) continue;
             // Skip backends marked NOT_IMPLEMENTED / SKIP up front.
             if (attributed[bi].status == .not_implemented or attributed[bi].status == .skip) continue;
 
             const outcome = Pool.spawnSingleWorker(
+                io,
                 gpa,
                 worker_argv_template,
                 idx,
@@ -1581,13 +1687,15 @@ fn collectTests() []const TestCase {
 
 // CLI parsing uses harness.parseStandardArgs for consistent flag handling.
 // The eval runner accepts the standard flags: --filter, --threads, --timeout, --verbose, --help,
-// plus the positional marker `known-bugs` to include opt-in compiler-bug repros.
+// plus `--llvm` and the positional marker `known-bugs` to include opt-in
+// compiler-bug repros.
 
 fn printHelp() void {
     const help =
         \\Roc Eval Test Runner
         \\
-        \\Runs eval tests across backends (interpreter, dev, wasm, llvm) in parallel
+        \\Runs eval tests across enabled backends (interpreter, dev, wasm, and
+        \\opt-in llvm) in parallel
         \\and compares results via Str.inspect. Each backend evaluation runs in
         \\a forked child process for crash isolation.
         \\
@@ -1606,6 +1714,8 @@ fn printHelp() void {
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
         \\                        Default: 30000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
+        \\                        LLVM eval lock slots match the worker count.
+        \\  --llvm                Include the LLVM backend. Default: skip LLVM.
         \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
@@ -1629,10 +1739,10 @@ fn printHelp() void {
         \\  the 5 slowest tests with full breakdowns.
         \\
         \\BACKEND COVERAGE:
-        \\  The baseline goal is 100% of backends testing 100% of tests. Tests may
-        \\  use `skip = .{ .wasm = true }` etc. to disable specific backends, but
-        \\  any test with a skip reports as SKIP rather than PASS to keep partial
-        \\  coverage visible.
+        \\  The baseline goal is 100% of enabled backends testing 100% of tests.
+        \\  Tests may use `skip = .{ .wasm = true }` etc. to disable specific
+        \\  backends, but any test with a skip reports as SKIP rather than PASS
+        \\  to keep partial coverage visible. LLVM coverage is opt-in via --llvm.
         \\
         \\  Test outcomes:
         \\    PASS  - all backends ran and agreed
@@ -1828,21 +1938,20 @@ const WorkerTrace = struct {
 
     fn init() WorkerTrace {
         const enabled = blk: {
-            const v = std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_EVAL_TIME_WORKER") catch null;
-            if (v) |val| {
-                std.heap.page_allocator.free(val);
+            const v = std.c.getenv("ROC_EVAL_TIME_WORKER");
+            if (v) |_| {
                 break :blk true;
             }
             break :blk false;
         };
-        const now = std.time.nanoTimestamp();
+        const now = std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds;
         const start_ns: u64 = @intCast(@max(0, now));
         return .{ .enabled = enabled, .start_ns = start_ns, .last_ns = start_ns };
     }
 
     fn stamp(self: *WorkerTrace, label: []const u8) void {
         if (!self.enabled) return;
-        const now: u64 = @intCast(@max(0, std.time.nanoTimestamp()));
+        const now: u64 = @intCast(@max(0, std.Io.Timestamp.now(std.Options.debug_io, .real).nanoseconds));
         const since_start_us = (now -| self.start_ns) / 1_000;
         const since_last_us = (now -| self.last_ns) / 1_000;
         self.last_ns = now;
@@ -1856,6 +1965,11 @@ fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
     return if (max_children <= 1) 10_000 else 30_000;
 }
 
+fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count: usize) usize {
+    const requested = cli.max_threads orelse @min(cpu_count, test_count);
+    return @max(1, requested);
+}
+
 fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
     for (args) |arg| {
         if (std.mem.eql(u8, arg, target)) return true;
@@ -1864,18 +1978,21 @@ fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
 }
 
 /// Entry point for the parallel eval test runner.
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var trace_worker = WorkerTrace.init();
     trace_worker.stamp("main entry");
 
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
     trace_worker.stamp("gpa init");
 
+    const io = init.io;
+    app_io = io;
+
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
-    const cli = try harness.parseStandardArgs(args_arena.allocator());
+    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
     trace_worker.stamp("parseStandardArgs");
 
     if (cli.help_requested) {
@@ -1884,6 +2001,7 @@ pub fn main() !void {
     }
 
     verbose_logging = cli.verbose;
+    include_llvm_backend = cli.include_llvm;
 
     const all_tests = collectTests();
     trace_worker.stamp("collectTests");
@@ -1897,8 +2015,8 @@ pub fn main() !void {
         for (all_tests) |tc| {
             if (tc.known_bug and !include_known_bugs) continue;
             for (cli.filters) |pattern| {
-                if (std.mem.indexOf(u8, tc.name, pattern) != null or
-                    std.mem.indexOf(u8, tc.source, pattern) != null)
+                if (std.mem.find(u8, tc.name, pattern) != null or
+                    std.mem.find(u8, tc.source, pattern) != null)
                 {
                     try filtered_buf.append(gpa, tc);
                     break;
@@ -1920,6 +2038,10 @@ pub fn main() !void {
         }
         return;
     }
+
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
+    llvm_eval_slot_count = max_children;
 
     // Worker mode: the parent spawned us with `--worker <idx>` (and optionally
     // `--worker-backend <name>`) to run a single test, serialize the result to
@@ -1951,7 +2073,7 @@ pub fn main() !void {
             .backends = backends,
             .expected_str = outcome.expected_str,
         };
-        serializeResultForPool(std.fs.File.stdout().handle, result);
+        serializeResultForPool(harness.stdoutFd(), result);
         trace_worker.stamp("serialize done");
         return;
     }
@@ -1965,15 +2087,15 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
-        const stdin = std.fs.File.stdin();
-        const stdout_handle = std.fs.File.stdout().handle;
+        const stdout_handle = harness.stdoutFd();
+        const stdin_handle = harness.stdinFd();
 
         var line_buf: [32]u8 = undefined;
         outer: while (true) {
             var line_len: usize = 0;
             while (true) {
                 if (line_len >= line_buf.len) break :outer; // malformed
-                const n = stdin.read(line_buf[line_len .. line_len + 1]) catch break :outer;
+                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
                 if (n == 0) break :outer; // EOF — parent done
                 if (line_buf[line_len] == '\n') break;
                 line_len += 1;
@@ -2002,8 +2124,15 @@ pub fn main() !void {
         return;
     }
 
-    const disable_fork_env = std.process.getEnvVarOwned(gpa, "ROC_EVAL_NO_FORK") catch null;
-    defer if (disable_fork_env) |value| gpa.free(value);
+    // In Zig 0.16, std.process.getEnvVarOwned was removed.
+    // Use Environ.getPosix on POSIX (no alloc). On Windows, the matching
+    // getPosix variant currently compiles incorrectly in the stdlib, and the fork
+    // path doesn't apply anyway (Windows uses the Child pool), so the
+    // env var has no effect there.
+    const disable_fork_env: ?[:0]const u8 = if (builtin.os.tag == .windows)
+        null
+    else
+        std.process.Environ.getPosix(init.minimal.environ, "ROC_EVAL_NO_FORK");
 
     // Coverage mode and ROC_EVAL_NO_FORK use a simple single-threaded loop: no
     // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
@@ -2045,9 +2174,6 @@ pub fn main() !void {
         return;
     }
 
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = cli.max_threads orelse @min(cpu_count, tests.len);
-
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
     for (results) |*result| {
@@ -2063,9 +2189,9 @@ pub fn main() !void {
     // Build a worker_argv_template so Windows can spawn `Child` workers that
     // re-invoke this binary with `--worker <idx>`. On POSIX the template is
     // unused (fork path doesn't re-exec) but we build it uniformly.
-    const worker_argv_template = try buildWorkerArgvTemplate(args_arena.allocator());
+    const worker_argv_template = try buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
+    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
 
     // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
     // whole worker before per-backend details land in the wire payload. For
@@ -2074,7 +2200,7 @@ pub fn main() !void {
     // pays zero retry cost. Skipped on POSIX where forkAndEval already
     // attributes crashes per-backend within the worker.
     if (builtin.os.tag == .windows) {
-        retryFailedForAttribution(gpa, results, worker_argv_template, hang_timeout_ms);
+        retryFailedForAttribution(io, gpa, results, worker_argv_template, hang_timeout_ms);
     }
 
     const wall_elapsed = wall_timer.read();

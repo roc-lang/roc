@@ -2136,16 +2136,20 @@ pub inline fn i8x16Shuffle(pc: u32, code: [*]const Instruction, stack: *Stack) v
     const indices: u8x16 = stack.topFrame().module_instance.module_def.code.vec_shuffle_16_immediates.items[immediate_index];
 
     var concat: [32]i8 = undefined;
+    const v1_arr: [16]i8 = v1;
+    const v2_arr: [16]i8 = v2;
     for (concat[0..16], 0..) |_, i| {
-        concat[i] = v1[i];
-        concat[i + 16] = v2[i];
+        concat[i] = v1_arr[i];
+        concat[i + 16] = v2_arr[i];
     }
     const concat_v: @Vector(32, i8) = concat;
 
+    const concat_arr: [32]i8 = concat_v;
+    const indices_arr: [16]u8 = indices;
     var arr: [16]i8 = undefined;
     for (&arr, 0..) |*v, i| {
-        const laneidx = indices[i];
-        v.* = concat_v[laneidx];
+        const laneidx = indices_arr[i];
+        v.* = concat_arr[laneidx];
     }
     const shuffled: i8x16 = arr;
 
@@ -2155,12 +2159,15 @@ pub inline fn i8x16Shuffle(pc: u32, code: [*]const Instruction, stack: *Stack) v
 pub inline fn i8x16Swizzle(stack: *Stack) void {
     const indices: i8x16 = @as(i8x16, @bitCast(stack.popV128()));
     const vec: i8x16 = @as(i8x16, @bitCast(stack.popV128()));
-    var swizzled: i8x16 = undefined;
+    const indices_arr: [16]i8 = indices;
+    const vec_arr: [16]i8 = vec;
+    var swizzled_arr: [16]i8 = undefined;
     var i: usize = 0;
     while (i < 16) : (i += 1) {
-        const value = if (indices[i] >= 0 and indices[i] < 16) vec[@as(usize, @intCast(indices[i]))] else @as(i8, 0);
-        swizzled[i] = value;
+        const idx = indices_arr[i];
+        swizzled_arr[i] = if (idx >= 0 and idx < 16) vec_arr[@as(usize, @intCast(idx))] else @as(i8, 0);
     }
+    const swizzled: i8x16 = swizzled_arr;
     stack.pushV128(@as(v128, @bitCast(swizzled)));
 }
 
@@ -2409,10 +2416,12 @@ pub inline fn i16x8Q15mulrSatS(stack: *Stack) void {
     const v2 = @as(i16x8, @bitCast(stack.popV128()));
     const v1 = @as(i16x8, @bitCast(stack.popV128()));
     const power: i32 = comptime std.math.powi(i32, 2, 14) catch unreachable;
+    const v1_arr: [8]i16 = v1;
+    const v2_arr: [8]i16 = v2;
 
     var arr: [8]i16 = undefined;
     for (&arr, 0..) |*v, i| {
-        const product = @as(i32, v1[i]) * @as(i32, v2[i]) + power;
+        const product = @as(i32, v1_arr[i]) * @as(i32, v2_arr[i]) + power;
         const shifted = product >> 15;
         const saturated = std.math.clamp(shifted, std.math.minInt(i16), std.math.maxInt(i16));
         v.* = @as(i16, @intCast(saturated));
@@ -2664,10 +2673,11 @@ pub inline fn i32x4DotI16x8S(stack: *Stack) void {
     const v1: i32x8 = @as(i16x8, @bitCast(stack.popV128()));
     const v2: i32x8 = @as(i16x8, @bitCast(stack.popV128()));
     const product = v1 * v2;
+    const product_arr: [8]i32 = product;
     var arr: [4]i32 = undefined;
     for (&arr, 0..) |*v, i| {
-        const p1: i32 = product[i * 2];
-        const p2: i32 = product[(i * 2) + 1];
+        const p1: i32 = product_arr[i * 2];
+        const p2: i32 = product_arr[(i * 2) + 1];
         v.* = p1 +% p2;
     }
     const dot: i32x4 = arr;
@@ -3143,9 +3153,11 @@ const VectorBinaryOp = enum(u8) {
 };
 
 fn vectorOr(comptime len: usize, v1: @Vector(len, bool), v2: @Vector(len, bool)) @Vector(len, bool) {
+    const v1_arr: [len]bool = v1;
+    const v2_arr: [len]bool = v2;
     var arr: [len]bool = undefined;
     for (&arr, 0..) |*v, i| {
-        v.* = v1[i] or v2[i];
+        v.* = v1_arr[i] or v2_arr[i];
     }
     return arr;
 }
@@ -3220,9 +3232,10 @@ fn vectorAbs(comptime T: type, stack: *Stack) void {
     const type_info = @typeInfo(T).vector;
     const child_type = type_info.child;
     const vec = @as(T, @bitCast(stack.popV128()));
+    const vec_arr: [type_info.len]child_type = vec;
     var arr: [type_info.len]child_type = undefined;
     for (&arr, 0..) |*v, i| {
-        v.* = @as(child_type, @bitCast(@abs(vec[i])));
+        v.* = @as(child_type, @bitCast(@abs(vec_arr[i])));
     }
     const abs: T = arr;
     stack.pushV128(@as(v128, @bitCast(abs)));
@@ -3235,10 +3248,12 @@ fn vectorAvgrU(comptime T: type, stack: *Stack) void {
 
     const v1 = @as(T, @bitCast(stack.popV128()));
     const v2 = @as(T, @bitCast(stack.popV128()));
+    const v1_arr: [type_info.len]child_type = v1;
+    const v2_arr: [type_info.len]child_type = v2;
     var arr: [type_info.len]child_type = undefined;
     for (&arr, 0..) |*v, i| {
-        const vv1: type_big_width = v1[i];
-        const vv2: type_big_width = v2[i];
+        const vv1: type_big_width = v1_arr[i];
+        const vv2: type_big_width = v2_arr[i];
         v.* = @as(child_type, @intCast(@divTrunc(vv1 + vv2 + 1, 2)));
     }
     const result: T = arr;
@@ -3357,11 +3372,13 @@ fn vectorBitmask(comptime T: type, vec: v128) i32 {
 fn vectorLoadLane(comptime T: type, instruction: Instruction, stack: *Stack) TrapError!void {
     const vec_type_info = @typeInfo(T).vector;
 
-    var vec = @as(T, @bitCast(stack.popV128()));
+    const vec = @as(T, @bitCast(stack.popV128()));
     const immediate = stack.topFrame().module_instance.module_def.code.memory_offset_and_lane_immediates.items[instruction.immediate.Index];
     const scalar = try loadFromMem(vec_type_info.child, stack, immediate.offset);
-    vec[immediate.laneidx] = scalar;
-    stack.pushV128(@as(v128, @bitCast(vec)));
+    var vec_arr: [vec_type_info.len]vec_type_info.child = vec;
+    vec_arr[immediate.laneidx] = scalar;
+    const vec_out: T = vec_arr;
+    stack.pushV128(@as(v128, @bitCast(vec_out)));
 }
 
 fn vectorLoadExtend(comptime mem_type: type, comptime extend_type: type, comptime len: usize, mem_offset: u64, stack: *Stack) TrapError!void {
@@ -3385,16 +3402,19 @@ fn vectorLoadLaneZero(comptime T: type, instruction: Instruction, stack: *Stack)
 fn vectorStoreLane(comptime T: type, instruction: Instruction, stack: *Stack) TrapError!void {
     const vec = @as(T, @bitCast(stack.popV128()));
     const immediate = stack.topFrame().module_instance.module_def.code.memory_offset_and_lane_immediates.items[instruction.immediate.Index];
-    const scalar = vec[immediate.laneidx];
+    const child_type = @typeInfo(T).vector.child;
+    const vec_arr: [@typeInfo(T).vector.len]child_type = vec;
+    const scalar = vec_arr[immediate.laneidx];
     try storeInMem(scalar, stack, immediate.offset);
     stack.pushV128(@as(v128, @bitCast(vec)));
 }
 
 fn vectorExtractLane(comptime T: type, lane: u32, stack: *Stack) void {
     const vec = @as(T, @bitCast(stack.popV128()));
-    const lane_value = vec[lane];
-
     const child_type = @typeInfo(T).vector.child;
+    const vec_arr: [@typeInfo(T).vector.len]child_type = vec;
+    const lane_value = vec_arr[lane];
+
     switch (child_type) {
         i8, u8, i16, u16, i32 => stack.pushI32(lane_value),
         i64 => stack.pushI64(lane_value),
@@ -3413,8 +3433,9 @@ fn vectorReplaceLane(comptime T: type, lane: u32, stack: *Stack) void {
         f64 => stack.popF64(),
         else => unreachable,
     };
-    var vec = @as(T, @bitCast(stack.popV128()));
-    vec[lane] = lane_value;
+    var vec_arr: [@typeInfo(T).vector.len]child_type = @as(T, @bitCast(stack.popV128()));
+    vec_arr[lane] = lane_value;
+    const vec: T = vec_arr;
     stack.pushV128(@as(v128, @bitCast(vec)));
 }
 
@@ -3430,12 +3451,14 @@ const VectorConvert = enum {
 
 fn vectorAddPairwise(comptime in_type: type, comptime out_type: type, stack: *Stack) void {
     const out_info = @typeInfo(out_type).vector;
+    const in_info = @typeInfo(in_type).vector;
 
     const vec = @as(in_type, @bitCast(stack.popV128()));
+    const vec_arr: [in_info.len]in_info.child = vec;
     var arr: [out_info.len]out_info.child = undefined;
     for (&arr, 0..) |*v, i| {
-        const v1: out_info.child = vec[i * 2];
-        const v2: out_info.child = vec[(i * 2) + 1];
+        const v1: out_info.child = @intCast(vec_arr[i * 2]);
+        const v2: out_info.child = @intCast(vec_arr[(i * 2) + 1]);
         v.* = v1 + v2;
     }
     const sum: out_type = arr;
@@ -3444,15 +3467,18 @@ fn vectorAddPairwise(comptime in_type: type, comptime out_type: type, stack: *St
 
 fn vectorMulPairwise(comptime in_type: type, comptime out_type: type, side: VectorSide, stack: *Stack) void {
     const info_out = @typeInfo(out_type).vector;
+    const info_in = @typeInfo(in_type).vector;
 
     const vec2 = @as(in_type, @bitCast(stack.popV128()));
     const vec1 = @as(in_type, @bitCast(stack.popV128()));
+    const vec1_arr: [info_in.len]info_in.child = vec1;
+    const vec2_arr: [info_in.len]info_in.child = vec2;
 
     var arr: [info_out.len]info_out.child = undefined;
     for (&arr, 0..) |*v, i| {
         const index = if (side == .Low) i else i + info_out.len;
-        const v1: info_out.child = vec1[index];
-        const v2: info_out.child = vec2[index];
+        const v1: info_out.child = @intCast(vec1_arr[index]);
+        const v2: info_out.child = @intCast(vec2_arr[index]);
         v.* = v1 * v2;
     }
     const product = arr;
@@ -3465,9 +3491,10 @@ fn vectorExtend(comptime in_type: type, comptime out_type: type, comptime side: 
     const side_offset = if (side == .Low) 0 else in_info.len / 2;
 
     const vec = @as(in_type, @bitCast(stack.popV128()));
+    const vec_arr: [in_info.len]in_info.child = vec;
     var arr: [out_info.len]out_info.child = undefined;
     for (&arr, 0..) |*v, i| {
-        v.* = vec[i + side_offset];
+        v.* = @intCast(vec_arr[i + side_offset]);
     }
     const extended: out_type = arr;
     stack.pushV128(@as(v128, @bitCast(extended)));
@@ -3490,9 +3517,10 @@ fn vectorConvert(comptime in_type: type, comptime out_type: type, comptime side:
     const side_offset = if (side == .Low) 0 else in_info.len / 2;
 
     const vec_in = @as(in_type, @bitCast(stack.popV128()));
+    const vec_in_arr: [in_info.len]in_info.child = vec_in;
     var arr: [out_info.len]out_info.child = undefined;
     for (arr, 0..) |_, i| {
-        const v: in_info.child = if (i < in_info.len) vec_in[i + side_offset] else 0;
+        const v: in_info.child = if (i < in_info.len) vec_in_arr[i + side_offset] else 0;
         switch (@typeInfo(out_info.child)) {
             .int => arr[i] = blk: {
                 if (convert == .SafeCast) {
@@ -3516,9 +3544,10 @@ fn vectorNarrowingSaturate(comptime in_type: type, comptime out_type: type, vec:
 
     std.debug.assert(out_info.len == in_info.len);
 
+    const vec_arr: [in_info.len]in_info.child = vec;
     var arr: [out_info.len]T = undefined;
     for (&arr, 0..) |*v, i| {
-        v.* = @as(T, @intCast(std.math.clamp(vec[i], std.math.minInt(T), std.math.maxInt(T))));
+        v.* = @as(T, @intCast(std.math.clamp(vec_arr[i], std.math.minInt(T), std.math.maxInt(T))));
     }
     return arr;
 }

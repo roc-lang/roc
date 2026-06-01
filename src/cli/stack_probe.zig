@@ -64,7 +64,7 @@ const COFF = struct {
 /// Generate a minimal COFF object file containing ___chkstk_ms for x86_64 Windows.
 /// Returns the object file bytes.
 pub fn generateStackProbeObject(allocator: std.mem.Allocator) ![]u8 {
-    var output: std.ArrayList(u8) = .{};
+    var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
     const symbol_name = "___chkstk_ms";
@@ -151,11 +151,11 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) ![]u8 {
 }
 
 /// Write the stack probe object file to a path.
-pub fn writeStackProbeObject(allocator: std.mem.Allocator, path: []const u8) !void {
+pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) !void {
     const obj_bytes = try generateStackProbeObject(allocator);
     defer allocator.free(obj_bytes);
 
-    try std.fs.cwd().writeFile(.{
+    try std.Io.Dir.cwd().writeFile(std_io, .{
         .sub_path = path,
         .data = obj_bytes,
     });

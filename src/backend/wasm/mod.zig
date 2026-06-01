@@ -9,4 +9,8 @@
 pub const WasmModule = @import("WasmModule.zig");
 pub const WasmCodeGen = @import("WasmCodeGen.zig");
 pub const WasmLayout = @import("WasmLayout.zig");
+pub const WasmLinking = @import("WasmLinking.zig");
 pub const Storage = @import("Storage.zig");
+pub const CodeBuilder = @import("CodeBuilder.zig");
+pub const IndexTypes = @import("index_types.zig");
+pub const BuiltinSignatures = @import("builtin_signatures.zig");

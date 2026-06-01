@@ -12,6 +12,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const bindings = @import("bindings.zig");
+const embedded_lld = @import("embedded_lld");
 const llvm_embedded = @import("llvm_embedded");
 
 const Allocator = std.mem.Allocator;
@@ -107,6 +108,7 @@ pub const CompileOptions = struct {
 };
 
 fn emitMergedBitcodeToObjectFile(
+    io: std.Io,
     bitcode: []const u32,
     options: CompileOptions,
     output_path: [:0]const u8,
@@ -114,13 +116,12 @@ fn emitMergedBitcodeToObjectFile(
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
-    if (std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_LLVM_KEEP_BITCODE")) |keep_path| {
-        defer std.heap.page_allocator.free(keep_path);
-        std.fs.cwd().writeFile(.{
-            .sub_path = keep_path,
+    if (std.c.getenv("ROC_LLVM_KEEP_BITCODE")) |keep_path_z| {
+        std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = std.mem.sliceTo(keep_path_z, 0),
             .data = bitcode_bytes,
         }) catch {};
-    } else |_| {}
+    }
 
     // Initialize all targets
     bindings.initializeAllTargets();
@@ -278,45 +279,46 @@ fn emitMergedBitcodeToObjectFile(
 }
 
 /// Compile LLVM bitcode to a native object file.
-pub fn compileToObject(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
-    const temp_path = createTempPath(allocator, ".o") catch return Error.TempFileError;
+pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![]const u8 {
+    const temp_path = createTempPath(allocator, io, ".o") catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
-    try emitMergedBitcodeToObjectFile(bitcode, options, temp_path);
+    try emitMergedBitcodeToObjectFile(io, bitcode, options, temp_path);
 
     // Read the object file back into memory
-    const object_bytes = std.fs.cwd().readFileAlloc(
-        allocator,
+    const object_bytes = std.Io.Dir.cwd().readFileAlloc(
+        io,
         std.mem.sliceTo(temp_path, 0),
-        10 * 1024 * 1024, // 10MB max
+        allocator,
+        .limited(10 * 1024 * 1024), // 10MB max
     ) catch return Error.TempFileError;
 
     if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
         defer allocator.free(keep_path);
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(io, .{
             .sub_path = keep_path,
             .data = object_bytes,
         }) catch {};
     } else |_| {}
 
     // Clean up temp file
-    std.fs.cwd().deleteFile(std.mem.sliceTo(temp_path, 0)) catch {};
+    std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(temp_path, 0)) catch {};
 
     return object_bytes;
 }
 
 /// Compile LLVM bitcode to a native shared library and return its path.
 /// Caller owns the returned path and is responsible for deleting the file.
-pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
-    const object_path = createTempPath(allocator, objectExtension()) catch return Error.TempFileError;
+pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
+    const object_path = createTempPath(allocator, io, objectExtension()) catch return Error.TempFileError;
     defer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(object_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(object_path, 0)) catch {};
         allocator.free(object_path);
     }
 
-    const shared_lib_path = createTempPath(allocator, sharedLibraryExtension()) catch return Error.TempFileError;
+    const shared_lib_path = createTempPath(allocator, io, sharedLibraryExtension()) catch return Error.TempFileError;
     errdefer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(shared_lib_path, 0)) catch {};
+        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(shared_lib_path, 0)) catch {};
         allocator.free(shared_lib_path);
     }
 
@@ -324,29 +326,29 @@ pub fn compileToSharedLibrary(allocator: Allocator, bitcode: []const u32, option
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
 
-    try emitMergedBitcodeToObjectFile(bitcode, pic_options, object_path);
+    try emitMergedBitcodeToObjectFile(io, bitcode, pic_options, object_path);
 
-    if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
-        defer allocator.free(keep_path);
-        std.fs.cwd().copyFile(
+    if (std.c.getenv("ROC_LLVM_KEEP_OBJECT")) |keep_path_z| {
+        std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(object_path, 0),
-            std.fs.cwd(),
-            keep_path,
+            std.Io.Dir.cwd(),
+            std.mem.sliceTo(keep_path_z, 0),
+            io,
             .{},
         ) catch {};
-    } else |_| {}
+    }
 
     try linkSharedLibrary(allocator, object_path, shared_lib_path);
 
-    if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_DYLIB")) |keep_path| {
-        defer allocator.free(keep_path);
-        std.fs.cwd().copyFile(
+    if (std.c.getenv("ROC_LLVM_KEEP_DYLIB")) |keep_path_z| {
+        std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(shared_lib_path, 0),
-            std.fs.cwd(),
-            keep_path,
+            std.Io.Dir.cwd(),
+            std.mem.sliceTo(keep_path_z, 0),
+            io,
             .{},
         ) catch {};
-    } else |_| {}
+    }
 
     return shared_lib_path;
 }
@@ -356,10 +358,6 @@ fn linkSharedLibrary(
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
-    if (builtin.os.tag == .macos) {
-        return linkSharedLibraryMacos(allocator, object_path, shared_lib_path);
-    }
-
     var arena_impl = std.heap.ArenaAllocator.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
@@ -368,10 +366,40 @@ fn linkSharedLibrary(
     defer args.deinit(allocator);
 
     switch (builtin.os.tag) {
-        .macos => unreachable,
+        .macos => {
+            try args.append(allocator, "ld64.lld");
+            try args.append(allocator, "-dylib");
+            try args.append(allocator, "-o");
+            try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
+            try args.append(allocator, "-w");
+            try args.append(allocator, "-arch");
+            try args.append(allocator, switch (builtin.cpu.arch) {
+                .aarch64 => "arm64",
+                .x86_64 => "x86_64",
+                else => return Error.LinkFailed,
+            });
+            try args.append(allocator, "-platform_version");
+            try args.append(allocator, "macos");
+            try args.append(allocator, "13.0");
+            try args.append(allocator, "13.0");
+            try args.append(allocator, "-syslibroot");
+            try args.append(allocator, build_options.darwin_sysroot);
+            try args.append(allocator, std.mem.sliceTo(object_path, 0));
+            try args.append(allocator, "-lSystem");
+        },
         .linux, .freebsd, .openbsd, .netbsd => {
             try args.append(allocator, "ld.lld");
             try args.append(allocator, "-shared");
+            // The eval-test-runner is a static-musl binary whose dlopen does not
+            // resolve a loaded library's own PLT/GOT (no dynamic-loader symbol
+            // binding), so default (preemptible, lazily-bound) intra-library
+            // calls like roc_builtins_dec_to_str leave GOT slots null and jump to
+            // 0x0. -Bsymbolic binds intra-library global references to their local
+            // definitions at link time (direct calls / RELATIVE relocs that musl
+            // always applies at load); -z now additionally forces eager binding.
+            try args.append(allocator, "-Bsymbolic");
+            try args.append(allocator, "-z");
+            try args.append(allocator, "now");
             try args.append(allocator, "-o");
             try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
@@ -394,75 +422,66 @@ fn linkSharedLibrary(
         else => return Error.LinkFailed,
     }
 
-    const c_args = arena.alloc([*:0]const u8, args.items.len) catch return Error.OutOfMemory;
-
-    for (args.items, 0..) |arg, i| {
-        c_args[i] = (arena.dupeZ(u8, arg) catch return Error.OutOfMemory).ptr;
-    }
-
-    const success = switch (builtin.os.tag) {
-        .macos => bindings.LinkMachO(@intCast(c_args.len), c_args.ptr, false, false),
-        .linux, .freebsd, .openbsd, .netbsd => bindings.LinkELF(@intCast(c_args.len), c_args.ptr, false, false),
-        .windows => bindings.LinkCOFF(@intCast(c_args.len), c_args.ptr, false, false),
-        else => false,
+    const format: embedded_lld.Format = switch (builtin.os.tag) {
+        .macos => .macho,
+        .linux, .freebsd, .openbsd, .netbsd => .elf,
+        .windows => .coff,
+        else => return Error.LinkFailed,
     };
 
-    if (!success) return Error.LinkFailed;
+    embedded_lld.link(allocator, format, args.items, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return Error.OutOfMemory,
+        error.LinkFailed => return Error.LinkFailed,
+    };
 }
 
-fn linkSharedLibraryMacos(
-    allocator: Allocator,
-    object_path: [:0]const u8,
-    shared_lib_path: [:0]const u8,
-) Error!void {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{
-            "cc",
-            "-dynamiclib",
-            "-isysroot",
-            build_options.darwin_sysroot,
-            "-o",
-            std.mem.sliceTo(shared_lib_path, 0),
-            std.mem.sliceTo(object_path, 0),
-        },
-    }) catch return Error.LinkFailed;
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+fn getTempDir(allocator: Allocator) ![]u8 {
+    const names: []const [:0]const u8 = if (builtin.os.tag == .windows)
+        &.{ "TEMP", "TMP" }
+    else
+        &.{ "TMPDIR", "TEMP", "TMP" };
 
-    switch (result.term) {
-        .Exited => |code| {
-            if (code == 0) return;
-        },
-        else => {},
+    for (names) |name| {
+        if (std.c.getenv(name.ptr)) |value_z| {
+            const value = std.mem.sliceTo(value_z, 0);
+            if (value.len != 0) return allocator.dupe(u8, value);
+        }
     }
 
-    if (result.stderr.len > 0) {
-        std.debug.print("{s}", .{result.stderr});
-    }
-
-    return Error.LinkFailed;
+    return error.TempDirUnavailable;
 }
 
 /// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, extension: []const u8) ![:0]const u8 {
+fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) ![:0]const u8 {
     const counter = temp_path_counter.fetchAdd(1, .monotonic);
-    const random_hi = std.crypto.random.int(u64);
-    const random_lo = std.crypto.random.int(u64);
+    // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
+    // mixed with the pid for cross-process uniqueness of the temp path.
+    const pid: u64 = if (builtin.os.tag == .windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        @intCast(std.c.getpid());
+    var prng = std.Random.DefaultPrng.init((@as(u64, counter) << 32) ^ pid);
+    const rng = prng.random();
+    const random_hi = rng.int(u64);
+    const random_lo = rng.int(u64);
 
-    // Use appropriate temp directory for each platform
-    const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";
+    const temp_dir = try getTempDir(allocator);
+    defer allocator.free(temp_dir);
+    try std.Io.Dir.cwd().createDirPath(io, temp_dir);
+    const temp_dir_abs = if (std.fs.path.isAbsolute(temp_dir))
+        try allocator.dupe(u8, temp_dir)
+    else
+        try std.Io.Dir.cwd().realPathFileAlloc(io, temp_dir, allocator);
+    defer allocator.free(temp_dir_abs);
 
-    const str = try std.fmt.allocPrint(
+    const filename = try std.fmt.allocPrint(
         allocator,
-        "{s}{x}_{x}_{x}{s}",
-        .{ tmp_prefix, random_hi, random_lo, counter, extension },
+        "roc_llvm_{x}_{x}_{x}{s}",
+        .{ random_hi, random_lo, counter, extension },
     );
-    // Convert to null-terminated by reallocating with extra byte
-    const result = try allocator.allocSentinel(u8, str.len, 0);
-    @memcpy(result, str);
-    allocator.free(str);
-    return result;
+    defer allocator.free(filename);
+
+    return try std.fs.path.joinZ(allocator, &.{ temp_dir_abs, filename });
 }
 
 fn objectExtension() []const u8 {

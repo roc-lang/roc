@@ -188,12 +188,12 @@ pub fn build(b: *Build) void {
         }),
         .use_llvm = use_llvm,
     });
-    cffi_test.addCSourceFile(.{
+    cffi_test.root_module.addCSourceFile(.{
         .file = b.path("test/cffi/main.c"),
     });
-    cffi_test.addIncludePath(b.path("src/bytebox.h"));
-    cffi_test.linkLibC();
-    cffi_test.linkLibrary(lib_bytebox);
+    cffi_test.root_module.addIncludePath(b.path("src/bytebox.h"));
+    cffi_test.root_module.link_libc = true;
+    cffi_test.root_module.linkLibrary(lib_bytebox);
 
     const ffi_guest: WasmBuild = buildWasmExe(b, "test/cffi/module.zig", .wasm32);
 

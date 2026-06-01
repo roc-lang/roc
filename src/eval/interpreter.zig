@@ -528,10 +528,10 @@ pub const Interpreter = struct {
             const layout_val = layout_store.getLayout(layout_idx);
             switch (layout_val.tag) {
                 .struct_ => {
-                    struct_field_count += layout_store.getStructData(layout_val.data.struct_.idx).fields.count;
+                    struct_field_count += layout_store.getStructData(layout_val.getStruct().idx).fields.count;
                 },
                 .tag_union => {
-                    const tu_data = layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                    const tu_data = layout_store.getTagUnionData(layout_val.getTagUnion().idx);
                     tag_variant_count += layout_store.getTagUnionVariants(tu_data).len;
                 },
                 else => {},
@@ -949,7 +949,7 @@ pub const Interpreter = struct {
                 };
                 var next_len = path_len;
                 if (next_len < path_buf.len) {
-                    path_buf[next_len] = .{ .box_payload = layout_val.data.box };
+                    path_buf[next_len] = .{ .box_payload = layout_val.getIdx() };
                     next_len += 1;
                 }
                 self.debugAssertValueMatchesLayoutAt(
@@ -957,7 +957,7 @@ pub const Interpreter = struct {
                     stmt_id,
                     local_id,
                     .{ .ptr = data_ptr },
-                    layout_val.data.box,
+                    layout_val.getIdx(),
                     visited,
                     path_buf,
                     next_len,
@@ -998,7 +998,7 @@ pub const Interpreter = struct {
                 }
                 if (list.len() == 0 or list.bytes == null) return;
 
-                const elem_layout = layout_val.data.list;
+                const elem_layout = layout_val.getIdx();
                 const elem_size = self.helper.sizeOf(elem_layout);
                 if (elem_size == 0) return;
 
@@ -1039,7 +1039,7 @@ pub const Interpreter = struct {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
-                    const field_offset = self.layout_store.getStructFieldOffset(layout_val.data.struct_.idx, @intCast(i));
+                    const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;
                     if (next_len < path_buf.len) {
                         path_buf[next_len] = .{ .struct_field = .{
@@ -1375,9 +1375,9 @@ pub const Interpreter = struct {
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
             .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
-            .box => self.debugPrintLayoutShapeLines(layout_val.data.box, indent + 1, visited),
-            .list => self.debugPrintLayoutShapeLines(layout_val.data.list, indent + 1, visited),
-            .closure => self.debugPrintLayoutShapeLines(layout_val.data.closure.captures_layout_idx, indent + 1, visited),
+            .box => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
+            .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
+            .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
             .struct_ => {
                 const info = self.layout_store.getStructInfo(layout_val);
                 for (0..info.fields.len) |i| {
@@ -1871,7 +1871,7 @@ pub const Interpreter = struct {
                     .{ idx, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
                 );
                 if (layout_val.tag == .list) {
-                    debugPrint(" elem={d}", .{@intFromEnum(layout_val.data.list)});
+                    debugPrint(" elem={d}", .{@intFromEnum(layout_val.getIdx())});
                 }
                 if (layout_val.tag == .tag_union) {
                     const tu_info = self.layout_store.getTagUnionInfo(layout_val);
@@ -1883,7 +1883,7 @@ pub const Interpreter = struct {
 
         var visited = std.AutoHashMap(CFStmtId, void).init(self.evalAllocator());
         defer visited.deinit();
-        var stack = std.ArrayListUnmanaged(CFStmtId){};
+        var stack = std.ArrayListUnmanaged(CFStmtId).empty;
         defer stack.deinit(self.evalAllocator());
         stack.append(self.evalAllocator(), body) catch return;
 
@@ -2186,11 +2186,11 @@ pub const Interpreter = struct {
                 const struct_base = self.resolveStructBaseValue(source_val, source_layout);
                 const struct_layout_val = self.layout_store.getLayout(struct_base.layout);
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                    struct_layout_val.data.struct_.idx,
+                    struct_layout_val.getStruct().idx,
                     field.field_idx,
                 );
                 const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                    struct_layout_val.data.struct_.idx,
+                    struct_layout_val.getStruct().idx,
                     field.field_idx,
                 );
                 const field_value = try self.coerceExplicitRefValueToLayout(
@@ -2234,11 +2234,11 @@ pub const Interpreter = struct {
                 switch (payload_layout_val.tag) {
                     .struct_ => {
                         const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                            payload_layout_val.data.struct_.idx,
+                            payload_layout_val.getStruct().idx,
                             payload.payload_idx,
                         );
                         const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                            payload_layout_val.data.struct_.idx,
+                            payload_layout_val.getStruct().idx,
                             payload.payload_idx,
                         );
                         const payload_value = try self.coerceExplicitRefValueToLayout(
@@ -2627,7 +2627,7 @@ pub const Interpreter = struct {
     fn boxAllocInfo(self: *LirInterpreter, box_layout: Layout) BoxAllocInfo {
         return switch (box_layout.tag) {
             .box => blk: {
-                const elem_layout = box_layout.data.box;
+                const elem_layout = box_layout.getIdx();
                 const elem_layout_val = self.layout_store.getLayout(elem_layout);
                 break :blk .{
                     .elem_layout = elem_layout,
@@ -2679,7 +2679,7 @@ pub const Interpreter = struct {
                 return .{
                     .outer = boxed,
                     .base = .{ .ptr = data_ptr },
-                    .base_layout = struct_layout_val.data.box,
+                    .base_layout = struct_layout_val.getIdx(),
                 };
             },
             .struct_ => {
@@ -2724,16 +2724,16 @@ pub const Interpreter = struct {
         }
         for (field_locals, 0..) |field_local, i| {
             const field_size = self.layout_store.getStructFieldSizeByOriginalIndex(
-                base_layout_val.data.struct_.idx,
+                base_layout_val.getStruct().idx,
                 @intCast(i),
             );
             if (field_size == 0) continue;
             const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
-                base_layout_val.data.struct_.idx,
+                base_layout_val.getStruct().idx,
                 @intCast(i),
             );
             const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                base_layout_val.data.struct_.idx,
+                base_layout_val.getStruct().idx,
                 @intCast(i),
             );
             const field_value = try self.coerceExplicitRefValueToLayout(
@@ -2787,7 +2787,7 @@ pub const Interpreter = struct {
             return .{
                 .outer = boxed,
                 .base = .{ .ptr = data_ptr },
-                .base_layout = union_layout_val.data.box,
+                .base_layout = union_layout_val.getIdx(),
             };
         }
 
@@ -3106,7 +3106,7 @@ pub const Interpreter = struct {
         const l = self.layout_store.getLayout(helper.layout_idx);
         return switch (l.tag) {
             .zst => .noop,
-            .scalar => if (l.data.scalar.tag == .str)
+            .scalar => if (l.getScalar().tag == .str)
                 switch (helper.op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
@@ -3130,16 +3130,16 @@ pub const Interpreter = struct {
                 .free => .erased_callable_free,
             },
             .struct_ => .{ .struct_ = .{
-                .struct_idx = l.data.struct_.idx,
+                .struct_idx = l.getStruct().idx,
                 .child_op = nestedDropOp(helper.op),
             } },
             .tag_union => .{ .tag_union = .{
-                .tag_union_idx = l.data.tag_union.idx,
+                .tag_union_idx = l.getTagUnion().idx,
                 .child_op = nestedDropOp(helper.op),
             } },
             .closure => .{ .closure = .{
                 .op = nestedDropOp(helper.op),
-                .layout_idx = l.data.closure.captures_layout_idx,
+                .layout_idx = l.getClosure().captures_layout_idx,
             } },
         };
     }
@@ -3154,7 +3154,7 @@ pub const Interpreter = struct {
     fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
         const layout_val = self.layout_store.getLayout(layout_idx);
         return switch (layout_val.tag) {
-            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.data.closure.captures_layout_idx),
+            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
             else => .{ .op = op, .layout_idx = layout_idx },
         };
     }
@@ -3232,7 +3232,7 @@ pub const Interpreter = struct {
     fn rcListPlan(self: *LirInterpreter, list_layout_idx: layout_mod.Idx) layout_mod.RcListPlan {
         const list_layout = self.layout_store.getLayout(list_layout_idx);
         const runtime_elem_layout_idx: ?layout_mod.Idx = switch (list_layout.tag) {
-            .list => self.layout_store.runtimeRepresentationLayoutIdx(list_layout.data.list),
+            .list => self.layout_store.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
             .list_of_zst => null,
             else => unreachable,
         };
@@ -3261,7 +3261,7 @@ pub const Interpreter = struct {
     fn rcBoxPlan(self: *LirInterpreter, box_layout_idx: layout_mod.Idx) layout_mod.RcBoxPlan {
         const box_layout = self.layout_store.getLayout(box_layout_idx);
         const runtime_elem_layout_idx: ?layout_mod.Idx = switch (box_layout.tag) {
-            .box => self.layout_store.runtimeRepresentationLayoutIdx(box_layout.data.box),
+            .box => self.layout_store.runtimeRepresentationLayoutIdx(box_layout.getIdx()),
             .box_of_zst => null,
             else => unreachable,
         };
@@ -3296,7 +3296,7 @@ pub const Interpreter = struct {
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         const direct = switch (layout_val.tag) {
-            .scalar => layout_val.data.scalar.tag == .str,
+            .scalar => layout_val.getScalar().tag == .str,
             .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
             .zst => false,
             .struct_, .tag_union, .closure => null,
@@ -3309,22 +3309,22 @@ pub const Interpreter = struct {
         self.rc_presence[raw] = .active;
         const contains = switch (layout_val.tag) {
             .struct_ => blk: {
-                const sd = self.layout_store.getStructData(layout_val.data.struct_.idx);
+                const sd = self.layout_store.getStructData(layout_val.getStruct().idx);
                 for (0..sd.fields.count) |i| {
-                    const field_layout = self.layout_store.getStructFieldLayout(layout_val.data.struct_.idx, @intCast(i));
+                    const field_layout = self.layout_store.getStructFieldLayout(layout_val.getStruct().idx, @intCast(i));
                     if (self.layoutContainsRc(field_layout)) break :blk true;
                 }
                 break :blk false;
             },
             .tag_union => blk: {
-                const tu_data = self.layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                const tu_data = self.layout_store.getTagUnionData(layout_val.getTagUnion().idx);
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
                 for (0..variants.len) |i| {
                     if (self.layoutContainsRc(variants.get(@intCast(i)).payload_layout)) break :blk true;
                 }
                 break :blk false;
             },
-            .closure => self.layoutContainsRc(layout_val.data.closure.captures_layout_idx),
+            .closure => self.layoutContainsRc(layout_val.getClosure().captures_layout_idx),
             .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
         };
         self.rc_presence[raw] = if (contains) .yes else .no;
@@ -3646,7 +3646,7 @@ pub const Interpreter = struct {
         );
         const l = self.layout_store.getLayout(resolved_layout);
         if (l.tag == .list) {
-            const elem_idx = l.data.list;
+            const elem_idx = l.getIdx();
             const sa = self.helper.sizeAlignOf(elem_idx);
             return .{
                 .alignment = @intCast(sa.alignment.toByteUnits()),
@@ -3666,7 +3666,7 @@ pub const Interpreter = struct {
             .{@intFromEnum(list_layout)},
         );
         const l = self.layout_store.getLayout(resolved_layout);
-        if (l.tag == .list) return l.data.list;
+        if (l.tag == .list) return l.getIdx();
         return .zst;
     }
 
@@ -3722,7 +3722,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         if (layout_val.tag != .struct_) return null;
 
-        const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+        const struct_data = self.layout_store.getStructData(layout_val.getStruct().idx);
         const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
         if (fields.len != 1) return null;
 
@@ -3746,7 +3746,7 @@ pub const Interpreter = struct {
             const inner_layout = self.layout_store.getLayout(unwrapped);
             if (inner_layout.tag != .struct_) continue;
 
-            const struct_idx = inner_layout.data.struct_.idx;
+            const struct_idx = inner_layout.getStruct().idx;
             const struct_data = self.layout_store.getStructData(struct_idx);
             const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
             if (fields.len != 2) continue;
@@ -3867,7 +3867,7 @@ pub const Interpreter = struct {
                 if (ret_layout_val.tag != .tag_union) {
                     return self.runtimeError("str_from_utf8 expected a tag union return layout");
                 }
-                const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
 
                 // Discover Ok (Str payload) and Err variant indices from the layout.
@@ -3885,9 +3885,9 @@ pub const Interpreter = struct {
                         err_disc = @intCast(i);
                         const err_layout = self.layout_store.getLayout(candidate);
                         switch (err_layout.tag) {
-                            .struct_ => err_record_idx = err_layout.data.struct_.idx,
+                            .struct_ => err_record_idx = err_layout.getStruct().idx,
                             .tag_union => {
-                                const inner_tu = self.layout_store.getTagUnionData(err_layout.data.tag_union.idx);
+                                const inner_tu = self.layout_store.getTagUnionData(err_layout.getTagUnion().idx);
                                 inner_tu_data_opt = inner_tu;
                                 const found = self.findBadUtf8Variant(inner_tu);
                                 if (found) |info| {
@@ -4026,7 +4026,7 @@ pub const Interpreter = struct {
                 // Generic num_to_str uses arg layout to determine type
                 const size = self.helper.sizeOf(arg_layout);
                 const l = self.layout_store.getLayout(arg_layout);
-                const is_float = l.tag == .scalar and l.data.scalar.tag == .frac;
+                const is_float = l.tag == .scalar and l.getScalar().tag == .frac;
                 if (isDec(arg_layout)) {
                     const dec = RocDec{ .num = args[0].read(i128) };
                     var crash_boundary = self.enterCrashBoundary();
@@ -4155,7 +4155,7 @@ pub const Interpreter = struct {
                     return self.runtimeError("list_sublist expected a { start, len } record");
                 }
 
-                const record_idx = record_layout_val.data.struct_.idx;
+                const record_idx = record_layout_val.getStruct().idx;
                 const len_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0);
                 const start_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1);
                 const start = args[1].offset(start_field_off).read(u64);
@@ -4415,7 +4415,7 @@ pub const Interpreter = struct {
                     return self.runtimeError("typed from_str expected a tag union return layout");
                 }
 
-                const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
+                const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
                 const result = try self.alloc(ll.ret_layout);
                 const roc_str = valueToRocStr(args[0]);
 
@@ -4737,8 +4737,8 @@ pub const Interpreter = struct {
         var found_list = false;
         var found_elem = false;
         for (0..struct_info.fields.len) |i| {
-            const field_layout = self.layout_store.getStructFieldLayout(struct_layout_val.data.struct_.idx, @intCast(i));
-            const field_offset = self.layout_store.getStructFieldOffset(struct_layout_val.data.struct_.idx, @intCast(i));
+            const field_layout = self.layout_store.getStructFieldLayout(struct_layout_val.getStruct().idx, @intCast(i));
+            const field_offset = self.layout_store.getStructFieldOffset(struct_layout_val.getStruct().idx, @intCast(i));
             const field_layout_val = self.layout_store.getLayout(field_layout);
             const is_list = field_layout_val.tag == .list or field_layout_val.tag == .list_of_zst;
             if (is_list) {
@@ -4925,7 +4925,7 @@ pub const Interpreter = struct {
 
         if (op == .eq and switch (layout_val.tag) {
             .zst, .struct_, .list, .list_of_zst, .tag_union => true,
-            .scalar => layout_val.data.scalar.tag == .str,
+            .scalar => layout_val.getScalar().tag == .str,
             else => false,
         }) {
             val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
@@ -4964,7 +4964,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         return switch (layout_val.tag) {
             .zst => true,
-            .scalar => switch (layout_val.data.scalar.tag) {
+            .scalar => switch (layout_val.getScalar().tag) {
                 .str => builtins.str.strEqual(valueToRocStr(a), valueToRocStr(b)),
                 .frac => switch (self.helper.sizeOf(layout_idx)) {
                     4 => a.read(f32) == b.read(f32),
@@ -5000,14 +5000,14 @@ pub const Interpreter = struct {
                 const a_ptr = self.readBoxedDataPointer(a);
                 const b_ptr = self.readBoxedDataPointer(b);
                 if (a_ptr == null or b_ptr == null) break :blk a_ptr == null and b_ptr == null;
-                break :blk try self.valuesEqual(.{ .ptr = a_ptr.? }, .{ .ptr = b_ptr.? }, layout_val.data.box);
+                break :blk try self.valuesEqual(.{ .ptr = a_ptr.? }, .{ .ptr = b_ptr.? }, layout_val.getIdx());
             },
             .erased_callable => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: equality on erased callable layout {d} survived lowering",
                 .{@intFromEnum(layout_idx)},
             ),
             .struct_ => blk: {
-                const struct_data = self.layout_store.getStructData(layout_val.data.struct_.idx);
+                const struct_data = self.layout_store.getStructData(layout_val.getStruct().idx);
                 const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
                 var field_index: usize = 0;
                 while (field_index < fields.len) : (field_index += 1) {
@@ -5016,7 +5016,7 @@ pub const Interpreter = struct {
                     const field_size = self.helper.sizeOf(field_layout);
                     if (field_size == 0) continue;
                     const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
-                        layout_val.data.struct_.idx,
+                        layout_val.getStruct().idx,
                         field.index,
                     );
                     if (!try self.valuesEqual(a.offset(field_offset), b.offset(field_offset), field_layout)) {
@@ -5358,17 +5358,17 @@ pub const Interpreter = struct {
         // Numeral record fields are stored in lexicographic order by name:
         // digits_after_pt, digits_after_pt_count, digits_before_pt, is_negative.
         const after = try self.readNumeralU8List(record_base.value, record_base.layout, 0);
-        const after_count_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, 1);
+        const after_count_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, 1);
         if (after_count_layout != .u64) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: Numeral digits_after_pt_count layout {d} was not U64",
                 .{@intFromEnum(after_count_layout)},
             );
         }
-        const after_count_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, 1);
+        const after_count_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, 1);
         const before = try self.readNumeralU8List(record_base.value, record_base.layout, 2);
-        const neg_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, 3);
-        const neg_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, 3);
+        const neg_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, 3);
+        const neg_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, 3);
 
         return .{
             .is_negative = try self.readBoolValue(record_base.value.offset(neg_offset), neg_layout),
@@ -5385,7 +5385,7 @@ pub const Interpreter = struct {
         field_index: u32,
     ) Error![]const u8 {
         const record_layout_val = self.layout_store.getLayout(record_layout);
-        const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout_val.data.struct_.idx, field_index);
+        const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(record_layout_val.getStruct().idx, field_index);
         const elem = self.listElemLayout(field_layout);
         if (elem != .u8) {
             return self.invariantFailedError(
@@ -5393,7 +5393,7 @@ pub const Interpreter = struct {
                 .{ field_index, @intFromEnum(elem) },
             );
         }
-        const offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout_val.data.struct_.idx, field_index);
+        const offset = self.layout_store.getStructFieldOffsetByOriginalIndex(record_layout_val.getStruct().idx, field_index);
         const list = self.valueToRocListForLayout(record_base.offset(offset), field_layout);
         if (list.len() == 0) return &.{};
         const bytes = list.bytes orelse {
@@ -5428,7 +5428,7 @@ pub const Interpreter = struct {
             );
         }
 
-        const tu_data = self.layout_store.getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
         const variants = self.layout_store.getTagUnionVariants(tu_data);
         var ok_discriminant: ?u16 = null;
         var ok_payload_layout: layout_mod.Idx = .none;
@@ -5670,7 +5670,7 @@ pub const Interpreter = struct {
                 };
                 const inner = try self.invalidNumeralValue(unwrapped);
                 const value = try self.alloc(err_layout);
-                const struct_idx = err_layout_val.data.struct_.idx;
+                const struct_idx = err_layout_val.getStruct().idx;
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
                 try self.writeStructFieldValue(value, field_offset, unwrapped, inner, unwrapped);
                 return value;
@@ -5702,7 +5702,7 @@ pub const Interpreter = struct {
         }
         if (self.unwrapSingleFieldPayloadLayout(variant_payload_layout)) |field_layout| {
             const variant_layout_val = self.layout_store.getLayout(variant_payload_layout);
-            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(variant_layout_val.data.struct_.idx, 0);
+            const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(variant_layout_val.getStruct().idx, 0);
             return self.writeStructFieldValue(destination, field_offset, field_layout, payload, payload_layout);
         }
         const coerced = try self.coerceExplicitRefValueToLayout(payload, payload_layout, variant_payload_layout);
@@ -5715,7 +5715,7 @@ pub const Interpreter = struct {
             return self.runtimeError("low-level try record expected a struct return layout");
         }
 
-        const struct_idx = layout_val.data.struct_.idx;
+        const struct_idx = layout_val.getStruct().idx;
         const struct_info = self.layout_store.getStructInfo(layout_val);
         if (struct_info.fields.len != 2) {
             return self.runtimeError("low-level try record expected exactly two fields");
@@ -6345,7 +6345,7 @@ pub const Interpreter = struct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         switch (struct_layout_val.tag) {
             .box => {
-                const inner_layout = struct_layout_val.data.box;
+                const inner_layout = struct_layout_val.getIdx();
                 const inner_layout_val = self.layout_store.getLayout(inner_layout);
                 if (inner_layout_val.tag != .struct_) {
                     self.invariantFailed(
@@ -6380,7 +6380,7 @@ pub const Interpreter = struct {
     ) ResolvedTagUnionBase {
         const union_layout_val = self.layout_store.getLayout(union_layout);
         if (union_layout_val.tag == .box) {
-            const inner_layout = union_layout_val.data.box;
+            const inner_layout = union_layout_val.getIdx();
             const data_ptr = self.readBoxedDataPointer(union_val) orelse self.invariantFailed(
                 "LIR/interpreter invariant violated: boxed tag union layout {d} had null data pointer for inner layout {d}",
                 .{ @intFromEnum(union_layout), @intFromEnum(inner_layout) },
@@ -6402,14 +6402,14 @@ pub const Interpreter = struct {
         const l = self.layout_store.getLayout(union_layout);
         return switch (l.tag) {
             .tag_union => blk: {
-                const tu_data = self.layout_store.getTagUnionData(l.data.tag_union.idx);
+                const tu_data = self.layout_store.getTagUnionData(l.getTagUnion().idx);
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
                 break :blk if (discriminant < variants.len) variants.get(discriminant).payload_layout else .zst;
             },
             .box => blk: {
-                const inner_layout = self.layout_store.getLayout(l.data.box);
+                const inner_layout = self.layout_store.getLayout(l.getIdx());
                 if (inner_layout.tag != .tag_union) break :blk .zst;
-                const tu_data = self.layout_store.getTagUnionData(inner_layout.data.tag_union.idx);
+                const tu_data = self.layout_store.getTagUnionData(inner_layout.getTagUnion().idx);
                 const variants = self.layout_store.getTagUnionVariants(tu_data);
                 break :blk if (discriminant < variants.len) variants.get(discriminant).payload_layout else .zst;
             },
@@ -6428,7 +6428,7 @@ pub const Interpreter = struct {
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         switch (actual_layout_val.tag) {
             .box => {
-                if (actual_layout_val.data.box == expected_layout) {
+                if (actual_layout_val.getIdx() == expected_layout) {
                     const data_ptr = self.readBoxedDataPointer(value) orelse self.invariantFailed(
                         "LIR/interpreter invariant violated: expected boxed layout {d} to contain data for inner layout {d}, but observed null box pointer",
                         .{ @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
@@ -6476,8 +6476,8 @@ pub const Interpreter = struct {
             const expected_layout_val = self.layout_store.getLayout(expected_layout);
             const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
             const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
-            const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.data.scalar.tag == .opaque_ptr;
-            const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.data.scalar.tag == .opaque_ptr;
+            const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.getScalar().tag == .opaque_ptr;
+            const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.getScalar().tag == .opaque_ptr;
             const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
             const expected_is_list = expected_layout_val.tag == .list or expected_layout_val.tag == .list_of_zst;
             const boxing_compatible =

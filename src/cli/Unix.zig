@@ -10,7 +10,7 @@ pub const Error = std.posix.TermiosGetError || std.posix.TermiosSetError;
 
 // method to enable raw mode on Unix terminals
 pub fn init() Error!Unix {
-    const stdin_handle = std.fs.File.stdin().handle;
+    const stdin_handle = std.Io.File.stdin().handle;
     const old_termios: std.posix.termios = try std.posix.tcgetattr(stdin_handle);
 
     var new_termios = old_termios;
@@ -26,7 +26,7 @@ pub fn init() Error!Unix {
 
 // method to restore the previous terminal settings
 pub fn deinit(unix: Unix) void {
-    const stdin_handle = std.fs.File.stdin().handle;
+    const stdin_handle = std.Io.File.stdin().handle;
 
     std.posix.tcsetattr(stdin_handle, .NOW, unix.old_termios) catch {};
 }

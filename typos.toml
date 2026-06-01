@@ -26,6 +26,7 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
+ACCES = "ACCES" # POSIX/WASI errno name for EACCES
 ANF = "ANF" # A-normal form
 ba = "ba" # Binop apply
 caf = "caf" # Part of the word "café"

@@ -10,12 +10,12 @@ fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expec
     const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("Echo app failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
             result.term, result.stdout, result.stderr,
         });
     }
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expect(result.term == .exited and result.term.exited == 0);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
 }
 
@@ -24,12 +24,12 @@ fn runEchoExpectExitCode(opt_args: []const []const u8, roc_file: []const u8, exp
     const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
-    if (result.term != .Exited or result.term.Exited != expected_code) {
+    if (result.term != .exited or result.term.exited != expected_code) {
         std.debug.print("Echo app exited with code {} (expected {})\nstdout: {s}\nstderr: {s}\n", .{
             result.term, expected_code, result.stdout, result.stderr,
         });
     }
-    try std.testing.expect(result.term == .Exited and result.term.Exited == expected_code);
+    try std.testing.expect(result.term == .exited and result.term.exited == expected_code);
 }
 
 test "echo platform: hello (interpreter)" {
@@ -70,7 +70,7 @@ test "echo platform: custom error issue 9255 repro (dev backend)" {
 
     // Expected behavior for issue #9255: the echo platform should preserve the
     // app's custom error tag when matching the open union catch-all.
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
     try testing.expectEqualStrings("Program exited with error: SomeCustomError(41.0)\n", result.stdout);
 }
 
@@ -79,7 +79,7 @@ fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) !voi
     const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
-    try std.testing.expect(result.term == .Exited and result.term.Exited != 0);
+    try std.testing.expect(result.term == .exited and result.term.exited != 0);
 }
 
 test "echo platform: list concat with refcounted elements issue 9316 (interpreter)" {
@@ -189,6 +189,6 @@ test "echo platform: roc test all_syntax_test.roc passes" {
 
     try util.checkSuccess(result);
 
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try std.testing.expect(has_passed);
 }

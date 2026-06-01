@@ -376,7 +376,7 @@ fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) !Exact {
     const is_negative = text[0] == '-';
     const first: usize = @intFromBool(is_negative);
     if (first >= text.len) return error.InvalidNumeral;
-    const had_decimal_point = std.mem.indexOfScalar(u8, text[first..], '.') != null;
+    const had_decimal_point = std.mem.findScalar(u8, text[first..], '.') != null;
 
     const parts = try decimalParts(allocator, text[first..]);
     defer parts.deinit(allocator);
@@ -398,7 +398,7 @@ fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) !Exact {
 }
 
 fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) !DecimalParts {
-    const exp_index = std.mem.indexOfAny(u8, unsigned_text, "eE");
+    const exp_index = std.mem.findAny(u8, unsigned_text, "eE");
     const mantissa = unsigned_text[0..(exp_index orelse unsigned_text.len)];
     const exponent: i64 = if (exp_index) |index| blk: {
         const exp_text = unsigned_text[index + 1 ..];

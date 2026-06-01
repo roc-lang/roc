@@ -17,7 +17,7 @@ const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
 const BuildEnv = compile.BuildEnv;
-const Io = compile.Io;
+const Io = compile.CoreCtx;
 const RocTarget = roc_target.RocTarget;
 const HostedFn = echo_platform.host_abi.HostedFn;
 
@@ -83,6 +83,13 @@ pub const RunOptions = struct {
     /// Fallback Io that handles everything not served by EchoCtx (i.e. paths
     /// not in `Paths` and not in `extras`).
     fallback_io: Io,
+    /// `std.Io` instance used for any real OS I/O on native targets — passed
+    /// to `BuildEnv.init`, the WasmFilesystem fallback, and stored in
+    /// `EchoEnv` so `echoHostedFn` can call `writeStreamingAll`. On WASM
+    /// builds the value is unused (freestanding stubs trap), but callers
+    /// must still pass a value; a default CoreCtx's `std_io` on freestanding
+    /// is a valid sentinel.
+    std_io: std.Io,
     /// The headerless user source (the body of the synthetic app).
     source: []const u8,
     /// Extra user-supplied modules, available as `import <name>`.
@@ -131,7 +138,12 @@ pub fn runEcho(opts: RunOptions) !u8 {
         .fallback = opts.fallback_io,
     };
 
-    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd) catch |err| {
+    // BuildEnv stores std_io for any real-OS reads its workers initiate.
+    // On WASM the echo pipeline only touches synthetic / extra paths served
+    // by EchoCtx, so the std_io is never actually dereferenced — but the
+    // field still must be a concrete value (no `undefined`) to avoid UB if
+    // a future refactor adds a real-OS call path.
+    var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io) catch |err| {
         diag.step("BuildEnv.init", err);
         return err;
     };
@@ -229,7 +241,7 @@ pub fn runEcho(opts: RunOptions) !u8 {
         return err;
     };
 
-    return runEchoView(allocator, &view, diag) catch |err| {
+    return runEchoView(allocator, &view, diag, opts.std_io) catch |err| {
         diag.step("runEchoView", err);
         return err;
     };
@@ -239,6 +251,7 @@ fn runEchoView(
     allocator: Allocator,
     view: *const lir.LirImage.ProgramView,
     diag: Diagnostics,
+    std_io: std.Io,
 ) !u8 {
     // HostedFn array order matters: the interpreter calls
     // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
@@ -247,8 +260,8 @@ fn runEchoView(
     // trivially correct — but additions must respect alphabetical order or
     // the wrong function will be called silently. See README "Host functions".
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
-    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, &hosted_fn_array);
+    var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
+    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
     var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
@@ -283,7 +296,7 @@ fn runEchoView(
         },
     };
 
-    if (default_roc_ops_env.inline_expect_failed) return 1;
+    if (echo_env.inline_expect_failed) return 1;
     return result_buf[0];
 }
 
@@ -318,7 +331,13 @@ pub const EchoCtx = struct {
     fallback: Io,
 
     pub fn io(self: *EchoCtx) Io {
-        return .{ .ctx = @ptrCast(self), .vtable = echo_vtable };
+        return .{
+            .ctx = @ptrCast(self),
+            .vtable = echo_vtable,
+            .std_io = self.fallback.std_io,
+            .gpa = self.fallback.gpa,
+            .arena = self.fallback.arena,
+        };
     }
 
     /// Return the content for a synthetic/embedded path, or null if not synthetic.
@@ -350,66 +369,84 @@ fn echoGetCtx(ctx_ptr: ?*anyopaque) *EchoCtx {
     return @ptrCast(@alignCast(ctx_ptr.?));
 }
 
-fn echoReadFile(ctx_ptr: ?*anyopaque, path: []const u8, gpa: Allocator) Io.ReadError![]u8 {
+fn echoReadFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) Io.ReadError![]u8 {
     const self = echoGetCtx(ctx_ptr);
     if (self.getSyntheticContent(path)) |content|
         return gpa.dupe(u8, content) catch return error.OutOfMemory;
     return self.fallback.readFile(path, gpa);
 }
 
-fn echoFileExists(ctx_ptr: ?*anyopaque, path: []const u8) bool {
+fn echoFileExists(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) bool {
     const self = echoGetCtx(ctx_ptr);
     if (self.isSyntheticPath(path)) return true;
     return self.fallback.fileExists(path);
 }
 
-fn echoReadFileInto(ctx_ptr: ?*anyopaque, path: []const u8, buf: []u8) Io.ReadError!usize {
+fn echoReadFileInto(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buf: []u8) Io.ReadError!usize {
     return echoGetCtx(ctx_ptr).fallback.readFileInto(path, buf);
 }
-fn echoWriteFile(ctx_ptr: ?*anyopaque, path: []const u8, data: []const u8) Io.WriteError!void {
+fn echoWriteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, data: []const u8) Io.WriteError!void {
     return echoGetCtx(ctx_ptr).fallback.writeFile(path, data);
 }
-fn echoStat(ctx_ptr: ?*anyopaque, path: []const u8) Io.StatError!Io.FileInfo {
+fn echoStat(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.StatError!Io.FileInfo {
     return echoGetCtx(ctx_ptr).fallback.stat(path);
 }
-fn echoListDir(ctx_ptr: ?*anyopaque, path: []const u8, gpa: Allocator) Io.ListError![]Io.FileEntry {
+fn echoListDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) Io.ListError![]Io.FileEntry {
     return echoGetCtx(ctx_ptr).fallback.listDir(path, gpa);
 }
-fn echoDirName(ctx_ptr: ?*anyopaque, path: []const u8) ?[]const u8 {
+fn echoDirName(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) ?[]const u8 {
     return echoGetCtx(ctx_ptr).fallback.dirName(path);
 }
-fn echoBaseName(ctx_ptr: ?*anyopaque, path: []const u8) []const u8 {
+fn echoBaseName(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) []const u8 {
     return echoGetCtx(ctx_ptr).fallback.baseName(path);
 }
-fn echoJoinPath(ctx_ptr: ?*anyopaque, parts: []const []const u8, gpa: Allocator) Allocator.Error![]const u8 {
+fn echoJoinPath(ctx_ptr: ?*anyopaque, _: std.Io, parts: []const []const u8, gpa: Allocator) Allocator.Error![]const u8 {
     return echoGetCtx(ctx_ptr).fallback.joinPath(parts, gpa);
 }
-fn echoCanonicalize(ctx_ptr: ?*anyopaque, path: []const u8, gpa: Allocator) Io.CanonicalizeError![]const u8 {
+fn echoCanonicalize(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, gpa: Allocator) Io.CanonicalizeError![]const u8 {
     return echoGetCtx(ctx_ptr).fallback.canonicalize(path, gpa);
 }
-fn echoMakePath(ctx_ptr: ?*anyopaque, path: []const u8) Io.MakePathError!void {
+fn echoMakePath(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.MakePathError!void {
     return echoGetCtx(ctx_ptr).fallback.makePath(path);
 }
-fn echoRename(ctx_ptr: ?*anyopaque, old: []const u8, new: []const u8) Io.RenameError!void {
+fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8) Io.RenameError!void {
     return echoGetCtx(ctx_ptr).fallback.rename(old, new);
 }
-fn echoGetEnvVar(ctx_ptr: ?*anyopaque, key: []const u8, gpa: Allocator) Io.GetEnvVarError![]u8 {
+fn echoGetEnvVar(ctx_ptr: ?*anyopaque, _: std.Io, key: []const u8, gpa: Allocator) Io.GetEnvVarError![]u8 {
     return echoGetCtx(ctx_ptr).fallback.getEnvVar(key, gpa);
 }
-fn echoFetchUrl(ctx_ptr: ?*anyopaque, gpa: Allocator, url: []const u8, dest: []const u8) Io.FetchUrlError!void {
+fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8) Io.FetchUrlError!void {
     return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest);
 }
-fn echoWriteStdout(ctx_ptr: ?*anyopaque, data: []const u8) Io.StdioError!void {
+fn echoWriteStdout(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) Io.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStdout(data);
 }
-fn echoWriteStderr(ctx_ptr: ?*anyopaque, data: []const u8) Io.StdioError!void {
+fn echoWriteStderr(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) Io.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStderr(data);
 }
-fn echoReadStdin(ctx_ptr: ?*anyopaque, buf: []u8) Io.StdioError!usize {
+fn echoReadStdin(ctx_ptr: ?*anyopaque, _: std.Io, buf: []u8) Io.StdioError!usize {
     return echoGetCtx(ctx_ptr).fallback.readStdin(buf);
 }
-fn echoIsTty(ctx_ptr: ?*anyopaque) bool {
+fn echoIsTty(ctx_ptr: ?*anyopaque, _: std.Io) bool {
     return echoGetCtx(ctx_ptr).fallback.isTty();
+}
+fn echoDeleteFile(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.DeleteError!void {
+    return echoGetCtx(ctx_ptr).fallback.deleteFile(path);
+}
+fn echoDeleteDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.DeleteError!void {
+    return echoGetCtx(ctx_ptr).fallback.deleteDir(path);
+}
+fn echoDeleteTree(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.DeleteError!void {
+    return echoGetCtx(ctx_ptr).fallback.deleteTree(path);
+}
+fn echoCreateDir(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) Io.MakePathError!void {
+    return echoGetCtx(ctx_ptr).fallback.createDir(path);
+}
+fn echoCopyFile(ctx_ptr: ?*anyopaque, _: std.Io, src: []const u8, dst: []const u8) Io.CopyError!void {
+    return echoGetCtx(ctx_ptr).fallback.copyFile(src, dst);
+}
+fn echoTimestampNow(ctx_ptr: ?*anyopaque, _: std.Io) i128 {
+    return echoGetCtx(ctx_ptr).fallback.timestampNow();
 }
 
 const echo_vtable = Io.VTable{
@@ -427,6 +464,12 @@ const echo_vtable = Io.VTable{
     .rename = &echoRename,
     .getEnvVar = &echoGetEnvVar,
     .fetchUrl = &echoFetchUrl,
+    .deleteFile = &echoDeleteFile,
+    .deleteDir = &echoDeleteDir,
+    .deleteTree = &echoDeleteTree,
+    .createDir = &echoCreateDir,
+    .copyFile = &echoCopyFile,
+    .timestampNow = &echoTimestampNow,
     .writeStdout = &echoWriteStdout,
     .writeStderr = &echoWriteStderr,
     .readStdin = &echoReadStdin,
