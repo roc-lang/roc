@@ -238,10 +238,32 @@ const ForkResult = union(enum) {
     fork_failed: void,
 };
 
-fn remainingPollTimeoutMs(deadline_ms: ?i64) i32 {
-    const deadline = deadline_ms orelse return -1;
-    const remaining = deadline - std.time.milliTimestamp();
-    if (remaining <= 0) return 0;
+const Deadline = struct {
+    timer: Timer,
+    timeout_ns: u64,
+
+    fn init(timeout_ms: u64) Deadline {
+        return .{
+            .timer = Timer.start() catch unreachable,
+            .timeout_ns = timeout_ms * std.time.ns_per_ms,
+        };
+    }
+
+    fn remainingMs(self: *Deadline) u64 {
+        const elapsed_ns = self.timer.read();
+        if (elapsed_ns >= self.timeout_ns) return 0;
+        return (self.timeout_ns - elapsed_ns) / std.time.ns_per_ms;
+    }
+
+    fn expired(self: *Deadline) bool {
+        return self.timer.read() >= self.timeout_ns;
+    }
+};
+
+fn remainingPollTimeoutMs(deadline: ?*Deadline) i32 {
+    const active = deadline orelse return -1;
+    const remaining = active.remainingMs();
+    if (remaining == 0) return 0;
     return @intCast(@min(remaining, std.math.maxInt(i32)));
 }
 
@@ -354,17 +376,15 @@ fn forkAndEval(
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
-    const deadline_ms: ?i64 = if (timeout_ms > 0)
-        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
-    else
-        null;
+    var deadline = if (timeout_ms > 0) Deadline.init(timeout_ms) else null;
+    const deadline_ptr: ?*Deadline = if (deadline) |*active| active else null;
     while (true) {
         var poll_fds = [_]posix.pollfd{.{
             .fd = pipe_read,
             .events = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL,
             .revents = 0,
         }};
-        const poll_timeout = remainingPollTimeoutMs(deadline_ms);
+        const poll_timeout = remainingPollTimeoutMs(deadline_ptr);
         if (poll_timeout == 0) {
             killForkedBackend(fork_result);
             _ = posix.waitpid(fork_result, 0);
@@ -650,12 +670,10 @@ fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) Te
         };
     }
 
-    const deadline_ms: ?i64 = if (timeout_ms > 0)
-        std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms))
-    else
-        null;
+    var deadline = if (timeout_ms > 0) Deadline.init(timeout_ms) else null;
+    const deadline_ptr: ?*Deadline = if (deadline) |*active| active else null;
 
-    const outcome = runSingleTestInner(allocator, tc, deadline_ms) catch |err| {
+    const outcome = runSingleTestInner(allocator, tc, deadline_ptr) catch |err| {
         return .{
             .status = .fail,
             .message = @errorName(err),
@@ -706,33 +724,32 @@ fn initBackendRows(skips: [NUM_BACKENDS]bool) [NUM_BACKENDS]BackendDetail {
     return backends;
 }
 
-fn remainingBackendBudgetMs(deadline_ms: ?i64) u64 {
-    const deadline = deadline_ms orelse return 0;
-    const remaining = deadline - std.time.milliTimestamp();
-    return if (remaining <= 0) 0 else @intCast(remaining);
+fn remainingBackendBudgetMs(deadline: ?*Deadline) u64 {
+    const active = deadline orelse return 0;
+    return active.remainingMs();
 }
 
-fn deadlineExpired(deadline_ms: ?i64) bool {
-    return if (deadline_ms) |deadline| std.time.milliTimestamp() >= deadline else false;
+fn deadlineExpired(deadline: ?*Deadline) bool {
+    return if (deadline) |active| active.expired() else false;
 }
 
 fn backendUsesStandardTimeout(index: usize) bool {
     return index != LLVM_BACKEND_INDEX;
 }
 
-fn backendTimeoutBudgetMs(index: usize, standard_deadline_ms: ?i64) u64 {
-    if (standard_deadline_ms == null) return 0;
+fn backendTimeoutBudgetMs(index: usize, standard_deadline: ?*Deadline) u64 {
+    if (standard_deadline == null) return 0;
     if (index == LLVM_BACKEND_INDEX) return LLVM_BACKEND_TIMEOUT_MS;
-    return remainingBackendBudgetMs(standard_deadline_ms);
+    return remainingBackendBudgetMs(standard_deadline);
 }
 
-fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, deadline_ms: ?i64) !TestOutcome {
+fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, deadline: ?*Deadline) !TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline_ms),
+        .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline),
         .allocations_at_most => |expected| runAllocationTest(allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
-        .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, deadline_ms),
-        .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, deadline_ms),
+        .crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, deadline),
+        .problem_and_crash => runCrashTest(allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, deadline),
     };
 }
 
@@ -876,7 +893,7 @@ fn runInspectTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
-    deadline_ms: ?i64,
+    deadline: ?*Deadline,
 ) !TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
     defer compiled.deinit(allocator);
@@ -909,7 +926,7 @@ fn runInspectTest(
         if (backends[i].status != .not_run) {
             continue;
         }
-        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline_ms)) {
+        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline)) {
             backends[i] = .{ .status = .timeout };
             any_timeout = true;
             break;
@@ -918,7 +935,7 @@ fn runInspectTest(
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
+        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline));
         const dur = timer.read();
         trace.log("finished backend {s} for inspected source {s} in {d}ns", .{ BACKEND_NAMES[i], src, dur });
 
@@ -1053,7 +1070,7 @@ fn runCrashTest(
     imports: []const helpers.ModuleSource,
     skip: TestCase.Skip,
     require_problems: bool,
-    deadline_ms: ?i64,
+    deadline: ?*Deadline,
 ) !TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, source_kind, src, imports);
     defer compiled.deinit(allocator);
@@ -1129,7 +1146,7 @@ fn runCrashTest(
         if (backends[i].status != .not_run) {
             continue;
         }
-        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline_ms)) {
+        if (backendUsesStandardTimeout(i) and deadlineExpired(deadline)) {
             backends[i] = .{ .status = .timeout };
             any_timeout = true;
             break;
@@ -1137,7 +1154,7 @@ fn runCrashTest(
 
         var timer = Timer.start() catch unreachable;
         const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
-        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline_ms));
+        const fork_result = forkAndEval(eval_fns[i], lowered, backendTimeoutBudgetMs(i, deadline));
         const dur = timer.read();
 
         switch (fork_result) {

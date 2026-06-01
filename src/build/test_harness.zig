@@ -432,7 +432,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             pid: posix.pid_t,
             pipe_fd: posix.fd_t,
             test_index: usize,
-            start_time_ms: i64,
+            start_time_ns: u64,
             buf: std.ArrayListUnmanaged(u8),
             timed_out: bool,
         };
@@ -459,7 +459,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             _ = std.c.raise(posix.SIG.INT);
         }
 
-        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64) bool {
+        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64, start_time_ns: u64) bool {
             if (comptime !has_fork) return false;
 
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
@@ -495,7 +495,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .pid = pid,
                 .pipe_fd = pipe_fds[0],
                 .test_index = test_idx,
-                .start_time_ms = std.time.milliTimestamp(),
+                .start_time_ns = start_time_ns,
                 .buf = .empty,
                 .timed_out = false,
             };
@@ -590,7 +590,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             // Fill initial slots
             for (slots) |*slot| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(slot, specs, next_test, timeout_ms)) {
+                if (!launchChild(slot, specs, next_test, timeout_ms, progress_timer.read())) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -631,7 +631,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms)) {
+                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms, progress_timer.read())) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -642,10 +642,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 // Check timeouts
                 if (timeout_ms > 0) {
-                    const now = std.time.milliTimestamp();
+                    const now_ns = progress_timer.read();
                     for (slots) |*slot_opt| {
                         if (slot_opt.*) |*slot| {
-                            const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
+                            const elapsed = (now_ns - slot.start_time_ns) / std.time.ns_per_ms;
                             const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
                             if (elapsed > kill_after_ms and !slot.timed_out) {
                                 slot.timed_out = true;
