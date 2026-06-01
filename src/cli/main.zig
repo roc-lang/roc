@@ -3357,19 +3357,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     else
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
-    const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
-    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
@@ -3612,13 +3599,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| {
-        std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
-        return err;
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    var cleanup_build_scratch_dir = true;
+    defer if (cleanup_build_scratch_dir) {
+        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), build_scratch_dir);
     };
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
     object_compiler.compileToObjectFileAndWrite(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -3634,6 +3624,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     };
 
     if (args.no_link) {
+        cleanup_build_scratch_dir = false;
         if (!args.suppress_build_status) {
             try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
         }
@@ -3642,7 +3633,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
         return error.BuiltinsExtractionFailed;
     };
@@ -3664,7 +3655,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_cache_dir,
+        .scratch_dir = build_scratch_dir,
     };
 
     if (args.z_dump_linker) {
