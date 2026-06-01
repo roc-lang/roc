@@ -162,6 +162,10 @@ scratch_type_var_problems: base.Scratch(TypeVarProblem),
 scratch_record_fields: base.Scratch(types.RecordField),
 /// Scratch ident
 scratch_seen_record_fields: base.Scratch(SeenRecordField),
+/// Scratch expression ids for short-lived dynamic lists.
+scratch_expr_ids: base.Scratch(Expr.Idx),
+/// Scratch pattern ids for short-lived dynamic lists.
+scratch_pattern_ids: base.Scratch(Pattern.Idx),
 /// Scratch tags
 scratch_tags: base.Scratch(types.Tag),
 /// Scratch free variables
@@ -396,6 +400,8 @@ pub fn deinit(
     self.scratch_type_var_problems.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_seen_record_fields.deinit();
+    self.scratch_expr_ids.deinit();
+    self.scratch_pattern_ids.deinit();
     self.import_indices.deinit(gpa);
     self.scratch_tags.deinit();
     self.scratch_free_vars.deinit();
@@ -462,6 +468,8 @@ fn initInternal(
         .scratch_type_var_problems = try base.Scratch(TypeVarProblem).init(gpa),
         .scratch_record_fields = try base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
+        .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
+        .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
         .type_vars_scope = try base.Scratch(TypeVarScope).init(gpa),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
@@ -8028,18 +8036,12 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
     defer self.scratch_captures.clearFrom(captures_top);
 
     // Step 2: Collect field names and canonicalize field values
-    var field_names: [64]Ident.Idx = undefined;
-    var field_values: [64]Expr.Idx = undefined;
-    if (field_count > 64) {
-        const feature = try self.env.insertString("record builder with more than 64 fields");
-        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-            .feature = feature,
-            .region = region,
-        } });
-        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-    }
+    const field_names_top = self.scratch_idents.top();
+    defer self.scratch_idents.clearFrom(field_names_top);
+    const field_values_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(field_values_top);
 
-    for (fields_slice, 0..) |field_idx, i| {
+    for (fields_slice) |field_idx| {
         const field = self.parse_ir.store.getRecordField(field_idx);
 
         // Get field name
@@ -8049,12 +8051,12 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
             } });
             return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
         };
-        field_names[i] = field_name;
+        try self.scratch_idents.append(field_name);
 
         // Canonicalize field value
         if (field.value) |value_idx| {
             if (try self.canonicalizeExpr(value_idx)) |can_value| {
-                field_values[i] = can_value.idx;
+                try self.scratch_expr_ids.append(can_value.idx);
                 // Collect free vars from field value
                 const value_free_vars = self.scratch_free_vars.sliceFromSpan(can_value.free_vars);
                 for (value_free_vars) |fv| {
@@ -8064,7 +8066,7 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                     .region = region,
                 } });
-                field_values[i] = malformed_idx;
+                try self.scratch_expr_ids.append(malformed_idx);
             }
         } else {
             // Shorthand: { foo } means { foo: foo }
@@ -8072,14 +8074,14 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
                 const lookup_idx = try self.env.addExpr(CIR.Expr{
                     .e_lookup_local = .{ .pattern_idx = pattern_idx },
                 }, region);
-                field_values[i] = lookup_idx;
+                try self.scratch_expr_ids.append(lookup_idx);
                 try self.appendPropagatedFreeVar(captures_top, pattern_idx);
             } else {
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
                     .ident = field_name,
                     .region = region,
                 } });
-                field_values[i] = malformed_idx;
+                try self.scratch_expr_ids.append(malformed_idx);
             }
         }
     }
@@ -8110,11 +8112,13 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
     // Step 4: Build the chained map2 calls
     // For 2 fields: T.map2(fa, fb, |a, b| { a, b })
     // For 3+ fields: Build right-to-left with tuple intermediates
+    const field_names = self.scratch_idents.slice(field_names_top, self.scratch_idents.top());
+    const field_values = self.scratch_expr_ids.slice(field_values_top, self.scratch_expr_ids.top());
     const result_expr = try self.buildChainedMap2(
         region,
         map2_pattern_idx.?,
-        field_names[0..field_count],
-        field_values[0..field_count],
+        field_names,
+        field_values,
     );
 
     // Collect all free variables
@@ -8342,13 +8346,14 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
 
     // Create patterns for all parameters
     const patterns_start = self.env.store.scratch.?.patterns.top();
-    var param_patterns: [64]Pattern.Idx = undefined;
+    const param_patterns_top = self.scratch_pattern_ids.top();
+    defer self.scratch_pattern_ids.clearFrom(param_patterns_top);
 
-    for (field_names, 0..) |name, i| {
+    for (field_names) |name| {
         const p = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
         _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, false, true);
         try self.env.store.scratch.?.patterns.append(p);
-        param_patterns[i] = p;
+        try self.scratch_pattern_ids.append(p);
         try self.used_patterns.put(self.env.gpa, p, {});
     }
 
@@ -8356,9 +8361,10 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
 
     // Create record body { a: a, b: b, ... }
     const record_fields_start = self.env.store.scratch.?.record_fields.top();
+    const param_patterns = self.scratch_pattern_ids.slice(param_patterns_top, self.scratch_pattern_ids.top());
 
-    for (field_names, 0..) |name, i| {
-        const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = param_patterns[i] } }, region);
+    for (field_names, param_patterns) |name, pattern_idx| {
+        const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, region);
         const field_idx = try self.env.addRecordField(CIR.RecordField{ .name = name, .value = lookup }, region);
         try self.env.store.scratch.?.record_fields.append(field_idx);
     }
