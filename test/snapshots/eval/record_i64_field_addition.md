@@ -100,7 +100,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 121)
+						(e-dispatch-call (method "plus") (constraint-fn-var 120)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -122,7 +122,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 267)
+				(e-call (constraint-fn-var 266)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields

@@ -772,97 +772,54 @@ UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:72:8:72:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:73:8:73:26
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:76:5:76:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:78:5:84:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:81:9:83:10
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:86:8:86:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:87:8:87:26
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:88:8:88:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:91:5:95:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:92:9:94:10
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:97:14:97:24
 TYPE REDECLARED - associated_items_complete_all_patterns.md:101:5:107:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:102:9:104:10
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:106:18:106:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:111:5:117:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:112:9:114:10
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:119:5:119:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:121:8:121:27
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:122:8:122:27
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:123:8:123:27
 TYPE REDECLARED - associated_items_complete_all_patterns.md:126:5:136:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:127:9:133:10
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:138:5:138:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:140:8:140:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:143:5:143:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:145:5:155:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:148:9:154:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:151:13:153:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:157:8:157:30
 TYPE REDECLARED - associated_items_complete_all_patterns.md:160:5:170:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:161:9:167:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:162:13:164:14
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:172:5:172:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:174:8:174:24
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:177:5:177:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:179:5:189:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:180:9:186:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:183:13:185:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:191:8:191:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:194:5:201:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:195:9:200:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:196:13:198:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:203:8:203:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:206:5:216:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:207:9:213:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:208:13:210:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:218:8:218:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:221:5:231:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:222:9:228:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:223:13:225:14
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:233:5:233:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:235:8:235:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:238:5:244:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:239:9:243:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:240:13:242:14
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:246:11:246:17
 TYPE REDECLARED - associated_items_complete_all_patterns.md:250:5:258:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:251:9:255:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:252:13:254:14
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:257:15:257:24
 TYPE REDECLARED - associated_items_complete_all_patterns.md:262:5:270:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:263:9:269:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:264:13:266:14
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:268:23:268:33
 TYPE REDECLARED - associated_items_complete_all_patterns.md:274:5:288:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:275:9:285:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:276:13:282:14
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:290:5:290:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:292:8:292:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:295:5:295:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:297:5:311:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:300:9:310:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:303:13:309:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:306:17:308:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:313:8:313:30
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:316:5:316:9
 TYPE REDECLARED - associated_items_complete_all_patterns.md:318:5:332:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:319:9:329:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:322:13:328:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:323:17:325:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:334:8:334:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:337:5:347:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:338:9:346:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:339:13:345:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:340:17:342:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:349:8:349:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:352:5:364:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:353:9:363:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:354:13:360:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:355:17:357:18
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:366:8:366:26
 TYPE REDECLARED - associated_items_complete_all_patterns.md:369:5:383:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:372:9:382:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:375:13:381:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:378:17:380:18
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:385:5:385:9
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:387:8:387:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:388:8:388:22
@@ -870,21 +827,10 @@ UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:389:8:389:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:390:8:390:22
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:391:9:391:23
 TYPE REDECLARED - associated_items_complete_all_patterns.md:394:5:402:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:395:9:401:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:396:13:400:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:397:17:399:18
 DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:404:5:404:8
 UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:404:11:404:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:409:9:417:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:410:13:414:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:411:17:413:18
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:416:19:416:28
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
-TYPE REDECLARED - associated_items_complete_all_patterns.md:423:9:431:10
-TYPE REDECLARED - associated_items_complete_all_patterns.md:424:13:430:14
-TYPE REDECLARED - associated_items_complete_all_patterns.md:425:17:427:18
-UNDEFINED VARIABLE - associated_items_complete_all_patterns.md:429:23:429:30
 TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
 # PROBLEMS
 **PARSE ERROR**
@@ -4966,26 +4912,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:81:9:83:10:**
-```roc
-        L3 := [U].{
-            val3 = val1 + val2
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d3_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5045,26 +4971,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:92:9:94:10:**
-```roc
-        L3 := [X].{
-            l3_private = 999
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `l3_private` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5105,37 +5011,6 @@ But _L2_ was already declared here:
 
 
 **TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:102:9:104:10:**
-```roc
-        L3 := [AA].{
-            l3_secret = 888
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l3_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:106:18:106:27:**
-```roc
-        bad_l2 = l3_secret
-```
-                 ^^^^^^^^^
-
-
-**TYPE REDECLARED**
 The type _L2_ is being redeclared.
 
 The redeclaration is here:
@@ -5160,26 +5035,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:112:9:114:10:**
-```roc
-        L3 := [AD].{
-            val3 = val2 * 2
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
 ```
 
 
@@ -5266,30 +5121,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:127:9:133:10:**
-```roc
-        L3 := [AG].{
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-
-            val3 = 3
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
 **DUPLICATE DEFINITION**
 The name `val1` is being redeclared in this scope.
 
@@ -5369,50 +5200,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:148:9:154:10:**
-```roc
-        L3 := [AK].{
-            val3 = val1 + val2
-
-            L4 := [AL].{
-                val4 = val1 + val2 + val3
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:151:13:153:14:**
-```roc
-            L4 := [AL].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d4_all_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5453,50 +5240,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:161:9:167:10:**
-```roc
-        L3 := [AO].{
-            L4 := [AP].{
-                val4 = val3 + 1
-            }
-
-            val3 = val2 + 1
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:162:13:164:14:**
-```roc
-            L4 := [AP].{
-                val4 = val3 + 1
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
 ```
 
 
@@ -5579,50 +5322,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:180:9:186:10:**
-```roc
-        L3 := [AS].{
-            val3 = val1 + val2
-
-            L4 := [AT].{
-                val4 = val1 + val2 + val3
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:183:13:185:14:**
-```roc
-            L4 := [AT].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d4_interleaved` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5660,49 +5359,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:195:9:200:10:**
-```roc
-        L3 := [BC].{
-            L4 := [BD].{
-                val4 = val3 * 3
-            }
-            val3 = 12
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:196:13:198:14:**
-```roc
-            L4 := [BD].{
-                val4 = val3 * 3
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
 ```
 
 
@@ -5749,50 +5405,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:207:9:213:10:**
-```roc
-        L3 := [BG].{
-            L4 := [BH].{
-                val4 = val2 + val3
-            }
-
-            val3 = 8
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:208:13:210:14:**
-```roc
-            L4 := [BH].{
-                val4 = val2 + val3
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d4_l2_val_after_l3` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -5833,50 +5445,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:222:9:228:10:**
-```roc
-        L3 := [BK].{
-            L4 := [BL].{
-                val4 = val1 + 100
-            }
-
-            val3 = val1 + 50
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:223:13:225:14:**
-```roc
-            L4 := [BL].{
-                val4 = val1 + 100
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
 ```
 
 
@@ -5937,48 +5505,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:239:9:243:10:**
-```roc
-        L3 := [BO].{
-            L4 := [BP].{
-                l4_val = 444
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:240:13:242:14:**
-```roc
-            L4 := [BP].{
-                l4_val = 444
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `l4_val` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -6021,59 +5547,6 @@ But _L2_ was already declared here:
 
 
 **TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:251:9:255:10:**
-```roc
-        L3 := [BS].{
-            L4 := [BT].{
-                l4_secret = 333
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:252:13:254:14:**
-```roc
-            L4 := [BT].{
-                l4_secret = 333
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l4_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:257:15:257:24:**
-```roc
-        bad = l4_secret
-```
-              ^^^^^^^^^
-
-
-**TYPE REDECLARED**
 The type _L2_ is being redeclared.
 
 The redeclaration is here:
@@ -6101,61 +5574,6 @@ But _L2_ was already declared here:
         val2 = 20
     }
 ```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:263:9:269:10:**
-```roc
-        L3 := [BW].{
-            L4 := [BX].{
-                l4_private = 555
-            }
-
-            attempt = l4_private
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:264:13:266:14:**
-```roc
-            L4 := [BX].{
-                l4_private = 555
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l4_private` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:268:23:268:33:**
-```roc
-            attempt = l4_private
-```
-                      ^^^^^^^^^^
 
 
 **TYPE REDECLARED**
@@ -6191,58 +5609,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:275:9:285:10:**
-```roc
-        L3 := [CA].{
-            L4 := [CB].{
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = 4
-            }
-
-            val3 = 3
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:276:13:282:14:**
-```roc
-            L4 := [CB].{
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = 4
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
 ```
 
 
@@ -6329,78 +5695,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:300:9:310:10:**
-```roc
-        L3 := [CF].{
-            val3 = val1 + val2
-
-            L4 := [CG].{
-                val4 = val1 + val2 + val3
-
-                L5 := [CH].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:303:13:309:14:**
-```roc
-            L4 := [CG].{
-                val4 = val1 + val2 + val3
-
-                L5 := [CH].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:306:17:308:18:**
-```roc
-                L5 := [CH].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d5_all_vals_then_types` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -6466,78 +5760,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:319:9:329:10:**
-```roc
-        L3 := [CK].{
-            val3 = val1 + val2
-
-            L4 := [CL].{
-                L5 := [CM].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = val1 + val2 + val3
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:322:13:328:14:**
-```roc
-            L4 := [CL].{
-                L5 := [CM].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-
-                val4 = val1 + val2 + val3
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:323:17:325:18:**
-```roc
-                L5 := [CM].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d5_deep_interleave` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -6578,76 +5800,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:338:9:346:10:**
-```roc
-        L3 := [CP].{
-            L4 := [CQ].{
-                L5 := [CR].{
-                    val5 = val4 * 5
-                }
-
-                val4 = 6
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:339:13:345:14:**
-```roc
-            L4 := [CQ].{
-                L5 := [CR].{
-                    val5 = val4 * 5
-                }
-
-                val4 = 6
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:340:17:342:18:**
-```roc
-                L5 := [CR].{
-                    val5 = val4 * 5
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
 ```
 
 
@@ -6696,78 +5848,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:353:9:363:10:**
-```roc
-        L3 := [CU].{
-            L4 := [CV].{
-                L5 := [CW].{
-                    val5 = val3 + val4
-                }
-
-                val4 = 7
-            }
-
-            val3 = 3
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:354:13:360:14:**
-```roc
-            L4 := [CV].{
-                L5 := [CW].{
-                    val5 = val3 + val4
-                }
-
-                val4 = 7
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:355:17:357:18:**
-```roc
-                L5 := [CW].{
-                    val5 = val3 + val4
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `d5_l3_val_after_l4` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -6812,78 +5892,6 @@ But _L2_ was already declared here:
 
         val2 = 20
     }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:372:9:382:10:**
-```roc
-        L3 := [DE].{
-            val3 = val1 + val2
-
-            L4 := [DF].{
-                val4 = val1 + val2 + val3
-
-                L5 := [DG].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:375:13:381:14:**
-```roc
-            L4 := [DF].{
-                val4 = val1 + val2 + val3
-
-                L5 := [DG].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:378:17:380:18:**
-```roc
-                L5 := [DG].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
 ```
 
 
@@ -6990,72 +5998,6 @@ But _L2_ was already declared here:
 ```
 
 
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:395:9:401:10:**
-```roc
-        L3 := [DJ].{
-            L4 := [DK].{
-                L5 := [DL].{
-                    deep_secret = 12345
-                }
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:396:13:400:14:**
-```roc
-            L4 := [DK].{
-                L5 := [DL].{
-                    deep_secret = 12345
-                }
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:397:17:399:18:**
-```roc
-                L5 := [DL].{
-                    deep_secret = 12345
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-
 **DUPLICATE DEFINITION**
 The name `bad` is being redeclared in this scope.
 
@@ -7118,85 +6060,6 @@ But _L2_ was already declared here:
 
 
 **TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:409:9:417:10:**
-```roc
-        L3 := [DO].{
-            L4 := [DP].{
-                L5 := [DQ].{
-                    l5_secret = 9999
-                }
-            }
-
-            bad = l5_secret
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:410:13:414:14:**
-```roc
-            L4 := [DP].{
-                L5 := [DQ].{
-                    l5_secret = 9999
-                }
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:411:17:413:18:**
-```roc
-                L5 := [DQ].{
-                    l5_secret = 9999
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l5_secret` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:416:19:416:28:**
-```roc
-            bad = l5_secret
-```
-                  ^^^^^^^^^
-
-
-**TYPE REDECLARED**
 The type _L2_ is being redeclared.
 
 The redeclaration is here:
@@ -7226,87 +6089,6 @@ But _L2_ was already declared here:
         val2 = 20
     }
 ```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:423:9:431:10:**
-```roc
-        L3 := [DT].{
-            L4 := [DU].{
-                L5 := [DV].{
-                    l5_only = 8888
-                }
-
-                bad = l5_only
-            }
-        }
-```
-
-But _Test.L2.L3_ was already declared here:
-**associated_items_complete_all_patterns.md:62:9:64:10:**
-```roc
-        L3 := [R].{
-            val3 = val1 + val2
-        }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:424:13:430:14:**
-```roc
-            L4 := [DU].{
-                L5 := [DV].{
-                    l5_only = 8888
-                }
-
-                bad = l5_only
-            }
-```
-
-But _Test.L2.L3.L4_ was already declared here:
-**associated_items_complete_all_patterns.md:128:13:130:14:**
-```roc
-            L4 := [AH].{
-                val4 = val1 + val2 + val3
-            }
-```
-
-
-**TYPE REDECLARED**
-The type _Test.L2.L3.L4.L5_ is being redeclared.
-
-The redeclaration is here:
-**associated_items_complete_all_patterns.md:425:17:427:18:**
-```roc
-                L5 := [DV].{
-                    l5_only = 8888
-                }
-```
-
-But _Test.L2.L3.L4.L5_ was already declared here:
-**associated_items_complete_all_patterns.md:277:17:279:18:**
-```roc
-                L5 := [CC].{
-                    val5 = val1 + val2 + val3 + val4
-                }
-```
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `l5_only` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_complete_all_patterns.md:429:23:429:30:**
-```roc
-                bad = l5_only
-```
-                      ^^^^^^^
 
 
 **TYPE MODULE MISSING MATCHING TYPE**
@@ -9981,10 +8763,6 @@ L2 := [DS].{
 		(p-assign (ident "d2_2"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.Inner.inner_val"))
-		(e-lookup-local
-			(p-assign (ident "outer_val"))))
-	(d-let
 		(p-assign (ident "outer_val"))
 		(e-num (value "500")))
 	(d-let
@@ -9994,16 +8772,10 @@ L2 := [DS].{
 		(p-assign (ident "outer_val"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.Inner.inner_val"))
-		(e-num (value "600")))
-	(d-let
 		(p-assign (ident "d2_4"))
 		(e-field-access (field "outer_val")
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))))
-	(d-let
-		(p-assign (ident "Test.Inner.inner_private"))
-		(e-num (value "700")))
 	(d-let
 		(p-assign (ident "outer_trying_inner"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -10018,7 +8790,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1317)
+		(e-dispatch-call (method "plus") (constraint-fn-var 654)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -10046,19 +8818,6 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "30")))
 	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "5"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
 		(p-assign (ident "d3_4"))
 		(e-field-access (field "val1")
 			(receiver
@@ -10070,29 +8829,8 @@ L2 := [DS].{
 		(p-assign (ident "d3_6"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.l3_private"))
-		(e-num (value "999")))
-	(d-let
 		(p-assign (ident "bad_l1"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.l3_secret"))
-		(e-num (value "888")))
-	(d-let
-		(p-assign (ident "Test.L2.bad_l2"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))
-			(e-num (value "2"))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "3"))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "5")))
@@ -10108,26 +8846,6 @@ L2 := [DS].{
 		(p-assign (ident "d3_9"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1450)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1448)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "val1"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "Test.L2.val2"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-num (value "3")))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-num (value "2")))
-	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "1")))
 	(d-let
@@ -10137,49 +8855,8 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "10")))
 	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
 		(p-assign (ident "d4_2"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))
-			(e-num (value "1"))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "7")))
@@ -10190,77 +8867,14 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "15")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "5"))))
-	(d-let
 		(p-assign (ident "d4_4"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))
-			(e-num (value "3"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-num (value "12")))
 	(d-let
 		(p-assign (ident "d4_5"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-num (value "8")))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-num (value "4")))
-	(d-let
 		(p-assign (ident "d4_6"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "100"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "50"))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "3")))
@@ -10268,51 +8882,8 @@ L2 := [DS].{
 		(p-assign (ident "d4_7"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.L4.l4_val"))
-		(e-num (value "444")))
-	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.l4_secret"))
-		(e-num (value "333")))
-	(d-let
-		(p-assign (ident "Test.L2.bad"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.l4_private"))
-		(e-num (value "555")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.attempt"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1696)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1694)
-					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 1692)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "val1"))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "Test.L2.val2"))))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "Test.L2.L3.val3"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.L4.val4"))))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-num (value "4")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-num (value "3")))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "1")))
@@ -10323,152 +8894,20 @@ L2 := [DS].{
 		(p-assign (ident "val1"))
 		(e-num (value "100")))
 	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "10"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
-	(d-let
 		(p-assign (ident "d5_2"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "2")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-num (value "1"))))
-	(d-let
 		(p-assign (ident "d5_3"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "mul")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))
-			(e-num (value "5"))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-num (value "6")))
 	(d-let
 		(p-assign (ident "d5_4"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-num (value "7")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-num (value "3")))
-	(d-let
 		(p-assign (ident "d5_5"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1315)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "10")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.val3"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "val1")))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.val2")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "val1")))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.val3")))))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-binop (op "add")
-			(e-binop (op "add")
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "val1")))
-					(e-lookup-local
-						(p-assign (ident "Test.L2.val2"))))
-				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))
-			(e-lookup-local
-				(p-assign (ident "Test.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "5")))
@@ -10490,22 +8929,7 @@ L2 := [DS].{
 		(p-assign (ident "d5_10"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.deep_secret"))
-		(e-num (value "12345")))
-	(d-let
 		(p-assign (ident "bad"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.l5_secret"))
-		(e-num (value "9999")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.bad"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.L5.l5_only"))
-		(e-num (value "8888")))
-	(d-let
-		(p-assign (ident "Test.L2.L3.L4.bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-nominal-decl
 		(ty-header (name "Inner"))
@@ -10544,297 +8968,93 @@ L2 := [DS].{
 		(ty-tag-union
 			(ty-tag-name (name "T"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "U"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "W"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "X"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "Z"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AA"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AC"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AD"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AF"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AH"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AJ"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AL"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AN"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AP"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AR"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AS"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AT"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BB"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BC"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BD"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BF"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BH"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BJ"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BL"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BN"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BP"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BR"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BS"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BT"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BV"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BW"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BX"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BZ"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CA"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CB"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CC"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CE"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CF"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CH"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CJ"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CL"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CM"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CP"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CQ"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CR"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CT"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CU"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CV"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CW"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DD"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DE"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DF"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DG"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DI"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DJ"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DL"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DN"))))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DP"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DQ"))))
-	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
-			(ty-tag-name (name "DS"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DT"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DU"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DV")))))
+			(ty-tag-name (name "DS")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -10849,69 +9069,29 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Error"))
-		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
+		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
 		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
 		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
@@ -10920,39 +9100,9 @@ L2 := [DS].{
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
+		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
@@ -10960,6 +9110,15 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Inner")
@@ -10980,152 +9139,50 @@ L2 := [DS].{
 			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
-			(ty-header (name "L2")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5"))))
+			(ty-header (name "L2"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -11136,69 +9193,29 @@ L2 := [DS].{
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Error"))
-		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
+		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
 		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
 		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
@@ -11207,39 +9224,9 @@ L2 := [DS].{
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
@@ -11247,5 +9234,14 @@ L2 := [DS].{
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

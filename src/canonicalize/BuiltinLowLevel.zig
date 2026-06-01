@@ -13,7 +13,7 @@ const ModuleEnv = @import("ModuleEnv.zig");
 
 /// Returns whether this module is the compiler-owned Builtin module.
 pub fn isBuiltinModule(env: *const ModuleEnv) bool {
-    return env.display_module_name_idx.eql(env.idents.builtin_module);
+    return env.module_role == .builtin;
 }
 
 /// Returns whether an annotation-only Builtin declaration is handled as an intrinsic wrapper.

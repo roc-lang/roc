@@ -33,6 +33,7 @@ decl_index: DeclIndex,
 scope_pending_annos: std.ArrayList(?DeclIndex.DeclIdx),
 type_path_stack: std.ArrayList(DeclIndex.TypePathIdx),
 collect_type_dependencies: bool,
+scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
@@ -52,6 +53,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .scope_pending_annos = .empty,
         .type_path_stack = .empty,
         .collect_type_dependencies = false,
+        .scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa),
         .scratch_nodes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
@@ -61,6 +63,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 
 /// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
+    parser.scratch_idents.deinit();
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
@@ -3598,10 +3601,8 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 .token = qual_result.final_token,
                 .qualifiers = qual_result.qualifiers,
             } });
-            if (self.collect_type_dependencies and first_token_tag == .UpperIdent and qual_result.qualifiers.span.len == 0) {
-                if (self.tok_buf.resolveIdentifier(qual_result.final_token)) |ident| {
-                    try self.decl_index.addTypeDependency(ident);
-                }
+            if (self.collect_type_dependencies and qual_result.is_upper) {
+                try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
             }
 
             if (self.peek() == .NoSpaceOpenRound) {
@@ -3898,10 +3899,8 @@ fn recordTypeDependenciesFromAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Err
     switch (anno) {
         .ty => |ty| {
             const token_tag = self.tok_buf.tokens.items(.tag)[ty.token];
-            if (token_tag == .UpperIdent and ty.qualifiers.span.len == 0) {
-                if (self.tok_buf.resolveIdentifier(ty.token)) |ident| {
-                    try self.decl_index.addTypeDependency(ident);
-                }
+            if (token_tag == .UpperIdent or token_tag == .NoSpaceDotUpperIdent) {
+                try self.recordTypeDependencyFromQualifiedTokens(ty.qualifiers, ty.token);
             }
         },
         .apply => |apply| {
@@ -3942,6 +3941,25 @@ fn recordTypeDependenciesFromAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Err
         },
         .ty_var, .underscore_type_var, .underscore, .malformed => {},
     }
+}
+
+fn recordTypeDependencyFromQualifiedTokens(
+    self: *Parser,
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+) Error!void {
+    const top = self.scratch_idents.top();
+    defer self.scratch_idents.clearFrom(top);
+
+    for (self.store.tokenSlice(qualifiers)) |token| {
+        const ident = self.tok_buf.resolveIdentifier(token) orelse return;
+        try self.scratch_idents.append(ident);
+    }
+
+    const final_ident = self.tok_buf.resolveIdentifier(final_token) orelse return;
+    try self.scratch_idents.append(final_ident);
+
+    try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
 }
 
 /// todo

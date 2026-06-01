@@ -310,6 +310,8 @@ pub const ModuleState = struct {
     path: []const u8,
     /// Source-relative import base override for materialized modules.
     source_dir_override: ?[]const u8 = null,
+    /// Compiler role assigned by the scheduler for this module.
+    module_role: ModuleEnv.ModuleRole = .user,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -1724,6 +1726,7 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .module_role = mod.module_role,
                 .depth = mod.depth,
             },
         });
@@ -3068,6 +3071,7 @@ pub const Coordinator = struct {
         env.* = try ModuleEnv.init(module_alloc, src);
         env_initialized = true;
         try env.initCIRFields(task.module_name);
+        env.module_role = task.module_role;
 
         // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
         // to ensure module identity is unique across packages. Without this, two modules with
@@ -3558,6 +3562,7 @@ test "Coordinator task queue" {
             .module_name = "Main",
             .path = "/test/app/Main.roc",
             .depth = 0,
+            .module_role = .user,
         },
     });
 
@@ -3600,6 +3605,7 @@ test "Coordinator isComplete logic" {
             .module_name = "Test",
             .path = "/test.roc",
             .depth = 0,
+            .module_role = .user,
         },
     });
     try std.testing.expect(!coord.isComplete());
@@ -3641,6 +3647,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .module_name = "Test",
             .path = "/test.roc",
             .depth = 0,
+            .module_role = .user,
         },
     });
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
@@ -3678,6 +3685,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .module_name = "Mod",
                 .path = "/mod.roc",
                 .depth = 0,
+                .module_role = .user,
             },
         });
     }
@@ -3726,6 +3734,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .module_name = "Mod",
                 .path = "/mod.roc",
                 .depth = 0,
+                .module_role = .user,
             },
         });
     }

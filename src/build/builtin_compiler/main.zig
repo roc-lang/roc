@@ -398,6 +398,7 @@ fn compileModule(
 
     // 4. Canonicalize
     try module_env.initCIRFields(module_name);
+    module_env.module_role = .builtin;
 
     var can_result = try gpa.create(Can);
     defer {

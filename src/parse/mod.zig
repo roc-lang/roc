@@ -259,9 +259,20 @@ test "parser records top-level type declaration dependencies" {
         if (!std.mem.eql(u8, env.getIdent(name_ident), "A")) continue;
 
         const deps = ast.decl_index.typeDependencies(decl.type_dependencies);
-        try std.testing.expectEqual(@as(usize, 2), deps.len);
-        try std.testing.expectEqualStrings("B", env.getIdent(deps[0]));
-        try std.testing.expectEqualStrings("D", env.getIdent(deps[1]));
+        try std.testing.expectEqual(@as(usize, 3), deps.len);
+
+        const first = ast.decl_index.typeDependencySegments(deps[0]);
+        try std.testing.expectEqual(@as(usize, 1), first.len);
+        try std.testing.expectEqualStrings("B", env.getIdent(first[0]));
+
+        const second = ast.decl_index.typeDependencySegments(deps[1]);
+        try std.testing.expectEqual(@as(usize, 2), second.len);
+        try std.testing.expectEqualStrings("Mod", env.getIdent(second[0]));
+        try std.testing.expectEqualStrings("C", env.getIdent(second[1]));
+
+        const third = ast.decl_index.typeDependencySegments(deps[2]);
+        try std.testing.expectEqual(@as(usize, 1), third.len);
+        try std.testing.expectEqualStrings("D", env.getIdent(third[0]));
         return;
     }
 

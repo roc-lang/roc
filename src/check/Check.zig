@@ -1543,6 +1543,20 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
     }
 }
 
+fn unifyWithTargetRank(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
+    const resolved_target = self.types.resolveVar(target_var);
+    if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+        var desc = resolved_target.desc;
+        desc.content = content;
+        try self.types.dangerousSetVarDesc(target_var, desc);
+        return;
+    }
+
+    const target_rank = self.types.resolveVar(target_var).desc.rank;
+    const fresh_var = try self.freshFromContentAtRank(content, env, self.getRegionAt(target_var), target_rank);
+    _ = try self.unify(target_var, fresh_var, env);
+}
+
 /// Give a var, ensure it's not a redirect and set its rank.
 /// If the var is already a redirect, this is a no-op - the root's rank was set when
 /// the redirect was created during unification. This can happen when a variable is
@@ -1638,12 +1652,12 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
-    // Reserve every local type constructor before generating any type body.
-    // Source-order canonicalization can emit `A : B` before `B : ...`; type
-    // annotation lookup needs `B`'s constructor shape even though its backing
-    // type is filled later in this same checking phase.
-    for (0..self.cir.all_statements.span.len) |stmt_offset| {
-        const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
+    // Reserve every canonical type constructor from canonicalization's explicit
+    // type-declaration table before generating type bodies. Transparent nominal
+    // backing types and recursive declarations both rely on these constructor
+    // shells being present before any later checking work consumes them.
+    for (0..self.cir.type_decls.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.type_decls, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
 
@@ -2393,7 +2407,7 @@ fn predeclareAliasDecl(
     const header_vars = try self.generateHeaderVars(header_args, env);
     const backing_var: Var = ModuleEnv.varFrom(alias.anno);
 
-    try self.unifyWith(
+    try self.unifyWithTargetRank(
         decl_var,
         try self.types.mkAlias(
             .{ .ident_idx = header.relative_name },
@@ -2416,7 +2430,7 @@ fn predeclareNominalDecl(
     const header_vars = try self.generateHeaderVars(header_args, env);
     const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
 
-    try self.unifyWith(
+    try self.unifyWithTargetRank(
         decl_var,
         try self.types.mkNominal(
             .{ .ident_idx = header.relative_name },
@@ -2459,6 +2473,18 @@ fn generateAliasDecl(
     // Next, generate the provided arg types and build the map of rigid variables in the header
     const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    if (predeclared_header_vars == null) {
+        try self.unifyWithTargetRank(
+            decl_var,
+            try self.types.mkAlias(
+                .{ .ident_idx = header.relative_name },
+                ModuleEnv.varFrom(alias.anno),
+                header_vars,
+                self.aliasOriginModule(),
+            ),
+            env,
+        );
+    }
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     defer self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -2483,21 +2509,8 @@ fn generateAliasDecl(
     } });
 
     if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
-        try self.unifyWith(decl_var, .err, env);
+        try self.unifyWithTargetRank(decl_var, .err, env);
         return;
-    }
-
-    if (predeclared_header_vars == null) {
-        try self.unifyWith(
-            decl_var,
-            try self.types.mkAlias(
-                .{ .ident_idx = header.relative_name },
-                backing_var,
-                header_vars,
-                self.aliasOriginModule(),
-            ),
-            env,
-        );
     }
 }
 
@@ -2519,6 +2532,19 @@ fn generateNominalDecl(
     // Next, generate the provided arg types and build the map of rigid variables in the header
     const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
     const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    if (predeclared_header_vars == null) {
+        try self.unifyWithTargetRank(
+            decl_var,
+            try self.types.mkNominal(
+                .{ .ident_idx = header.relative_name },
+                ModuleEnv.varFrom(nominal.anno),
+                header_vars,
+                self.builtin_ctx.module_name,
+                nominal.is_opaque,
+            ),
+            env,
+        );
+    }
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     defer self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -2541,20 +2567,6 @@ fn generateNominalDecl(
         .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
     } });
-
-    if (predeclared_header_vars == null) {
-        try self.unifyWith(
-            decl_var,
-            try self.types.mkNominal(
-                .{ .ident_idx = header.relative_name },
-                backing_var,
-                header_vars,
-                self.builtin_ctx.module_name,
-                nominal.is_opaque,
-            ),
-            env,
-        );
-    }
 }
 
 /// Generate types for a standalone type annotation (one without a corresponding definition).

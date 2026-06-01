@@ -17,6 +17,101 @@ const testing = std.testing;
 const Ident = base.Ident;
 const Statement = CIR.Statement;
 
+test "canonicalization records explicit type declaration tables" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const source =
+        \\module []
+        \\
+        \\A : B
+        \\B : U64
+        \\C := [C]
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env.common);
+    defer ast.deinit();
+
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    try testing.expectEqual(@as(u32, 3), env.type_decls.span.len);
+    try testing.expectEqual(@as(u32, 1), env.forward_type_decls.span.len);
+
+    const forward_stmt = env.store.statementAt(env.forward_type_decls, 0);
+    const header = switch (env.store.getStatement(forward_stmt)) {
+        .s_alias_decl => |alias| env.store.getTypeHeader(alias.header),
+        else => return error.ExpectedForwardAlias,
+    };
+    try testing.expectEqualStrings("B", env.getIdent(header.relative_name));
+}
+
+test "nested type redeclarations are detected after previous associated scope exits" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const source =
+        \\module []
+        \\
+        \\T := [A].{
+        \\    L2 := [B].{
+        \\        L3 := [C]
+        \\    }
+        \\
+        \\    L2 := [D].{
+        \\        L3 := [E]
+        \\    }
+        \\}
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env.common);
+    defer ast.deinit();
+
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    var saw_l2_redeclared = false;
+    var saw_l3_redeclared = false;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .type_redeclared => |data| {
+                const name = env.getIdent(data.name);
+                if (std.mem.eql(u8, name, "Test.T.L2")) saw_l2_redeclared = true;
+                if (std.mem.eql(u8, name, "Test.T.L2.L3")) saw_l3_redeclared = true;
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(saw_l2_redeclared);
+    try testing.expect(saw_l3_redeclared);
+}
+
 test "local type alias is parsed and canonicalized" {
     const source =
         \\|_| {

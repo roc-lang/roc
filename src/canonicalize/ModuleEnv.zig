@@ -92,6 +92,12 @@ pub const ModuleKind = union(enum) {
     };
 };
 
+/// Module role known before header canonicalization.
+pub const ModuleRole = enum(u8) {
+    user,
+    builtin,
+};
+
 /// Well-known identifiers that are interned once and reused throughout compilation.
 /// These are needed for type checking, operator desugaring, and layout generation.
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
@@ -517,6 +523,8 @@ types: TypeStore,
 
 /// The kind of module (type_module, app, etc.) - set during canonicalization
 module_kind: ModuleKind,
+/// The compiler role of this module, known before header canonicalization.
+module_role: ModuleRole,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
@@ -524,6 +532,10 @@ all_defs: CIR.Def.Span,
 global_value_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
+/// All canonical type-declaration statements in the module.
+type_decls: CIR.Statement.Span,
+/// Type declarations prepared by forward references before their source declaration.
+forward_type_decls: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
 /// Required type signatures for platform modules (from `requires { main! : () => {} }`)
@@ -656,9 +668,12 @@ pub fn relocate(self: *Self, offset: isize) void {
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
+    self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
+    self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
+    self.forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
@@ -692,9 +707,12 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .common = common,
         .types = try TypeStore.initFromSourceLen(gpa, source_len),
         .module_kind = .module, // Placeholder - set to actual kind during header canonicalization
+        .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
+        .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
+        .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
@@ -2652,9 +2670,12 @@ pub const Serialized = extern struct {
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
     module_kind: ModuleKind.Serialized,
+    module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
+    type_decls: CIR.Statement.Span,
+    forward_type_decls: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
@@ -2693,9 +2714,12 @@ pub const Serialized = extern struct {
 
         // Copy simple values directly
         self.module_kind = ModuleKind.Serialized.encode(env.module_kind);
+        self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
         self.all_statements = env.all_statements;
+        self.type_decls = env.type_decls;
+        self.forward_type_decls = env.forward_type_decls;
         self.exports = env.exports;
         self.builtin_statements = env.builtin_statements;
 
@@ -2753,9 +2777,12 @@ pub const Serialized = extern struct {
             .common = self.common.deserializeInto(base_addr, source),
             .types = self.types.deserializeInto(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
@@ -2803,9 +2830,12 @@ pub const Serialized = extern struct {
             // Use deserializeWithCopy to get mutable type store
             .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),

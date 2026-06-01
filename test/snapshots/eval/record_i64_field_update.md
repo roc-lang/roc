@@ -171,7 +171,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 166)
+						(e-dispatch-call (method "plus") (constraint-fn-var 165)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -194,7 +194,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 323)
+						(e-dispatch-call (method "minus") (constraint-fn-var 322)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -216,7 +216,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 469)
+				(e-call (constraint-fn-var 468)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -234,7 +234,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 886)
+				(e-call (constraint-fn-var 885)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -252,9 +252,9 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1304)
+				(e-call (constraint-fn-var 1303)
 					(e-runtime-error (tag "erroneous_value_use"))
-					(e-call (constraint-fn-var 1303)
+					(e-call (constraint-fn-var 1302)
 						(e-runtime-error (tag "erroneous_value_use"))
 						(e-record
 							(fields

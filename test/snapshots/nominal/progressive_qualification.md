@@ -773,7 +773,7 @@ test6_combined = Container.Nested.combined # 35
 			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Parent.sumChildren"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 410)
+		(e-dispatch-call (method "plus") (constraint-fn-var 394)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
@@ -859,9 +859,9 @@ test6_combined = Container.Nested.combined # 35
 			(p-assign (ident "progressive_qualification.Container.outerB"))))
 	(d-let
 		(p-assign (ident "progressive_qualification.Container.Nested.combined"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 624)
+		(e-dispatch-call (method "plus") (constraint-fn-var 608)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 622)
+				(e-dispatch-call (method "plus") (constraint-fn-var 606)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))))

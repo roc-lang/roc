@@ -4782,6 +4782,19 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
+fn isCompilerBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
+    const abs_path = if (std.fs.path.isAbsolute(filepath))
+        try std.fs.path.resolve(gpa, &.{filepath})
+    else
+        try std.fs.path.resolve(gpa, &.{ cwd, filepath });
+    defer gpa.free(abs_path);
+
+    const builtin_path = try std.fs.path.resolve(gpa, &.{ cwd, "src/build/roc/Builtin.roc" });
+    defer gpa.free(builtin_path);
+
+    return std.mem.eql(u8, abs_path, builtin_path);
+}
+
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliContext,
@@ -4804,6 +4817,9 @@ fn checkFileWithBuildEnvPreserved(
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.Internal,
     };
+    if (try isCompilerBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+        build_env.setRootModuleRole(.builtin);
+    }
 
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it

@@ -93,6 +93,20 @@ const TypePathKey = struct {
     name: Ident.Idx,
 };
 
+/// Syntactic type reference recorded from a type declaration annotation.
+///
+/// `segments` points into `type_dependency_segments`; unqualified references
+/// have one segment, qualified references preserve their full source path.
+pub const TypeDependency = struct {
+    segments: Span,
+};
+
+/// Side-table tops captured before parsing a declaration annotation.
+pub const TypeDependencyMark = struct {
+    dependencies_top: u32,
+    segments_top: u32,
+};
+
 /// Associated value declaration lookup key.
 pub const AssocValue = struct {
     owner: TypePathIdx,
@@ -136,11 +150,12 @@ decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
 scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
 decl_by_statement: std.AutoHashMapUnmanaged(u32, DeclIdx),
-type_dependency_ids: std.ArrayList(Ident.Idx),
+type_dependencies: std.ArrayList(TypeDependency),
+type_dependency_segments: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
 type_path_by_statement: std.AutoHashMapUnmanaged(u32, TypePathIdx),
-type_decl_by_path: std.AutoHashMapUnmanaged(TypePathIdx, DeclIdx),
+type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
 assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 scope_stack: std.ArrayList(ScopeIdx),
@@ -154,11 +169,12 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .scope_decl_ids = .empty,
         .scope_decl_builders = .empty,
         .decl_by_statement = .{},
-        .type_dependency_ids = .empty,
+        .type_dependencies = .empty,
+        .type_dependency_segments = .empty,
         .type_paths = .empty,
         .type_path_intern = .{},
         .type_path_by_statement = .{},
-        .type_decl_by_path = .{},
+        .type_decls_by_path = .{},
         .assoc_value_decls = .{},
         .assoc_owner_value_decls = .{},
         .scope_stack = .empty,
@@ -181,11 +197,12 @@ pub fn deinit(self: *DeclIndex) void {
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
     self.decl_by_statement.deinit(self.gpa);
-    self.type_dependency_ids.deinit(self.gpa);
+    self.type_dependencies.deinit(self.gpa);
+    self.type_dependency_segments.deinit(self.gpa);
     self.type_paths.deinit(self.gpa);
     self.type_path_intern.deinit(self.gpa);
     self.type_path_by_statement.deinit(self.gpa);
-    self.type_decl_by_path.deinit(self.gpa);
+    deinitNameBuckets(TypePathIdx, self.gpa, &self.type_decls_by_path);
     self.scope_stack.deinit(self.gpa);
 }
 
@@ -282,10 +299,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].type_decls, ident, idx);
             if (decl.type_path) |path| {
                 try self.type_path_by_statement.put(self.gpa, decl.statement, path);
-                const path_entry = try self.type_decl_by_path.getOrPut(self.gpa, path);
-                if (!path_entry.found_existing) {
-                    path_entry.value_ptr.* = idx;
-                }
+                try addDeclToBucket(TypePathIdx, self.gpa, &self.type_decls_by_path, path, idx);
             }
         }
     }
@@ -430,7 +444,15 @@ pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
 
 /// Return the first parser type declaration recorded for a type path.
 pub fn typeDeclForPath(self: *const DeclIndex, path: TypePathIdx) ?DeclIdx {
-    return self.type_decl_by_path.get(path);
+    const decls = self.typeDeclsForPath(path);
+    if (decls.len == 0) return null;
+    return decls[0];
+}
+
+/// Return all parser type declarations recorded for a type path in source order.
+pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) []const DeclIdx {
+    const bucket = self.type_decls_by_path.get(path) orelse return &.{};
+    return bucket.decls.items;
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -445,32 +467,57 @@ pub fn scopeDecls(self: *const DeclIndex, scope_idx: ScopeIdx) []const DeclIdx {
     return self.scope_decl_ids.items[scope.decls.start..][0..scope.decls.len];
 }
 
-/// Return the current type-dependency side-table top.
-pub fn typeDependencyTop(self: *const DeclIndex) u32 {
-    return @intCast(self.type_dependency_ids.items.len);
+/// Return the current type-dependency side-table tops.
+pub fn typeDependencyTop(self: *const DeclIndex) TypeDependencyMark {
+    return .{
+        .dependencies_top = @intCast(self.type_dependencies.items.len),
+        .segments_top = @intCast(self.type_dependency_segments.items.len),
+    };
 }
 
 /// Append one syntactic type dependency to the side table.
 pub fn addTypeDependency(self: *DeclIndex, ident: Ident.Idx) std.mem.Allocator.Error!void {
-    try self.type_dependency_ids.append(self.gpa, ident);
+    const segments = [_]Ident.Idx{ident};
+    try self.addTypeDependencySegments(&segments);
+}
+
+/// Append one syntactic type dependency path to the side table.
+pub fn addTypeDependencySegments(self: *DeclIndex, segments: []const Ident.Idx) std.mem.Allocator.Error!void {
+    std.debug.assert(segments.len > 0);
+    const start: u32 = @intCast(self.type_dependency_segments.items.len);
+    try self.type_dependency_segments.appendSlice(self.gpa, segments);
+    try self.type_dependencies.append(self.gpa, .{
+        .segments = .{
+            .start = start,
+            .len = @intCast(segments.len),
+        },
+    });
 }
 
 /// Return a dependency span from a previously captured side-table top.
-pub fn typeDependencySpanFrom(self: *const DeclIndex, start: u32) Span {
-    const end: u32 = @intCast(self.type_dependency_ids.items.len);
-    std.debug.assert(start <= end);
-    return .{ .start = start, .len = end - start };
+pub fn typeDependencySpanFrom(self: *const DeclIndex, mark: TypeDependencyMark) Span {
+    const end: u32 = @intCast(self.type_dependencies.items.len);
+    std.debug.assert(mark.dependencies_top <= end);
+    std.debug.assert(mark.segments_top <= self.type_dependency_segments.items.len);
+    return .{ .start = mark.dependencies_top, .len = end - mark.dependencies_top };
 }
 
 /// Discard dependencies appended after a previously captured side-table top.
-pub fn clearTypeDependenciesFrom(self: *DeclIndex, start: u32) void {
-    std.debug.assert(start <= self.type_dependency_ids.items.len);
-    self.type_dependency_ids.shrinkRetainingCapacity(@intCast(start));
+pub fn clearTypeDependenciesFrom(self: *DeclIndex, mark: TypeDependencyMark) void {
+    std.debug.assert(mark.dependencies_top <= self.type_dependencies.items.len);
+    std.debug.assert(mark.segments_top <= self.type_dependency_segments.items.len);
+    self.type_dependencies.shrinkRetainingCapacity(@intCast(mark.dependencies_top));
+    self.type_dependency_segments.shrinkRetainingCapacity(@intCast(mark.segments_top));
 }
 
-/// Return the dependency identifiers covered by a span.
-pub fn typeDependencies(self: *const DeclIndex, span: Span) []const Ident.Idx {
-    return self.type_dependency_ids.items[span.start..][0..span.len];
+/// Return the dependency paths covered by a span.
+pub fn typeDependencies(self: *const DeclIndex, span: Span) []const TypeDependency {
+    return self.type_dependencies.items[span.start..][0..span.len];
+}
+
+/// Return the source-order identifier segments for one dependency path.
+pub fn typeDependencySegments(self: *const DeclIndex, dependency: TypeDependency) []const Ident.Idx {
+    return self.type_dependency_segments.items[dependency.segments.start..][0..dependency.segments.len];
 }
 
 /// Number of scopes in this declaration index.
@@ -583,12 +630,24 @@ test "type dependency spans preserve parser-recorded type references" {
     const start = index.typeDependencyTop();
     try index.addTypeDependency(first_ident);
     try index.addTypeDependency(second_ident);
+    try index.addTypeDependencySegments(&.{ first_ident, second_ident });
     const span = index.typeDependencySpanFrom(start);
 
     const deps = index.typeDependencies(span);
-    try std.testing.expectEqual(@as(usize, 2), deps.len);
-    try std.testing.expectEqual(first_ident, deps[0]);
-    try std.testing.expectEqual(second_ident, deps[1]);
+    try std.testing.expectEqual(@as(usize, 3), deps.len);
+
+    const first_segments = index.typeDependencySegments(deps[0]);
+    try std.testing.expectEqual(@as(usize, 1), first_segments.len);
+    try std.testing.expectEqual(first_ident, first_segments[0]);
+
+    const second_segments = index.typeDependencySegments(deps[1]);
+    try std.testing.expectEqual(@as(usize, 1), second_segments.len);
+    try std.testing.expectEqual(second_ident, second_segments[0]);
+
+    const qualified_segments = index.typeDependencySegments(deps[2]);
+    try std.testing.expectEqual(@as(usize, 2), qualified_segments.len);
+    try std.testing.expectEqual(first_ident, qualified_segments[0]);
+    try std.testing.expectEqual(second_ident, qualified_segments[1]);
 
     index.clearTypeDependenciesFrom(start);
     try std.testing.expectEqual(start, index.typeDependencyTop());
@@ -691,4 +750,45 @@ test "associated value declarations are keyed by structural owner path" {
 
     const parent_decls = index.assocValueDecls(parent_path, value_ident);
     try std.testing.expectEqual(@as(usize, 0), parent_decls.len);
+}
+
+test "type path buckets preserve duplicate declarations in source order" {
+    const gpa = std.testing.allocator;
+
+    var index = DeclIndex.init(gpa);
+    defer index.deinit();
+
+    const attrs = Ident.Attributes.fromString("Repeated");
+    const ident = Ident.Idx{ .attributes = attrs, .idx = 1 };
+    const path = try index.internTypePath(null, ident);
+    const scope_idx = try index.enterScope(.module, .file, TokenRegion.empty());
+
+    const first = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 10,
+        .kind = .type_alias,
+        .name_tok = null,
+        .name_ident = ident,
+        .type_path = path,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    const second = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 11,
+        .kind = .nominal,
+        .name_tok = null,
+        .name_ident = ident,
+        .type_path = path,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+
+    const decls = index.typeDeclsForPath(path);
+    try std.testing.expectEqual(@as(usize, 2), decls.len);
+    try std.testing.expectEqual(first, decls[0]);
+    try std.testing.expectEqual(second, decls[1]);
+    try std.testing.expectEqual(first, index.typeDeclForPath(path).?);
 }

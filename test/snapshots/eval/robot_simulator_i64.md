@@ -277,7 +277,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 224)
+						(e-dispatch-call (method "plus") (constraint-fn-var 223)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -300,7 +300,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 381)
+						(e-dispatch-call (method "minus") (constraint-fn-var 380)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -323,7 +323,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "plus") (constraint-fn-var 538)
+						(e-dispatch-call (method "plus") (constraint-fn-var 537)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -346,7 +346,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "minus") (constraint-fn-var 695)
+						(e-dispatch-call (method "minus") (constraint-fn-var 694)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -368,7 +368,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 841)
+				(e-call (constraint-fn-var 840)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -386,7 +386,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1258)
+				(e-call (constraint-fn-var 1257)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -404,7 +404,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1675)
+				(e-call (constraint-fn-var 1674)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -422,7 +422,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2092)
+				(e-call (constraint-fn-var 2091)
 					(e-runtime-error (tag "erroneous_value_use"))
 					(e-record
 						(fields
@@ -440,9 +440,9 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2510)
+				(e-call (constraint-fn-var 2509)
 					(e-runtime-error (tag "erroneous_value_use"))
-					(e-call (constraint-fn-var 2509)
+					(e-call (constraint-fn-var 2508)
 						(e-runtime-error (tag "erroneous_value_use"))
 						(e-record
 							(fields
