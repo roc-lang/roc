@@ -8,13 +8,13 @@ const bitcode_writer = @import("bitcode_writer.zig");
 
 const AbbrevOp = bitcode_writer.AbbrevOp;
 
-/// Magic number identifying LLVM bitcode files.
 pub const MAGIC: u32 = 0xdec04342;
 
 const ValueAbbrev = AbbrevOp{ .vbr = 6 };
 const ValueArrayAbbrev = AbbrevOp{ .array_vbr = 6 };
 
 const ConstantAbbrev = AbbrevOp{ .vbr = 6 };
+const ConstantArrayAbbrev = AbbrevOp{ .array_vbr = 6 };
 
 const MetadataAbbrev = AbbrevOp{ .vbr = 16 };
 const MetadataArrayAbbrev = AbbrevOp{ .array_vbr = 16 };
@@ -121,7 +121,6 @@ pub const FixedMetadataKind = enum(u6) {
     //@"coro.outside.frame" = 39,
 };
 
-/// Block containing metadata about other blocks, such as standard abbreviations.
 pub const BlockInfoBlock = struct {
     pub const id: BlockId = .BLOCKINFO;
 
@@ -2284,7 +2283,6 @@ pub const IdentificationBlock = struct {
     };
 };
 
-/// String table block for storing string data referenced elsewhere in the bitcode.
 pub const StrtabBlock = struct {
     pub const id: BlockId = .STRTAB;
 

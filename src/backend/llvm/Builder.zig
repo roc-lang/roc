@@ -2,16 +2,20 @@
 //!
 //! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
+const builtin = @import("builtin");
+const Builder = @This();
+
 const std = @import("std");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
-const bitcode_writer = @import("bitcode_writer.zig");
-const Builder = @This();
-const builtin = @import("builtin");
 const DW = std.dwarf;
-const ir = @import("ir.zig");
 const log = std.log.scoped(.llvm);
+const maxInt = std.math.maxInt;
 const Writer = std.Io.Writer;
+
+const bitcode_writer = @import("bitcode_writer.zig");
+const ir = @import("ir.zig");
 
 gpa: Allocator,
 strip: bool,
@@ -56,6 +60,8 @@ constant_items: std.MultiArrayList(Constant.Item),
 constant_extra: std.ArrayList(u32),
 constant_limbs: std.ArrayList(std.math.big.Limb),
 
+alignment_forward_references: std.ArrayList(Alignment),
+
 metadata_map: std.AutoArrayHashMapUnmanaged(void, void),
 metadata_items: std.MultiArrayList(Metadata.Item),
 metadata_extra: std.ArrayList(u32),
@@ -70,20 +76,13 @@ metadata_string_map: std.AutoArrayHashMapUnmanaged(void, void),
 metadata_string_indices: std.ArrayList(u32),
 metadata_string_bytes: std.ArrayList(u8),
 
-/// Default capacity for function arguments in internal buffers.
 pub const expected_args_len = 16;
-/// Default capacity for attributes in internal buffers.
 pub const expected_attrs_len = 16;
-/// Default capacity for struct fields in internal buffers.
 pub const expected_fields_len = 32;
-/// Default capacity for GEP indices in internal buffers.
 pub const expected_gep_indices_len = 8;
-/// Default capacity for switch cases in internal buffers.
 pub const expected_cases_len = 8;
-/// Default capacity for phi incoming values in internal buffers.
 pub const expected_incoming_len = 8;
 
-/// Configuration options for initializing the LLVM IR builder.
 pub const Options = struct {
     allocator: Allocator,
     strip: bool = true,
@@ -92,14 +91,9 @@ pub const Options = struct {
     triple: []const u8 = &.{},
 };
 
-/// Interned string handle for efficient string storage and comparison.
 pub const String = enum(u32) {
-    /// Sentinel value indicating no string.
-    none = std.math.maxInt(u31),
-    /// Empty string.
+    none = maxInt(u31),
     empty,
-    /// The first anonymous name index (used for counter initialization).
-    first_anon = 0,
     _,
 
     pub fn isAnon(self: String) bool {
@@ -171,7 +165,6 @@ pub const String = enum(u32) {
     };
 };
 
-/// LLVM binary operation opcodes for arithmetic and bitwise operations.
 pub const BinaryOpcode = enum(u4) {
     add = 0,
     sub = 1,
@@ -188,7 +181,6 @@ pub const BinaryOpcode = enum(u4) {
     xor = 12,
 };
 
-/// LLVM type conversion opcodes for casting between types.
 pub const CastOpcode = enum(u4) {
     trunc = 0,
     zext = 1,
@@ -205,7 +197,6 @@ pub const CastOpcode = enum(u4) {
     addrspacecast = 12,
 };
 
-/// LLVM comparison predicates for integer and floating-point comparisons.
 pub const CmpPredicate = enum(u6) {
     fcmp_false = 0,
     fcmp_oeq = 1,
@@ -235,7 +226,6 @@ pub const CmpPredicate = enum(u6) {
     icmp_sle = 41,
 };
 
-/// Represents an LLVM type, including primitives, pointers, arrays, structs, and functions.
 pub const Type = enum(u32) {
     void,
     half,
@@ -262,7 +252,7 @@ pub const Type = enum(u32) {
     ptr,
     @"ptr addrspace(4)",
 
-    none = std.math.maxInt(u32),
+    none = maxInt(u32),
     _,
 
     pub const ptr_amdgpu_constant =
@@ -676,12 +666,14 @@ pub const Type = enum(u32) {
         };
     }
 
-    pub fn targetLayoutType(_: Type, _: *const Builder) Type {
+    pub fn targetLayoutType(self: Type, builder: *const Builder) Type {
+        _ = self;
+        _ = builder;
         @panic("TODO: implement targetLayoutType");
     }
 
     pub fn isSized(self: Type, builder: *const Builder) Allocator.Error!bool {
-        var visited: IsSizedVisited = .empty;
+        var visited: IsSizedVisited = .{};
         defer visited.deinit(builder.gpa);
         const result = try self.isSizedVisited(&visited, builder);
         return result;
@@ -945,7 +937,6 @@ pub const Type = enum(u32) {
     }
 };
 
-/// LLVM function and parameter attributes affecting calling conventions and optimization.
 pub const Attribute = union(Kind) {
     // Parameter Attributes
     zeroext,
@@ -957,7 +948,7 @@ pub const Attribute = union(Kind) {
     inalloca: Type,
     sret: Type,
     elementtype: Type,
-    @"align": Alignment,
+    @"align": Alignment.Lazy,
     @"noalias",
     nocapture,
     nofree,
@@ -972,7 +963,7 @@ pub const Attribute = union(Kind) {
     immarg,
     noundef,
     nofpclass: FpClass,
-    alignstack: Alignment,
+    alignstack: Alignment.Lazy,
     allocalign,
     allocptr,
     readnone,
@@ -980,7 +971,7 @@ pub const Attribute = union(Kind) {
     writeonly,
 
     // Function Attributes
-    //alignstack: Alignment,
+    //alignstack: Alignment.Lazy,
     allockind: AllocKind,
     allocsize: AllocSize,
     alwaysinline,
@@ -1161,7 +1152,7 @@ pub const Attribute = union(Kind) {
                     return @unionInit(Attribute, field.name, switch (field.type) {
                         void => {},
                         u32 => storage.value,
-                        Alignment, String, Type, UwTable => @enumFromInt(storage.value),
+                        Alignment.Lazy, String, Type, UwTable => @enumFromInt(storage.value),
                         AllocKind, AllocSize, FpClass, Memory, VScaleRange => @bitCast(storage.value),
                         else => @compileError("bad payload type: " ++ field.name ++ ": " ++
                             @typeName(field.type)),
@@ -1262,7 +1253,7 @@ pub const Attribute = union(Kind) {
                 .sret,
                 .elementtype,
                 => |ty| try w.print(" {s}({f})", .{ @tagName(attribute), ty.fmt(data.builder, .percent) }),
-                .@"align" => |alignment| try w.print("{f}", .{alignment.fmt(" ")}),
+                .@"align" => |alignment| try w.print("{f}", .{alignment.resolve(data.builder).fmt(" ")}),
                 .dereferenceable,
                 .dereferenceable_or_null,
                 => |size| try w.print(" {s}({d})", .{ @tagName(attribute), size }),
@@ -1286,7 +1277,7 @@ pub const Attribute = union(Kind) {
                 },
                 .alignstack => |alignment| {
                     try w.print(" {t}", .{attribute});
-                    const alignment_bytes = alignment.toByteUnits() orelse return;
+                    const alignment_bytes = alignment.resolve(data.builder).toByteUnits() orelse return;
                     if (data.flags.pound) {
                         try w.print("={d}", .{alignment_bytes});
                     } else {
@@ -1451,8 +1442,8 @@ pub const Attribute = union(Kind) {
         //sanitize_memtag,
         sanitize_address_dyninit = 102,
 
-        string = std.math.maxInt(u31),
-        none = std.math.maxInt(u32),
+        string = maxInt(u31),
+        none = maxInt(u32),
         _,
 
         pub const len = @typeInfo(Kind).@"enum".fields.len - 2;
@@ -1532,12 +1523,12 @@ pub const Attribute = union(Kind) {
         elem_size: u16,
         num_elems: u16,
 
-        pub const none = std.math.maxInt(u16);
+        pub const none = maxInt(u16);
 
         fn toLlvm(self: AllocSize) packed struct(u64) { num_elems: u32, elem_size: u32 } {
             return .{ .num_elems = switch (self.num_elems) {
                 else => self.num_elems,
-                none => std.math.maxInt(u32),
+                none => maxInt(u32),
             }, .elem_size = self.elem_size };
         }
     };
@@ -1593,7 +1584,7 @@ pub const Attribute = union(Kind) {
             inline else => |value, tag| .{ .kind = @as(Kind, self), .value = switch (@TypeOf(value)) {
                 void => 0,
                 u32 => value,
-                Alignment, String, Type, UwTable => @intFromEnum(value),
+                Alignment.Lazy, String, Type, UwTable => @intFromEnum(value),
                 AllocKind, AllocSize, FpClass, Memory, VScaleRange => @bitCast(value),
                 else => @compileError("bad payload type: " ++ @tagName(tag) ++ @typeName(@TypeOf(value))),
             } },
@@ -1606,7 +1597,6 @@ pub const Attribute = union(Kind) {
     }
 };
 
-/// A collection of LLVM attributes that can be applied to a function or parameter.
 pub const Attributes = enum(u32) {
     none,
     _,
@@ -1635,7 +1625,6 @@ pub const Attributes = enum(u32) {
     }
 };
 
-/// Complete set of attributes for a function including return, function-level, and parameter attributes.
 pub const FunctionAttributes = enum(u32) {
     none,
     _,
@@ -1756,6 +1745,13 @@ pub const FunctionAttributes = enum(u32) {
         fn getMap(self: *Wip, index: usize) ?*Map {
             return if (index >= self.maps.items.len) null else &self.maps.items[index];
         }
+
+        fn ensureTotalLength(self: *Wip, new_len: usize) Allocator.Error!void {
+            try self.maps.appendNTimes(
+                .{},
+                std.math.sub(usize, new_len, self.maps.items.len) catch return,
+            );
+        }
     };
 
     pub fn func(self: FunctionAttributes, builder: *const Builder) Attributes {
@@ -1777,7 +1773,7 @@ pub const FunctionAttributes = enum(u32) {
         try wip.maps.ensureTotalCapacityPrecise(builder.gpa, attributes_slice.len);
         for (attributes_slice) |attributes| {
             const map = wip.maps.addOneAssumeCapacity();
-            map.* = .empty;
+            map.* = .{};
             const attribute_slice = attributes.slice(builder);
             try map.ensureTotalCapacity(builder.gpa, attribute_slice.len);
             for (attributes.slice(builder)) |attribute|
@@ -1798,7 +1794,6 @@ pub const FunctionAttributes = enum(u32) {
     }
 };
 
-/// Symbol linkage type controlling visibility and merging behavior across modules.
 pub const Linkage = enum(u4) {
     private = 9,
     internal = 3,
@@ -1824,7 +1819,6 @@ pub const Linkage = enum(u4) {
     }
 };
 
-/// Dynamic symbol preemption behavior for shared library symbols.
 pub const Preemption = enum {
     dso_preemptable,
     dso_local,
@@ -1835,7 +1829,6 @@ pub const Preemption = enum {
     }
 };
 
-/// Symbol visibility controlling access from other modules.
 pub const Visibility = enum(u2) {
     default = 0,
     hidden = 1,
@@ -1854,7 +1847,6 @@ pub const Visibility = enum(u2) {
     }
 };
 
-/// Windows DLL storage class for import/export declarations.
 pub const DllStorageClass = enum(u2) {
     default = 0,
     dllimport = 1,
@@ -1865,7 +1857,6 @@ pub const DllStorageClass = enum(u2) {
     }
 };
 
-/// Thread-local storage model for global variables.
 pub const ThreadLocal = enum(u3) {
     default = 0,
     generaldynamic = 1,
@@ -1901,10 +1892,8 @@ pub const ThreadLocal = enum(u3) {
     }
 };
 
-/// Whether a global variable is mutable or constant.
 pub const Mutability = enum { global, constant };
 
-/// Address significance for global values enabling certain optimizations.
 pub const UnnamedAddr = enum(u2) {
     default = 0,
     unnamed_addr = 1,
@@ -1915,7 +1904,6 @@ pub const UnnamedAddr = enum(u2) {
     }
 };
 
-/// LLVM address space for pointers, with target-specific semantics.
 pub const AddrSpace = enum(u24) {
     default,
     _,
@@ -1934,7 +1922,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/lib/Target/AVR/AVR.h
     pub const avr = struct {
-        pub const data: AddrSpace = .default;
+        pub const data: AddrSpace = @enumFromInt(0);
         pub const program: AddrSpace = @enumFromInt(1);
         pub const program1: AddrSpace = @enumFromInt(2);
         pub const program2: AddrSpace = @enumFromInt(3);
@@ -1945,7 +1933,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/lib/Target/NVPTX/NVPTX.h
     pub const nvptx = struct {
-        pub const generic: AddrSpace = .default;
+        pub const generic: AddrSpace = @enumFromInt(0);
         pub const global: AddrSpace = @enumFromInt(1);
         pub const constant: AddrSpace = @enumFromInt(2);
         pub const shared: AddrSpace = @enumFromInt(3);
@@ -1955,7 +1943,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/lib/Target/AMDGPU/AMDGPU.h
     pub const amdgpu = struct {
-        pub const flat: AddrSpace = .default;
+        pub const flat: AddrSpace = @enumFromInt(0);
         pub const global: AddrSpace = @enumFromInt(1);
         pub const region: AddrSpace = @enumFromInt(2);
         pub const local: AddrSpace = @enumFromInt(3);
@@ -1987,7 +1975,7 @@ pub const AddrSpace = enum(u24) {
     };
 
     pub const spirv = struct {
-        pub const function: AddrSpace = .default;
+        pub const function: AddrSpace = @enumFromInt(0);
         pub const cross_workgroup: AddrSpace = @enumFromInt(1);
         pub const uniform_constant: AddrSpace = @enumFromInt(2);
         pub const workgroup: AddrSpace = @enumFromInt(3);
@@ -1999,7 +1987,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/include/llvm/CodeGen/WasmAddressSpaces.h
     pub const wasm = struct {
-        pub const default: AddrSpace = .default;
+        pub const default: AddrSpace = @enumFromInt(0);
         pub const variable: AddrSpace = @enumFromInt(1);
         pub const externref: AddrSpace = @enumFromInt(10);
         pub const funcref: AddrSpace = @enumFromInt(20);
@@ -2026,7 +2014,6 @@ pub const AddrSpace = enum(u24) {
     }
 };
 
-/// Indicates whether a global variable is initialized outside the current module.
 pub const ExternallyInitialized = enum {
     default,
     externally_initialized,
@@ -2036,10 +2023,32 @@ pub const ExternallyInitialized = enum {
     }
 };
 
-/// Memory alignment as a power of two, stored as the exponent.
 pub const Alignment = enum(u6) {
-    default = std.math.maxInt(u6),
+    default = maxInt(u6),
     _,
+
+    pub const Lazy = enum(u32) {
+        /// Values which fit in a `u6` are already-resolved `Alignment` values. Other values are
+        /// indices into `Builder.alignment_forward_references`, offset by `maxInt(u6)`.
+        _,
+
+        pub fn wrap(a: Alignment) Lazy {
+            return @enumFromInt(@intFromEnum(a));
+        }
+        pub fn resolve(l: Lazy, b: *const Builder) Alignment {
+            return switch (@intFromEnum(l)) {
+                0...maxInt(u6) => |raw| @enumFromInt(raw),
+                else => |offset_index| b.alignment_forward_references.items[offset_index - maxInt(u6)],
+            };
+        }
+
+        fn fromFwdRefIndex(index: usize) Lazy {
+            return @enumFromInt(index + maxInt(u6));
+        }
+        fn toFwdRefIndex(l: Lazy) usize {
+            return @intFromEnum(l) - maxInt(u6);
+        }
+    };
 
     pub fn fromByteUnits(bytes: u64) Alignment {
         if (bytes == 0) return .default;
@@ -2049,11 +2058,17 @@ pub const Alignment = enum(u6) {
     }
 
     pub fn toByteUnits(self: Alignment) ?u64 {
-        return if (self == .default) null else @as(u64, 1) << @intFromEnum(self);
+        return switch (self) {
+            .default => null,
+            else => @as(u64, 1) << @intFromEnum(self),
+        };
     }
 
     pub fn toLlvm(self: Alignment) u6 {
-        return if (self == .default) 0 else (@intFromEnum(self) + 1);
+        return switch (self) {
+            .default => 0,
+            else => @intFromEnum(self) + 1,
+        };
     }
 
     pub const Prefixed = struct {
@@ -2071,7 +2086,6 @@ pub const Alignment = enum(u6) {
     }
 };
 
-/// LLVM calling convention specifying how arguments and return values are passed.
 pub const CallConv = enum(u10) {
     ccc,
 
@@ -2201,14 +2215,9 @@ pub const CallConv = enum(u10) {
     }
 };
 
-/// Interned string stored in the LLVM string table for symbol names.
 pub const StrtabString = enum(u32) {
-    /// Sentinel value indicating no string.
-    none = std.math.maxInt(u31),
-    /// Empty string.
+    none = maxInt(u31),
     empty,
-    /// The first anonymous name index (used for counter initialization).
-    first_anon = 0,
     _,
 
     pub fn isAnon(self: StrtabString) bool {
@@ -2267,7 +2276,6 @@ pub const StrtabString = enum(u32) {
     };
 };
 
-/// Interns a string in the symbol string table and returns its handle.
 pub fn strtabString(self: *Builder, bytes: []const u8) Allocator.Error!StrtabString {
     try self.strtab_string_bytes.ensureUnusedCapacity(self.gpa, bytes.len);
     try self.strtab_string_indices.ensureUnusedCapacity(self.gpa, 1);
@@ -2281,14 +2289,12 @@ pub fn strtabString(self: *Builder, bytes: []const u8) Allocator.Error!StrtabStr
     return StrtabString.fromIndex(gop.index);
 }
 
-/// Returns an existing string table entry if it exists, without allocating.
 pub fn strtabStringIfExists(self: *const Builder, bytes: []const u8) ?StrtabString {
     return StrtabString.fromIndex(
         self.strtab_string_map.getIndexAdapted(bytes, StrtabString.Adapter{ .builder = self }) orelse return null,
     );
 }
 
-/// Creates a formatted string in the string table using printf-style formatting.
 pub fn strtabStringFmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allocator.Error!StrtabString {
     try self.strtab_string_map.ensureUnusedCapacity(self.gpa, 1);
     try self.strtab_string_bytes.ensureUnusedCapacity(self.gpa, @intCast(std.fmt.count(fmt_str, fmt_args)));
@@ -2296,20 +2302,17 @@ pub fn strtabStringFmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: a
     return self.strtabStringFmtAssumeCapacity(fmt_str, fmt_args);
 }
 
-/// Creates a formatted string assuming capacity has been pre-allocated.
 pub fn strtabStringFmtAssumeCapacity(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) StrtabString {
     self.strtab_string_bytes.printAssumeCapacity(fmt_str, fmt_args);
     return self.trailingStrtabStringAssumeCapacity();
 }
 
-/// Interns bytes already appended to the string buffer as a new string table entry.
 pub fn trailingStrtabString(self: *Builder) Allocator.Error!StrtabString {
     try self.strtab_string_indices.ensureUnusedCapacity(self.gpa, 1);
     try self.strtab_string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingStrtabStringAssumeCapacity();
 }
 
-/// Interns trailing bytes assuming capacity has been pre-allocated.
 pub fn trailingStrtabStringAssumeCapacity(self: *Builder) StrtabString {
     const start = self.strtab_string_indices.getLast();
     const bytes: []const u8 = self.strtab_string_bytes.items[start..];
@@ -2322,7 +2325,6 @@ pub fn trailingStrtabStringAssumeCapacity(self: *Builder) StrtabString {
     return StrtabString.fromIndex(gop.index);
 }
 
-/// Represents a global value in the LLVM module (function, variable, or alias).
 pub const Global = struct {
     linkage: Linkage = .external,
     preemption: Preemption = .dso_preemptable,
@@ -2342,15 +2344,16 @@ pub const Global = struct {
     },
 
     pub const Index = enum(u32) {
-        none = std.math.maxInt(u32),
+        none = maxInt(u32),
         _,
 
-        pub fn unwrap(self: Index, builder: *const Builder) Index {
-            var cur = self;
+        pub fn unwrap(orig_index: Index, builder: *const Builder) Index {
+            var cur = orig_index;
             while (true) {
-                const replacement = cur.getReplacement(builder);
-                if (replacement == .none) return cur;
-                cur = replacement;
+                switch (builder.globals.values()[@intFromEnum(cur)].kind) {
+                    .replaced => |replacement| cur = replacement,
+                    else => return cur,
+                }
             }
         }
 
@@ -2390,8 +2393,12 @@ pub const Global = struct {
             return self.ptrConst(builder).type;
         }
 
-        pub fn toConst(self: Index) Constant {
-            return @enumFromInt(@intFromEnum(Constant.first_global) + @intFromEnum(self));
+        pub fn toConst(global: Index) Constant {
+            return @enumFromInt(@intFromEnum(Constant.first_global) + @intFromEnum(global));
+        }
+
+        pub fn toValue(global: Index) Value {
+            return global.toConst().toValue();
         }
 
         pub fn setLinkage(self: Index, linkage: Linkage, builder: *Builder) void {
@@ -2452,6 +2459,42 @@ pub const Global = struct {
             self.ptr(builder).kind = .{ .replaced = .none };
         }
 
+        /// Replaces whatever this `Global` currently contains with a new `Function`. Similar to
+        /// `Builder.addFunction`, but the same `Global` is reused.
+        pub fn toNewFunction(global: Index, builder: *Builder) Allocator.Error!Function.Index {
+            try builder.functions.ensureUnusedCapacity(builder.gpa, 1);
+            errdefer comptime unreachable;
+            const function: Function.Index = @enumFromInt(builder.functions.items.len);
+            builder.functions.appendAssumeCapacity(.{
+                .global = global,
+                .strip = undefined,
+            });
+            global.ptr(builder).kind = .{ .function = function };
+            return function;
+        }
+
+        /// Replaces whatever this `Global` currently contains with a new `Variable`. Similar to
+        /// `Builder.addVariable`, but the same `Global` is reused.
+        pub fn toNewVariable(global: Index, builder: *Builder) Allocator.Error!Variable.Index {
+            try builder.variables.ensureUnusedCapacity(builder.gpa, 1);
+            errdefer comptime unreachable;
+            const variable: Variable.Index = @enumFromInt(builder.variables.items.len);
+            builder.variables.appendAssumeCapacity(.{ .global = global });
+            global.ptr(builder).kind = .{ .variable = variable };
+            return variable;
+        }
+
+        /// Replaces whatever this `Global` currently contains with a new `Alias`. Similar to
+        /// `Builder.addAlias`, but the same `Global` is reused.
+        pub fn toNewAlias(global: Index, builder: *Builder) Allocator.Error!Alias.Index {
+            try builder.aliases.ensureUnusedCapacity(builder.gpa, 1);
+            errdefer comptime unreachable;
+            const alias: Alias.Index = @enumFromInt(builder.aliases.items.len);
+            builder.aliass.appendAssumeCapacity(.{ .global = global, .aliasee = .none });
+            global.ptr(builder).kind = .{ .alias = alias };
+            return alias;
+        }
+
         fn updateDsoLocal(self: Index, builder: *Builder) void {
             const self_ptr = self.ptr(builder);
             switch (self_ptr.linkage) {
@@ -2476,7 +2519,7 @@ pub const Global = struct {
             const old_name = self.name(builder);
             if (new_name == old_name) return;
             const index = @intFromEnum(self.unwrap(builder));
-            builder.addGlobalAssumeCapacity(new_name, builder.globals.values()[index]);
+            _ = builder.addGlobalAssumeCapacity(new_name, builder.globals.values()[index]);
             builder.globals.swapRemoveAt(index);
             if (!old_name.isAnon()) return;
             builder.next_unnamed_global = @enumFromInt(@intFromEnum(builder.next_unnamed_global) - 1);
@@ -2496,24 +2539,16 @@ pub const Global = struct {
             self.renameAssumeCapacity(builder.next_replaced_global, builder);
             self.ptr(builder).kind = .{ .replaced = other.unwrap(builder) };
         }
-
-        fn getReplacement(self: Index, builder: *const Builder) Index {
-            return switch (builder.globals.values()[@intFromEnum(self)].kind) {
-                .replaced => |replacement| replacement,
-                else => .none,
-            };
-        }
     };
 };
 
-/// An LLVM alias that provides an alternate name for another global value.
 pub const Alias = struct {
     global: Global.Index,
     thread_local: ThreadLocal = .default,
     aliasee: Constant = .no_init,
 
     pub const Index = enum(u32) {
-        none = std.math.maxInt(u32),
+        none = maxInt(u32),
         _,
 
         pub fn ptr(self: Index, builder: *Builder) *Alias {
@@ -2556,7 +2591,6 @@ pub const Alias = struct {
     };
 };
 
-/// An LLVM global variable with optional initializer and memory attributes.
 pub const Variable = struct {
     global: Global.Index,
     thread_local: ThreadLocal = .default,
@@ -2566,7 +2600,7 @@ pub const Variable = struct {
     alignment: Alignment = .default,
 
     pub const Index = enum(u32) {
-        none = std.math.maxInt(u32),
+        none = maxInt(u32),
         _,
 
         pub fn ptr(self: Index, builder: *Builder) *Variable {
@@ -2595,22 +2629,6 @@ pub const Variable = struct {
 
         pub fn toValue(self: Index, builder: *const Builder) Value {
             return self.toConst(builder).toValue();
-        }
-
-        pub fn setLinkage(self: Index, linkage: Linkage, builder: *Builder) void {
-            return self.ptrConst(builder).global.setLinkage(linkage, builder);
-        }
-
-        pub fn setVisibility(self: Index, visibility: Visibility, builder: *Builder) void {
-            return self.ptrConst(builder).global.setVisibility(visibility, builder);
-        }
-
-        pub fn setDllStorageClass(self: Index, class: DllStorageClass, builder: *Builder) void {
-            return self.ptrConst(builder).global.setDllStorageClass(class, builder);
-        }
-
-        pub fn setUnnamedAddr(self: Index, unnamed_addr: UnnamedAddr, builder: *Builder) void {
-            return self.ptrConst(builder).global.setUnnamedAddr(unnamed_addr, builder);
         }
 
         pub fn setThreadLocal(self: Index, thread_local: ThreadLocal, builder: *Builder) void {
@@ -2657,7 +2675,6 @@ pub const Variable = struct {
     };
 };
 
-/// LLVM intrinsic functions with well-known semantics for code generation.
 pub const Intrinsic = enum {
     // Variable Argument Handling
     va_start,
@@ -2973,52 +2990,52 @@ pub const Intrinsic = enum {
         .memcpy = .{
             .ret_len = 0,
             .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .writeonly } },
+                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .readonly } },
                 .{ .kind = .overloaded },
-                .{ .kind = .overloaded },
-                .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 } },
+                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
-            .attrs = &.{},
+            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
         },
         .@"memcpy.inline" = .{
             .ret_len = 0,
             .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .writeonly } },
+                .{ .kind = .overloaded, .attrs = &.{ .@"noalias", .nocapture, .readonly } },
                 .{ .kind = .overloaded },
-                .{ .kind = .overloaded },
-                .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 } },
+                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
-            .attrs = &.{},
+            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
         },
         .memmove = .{
             .ret_len = 0,
             .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .writeonly } },
+                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .readonly } },
                 .{ .kind = .overloaded },
-                .{ .kind = .overloaded },
-                .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 } },
+                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
-            .attrs = &.{},
+            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
         },
         .memset = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded },
+                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .writeonly } },
                 .{ .kind = .{ .type = .i8 } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 } },
+                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
-            .attrs = &.{},
+            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .write } } },
         },
         .@"memset.inline" = .{
             .ret_len = 0,
             .params = &.{
-                .{ .kind = .overloaded },
+                .{ .kind = .overloaded, .attrs = &.{ .nocapture, .writeonly } },
                 .{ .kind = .{ .type = .i8 } },
                 .{ .kind = .overloaded },
-                .{ .kind = .{ .type = .i1 } },
+                .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
-            .attrs = &.{},
+            .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .write } } },
         },
         .sqrt = .{
             .ret_len = 1,
@@ -3986,7 +4003,7 @@ pub const Intrinsic = enum {
             .params = &.{
                 .{
                     .kind = .{ .type = Type.ptr_amdgpu_constant },
-                    .attrs = &.{.{ .@"align" = Builder.Alignment.fromByteUnits(4) }},
+                    .attrs = &.{.{ .@"align" = .wrap(.fromByteUnits(4)) }},
                 },
             },
             .attrs = &.{ .nocallback, .nofree, .nosync, .nounwind, .speculatable, .willreturn, .{ .memory = Attribute.Memory.all(.none) } },
@@ -4078,7 +4095,6 @@ pub const Intrinsic = enum {
     });
 };
 
-/// An LLVM function with its signature, basic blocks, and instructions.
 pub const Function = struct {
     global: Global.Index,
     call_conv: CallConv = CallConv.default,
@@ -4095,7 +4111,7 @@ pub const Function = struct {
     extra: []const u32 = &.{},
 
     pub const Index = enum(u32) {
-        none = std.math.maxInt(u32),
+        none = maxInt(u32),
         _,
 
         pub fn ptr(self: Index, builder: *Builder) *Function {
@@ -4449,10 +4465,7 @@ pub const Function = struct {
         };
 
         pub const Index = enum(u32) {
-            /// Sentinel value indicating no instruction.
-            none = std.math.maxInt(u31),
-            /// The first valid instruction index (used for counter initialization).
-            first = 0,
+            none = maxInt(u31),
             _,
 
             pub fn name(self: Instruction.Index, function: *const Function) String {
@@ -5048,7 +5061,7 @@ pub const Function = struct {
                 fsub = 12,
                 fmax = 13,
                 fmin = 14,
-                none = std.math.maxInt(u5),
+                none = maxInt(u5),
             };
         };
 
@@ -5187,7 +5200,6 @@ pub const Function = struct {
     }
 };
 
-/// Source location information for debug info, either absent or with line/column/scope.
 pub const DebugLocation = union(enum) {
     no_location: void,
     location: Location,
@@ -5212,7 +5224,6 @@ pub const DebugLocation = union(enum) {
     }
 };
 
-/// Work-in-progress function being constructed with mutable instruction lists.
 pub const WipFunction = struct {
     builder: *Builder,
     function: Function.Index,
@@ -5266,7 +5277,7 @@ pub const WipFunction = struct {
             .debug_location = .no_location,
             .cursor = undefined,
             .blocks = .empty,
-            .instructions = .{},
+            .instructions = .empty,
             .names = .empty,
             .strip = options.strip,
             .debug_locations = .empty,
@@ -5429,7 +5440,7 @@ pub const WipFunction = struct {
                 .targets_len = @intCast(targets.len),
             }),
         });
-        self.extra.appendSliceAssumeCapacity(@ptrCast(targets));
+        _ = self.extra.appendSliceAssumeCapacity(@ptrCast(targets));
         for (targets) |target| target.ptr(self).branches += 1;
         return instruction;
     }
@@ -5573,7 +5584,7 @@ pub const WipFunction = struct {
         assert(lhs.typeOfWip(self).isVector(self.builder));
         assert(lhs.typeOfWip(self) == rhs.typeOfWip(self));
         assert(mask.typeOfWip(self).scalarType(self.builder).isInteger(self.builder));
-        try self.ensureUnusedExtraCapacity(1, Instruction.ShuffleVector, 0);
+        _ = try self.ensureUnusedExtraCapacity(1, Instruction.ShuffleVector, 0);
         const instruction = try self.addInst(name, .{
             .tag = .shufflevector,
             .data = self.addExtraAssumeCapacity(Instruction.ShuffleVector{
@@ -5606,7 +5617,7 @@ pub const WipFunction = struct {
         name: []const u8,
     ) Allocator.Error!Value {
         assert(indices.len > 0);
-        val.typeOfWip(self).childTypeAt(indices, self.builder);
+        _ = val.typeOfWip(self).childTypeAt(indices, self.builder);
         try self.ensureUnusedExtraCapacity(1, Instruction.ExtractValue, indices.len);
         const instruction = try self.addInst(name, .{
             .tag = .extractvalue,
@@ -5807,7 +5818,7 @@ pub const WipFunction = struct {
         assert(success_ordering != .none);
         assert(failure_ordering != .none);
 
-        try self.builder.structType(.normal, &.{ ty, .i1 });
+        _ = try self.builder.structType(.normal, &.{ ty, .i1 });
         try self.ensureUnusedExtraCapacity(1, Instruction.CmpXchg, 0);
         const instruction = try self.addInst(name, .{
             .tag = switch (kind) {
@@ -6168,16 +6179,23 @@ pub const WipFunction = struct {
     pub fn callMemCpy(
         self: *WipFunction,
         dst: Value,
-        _: Alignment,
+        dst_align: Alignment,
         src: Value,
-        _: Alignment,
+        src_align: Alignment,
         len: Value,
         kind: MemoryAccessKind,
         @"inline": bool,
     ) Allocator.Error!Instruction.Index {
+        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(dst_align) })};
+        var src_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(src_align) })};
         const value = try self.callIntrinsic(
             .normal,
-            .none,
+            try self.builder.fnAttrs(&.{
+                .none,
+                .none,
+                try self.builder.attrs(&dst_attrs),
+                try self.builder.attrs(&src_attrs),
+            }),
             if (@"inline") .@"memcpy.inline" else .memcpy,
             &.{ dst.typeOfWip(self), src.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, src, len, switch (kind) {
@@ -6192,15 +6210,22 @@ pub const WipFunction = struct {
     pub fn callMemMove(
         self: *WipFunction,
         dst: Value,
-        _: Alignment,
+        dst_align: Alignment,
         src: Value,
-        _: Alignment,
+        src_align: Alignment,
         len: Value,
         kind: MemoryAccessKind,
     ) Allocator.Error!Instruction.Index {
+        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(dst_align) })};
+        var src_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(src_align) })};
         const value = try self.callIntrinsic(
             .normal,
-            .none,
+            try self.builder.fnAttrs(&.{
+                .none,
+                .none,
+                try self.builder.attrs(&dst_attrs),
+                try self.builder.attrs(&src_attrs),
+            }),
             .memmove,
             &.{ dst.typeOfWip(self), src.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, src, len, switch (kind) {
@@ -6215,15 +6240,16 @@ pub const WipFunction = struct {
     pub fn callMemSet(
         self: *WipFunction,
         dst: Value,
-        _: Alignment,
+        dst_align: Alignment,
         val: Value,
         len: Value,
         kind: MemoryAccessKind,
         @"inline": bool,
     ) Allocator.Error!Instruction.Index {
+        var dst_attrs = [_]Attribute.Index{try self.builder.attr(.{ .@"align" = .wrap(dst_align) })};
         const value = try self.callIntrinsic(
             .normal,
-            .none,
+            try self.builder.fnAttrs(&.{ .none, .none, try self.builder.attrs(&dst_attrs) }),
             if (@"inline") .@"memset.inline" else .memset,
             &.{ dst.typeOfWip(self), len.typeOfWip(self) },
             &.{ dst, val, len, switch (kind) {
@@ -6364,7 +6390,7 @@ pub const WipFunction = struct {
         errdefer function.instructions.shrinkRetainingCapacity(0);
 
         {
-            var final_instruction_index: Instruction.Index = .first;
+            var final_instruction_index: Instruction.Index = @enumFromInt(0);
             for (0..params_len) |param_index| {
                 instructions.items[param_index] = final_instruction_index;
                 final_instruction_index = @enumFromInt(@intFromEnum(final_instruction_index) + 1);
@@ -6381,36 +6407,40 @@ pub const WipFunction = struct {
         }
 
         var wip_name: struct {
-            next_name: String = .first_anon,
+            next_name: String = @enumFromInt(0),
             next_unique_name: std.AutoHashMap(String, String),
             builder: *Builder,
 
             fn map(wip_name: *@This(), name: String, sep: []const u8) Allocator.Error!String {
-                if (name == .none) return .none;
-                if (name == .empty or name.isAnon()) {
-                    assert(wip_name.next_name != .none);
-                    defer wip_name.next_name = @enumFromInt(@intFromEnum(wip_name.next_name) + 1);
-                    return wip_name.next_name;
-                }
+                switch (name) {
+                    .none => return .none,
+                    .empty => {
+                        assert(wip_name.next_name != .none);
+                        defer wip_name.next_name = @enumFromInt(@intFromEnum(wip_name.next_name) + 1);
+                        return wip_name.next_name;
+                    },
+                    _ => {
+                        assert(!name.isAnon());
+                        const gop = try wip_name.next_unique_name.getOrPut(name);
+                        if (!gop.found_existing) {
+                            gop.value_ptr.* = @enumFromInt(0);
+                            return name;
+                        }
 
-                const gop = try wip_name.next_unique_name.getOrPut(name);
-                if (!gop.found_existing) {
-                    gop.value_ptr.* = .first_anon;
-                    return name;
-                }
-
-                while (true) {
-                    gop.value_ptr.* = @enumFromInt(@intFromEnum(gop.value_ptr.*) + 1);
-                    const unique_name = try wip_name.builder.fmt("{f}{s}{f}", .{
-                        name.fmtRaw(wip_name.builder),
-                        sep,
-                        gop.value_ptr.fmtRaw(wip_name.builder),
-                    });
-                    const unique_gop = try wip_name.next_unique_name.getOrPut(unique_name);
-                    if (!unique_gop.found_existing) {
-                        unique_gop.value_ptr.* = .first_anon;
-                        return unique_name;
-                    }
+                        while (true) {
+                            gop.value_ptr.* = @enumFromInt(@intFromEnum(gop.value_ptr.*) + 1);
+                            const unique_name = try wip_name.builder.fmt("{f}{s}{f}", .{
+                                name.fmtRaw(wip_name.builder),
+                                sep,
+                                gop.value_ptr.fmtRaw(wip_name.builder),
+                            });
+                            const unique_gop = try wip_name.next_unique_name.getOrPut(unique_name);
+                            if (!unique_gop.found_existing) {
+                                unique_gop.value_ptr.* = @enumFromInt(0);
+                                return unique_name;
+                            }
+                        }
+                    },
                 }
             }
         } = .{
@@ -6879,7 +6909,7 @@ pub const WipFunction = struct {
             .tag = tag,
             .data = self.addExtraAssumeCapacity(Instruction.Phi{ .type = ty }),
         });
-        self.extra.addManyAsSliceAssumeCapacity(incoming * 2);
+        _ = self.extra.addManyAsSliceAssumeCapacity(incoming * 2);
         return .{ .block = self.cursor.block, .instruction = instruction };
     }
 
@@ -7035,7 +7065,6 @@ pub const WipFunction = struct {
     }
 };
 
-/// Comparison condition for floating-point fcmp instructions.
 pub const FloatCondition = enum(u4) {
     oeq = 1,
     ogt = 2,
@@ -7053,7 +7082,6 @@ pub const FloatCondition = enum(u4) {
     une = 14,
 };
 
-/// Comparison condition for integer icmp instructions.
 pub const IntegerCondition = enum(u6) {
     eq = 32,
     ne = 33,
@@ -7067,7 +7095,6 @@ pub const IntegerCondition = enum(u6) {
     sle = 41,
 };
 
-/// Indicates whether a memory access is volatile or normal.
 pub const MemoryAccessKind = enum(u1) {
     normal,
     @"volatile",
@@ -7096,7 +7123,6 @@ pub const MemoryAccessKind = enum(u1) {
     }
 };
 
-/// Synchronization scope for atomic operations (single-thread or system-wide).
 pub const SyncScope = enum(u1) {
     singlethread,
     system,
@@ -7125,7 +7151,6 @@ pub const SyncScope = enum(u1) {
     }
 };
 
-/// Memory ordering constraint for atomic operations.
 pub const AtomicOrdering = enum(u3) {
     none = 0,
     unordered = 1,
@@ -7169,7 +7194,6 @@ const MemoryAccessInfo = packed struct(u32) {
     _: u13 = undefined,
 };
 
-/// Fast-math flags enabling aggressive floating-point optimizations.
 pub const FastMath = packed struct(u8) {
     unsafe_algebra: bool = false, // Legacy
     nnan: bool = false,
@@ -7191,7 +7215,6 @@ pub const FastMath = packed struct(u8) {
     };
 };
 
-/// Simplified fast-math mode selection (normal or all optimizations enabled).
 pub const FastMathKind = enum {
     normal,
     fast,
@@ -7204,7 +7227,6 @@ pub const FastMathKind = enum {
     }
 };
 
-/// An LLVM constant value that can be used in global initializers and constant expressions.
 pub const Constant = enum(u32) {
     false,
     true,
@@ -7361,7 +7383,7 @@ pub const Constant = enum(u32) {
         //indices: [info.indices_len]Constant,
 
         pub const Kind = enum { normal, inbounds };
-        pub const InRangeIndex = enum(u16) { none = std.math.maxInt(u16), _ };
+        pub const InRangeIndex = enum(u16) { none = maxInt(u16), _ };
         pub const Info = packed struct(u32) { indices_len: u16, inrange: InRangeIndex };
     };
 
@@ -7611,7 +7633,7 @@ pub const Constant = enum(u32) {
                             string: [
                                 (std.math.big.int.Const{
                                     .limbs = &([1]std.math.big.Limb{
-                                        std.math.maxInt(std.math.big.Limb),
+                                        maxInt(std.math.big.Limb),
                                     } ** expected_limbs),
                                     .positive = false,
                                 }).sizeInBaseUpperBound(10)
@@ -7675,7 +7697,7 @@ pub const Constant = enum(u32) {
                                     std.math.minInt(Exponent64),
                                 else => @as(Exponent64, repr.exponent) +
                                     (std.math.floatExponentMax(f64) - std.math.floatExponentMax(f32)),
-                                std.math.maxInt(Exponent32) => std.math.maxInt(Exponent64),
+                                maxInt(Exponent32) => maxInt(Exponent64),
                             },
                             .sign = repr.sign,
                         }))});
@@ -7851,9 +7873,8 @@ pub const Constant = enum(u32) {
     }
 };
 
-/// An SSA value that can be an instruction result, constant, or metadata reference.
 pub const Value = enum(u32) {
-    none = std.math.maxInt(u31),
+    none = maxInt(u31),
     false = first_constant + @intFromEnum(Constant.false),
     true = first_constant + @intFromEnum(Constant.true),
     @"0" = first_constant + @intFromEnum(Constant.@"0"),
@@ -7926,7 +7947,6 @@ pub const Value = enum(u32) {
     }
 };
 
-/// LLVM metadata for debug info, annotations, and other non-code information.
 pub const Metadata = packed struct(u32) {
     index: u29,
     kind: Kind,
@@ -8055,6 +8075,7 @@ pub const Metadata = packed struct(u32) {
         composite_vector_type,
         derived_pointer_type,
         derived_member_type,
+        derived_typedef_type,
         subroutine_type,
         enumerator_unsigned,
         enumerator_signed_positive,
@@ -8098,6 +8119,7 @@ pub const Metadata = packed struct(u32) {
                 .composite_vector_type,
                 .derived_pointer_type,
                 .derived_member_type,
+                .derived_typedef_type,
                 .subroutine_type,
                 .enumerator_unsigned,
                 .enumerator_signed_positive,
@@ -8652,15 +8674,25 @@ pub const Metadata = packed struct(u32) {
             w: *Writer,
         ) !void {
             const names = comptime std.meta.fieldNames(@TypeOf(nodes));
-            try w.print("{s}{s}(", .{ @tagName(distinct), @tagName(node) });
-            inline for (names) |name| {
-                try w.print("{f}", .{try formatter.fmt(
-                    name ++ ": ",
-                    @field(nodes, name),
-                    null,
-                )});
-            }
-            try w.writeAll(")\n");
+
+            comptime var fmt_str: []const u8 = "{[distinct]s}{[node]s}(";
+            inline for (names) |name| fmt_str = fmt_str ++ "{[" ++ name ++ "]f}";
+            fmt_str = fmt_str ++ ")\n";
+
+            const field_names = @as([]const []const u8, &.{ "distinct", "node" }) ++ names;
+            comptime var field_types: [2 + names.len]type = undefined;
+            @memset(field_types[0..2], []const u8);
+            @memset(field_types[2..], std.fmt.Alt(FormatData, format));
+
+            var fmt_args: @Struct(.auto, null, field_names, &field_types, &@splat(.{})) = undefined;
+            fmt_args.distinct = @tagName(distinct);
+            fmt_args.node = @tagName(node);
+            inline for (names) |name| @field(fmt_args, name) = try formatter.fmt(
+                name ++ ": ",
+                @field(nodes, name),
+                null,
+            );
+            try w.print(fmt_str, fmt_args);
         }
     };
 };
@@ -8680,7 +8712,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .string_bytes = .empty,
 
         .types = .empty,
-        .next_unnamed_type = .first_anon,
+        .next_unnamed_type = @enumFromInt(0),
         .next_unique_type_id = .empty,
         .type_map = .empty,
         .type_items = .empty,
@@ -8694,7 +8726,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .function_attributes_set = .empty,
 
         .globals = .empty,
-        .next_unnamed_global = .first_anon,
+        .next_unnamed_global = @enumFromInt(0),
         .next_replaced_global = .none,
         .next_unique_global_id = .empty,
         .aliases = .empty,
@@ -8706,12 +8738,14 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .strtab_string_bytes = .empty,
 
         .constant_map = .empty,
-        .constant_items = .{},
+        .constant_items = .empty,
         .constant_extra = .empty,
         .constant_limbs = .empty,
 
+        .alignment_forward_references = .empty,
+
         .metadata_map = .empty,
-        .metadata_items = .{},
+        .metadata_items = .empty,
         .metadata_extra = .empty,
         .metadata_limbs = .empty,
         .metadata_forward_references = .empty,
@@ -8773,7 +8807,6 @@ pub fn init(options: Options) Allocator.Error!Builder {
     return self;
 }
 
-/// Clears all data and frees all memory, leaving the builder in a reusable state.
 pub fn clearAndFree(self: *Builder) void {
     self.module_asm.clearAndFree(self.gpa);
 
@@ -8822,65 +8855,66 @@ pub fn clearAndFree(self: *Builder) void {
     self.metadata_string_bytes.clearAndFree(self.gpa);
 }
 
-/// Frees all resources and invalidates the builder.
 pub fn deinit(self: *Builder) void {
-    self.module_asm.deinit(self.gpa);
+    const gpa = self.gpa;
 
-    self.string_map.deinit(self.gpa);
-    self.string_indices.deinit(self.gpa);
-    self.string_bytes.deinit(self.gpa);
+    self.module_asm.deinit(gpa);
 
-    self.types.deinit(self.gpa);
-    self.next_unique_type_id.deinit(self.gpa);
-    self.type_map.deinit(self.gpa);
-    self.type_items.deinit(self.gpa);
-    self.type_extra.deinit(self.gpa);
+    self.string_map.deinit(gpa);
+    self.string_indices.deinit(gpa);
+    self.string_bytes.deinit(gpa);
 
-    self.attributes.deinit(self.gpa);
-    self.attributes_map.deinit(self.gpa);
-    self.attributes_indices.deinit(self.gpa);
-    self.attributes_extra.deinit(self.gpa);
+    self.types.deinit(gpa);
+    self.next_unique_type_id.deinit(gpa);
+    self.type_map.deinit(gpa);
+    self.type_items.deinit(gpa);
+    self.type_extra.deinit(gpa);
 
-    self.function_attributes_set.deinit(self.gpa);
+    self.attributes.deinit(gpa);
+    self.attributes_map.deinit(gpa);
+    self.attributes_indices.deinit(gpa);
+    self.attributes_extra.deinit(gpa);
 
-    self.globals.deinit(self.gpa);
-    self.next_unique_global_id.deinit(self.gpa);
-    self.aliases.deinit(self.gpa);
-    self.variables.deinit(self.gpa);
-    for (self.functions.items) |*function| function.deinit(self.gpa);
-    self.functions.deinit(self.gpa);
+    self.function_attributes_set.deinit(gpa);
 
-    self.strtab_string_map.deinit(self.gpa);
-    self.strtab_string_indices.deinit(self.gpa);
-    self.strtab_string_bytes.deinit(self.gpa);
+    self.globals.deinit(gpa);
+    self.next_unique_global_id.deinit(gpa);
+    self.aliases.deinit(gpa);
+    self.variables.deinit(gpa);
+    for (self.functions.items) |*function| function.deinit(gpa);
+    self.functions.deinit(gpa);
 
-    self.constant_map.deinit(self.gpa);
-    self.constant_items.deinit(self.gpa);
-    self.constant_extra.deinit(self.gpa);
-    self.constant_limbs.deinit(self.gpa);
+    self.strtab_string_map.deinit(gpa);
+    self.strtab_string_indices.deinit(gpa);
+    self.strtab_string_bytes.deinit(gpa);
 
-    self.metadata_map.deinit(self.gpa);
-    self.metadata_items.deinit(self.gpa);
-    self.metadata_extra.deinit(self.gpa);
-    self.metadata_limbs.deinit(self.gpa);
-    self.metadata_forward_references.deinit(self.gpa);
-    self.metadata_named.deinit(self.gpa);
+    self.constant_map.deinit(gpa);
+    self.constant_items.deinit(gpa);
+    self.constant_extra.deinit(gpa);
+    self.constant_limbs.deinit(gpa);
 
-    self.metadata_string_map.deinit(self.gpa);
-    self.metadata_string_indices.deinit(self.gpa);
-    self.metadata_string_bytes.deinit(self.gpa);
+    self.alignment_forward_references.deinit(gpa);
+
+    self.metadata_map.deinit(gpa);
+    self.metadata_items.deinit(gpa);
+    self.metadata_extra.deinit(gpa);
+    self.metadata_limbs.deinit(gpa);
+    self.metadata_forward_references.deinit(gpa);
+    self.metadata_named.deinit(gpa);
+
+    self.metadata_string_map.deinit(gpa);
+    self.metadata_string_indices.deinit(gpa);
+    self.metadata_string_bytes.deinit(gpa);
 
     self.* = undefined;
 }
 
-/// Finalizes the module-level inline assembly, ensuring it ends with a newline.
 pub fn finishModuleAsm(self: *Builder, aw: *Writer.Allocating) Allocator.Error!void {
     self.module_asm = aw.toArrayList();
     if (self.module_asm.getLastOrNull()) |last| if (last != '\n')
         try self.module_asm.append(self.gpa, '\n');
 }
 
-/// Interns a string and returns its handle for later retrieval.
 pub fn string(self: *Builder, bytes: []const u8) Allocator.Error!String {
     try self.string_bytes.ensureUnusedCapacity(self.gpa, bytes.len);
     try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
@@ -8894,19 +8928,16 @@ pub fn string(self: *Builder, bytes: []const u8) Allocator.Error!String {
     return String.fromIndex(gop.index);
 }
 
-/// Interns a null-terminated string including the null byte.
 pub fn stringNull(self: *Builder, bytes: [:0]const u8) Allocator.Error!String {
     return self.string(bytes[0 .. bytes.len + 1]);
 }
 
-/// Returns an existing string handle if the string is already interned.
 pub fn stringIfExists(self: *const Builder, bytes: []const u8) ?String {
     return String.fromIndex(
         self.string_map.getIndexAdapted(bytes, String.Adapter{ .builder = self }) orelse return null,
     );
 }
 
-/// Creates a formatted string using printf-style formatting and interns it.
 pub fn fmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allocator.Error!String {
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     try self.string_bytes.ensureUnusedCapacity(self.gpa, @intCast(std.fmt.count(fmt_str, fmt_args)));
@@ -8914,20 +8945,17 @@ pub fn fmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allo
     return self.fmtAssumeCapacity(fmt_str, fmt_args);
 }
 
-/// Creates a formatted string assuming capacity has been pre-allocated.
 pub fn fmtAssumeCapacity(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) String {
     self.string_bytes.printAssumeCapacity(fmt_str, fmt_args);
     return self.trailingStringAssumeCapacity();
 }
 
-/// Interns bytes already appended to the string buffer as a new entry.
 pub fn trailingString(self: *Builder) Allocator.Error!String {
     try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingStringAssumeCapacity();
 }
 
-/// Interns trailing bytes assuming capacity has been pre-allocated.
 pub fn trailingStringAssumeCapacity(self: *Builder) String {
     const start = self.string_indices.getLast();
     const bytes: []const u8 = self.string_bytes.items[start..];
@@ -8940,7 +8968,6 @@ pub fn trailingStringAssumeCapacity(self: *Builder) String {
     return String.fromIndex(gop.index);
 }
 
-/// Creates a function type with the given return type, parameter types, and varargs mode.
 pub fn fnType(
     self: *Builder,
     ret: Type,
@@ -8953,19 +8980,16 @@ pub fn fnType(
     }
 }
 
-/// Creates an integer type with the specified bit width.
 pub fn intType(self: *Builder, bits: u24) Allocator.Error!Type {
     try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
     return self.intTypeAssumeCapacity(bits);
 }
 
-/// Creates a pointer type in the specified address space.
 pub fn ptrType(self: *Builder, addr_space: AddrSpace) Allocator.Error!Type {
     try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
     return self.ptrTypeAssumeCapacity(addr_space);
 }
 
-/// Creates a fixed-length or scalable vector type with the specified element type.
 pub fn vectorType(
     self: *Builder,
     kind: Type.Vector.Kind,
@@ -8978,14 +9002,12 @@ pub fn vectorType(
     }
 }
 
-/// Creates an array type with the specified length and element type.
 pub fn arrayType(self: *Builder, len: u64, child: Type) Allocator.Error!Type {
     comptime assert(@sizeOf(Type.Array) >= @sizeOf(Type.Vector));
     try self.ensureUnusedTypeCapacity(1, Type.Array, 0);
     return self.arrayTypeAssumeCapacity(len, child);
 }
 
-/// Creates an anonymous struct type with the specified field types.
 pub fn structType(
     self: *Builder,
     kind: Type.Structure.Kind,
@@ -8997,11 +9019,10 @@ pub fn structType(
     }
 }
 
-/// Creates a named opaque struct type that can have its body set later.
 pub fn opaqueType(self: *Builder, name: String) Allocator.Error!Type {
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     if (name.slice(self)) |id| {
-        const count: usize = comptime std.fmt.count("{d}", .{std.math.maxInt(u32)});
+        const count: usize = comptime std.fmt.count("{d}", .{maxInt(u32)});
         try self.string_bytes.ensureUnusedCapacity(self.gpa, id.len + count);
     }
     try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
@@ -9011,7 +9032,6 @@ pub fn opaqueType(self: *Builder, name: String) Allocator.Error!Type {
     return self.opaqueTypeAssumeCapacity(name);
 }
 
-/// Sets the body of a previously created named opaque type.
 pub fn namedTypeSetBody(
     self: *Builder,
     named_type: Type,
@@ -9022,7 +9042,6 @@ pub fn namedTypeSetBody(
         @intFromEnum(body_type);
 }
 
-/// Interns an attribute and returns its index for use in attribute lists.
 pub fn attr(self: *Builder, attribute: Attribute) Allocator.Error!Attribute.Index {
     try self.attributes.ensureUnusedCapacity(self.gpa, 1);
 
@@ -9031,7 +9050,6 @@ pub fn attr(self: *Builder, attribute: Attribute) Allocator.Error!Attribute.Inde
     return @enumFromInt(gop.index);
 }
 
-/// Creates a sorted, deduplicated attribute set from individual attribute indices.
 pub fn attrs(self: *Builder, attributes: []Attribute.Index) Allocator.Error!Attributes {
     std.sort.heap(Attribute.Index, attributes, self, struct {
         pub fn lessThan(builder: *const Builder, lhs: Attribute.Index, rhs: Attribute.Index) bool {
@@ -9044,11 +9062,10 @@ pub fn attrs(self: *Builder, attributes: []Attribute.Index) Allocator.Error!Attr
     return @enumFromInt(try self.attrGeneric(@ptrCast(attributes)));
 }
 
-/// Creates a function attribute set combining function, return, and parameter attributes.
 pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Error!FunctionAttributes {
     try self.function_attributes_set.ensureUnusedCapacity(self.gpa, 1);
     const function_attributes: FunctionAttributes = @enumFromInt(try self.attrGeneric(@ptrCast(
-        fn_attributes[0..if (std.mem.findLastNone(Attributes, fn_attributes, &.{.none})) |last|
+        fn_attributes[0..if (std.mem.lastIndexOfNone(Attributes, fn_attributes, &.{.none})) |last|
             last + 1
         else
             0],
@@ -9058,7 +9075,6 @@ pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Erro
     return function_attributes;
 }
 
-/// Adds a new global value to the module with the given name and properties.
 pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.Error!Global.Index {
     assert(!name.isAnon());
     try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
@@ -9066,7 +9082,6 @@ pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.E
     return self.addGlobalAssumeCapacity(name, global);
 }
 
-/// Adds a global value assuming capacity has been pre-allocated.
 pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Global) Global.Index {
     _ = self.ptrTypeAssumeCapacity(global.addr_space);
     var id = name;
@@ -9091,12 +9106,10 @@ pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Globa
     }
 }
 
-/// Looks up a global value by name, returning null if not found.
 pub fn getGlobal(self: *const Builder, name: StrtabString) ?Global.Index {
     return @enumFromInt(self.globals.getIndex(name) orelse return null);
 }
 
-/// Adds a new alias to the module that refers to another global value.
 pub fn addAlias(
     self: *Builder,
     name: StrtabString,
@@ -9111,7 +9124,6 @@ pub fn addAlias(
     return self.addAliasAssumeCapacity(name, ty, addr_space, aliasee);
 }
 
-/// Adds an alias assuming capacity has been pre-allocated.
 pub fn addAliasAssumeCapacity(
     self: *Builder,
     name: StrtabString,
@@ -9128,7 +9140,6 @@ pub fn addAliasAssumeCapacity(
     return alias_index;
 }
 
-/// Adds a new global variable to the module.
 pub fn addVariable(
     self: *Builder,
     name: StrtabString,
@@ -9142,7 +9153,6 @@ pub fn addVariable(
     return self.addVariableAssumeCapacity(ty, name, addr_space);
 }
 
-/// Adds a global variable assuming capacity has been pre-allocated.
 pub fn addVariableAssumeCapacity(
     self: *Builder,
     ty: Type,
@@ -9158,7 +9168,6 @@ pub fn addVariableAssumeCapacity(
     return variable_index;
 }
 
-/// Adds a new function declaration or definition to the module.
 pub fn addFunction(
     self: *Builder,
     ty: Type,
@@ -9172,7 +9181,6 @@ pub fn addFunction(
     return self.addFunctionAssumeCapacity(ty, name, addr_space);
 }
 
-/// Adds a function assuming capacity has been pre-allocated.
 pub fn addFunctionAssumeCapacity(
     self: *Builder,
     ty: Type,
@@ -9192,7 +9200,6 @@ pub fn addFunctionAssumeCapacity(
     return function_index;
 }
 
-/// Gets or creates an LLVM intrinsic function with the given overloaded types.
 pub fn getIntrinsic(
     self: *Builder,
     id: Intrinsic,
@@ -9288,7 +9295,6 @@ pub fn getIntrinsic(
     return function_index;
 }
 
-/// Creates an integer constant from an integral value.
 pub fn intConst(self: *Builder, ty: Type, value: anytype) Allocator.Error!Constant {
     const int_value = switch (@typeInfo(@TypeOf(value))) {
         .int, .comptime_int => value,
@@ -9305,12 +9311,10 @@ pub fn intConst(self: *Builder, ty: Type, value: anytype) Allocator.Error!Consta
     return self.bigIntConst(ty, std.math.big.int.Mutable.init(&limbs, int_value).toConst());
 }
 
-/// Creates an integer value from an integral value.
 pub fn intValue(self: *Builder, ty: Type, value: anytype) Allocator.Error!Value {
     return (try self.intConst(ty, value)).toValue();
 }
 
-/// Creates an integer constant from a big integer.
 pub fn bigIntConst(self: *Builder, ty: Type, value: std.math.big.int.Const) Allocator.Error!Constant {
     try self.constant_map.ensureUnusedCapacity(self.gpa, 1);
     try self.constant_items.ensureUnusedCapacity(self.gpa, 1);
@@ -9318,12 +9322,10 @@ pub fn bigIntConst(self: *Builder, ty: Type, value: std.math.big.int.Const) Allo
     return self.bigIntConstAssumeCapacity(ty, value);
 }
 
-/// Creates an integer value from a big integer.
 pub fn bigIntValue(self: *Builder, ty: Type, value: std.math.big.int.Const) Allocator.Error!Value {
     return (try self.bigIntConst(ty, value)).toValue();
 }
 
-/// Creates a floating-point constant from a compile-time float.
 pub fn fpConst(self: *Builder, ty: Type, comptime val: comptime_float) Allocator.Error!Constant {
     return switch (ty) {
         .half => try self.halfConst(val),
@@ -9337,12 +9339,10 @@ pub fn fpConst(self: *Builder, ty: Type, comptime val: comptime_float) Allocator
     };
 }
 
-/// Creates a floating-point value from a compile-time float.
 pub fn fpValue(self: *Builder, ty: Type, comptime value: comptime_float) Allocator.Error!Value {
     return (try self.fpConst(ty, value)).toValue();
 }
 
-/// Creates a NaN (Not a Number) constant for the given floating-point type.
 pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     return switch (ty) {
         .half => try self.halfConst(std.math.nan(f16)),
@@ -9356,167 +9356,137 @@ pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     };
 }
 
-/// Creates a NaN value for the given floating-point type.
 pub fn nanValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.nanConst(ty)).toValue();
 }
 
-/// Creates a half-precision (f16) floating-point constant.
 pub fn halfConst(self: *Builder, val: f16) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.halfConstAssumeCapacity(val);
 }
 
-/// Creates a half-precision (f16) floating-point value.
 pub fn halfValue(self: *Builder, value: f16) Allocator.Error!Value {
     return (try self.halfConst(value)).toValue();
 }
 
-/// Creates a bfloat16 floating-point constant.
 pub fn bfloatConst(self: *Builder, val: f32) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.bfloatConstAssumeCapacity(val);
 }
 
-/// Creates a bfloat16 floating-point value.
 pub fn bfloatValue(self: *Builder, value: f32) Allocator.Error!Value {
     return (try self.bfloatConst(value)).toValue();
 }
 
-/// Creates a single-precision (f32) floating-point constant.
 pub fn floatConst(self: *Builder, val: f32) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.floatConstAssumeCapacity(val);
 }
 
-/// Creates a single-precision (f32) floating-point value.
 pub fn floatValue(self: *Builder, value: f32) Allocator.Error!Value {
     return (try self.floatConst(value)).toValue();
 }
 
-/// Creates a double-precision (f64) floating-point constant.
 pub fn doubleConst(self: *Builder, val: f64) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Double, 0);
     return self.doubleConstAssumeCapacity(val);
 }
 
-/// Creates a double-precision (f64) floating-point value.
 pub fn doubleValue(self: *Builder, value: f64) Allocator.Error!Value {
     return (try self.doubleConst(value)).toValue();
 }
 
-/// Creates a quad-precision (f128) floating-point constant.
 pub fn fp128Const(self: *Builder, val: f128) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
     return self.fp128ConstAssumeCapacity(val);
 }
 
-/// Creates a quad-precision (f128) floating-point value.
 pub fn fp128Value(self: *Builder, value: f128) Allocator.Error!Value {
     return (try self.fp128Const(value)).toValue();
 }
 
-/// Creates an x86 extended precision (f80) floating-point constant.
 pub fn x86_fp80Const(self: *Builder, val: f80) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp80, 0);
     return self.x86_fp80ConstAssumeCapacity(val);
 }
 
-/// Creates an x86 extended precision (f80) floating-point value.
 pub fn x86_fp80Value(self: *Builder, value: f80) Allocator.Error!Value {
     return (try self.x86_fp80Const(value)).toValue();
 }
 
-/// Creates a PowerPC double-double (ppc_fp128) floating-point constant.
 pub fn ppc_fp128Const(self: *Builder, val: [2]f64) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
     return self.ppc_fp128ConstAssumeCapacity(val);
 }
 
-/// Creates a PowerPC double-double (ppc_fp128) floating-point value.
 pub fn ppc_fp128Value(self: *Builder, value: [2]f64) Allocator.Error!Value {
     return (try self.ppc_fp128Const(value)).toValue();
 }
 
-/// Creates a null pointer constant for the given pointer type.
 pub fn nullConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.nullConstAssumeCapacity(ty);
 }
 
-/// Creates a null pointer value for the given pointer type.
 pub fn nullValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.nullConst(ty)).toValue();
 }
 
-/// Creates a none/undef constant for the given type.
 pub fn noneConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.noneConstAssumeCapacity(ty);
 }
 
-/// Creates a none/undef value for the given type.
 pub fn noneValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.noneConst(ty)).toValue();
 }
 
-/// Creates a struct constant with the given field values.
 pub fn structConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.structConstAssumeCapacity(ty, vals);
 }
 
-/// Creates a struct value with the given field values.
 pub fn structValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
     return (try self.structConst(ty, vals)).toValue();
 }
 
-/// Creates an array constant with the given element values.
 pub fn arrayConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.arrayConstAssumeCapacity(ty, vals);
 }
 
-/// Creates an array value with the given element values.
 pub fn arrayValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
     return (try self.arrayConst(ty, vals)).toValue();
 }
 
-/// Creates a string constant from an interned string.
 pub fn stringConst(self: *Builder, val: String) Allocator.Error!Constant {
     try self.ensureUnusedTypeCapacity(1, Type.Array, 0);
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.stringConstAssumeCapacity(val);
 }
 
-/// Creates a string value from an interned string.
 pub fn stringValue(self: *Builder, val: String) Allocator.Error!Value {
     return (try self.stringConst(val)).toValue();
 }
 
-/// Creates a vector constant with the given element values.
 pub fn vectorConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.vectorConstAssumeCapacity(ty, vals);
 }
 
-/// Creates a vector value with the given element values.
 pub fn vectorValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
     return (try self.vectorConst(ty, vals)).toValue();
 }
 
-/// Creates a splat vector constant with all elements set to the same value.
 pub fn splatConst(self: *Builder, ty: Type, val: Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Splat, 0);
     return self.splatConstAssumeCapacity(ty, val);
 }
 
-/// Creates a splat vector value with all elements set to the same value.
 pub fn splatValue(self: *Builder, ty: Type, val: Constant) Allocator.Error!Value {
     return (try self.splatConst(ty, val)).toValue();
 }
 
-/// Creates a zero-initialized constant for the given type.
 pub fn zeroInitConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
     try self.constant_limbs.ensureUnusedCapacity(
@@ -9526,34 +9496,28 @@ pub fn zeroInitConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     return self.zeroInitConstAssumeCapacity(ty);
 }
 
-/// Creates a zero-initialized value for the given type.
 pub fn zeroInitValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.zeroInitConst(ty)).toValue();
 }
 
-/// Creates an undefined constant for the given type.
 pub fn undefConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.undefConstAssumeCapacity(ty);
 }
 
-/// Creates an undefined value for the given type.
 pub fn undefValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.undefConst(ty)).toValue();
 }
 
-/// Creates a poison constant for the given type.
 pub fn poisonConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.poisonConstAssumeCapacity(ty);
 }
 
-/// Creates a poison value for the given type.
 pub fn poisonValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.poisonConst(ty)).toValue();
 }
 
-/// Creates a block address constant for indirect branching.
 pub fn blockAddrConst(
     self: *Builder,
     function: Function.Index,
@@ -9563,7 +9527,6 @@ pub fn blockAddrConst(
     return self.blockAddrConstAssumeCapacity(function, block);
 }
 
-/// Creates a block address value for indirect branching.
 pub fn blockAddrValue(
     self: *Builder,
     function: Function.Index,
@@ -9572,29 +9535,24 @@ pub fn blockAddrValue(
     return (try self.blockAddrConst(function, block)).toValue();
 }
 
-/// Creates a DSO-local equivalent constant for a function.
 pub fn dsoLocalEquivalentConst(self: *Builder, function: Function.Index) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.dsoLocalEquivalentConstAssumeCapacity(function);
 }
 
-/// Creates a DSO-local equivalent value for a function.
 pub fn dsoLocalEquivalentValue(self: *Builder, function: Function.Index) Allocator.Error!Value {
     return (try self.dsoLocalEquivalentConst(function)).toValue();
 }
 
-/// Creates a no-CFI constant bypassing control flow integrity checks.
 pub fn noCfiConst(self: *Builder, function: Function.Index) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.noCfiConstAssumeCapacity(function);
 }
 
-/// Creates a no-CFI value bypassing control flow integrity checks.
 pub fn noCfiValue(self: *Builder, function: Function.Index) Allocator.Error!Value {
     return (try self.noCfiConst(function)).toValue();
 }
 
-/// Creates a type conversion constant expression.
 pub fn convConst(
     self: *Builder,
     val: Constant,
@@ -9604,7 +9562,6 @@ pub fn convConst(
     return self.convConstAssumeCapacity(val, ty);
 }
 
-/// Creates a type conversion value expression.
 pub fn convValue(
     self: *Builder,
     val: Constant,
@@ -9613,18 +9570,15 @@ pub fn convValue(
     return (try self.convConst(val, ty)).toValue();
 }
 
-/// Creates a cast constant expression with a specific operation.
 pub fn castConst(self: *Builder, tag: Constant.Tag, val: Constant, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Cast, 0);
     return self.castConstAssumeCapacity(tag, val, ty);
 }
 
-/// Creates a cast value expression with a specific operation.
 pub fn castValue(self: *Builder, tag: Constant.Tag, val: Constant, ty: Type) Allocator.Error!Value {
     return (try self.castConst(tag, val, ty)).toValue();
 }
 
-/// Creates a getelementptr constant expression for address calculation.
 pub fn gepConst(
     self: *Builder,
     comptime kind: Constant.GetElementPtr.Kind,
@@ -9638,7 +9592,6 @@ pub fn gepConst(
     return self.gepConstAssumeCapacity(kind, ty, base, inrange, indices);
 }
 
-/// Creates a getelementptr value expression for address calculation.
 pub fn gepValue(
     self: *Builder,
     comptime kind: Constant.GetElementPtr.Kind,
@@ -9650,7 +9603,6 @@ pub fn gepValue(
     return (try self.gepConst(kind, ty, base, inrange, indices)).toValue();
 }
 
-/// Creates a binary operation constant expression.
 pub fn binConst(
     self: *Builder,
     tag: Constant.Tag,
@@ -9661,12 +9613,10 @@ pub fn binConst(
     return self.binConstAssumeCapacity(tag, lhs, rhs);
 }
 
-/// Creates a binary operation value expression.
 pub fn binValue(self: *Builder, tag: Constant.Tag, lhs: Constant, rhs: Constant) Allocator.Error!Value {
     return (try self.binConst(tag, lhs, rhs)).toValue();
 }
 
-/// Creates an inline assembly constant.
 pub fn asmConst(
     self: *Builder,
     ty: Type,
@@ -9678,7 +9628,6 @@ pub fn asmConst(
     return self.asmConstAssumeCapacity(ty, info, assembly, constraints);
 }
 
-/// Creates an inline assembly value.
 pub fn asmValue(
     self: *Builder,
     ty: Type,
@@ -9689,30 +9638,40 @@ pub fn asmValue(
     return (try self.asmConst(ty, info, assembly, constraints)).toValue();
 }
 
-/// Dumps the LLVM IR to stderr for debugging.
-pub fn dump(b: *Builder, std_io: std.Io) void {
-    var buffer: [4000]u8 = undefined;
-    const stderr: std.Io.File = .{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
-    b.printToFile(stderr, std_io, &buffer) catch {};
+/// The initial "resolved" value of the forward reference is `Alignment.default`.
+pub fn alignmentForwardReference(b: *Builder) Allocator.Error!Alignment.Lazy {
+    const index = b.alignment_forward_references.items.len;
+    try b.alignment_forward_references.append(b.gpa, .default);
+    return .fromFwdRefIndex(index);
 }
 
-/// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, std_io: std.Io, path: []const u8) !void {
-    var buffer: [4000]u8 = undefined;
-    const cwd: std.Io.Dir = .cwd();
-    const file = try cwd.createFile(std_io, path, .{});
-    defer file.close(std_io);
-    try b.printToFile(file, std_io, &buffer);
+/// Updates the "resolved" value of the alignment forward reference `fwd_ref` to `value`.
+///
+/// Asserts that `fwd_ref` is a forward reference, as opposed to a resolved alignment value.
+pub fn resolveAlignmentForwardReference(b: *Builder, fwd_ref: Alignment.Lazy, value: Alignment) void {
+    const index = fwd_ref.toFwdRefIndex();
+    b.alignment_forward_references.items[index] = value;
 }
 
-/// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, file: std.Io.File, std_io: std.Io, buffer: []u8) !void {
-    var fw = file.writer(std_io, buffer);
+pub fn dump(b: *Builder, io: Io) void {
+    var buffer: [4000]u8 = undefined;
+    const stderr: Io.File = .stderr();
+    b.printToFile(io, stderr, &buffer) catch {};
+}
+
+pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void {
+    var buffer: [4000]u8 = undefined;
+    const file = try dir.createFile(io, path, .{});
+    defer file.close(io);
+    try b.printToFile(io, file, &buffer);
+}
+
+pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) !void {
+    var fw = file.writer(io, buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();
 }
 
-/// Prints the LLVM IR to a writer.
 pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void {
     var need_newline = false;
     var metadata_formatter: Metadata.Formatter = .{ .builder = self, .need_comma = undefined };
@@ -9755,8 +9714,12 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
 
     if (self.variables.items.len > 0) {
         if (need_newline) try w.writeByte('\n') else need_newline = true;
-        for (self.variables.items) |variable| {
-            if (variable.global.getReplacement(self) != .none) continue;
+        for (self.variables.items, 0..) |variable, variable_i| {
+            // Skip the variable if its global has been repurposed for something else.
+            switch (variable.global.ptrConst(self).kind) {
+                .variable => |v| if (@intFromEnum(v) != variable_i) continue,
+                else => continue,
+            }
             const global = variable.global.ptrConst(self);
             metadata_formatter.need_comma = true;
             defer metadata_formatter.need_comma = undefined;
@@ -9786,8 +9749,12 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
 
     if (self.aliases.items.len > 0) {
         if (need_newline) try w.writeByte('\n') else need_newline = true;
-        for (self.aliases.items) |alias| {
-            if (alias.global.getReplacement(self) != .none) continue;
+        for (self.aliases.items, 0..) |alias, alias_i| {
+            // Skip the alias if its global has been repurposed for something else.
+            switch (alias.global.ptrConst(self).kind) {
+                .alias => |a| if (@intFromEnum(a) != alias_i) continue,
+                else => continue,
+            }
             const global = alias.global.ptrConst(self);
             metadata_formatter.need_comma = true;
             defer metadata_formatter.need_comma = undefined;
@@ -9813,7 +9780,11 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
     defer attribute_groups.deinit(self.gpa);
 
     for (0.., self.functions.items) |function_i, function| {
-        if (function.global.getReplacement(self) != .none) continue;
+        // Skip the function if its global has been repurposed for something else.
+        switch (function.global.ptrConst(self).kind) {
+            .function => |f| if (@intFromEnum(f) != function_i) continue,
+            else => continue,
+        }
         if (need_newline) try w.writeByte('\n') else need_newline = true;
         const function_index: Function.Index = @enumFromInt(function_i);
         const global = function.global.ptrConst(self);
@@ -10581,15 +10552,18 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                 },
                 .derived_pointer_type,
                 .derived_member_type,
+                .derived_typedef_type,
                 => |kind| {
                     const extra = self.metadataExtraData(Metadata.DerivedType, metadata_item.data);
                     try metadata_formatter.specialized(.@"!", .DIDerivedType, .{
                         .tag = @as(enum {
                             DW_TAG_pointer_type,
                             DW_TAG_member,
+                            DW_TAG_typedef,
                         }, switch (kind) {
                             .derived_pointer_type => .DW_TAG_pointer_type,
                             .derived_member_type => .DW_TAG_member,
+                            .derived_typedef_type => .DW_TAG_typedef,
                             else => unreachable,
                         }),
                         .name = extra.name,
@@ -10628,7 +10602,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
                         string: [
                             (std.math.big.int.Const{
                                 .limbs = &([1]std.math.big.Limb{
-                                    std.math.maxInt(std.math.big.Limb),
+                                    maxInt(std.math.big.Limb),
                                 } ** expected_limbs),
                                 .positive = false,
                             }).sizeInBaseUpperBound(10)
@@ -10778,7 +10752,7 @@ fn printEscapedString(slice: []const u8, quotes: QuoteBehavior, w: *Writer) Writ
 fn ensureUnusedGlobalCapacity(self: *Builder, name: StrtabString) Allocator.Error!void {
     try self.strtab_string_map.ensureUnusedCapacity(self.gpa, 1);
     if (name.slice(self)) |id| {
-        const count: usize = comptime std.fmt.count("{d}", .{std.math.maxInt(u32)});
+        const count: usize = comptime std.fmt.count("{d}", .{maxInt(u32)});
         try self.strtab_string_bytes.ensureUnusedCapacity(self.gpa, id.len + count);
     }
     try self.strtab_string_indices.ensureUnusedCapacity(self.gpa, 1);
@@ -12128,7 +12102,6 @@ fn metadataExtraData(self: *const Builder, comptime T: type, index: Metadata.Ite
     return self.metadataExtraDataTrail(T, index).data;
 }
 
-/// Interns a metadata string and returns its handle.
 pub fn metadataString(self: *Builder, bytes: []const u8) Allocator.Error!Metadata.String {
     assert(bytes.len > 0);
     try self.metadata_string_bytes.ensureUnusedCapacity(self.gpa, bytes.len);
@@ -12148,7 +12121,6 @@ pub fn metadataString(self: *Builder, bytes: []const u8) Allocator.Error!Metadat
     return @enumFromInt(gop.index);
 }
 
-/// Creates a metadata string from a string table string.
 pub fn metadataStringFromStrtabString(
     self: *Builder,
     str: StrtabString,
@@ -12156,7 +12128,6 @@ pub fn metadataStringFromStrtabString(
     return try self.metadataString(str.slice(self).?);
 }
 
-/// Creates a formatted metadata string using printf-style formatting.
 pub fn metadataStringFmt(
     self: *Builder,
     comptime fmt_str: []const u8,
@@ -12171,7 +12142,6 @@ pub fn metadataStringFmt(
     return self.metadataStringFmtAssumeCapacity(fmt_str, fmt_args);
 }
 
-/// Creates a formatted metadata string assuming capacity has been pre-allocated.
 pub fn metadataStringFmtAssumeCapacity(
     self: *Builder,
     comptime fmt_str: []const u8,
@@ -12181,19 +12151,17 @@ pub fn metadataStringFmtAssumeCapacity(
     return self.trailingMetadataStringAssumeCapacity();
 }
 
-/// Interns trailing bytes as a new metadata string entry.
 pub fn trailingMetadataString(self: *Builder) Allocator.Error!Metadata.String {
     try self.metadata_string_indices.ensureUnusedCapacity(self.gpa, 1);
     try self.metadata_string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingMetadataStringAssumeCapacity();
 }
 
-/// Interns trailing bytes assuming capacity has been pre-allocated.
 pub fn trailingMetadataStringAssumeCapacity(self: *Builder) Metadata.String {
     const start = self.metadata_string_indices.getLast();
     const bytes: []const u8 = self.metadata_string_bytes.items[start..];
     assert(bytes.len > 0);
-    const gop = self.metadata_string_map.getOrPutAssumeCapacityAdapted(bytes, String.Adapter{ .builder = self });
+    const gop = self.metadata_string_map.getOrPutAssumeCapacityAdapted(bytes, Metadata.String.Adapter{ .builder = self });
     if (gop.found_existing) {
         self.metadata_string_bytes.shrinkRetainingCapacity(start);
     } else {
@@ -12202,14 +12170,12 @@ pub fn trailingMetadataStringAssumeCapacity(self: *Builder) Metadata.String {
     return @enumFromInt(gop.index);
 }
 
-/// Adds a named metadata entry to the module.
 pub fn addNamedMetadata(self: *Builder, name: String, operands: []const Metadata) Allocator.Error!void {
     try self.metadata_extra.ensureUnusedCapacity(self.gpa, operands.len);
     try self.metadata_named.ensureUnusedCapacity(self.gpa, 1);
     self.addNamedMetadataAssumeCapacity(name, operands);
 }
 
-/// Creates a debug info file metadata entry.
 pub fn debugFile(
     self: *Builder,
     filename: ?Metadata.String,
@@ -12219,7 +12185,6 @@ pub fn debugFile(
     return self.debugFileAssumeCapacity(filename, directory);
 }
 
-/// Creates a debug info compile unit metadata entry.
 pub fn debugCompileUnit(
     self: *Builder,
     file: ?Metadata,
@@ -12232,7 +12197,6 @@ pub fn debugCompileUnit(
     return self.debugCompileUnitAssumeCapacity(file, producer, enums, globals, options);
 }
 
-/// Creates a debug info subprogram (function) metadata entry.
 pub fn debugSubprogram(
     self: *Builder,
     file: ?Metadata,
@@ -12257,7 +12221,6 @@ pub fn debugSubprogram(
     );
 }
 
-/// Creates a debug info lexical block scope metadata entry.
 pub fn debugLexicalBlock(
     self: *Builder,
     scope: ?Metadata,
@@ -12269,7 +12232,6 @@ pub fn debugLexicalBlock(
     return self.debugLexicalBlockAssumeCapacity(scope, file, line, column);
 }
 
-/// Creates a debug info source location metadata entry.
 pub fn debugLocation(
     self: *Builder,
     line: u32,
@@ -12281,7 +12243,6 @@ pub fn debugLocation(
     return self.debugLocationAssumeCapacity(line, column, scope, inlined_at);
 }
 
-/// Creates a debug info boolean type metadata entry.
 pub fn debugBoolType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12291,7 +12252,6 @@ pub fn debugBoolType(
     return self.debugBoolTypeAssumeCapacity(name, size_in_bits);
 }
 
-/// Creates a debug info unsigned integer type metadata entry.
 pub fn debugUnsignedType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12301,7 +12261,6 @@ pub fn debugUnsignedType(
     return self.debugUnsignedTypeAssumeCapacity(name, size_in_bits);
 }
 
-/// Creates a debug info signed integer type metadata entry.
 pub fn debugSignedType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12311,7 +12270,6 @@ pub fn debugSignedType(
     return self.debugSignedTypeAssumeCapacity(name, size_in_bits);
 }
 
-/// Creates a debug info floating-point type metadata entry.
 pub fn debugFloatType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12321,13 +12279,11 @@ pub fn debugFloatType(
     return self.debugFloatTypeAssumeCapacity(name, size_in_bits);
 }
 
-/// Creates a forward reference placeholder for recursive debug types.
 pub fn debugForwardReference(self: *Builder) Allocator.Error!Metadata {
     try self.metadata_forward_references.ensureUnusedCapacity(self.gpa, 1);
     return self.debugForwardReferenceAssumeCapacity();
 }
 
-/// Creates a debug info struct/class type metadata entry.
 pub fn debugStructType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12352,7 +12308,6 @@ pub fn debugStructType(
     );
 }
 
-/// Creates a debug info union type metadata entry.
 pub fn debugUnionType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12377,7 +12332,6 @@ pub fn debugUnionType(
     );
 }
 
-/// Creates a debug info enumeration type metadata entry.
 pub fn debugEnumerationType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12402,7 +12356,6 @@ pub fn debugEnumerationType(
     );
 }
 
-/// Creates a debug info array type metadata entry.
 pub fn debugArrayType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12427,7 +12380,6 @@ pub fn debugArrayType(
     );
 }
 
-/// Creates a debug info vector type metadata entry.
 pub fn debugVectorType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12452,7 +12404,6 @@ pub fn debugVectorType(
     );
 }
 
-/// Creates a debug info pointer type metadata entry.
 pub fn debugPointerType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12477,7 +12428,6 @@ pub fn debugPointerType(
     );
 }
 
-/// Creates a debug info struct/union member type metadata entry.
 pub fn debugMemberType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12502,13 +12452,35 @@ pub fn debugMemberType(
     );
 }
 
-/// Creates a debug info subroutine (function) type metadata entry.
+pub fn debugTypedefType(
+    self: *Builder,
+    name: ?Metadata.String,
+    file: ?Metadata,
+    scope: ?Metadata,
+    line: u32,
+    underlying_type: ?Metadata,
+    size_in_bits: u64,
+    align_in_bits: u64,
+    offset_in_bits: u64,
+) Allocator.Error!Metadata {
+    try self.ensureUnusedMetadataCapacity(1, Metadata.DerivedType, 0);
+    return self.debugTypedefTypeAssumeCapacity(
+        name,
+        file,
+        scope,
+        line,
+        underlying_type,
+        size_in_bits,
+        align_in_bits,
+        offset_in_bits,
+    );
+}
+
 pub fn debugSubroutineType(self: *Builder, types_tuple: ?Metadata) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.SubroutineType, 0);
     return self.debugSubroutineTypeAssumeCapacity(types_tuple);
 }
 
-/// Creates a debug info enumerator (enum value) metadata entry.
 pub fn debugEnumerator(
     self: *Builder,
     name: ?Metadata.String,
@@ -12522,7 +12494,6 @@ pub fn debugEnumerator(
     return self.debugEnumeratorAssumeCapacity(name, unsigned, bit_width, value);
 }
 
-/// Creates a debug info subrange metadata entry for array bounds.
 pub fn debugSubrange(
     self: *Builder,
     lower_bound: ?Metadata,
@@ -12532,18 +12503,15 @@ pub fn debugSubrange(
     return self.debugSubrangeAssumeCapacity(lower_bound, count);
 }
 
-/// Creates a debug info expression metadata entry for variable locations.
 pub fn debugExpression(self: *Builder, elements: []const u32) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.Expression, elements.len);
     return self.debugExpressionAssumeCapacity(elements);
 }
 
-/// Creates a metadata tuple from an array of metadata elements.
 pub fn metadataTuple(self: *Builder, elements: []const Metadata) Allocator.Error!Metadata {
     return self.metadataTupleOptionals(@ptrCast(elements));
 }
 
-/// Creates a metadata tuple from an array of optional metadata elements.
 pub fn metadataTupleOptionals(
     self: *Builder,
     elements: []const Metadata.Optional,
@@ -12552,7 +12520,6 @@ pub fn metadataTupleOptionals(
     return self.metadataTupleOptionalsAssumeCapacity(elements);
 }
 
-/// Creates a debug info local variable metadata entry.
 pub fn debugLocalVar(
     self: *Builder,
     name: ?Metadata.String,
@@ -12565,7 +12532,6 @@ pub fn debugLocalVar(
     return self.debugLocalVarAssumeCapacity(name, file, scope, line, ty);
 }
 
-/// Creates a debug info function parameter metadata entry.
 pub fn debugParameter(
     self: *Builder,
     name: ?Metadata.String,
@@ -12579,7 +12545,6 @@ pub fn debugParameter(
     return self.debugParameterAssumeCapacity(name, file, scope, line, ty, arg_no);
 }
 
-/// Creates a debug info global variable metadata entry.
 pub fn debugGlobalVar(
     self: *Builder,
     name: ?Metadata.String,
@@ -12604,7 +12569,6 @@ pub fn debugGlobalVar(
     );
 }
 
-/// Creates a debug info global variable expression metadata entry.
 pub fn debugGlobalVarExpression(
     self: *Builder,
     variable: ?Metadata,
@@ -12614,18 +12578,17 @@ pub fn debugGlobalVarExpression(
     return self.debugGlobalVarExpressionAssumeCapacity(variable, expression);
 }
 
-/// Creates a metadata entry wrapping a constant value.
 pub fn metadataConstant(self: *Builder, value: Constant) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, NoExtra, 0);
     return self.metadataConstantAssumeCapacity(value);
 }
 
-/// Resolves a forward reference placeholder to its actual metadata value.
+/// Resolves the given forward reference to the given value (which is not itself a forward
+/// reference). If the forward reference is already resolved, its target is replaced.
 pub fn resolveDebugForwardReference(self: *Builder, fwd_ref: Metadata, value: Metadata) void {
     assert(fwd_ref.kind == .forward);
-    const resolved = &self.metadata_forward_references.items[fwd_ref.index];
-    assert(resolved.is_none);
-    resolved.* = value.toOptional();
+    assert(value.kind != .forward);
+    self.metadata_forward_references.items[fwd_ref.index] = value.toOptional();
 }
 
 fn metadataSimpleAssumeCapacity(self: *Builder, tag: Metadata.Tag, value: anytype) Metadata {
@@ -12669,7 +12632,7 @@ fn metadataSimpleAssumeCapacity(self: *Builder, tag: Metadata.Tag, value: anytyp
 
 fn metadataDistinctAssumeCapacity(self: *Builder, tag: Metadata.Tag, value: anytype) Metadata {
     const index = self.metadata_items.len;
-    self.metadata_map.entries.addOneAssumeCapacity();
+    _ = self.metadata_map.entries.addOneAssumeCapacity();
     self.metadata_items.appendAssumeCapacity(.{
         .tag = tag,
         .data = self.addMetadataExtraAssumeCapacity(value),
@@ -12701,7 +12664,6 @@ fn debugFileAssumeCapacity(
     });
 }
 
-/// Creates a debug info compile unit assuming capacity has been pre-allocated.
 pub fn debugCompileUnitAssumeCapacity(
     self: *Builder,
     file: ?Metadata,
@@ -13029,6 +12991,33 @@ fn debugMemberTypeAssumeCapacity(
     });
 }
 
+fn debugTypedefTypeAssumeCapacity(
+    self: *Builder,
+    name: ?Metadata.String,
+    file: ?Metadata,
+    scope: ?Metadata,
+    line: u32,
+    underlying_type: ?Metadata,
+    size_in_bits: u64,
+    align_in_bits: u64,
+    offset_in_bits: u64,
+) Metadata {
+    assert(!self.strip);
+    return self.metadataSimpleAssumeCapacity(.derived_typedef_type, Metadata.DerivedType{
+        .name = .wrap(name),
+        .file = .wrap(file),
+        .scope = .wrap(scope),
+        .line = line,
+        .underlying_type = .wrap(underlying_type),
+        .size_in_bits_lo = @truncate(size_in_bits),
+        .size_in_bits_hi = @truncate(size_in_bits >> 32),
+        .align_in_bits_lo = @truncate(align_in_bits),
+        .align_in_bits_hi = @truncate(align_in_bits >> 32),
+        .offset_in_bits_lo = @truncate(offset_in_bits),
+        .offset_in_bits_hi = @truncate(offset_in_bits >> 32),
+    });
+}
+
 fn debugSubroutineTypeAssumeCapacity(self: *Builder, types_tuple: ?Metadata) Metadata {
     assert(!self.strip);
     return self.metadataSimpleAssumeCapacity(.subroutine_type, Metadata.SubroutineType{
@@ -13314,13 +13303,11 @@ fn metadataConstantAssumeCapacity(self: *Builder, constant: Constant) Metadata {
     return .{ .index = @intCast(gop.index), .kind = .node };
 }
 
-/// Information about the producer tool for embedding in bitcode.
 pub const Producer = struct {
     name: []const u8,
     version: std.SemanticVersion,
 };
 
-/// Serializes the LLVM IR to bitcode format.
 pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitcode_writer.Error![]const u32 {
     const BitcodeWriter = bitcode_writer.BitcodeWriter(&.{ Type, FunctionAttributes });
     var bitcode = BitcodeWriter.init(allocator, .{
@@ -13492,7 +13479,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
         var attributes_set: std.AutoArrayHashMapUnmanaged(struct {
             attributes: Attributes,
             index: u32,
-        }, void) = .empty;
+        }, void) = .{};
         defer attributes_set.deinit(self.gpa);
 
         // PARAMATTR_GROUP_BLOCK
@@ -13516,7 +13503,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     record.clearRetainingCapacity();
                     try record.ensureUnusedCapacity(self.gpa, 2);
 
-                    record.appendAssumeCapacity(attr_gop.index + 1);
+                    record.appendAssumeCapacity(attr_gop.index);
                     record.appendAssumeCapacity(switch (i) {
                         0 => 0xffffffff,
                         else => i - 1,
@@ -13618,7 +13605,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                                 try record.ensureUnusedCapacity(self.gpa, 3);
                                 record.appendAssumeCapacity(1);
                                 record.appendAssumeCapacity(@intFromEnum(kind));
-                                record.appendAssumeCapacity(alignment.toByteUnits() orelse 0);
+                                record.appendAssumeCapacity(alignment.resolve(self).toByteUnits() orelse 0);
                             },
                             .dereferenceable,
                             .dereferenceable_or_null,
@@ -13716,7 +13703,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                         .attributes = attributes,
                         .index = @intCast(i),
                     }).?;
-                    record.appendAssumeCapacity(@intCast(group_index + 1));
+                    record.appendAssumeCapacity(@intCast(group_index));
                 }
 
                 try paramattr_block.writeAbbrev(ParamattrBlock.Entry{ .group_indices = record.items });
@@ -13734,20 +13721,32 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                 self.aliases.items.len,
         );
 
-        for (self.variables.items) |variable| {
-            if (variable.global.getReplacement(self) != .none) continue;
+        for (self.variables.items, 0..) |variable, variable_i| {
+            // Skip the variable if its global has been repurposed for something else.
+            switch (variable.global.ptrConst(self).kind) {
+                .variable => |v| if (@intFromEnum(v) != variable_i) continue,
+                else => continue,
+            }
 
             globals.putAssumeCapacity(variable.global, {});
         }
 
-        for (self.functions.items) |function| {
-            if (function.global.getReplacement(self) != .none) continue;
+        for (self.functions.items, 0..) |function, function_i| {
+            // Skip the function if its global has been repurposed for something else.
+            switch (function.global.ptrConst(self).kind) {
+                .function => |f| if (@intFromEnum(f) != function_i) continue,
+                else => continue,
+            }
 
             globals.putAssumeCapacity(function.global, {});
         }
 
-        for (self.aliases.items) |alias| {
-            if (alias.global.getReplacement(self) != .none) continue;
+        for (self.aliases.items, 0..) |alias, alias_i| {
+            // Skip the alias if its global has been repurposed for something else.
+            switch (alias.global.ptrConst(self).kind) {
+                .alias => |a| if (@intFromEnum(a) != alias_i) continue,
+                else => continue,
+            }
 
             globals.putAssumeCapacity(alias.global, {});
         }
@@ -13789,8 +13788,12 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
             defer section_map.deinit(self.gpa);
             try section_map.ensureUnusedCapacity(self.gpa, globals.count());
 
-            for (self.variables.items) |variable| {
-                if (variable.global.getReplacement(self) != .none) continue;
+            for (self.variables.items, 0..) |variable, variable_i| {
+                // Skip the variable if its global has been repurposed for something else.
+                switch (variable.global.ptrConst(self).kind) {
+                    .variable => |v| if (@intFromEnum(v) != variable_i) continue,
+                    else => continue,
+                }
 
                 const section = blk: {
                     if (variable.section == .none) break :blk 0;
@@ -13836,8 +13839,12 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                 });
             }
 
-            for (self.functions.items) |func| {
-                if (func.global.getReplacement(self) != .none) continue;
+            for (self.functions.items, 0..) |func, func_i| {
+                // Skip the function if its global has been repurposed for something else.
+                switch (func.global.ptrConst(self).kind) {
+                    .function => |f| if (@intFromEnum(f) != func_i) continue,
+                    else => continue,
+                }
 
                 const section = blk: {
                     if (func.section == .none) break :blk 0;
@@ -13877,8 +13884,12 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                 });
             }
 
-            for (self.aliases.items) |alias| {
-                if (alias.global.getReplacement(self) != .none) continue;
+            for (self.aliases.items, 0..) |alias, alias_i| {
+                // Skip the alias if its global has been repurposed for something else.
+                switch (alias.global.ptrConst(self).kind) {
+                    .alias => |a| if (@intFromEnum(a) != alias_i) continue,
+                    else => continue,
+                }
 
                 const strtab = alias.global.strtab(self);
 
@@ -14379,12 +14390,14 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     },
                     .derived_pointer_type,
                     .derived_member_type,
+                    .derived_typedef_type,
                     => |kind| {
                         const extra = self.metadataExtraData(Metadata.DerivedType, data);
                         try metadata_block.writeAbbrevAdapted(MetadataBlock.DerivedType{
                             .tag = switch (kind) {
                                 .derived_pointer_type => DW.TAG.pointer_type,
                                 .derived_member_type => DW.TAG.member,
+                                .derived_typedef_type => DW.TAG.typedef,
                                 else => unreachable,
                             },
                             .name = extra.name,
@@ -14680,8 +14693,13 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
             };
 
             for (self.functions.items, 0..) |func, func_index| {
+                // Skip the function if its global has been repurposed for something else.
+                switch (func.global.ptrConst(self).kind) {
+                    .function => |f| if (@intFromEnum(f) != func_index) continue,
+                    else => continue,
+                }
+
                 const FunctionBlock = ir.ModuleBlock.FunctionBlock;
-                if (func.global.getReplacement(self) != .none) continue;
 
                 if (func.instructions.len == 0) continue;
 
@@ -14692,7 +14710,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                 var adapter: FunctionAdapter = .{
                     .metadata_adapter = metadata_adapter,
                     .func = &func,
-                    .instruction_index = .first,
+                    .instruction_index = @enumFromInt(0),
                 };
 
                 // Emit function level metadata block

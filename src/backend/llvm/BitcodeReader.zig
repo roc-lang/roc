@@ -16,14 +16,12 @@ bit_offset: u5,
 stack: std.ArrayList(State),
 block_info: std.AutoHashMapUnmanaged(u32, Block.Info),
 
-/// Represents a parsed item from the bitcode stream: block start, record, or block end.
 pub const Item = union(enum) {
     start_block: Block,
     record: Record,
     end_block: Block,
 };
 
-/// A bitcode block containing nested records and sub-blocks with a unique ID.
 pub const Block = struct {
     name: []const u8,
     id: u32,
@@ -40,8 +38,8 @@ pub const Block = struct {
 
         const default: Info = .{
             .block_name = &.{},
-            .record_names = .{},
-            .abbrevs = .{ .abbrevs = .{} },
+            .record_names = .empty,
+            .abbrevs = .{ .abbrevs = .empty },
         };
 
         const set_bid_id: u32 = 1;
@@ -59,7 +57,6 @@ pub const Block = struct {
     };
 };
 
-/// A bitcode record containing an ID, operand values, and optional blob data.
 pub const Record = struct {
     name: []const u8,
     id: u32,
@@ -104,7 +101,6 @@ pub const Record = struct {
     }
 };
 
-/// Configuration options for initializing the bitcode reader.
 pub const InitOptions = struct {
     reader: *std.Io.Reader,
     keep_names: bool = false,
@@ -117,8 +113,8 @@ pub fn init(allocator: std.mem.Allocator, options: InitOptions) BitcodeReader {
         .keep_names = options.keep_names,
         .bit_buffer = 0,
         .bit_offset = 0,
-        .stack = .{},
-        .block_info = .{},
+        .stack = .empty,
+        .block_info = .empty,
     };
 }
 
@@ -132,7 +128,6 @@ pub fn deinit(bc: *BitcodeReader) void {
     bc.* = undefined;
 }
 
-/// Verifies the 4-byte magic number at the start of the bitcode file.
 pub fn checkMagic(bc: *BitcodeReader, magic: *const [4]u8) !void {
     var buffer: [4]u8 = undefined;
     try bc.readBytes(&buffer);
@@ -142,7 +137,6 @@ pub fn checkMagic(bc: *BitcodeReader, magic: *const [4]u8) !void {
     try bc.block_info.put(bc.allocator, Block.block_info, Block.Info.default);
 }
 
-/// Returns the next item from the bitcode stream, or null at end of file.
 pub fn next(bc: *BitcodeReader) !?Item {
     while (true) {
         const record = (try bc.nextRecord()) orelse
@@ -189,7 +183,6 @@ pub fn next(bc: *BitcodeReader) !?Item {
     }
 }
 
-/// Skips over the contents of a block without parsing its records.
 pub fn skipBlock(bc: *BitcodeReader, block: Block) !void {
     assert(bc.bit_offset == 0);
     try bc.reader.discardAll(4 * @as(usize, block.len));
@@ -207,7 +200,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
 
     var record_arena = bc.record_arena.promote(bc.allocator);
     defer bc.record_arena = record_arena.state;
-    record_arena.reset(.retain_capacity);
+    _ = record_arena.reset(.retain_capacity);
 
     var operands = try std.array_list.Managed(u64).initCapacity(record_arena.allocator(), abbrev.operands.len);
     var blob = std.array_list.Managed(u8).init(record_arena.allocator());
@@ -241,7 +234,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
                             switch (encoding) {
                                 .fixed, .vbr => try operands.append(try bc.readVbr(u7, 5)),
                                 .array, .char6, .blob => {},
-                                _ => return error.UnsupportedAbbrevEncoding,
+                                _ => return error.UnsuportedAbbrevEncoding,
                             }
                         },
                     },
@@ -289,7 +282,7 @@ fn startBlock(bc: *BitcodeReader, block_id: ?u32, new_abbrev_len: u6) !void {
     state.* = .{
         .block_id = block_id,
         .abbrev_id_width = new_abbrev_len,
-        .abbrevs = .{ .abbrevs = .{} },
+        .abbrevs = .{ .abbrevs = .empty },
     };
     try state.abbrevs.abbrevs.ensureTotalCapacity(
         bc.allocator,
@@ -507,6 +500,11 @@ const Abbrev = struct {
             store.* = undefined;
         }
 
+        fn addAbbrev(store: *Store, allocator: std.mem.Allocator, abbrev: Abbrev) !void {
+            try store.ensureUnusedCapacity(allocator, 1);
+            store.addAbbrevAssumeCapacity(abbrev);
+        }
+
         fn addAbbrevAssumeCapacity(store: *Store, allocator: std.mem.Allocator, abbrev: Abbrev) !void {
             store.abbrevs.appendAssumeCapacity(.{
                 .operands = try allocator.dupe(Abbrev.Operand, abbrev.operands),
@@ -525,5 +523,5 @@ const Abbrev = struct {
 };
 
 test {
-    std.testing.refAllDecls(@This());
+    _ = &skipBlock;
 }

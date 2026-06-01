@@ -453,7 +453,7 @@ pub const MonoLlvmCodeGen = struct {
         };
         if (environ.getAlloc(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.Options.debug_io, keep_path) catch return error.CompilationFailed;
+            builder.printToFilePath(std.Options.debug_io, std.Io.Dir.cwd(), keep_path) catch return error.CompilationFailed;
         } else |_| {}
         return builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
     }
@@ -1402,7 +1402,7 @@ pub const MonoLlvmCodeGen = struct {
         const name = builder.strtabStringFmt(".roc.bytes.{d}", .{self.string_counter}) catch return error.OutOfMemory;
         self.string_counter += 1;
         const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
-        variable.setLinkage(.internal, builder);
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
         variable.setMutability(.constant, builder);
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
         return variable.toValue(builder);
