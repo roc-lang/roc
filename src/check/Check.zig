@@ -396,7 +396,7 @@ fn initAssumePrepared(
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
-        .instantiation_dispatchers = .{},
+        .instantiation_dispatchers = .empty,
     };
 
     return self;

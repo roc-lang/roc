@@ -1762,10 +1762,10 @@ test "roc check does not hang on tag union type alias inside List (issue 9481)" 
     try testing.expect(!did_panic);
 
     // Neither the infinite-loop guard nor the coordinator watchdog should have fired.
-    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "Coordinator stuck") != null or
-        std.mem.indexOf(u8, result.stderr, "Infinite loop") != null or
-        std.mem.indexOf(u8, result.stderr, "INFINITE TYPE") != null;
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "Coordinator stuck") != null or
+        std.mem.find(u8, result.stderr, "Infinite loop") != null or
+        std.mem.find(u8, result.stderr, "INFINITE TYPE") != null;
     try testing.expect(!has_panic_text);
 
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
