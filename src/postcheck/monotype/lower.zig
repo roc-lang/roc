@@ -913,6 +913,38 @@ const Builder = struct {
         };
     }
 
+    /// Whether structural equality over `ty` reaches a heap-allocated value (a list or box).
+    /// Such values must be compared through owned equality procedures rather than the direct LIR
+    /// structural-equality lowering. Recursion stops at lists and boxes (the heap-indirection
+    /// points that every type cycle must pass through), so it terminates for any finite type.
+    fn typeContainsHeapData(self: *Builder, ty: Type.TypeId) bool {
+        return switch (self.program.types.get(ty)) {
+            .list, .box => true,
+            .primitive, .zst, .func, .erased => false,
+            .named => |named| if (named.backing) |backing| self.typeContainsHeapData(backing.ty) else false,
+            .record => |fields| {
+                for (self.program.types.fieldSpan(fields)) |field| {
+                    if (self.typeContainsHeapData(field.ty)) return true;
+                }
+                return false;
+            },
+            .tuple => |items| {
+                for (self.program.types.span(items)) |item| {
+                    if (self.typeContainsHeapData(item)) return true;
+                }
+                return false;
+            },
+            .tag_union => |tags| {
+                for (self.program.types.tagSpan(tags)) |tag| {
+                    for (self.program.types.span(tag.payloads)) |payload| {
+                        if (self.typeContainsHeapData(payload)) return true;
+                    }
+                }
+                return false;
+            },
+        };
+    }
+
     fn shapeContent(self: *Builder, ty: Type.TypeId) Type.Content {
         var current = ty;
         while (true) {
@@ -6368,19 +6400,184 @@ const BodyContext = struct {
             .list => try self.lowerOwnedEqualityCall(ty, lhs, rhs, method_name, bool_ty),
             .record => |fields| try self.lowerRecordEqualityExpr(self.builder.program.types.fieldSpan(fields), lhs, rhs, method_name, bool_ty),
             .tuple => |items| try self.lowerTupleEqualityExpr(self.builder.program.types.span(items), lhs, rhs, method_name, bool_ty),
+            // A tag union whose payloads reach heap-allocated values cannot be compared by the
+            // direct LIR structural-equality lowering: those values must go through owned equality
+            // procedures. Decompose such unions here so the heap leaves become owned equality
+            // calls; heap-free unions keep the cheaper direct lowering.
+            .tag_union => if (self.builder.typeContainsHeapData(ty))
+                try self.lowerTagUnionEqualityExpr(ty, lhs, rhs, method_name, bool_ty)
+            else
+                try self.structuralEqExpr(lhs, rhs, bool_ty),
+            // A nominal type's structural equality is the equality of its backing. When the backing
+            // reaches heap data we unwrap it and lower the backing equality so the heap leaves are
+            // peeled into owned equality calls instead of reaching the direct LIR lowering.
+            .named => |named| if (named.backing != null and self.builder.typeContainsHeapData(ty))
+                try self.lowerNamedEqualityExpr(ty, named.backing.?.ty, lhs, rhs, method_name, bool_ty)
+            else
+                try self.structuralEqExpr(lhs, rhs, bool_ty),
             .primitive,
             .zst,
-            .named,
-            .tag_union,
             .func,
             .erased,
             .box,
-            => try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .structural_eq = .{
-                .lhs = lhs,
-                .rhs = rhs,
-                .negated = false,
-            } } }),
+            => try self.structuralEqExpr(lhs, rhs, bool_ty),
         };
+    }
+
+    fn structuralEqExpr(
+        self: *BodyContext,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .structural_eq = .{
+            .lhs = lhs,
+            .rhs = rhs,
+            .negated = false,
+        } } });
+    }
+
+    /// Unwrap a nominal value to its backing on both operands and lower the backing equality.
+    fn lowerNamedEqualityExpr(
+        self: *BodyContext,
+        named_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const lhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const rhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), backing_ty);
+        const body = try self.lowerEqualityExpr(
+            backing_ty,
+            try self.builder.localExpr(lhs_local, backing_ty),
+            try self.builder.localExpr(rhs_local, backing_ty),
+            method_name,
+            bool_ty,
+        );
+        const rhs_bound = try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .let_ = .{
+            .bind = try self.nominalBindPattern(rhs_local, backing_ty, named_ty),
+            .value = rhs,
+            .rest = body,
+        } } });
+        return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .let_ = .{
+            .bind = try self.nominalBindPattern(lhs_local, backing_ty, named_ty),
+            .value = lhs,
+            .rest = rhs_bound,
+        } } });
+    }
+
+    fn nominalBindPattern(
+        self: *BodyContext,
+        local: Ast.LocalId,
+        backing_ty: Type.TypeId,
+        named_ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatId {
+        const inner = try self.builder.bindPat(local, backing_ty);
+        return try self.builder.program.addPat(.{ .ty = named_ty, .data = .{ .nominal = inner } });
+    }
+
+    /// Lower equality of a tag union whose payloads reach heap data by matching both operands
+    /// together (`match (lhs, rhs) { (V(p..), V(q..)) => p == q && ..., _ => False }`), so each
+    /// payload comparison is lowered recursively and heap payloads become owned equality calls.
+    fn lowerTagUnionEqualityExpr(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const tag_span = switch (self.builder.program.types.get(ty)) {
+            .tag_union => |span| span,
+            else => Common.invariant("tag union equality lowering received a non-tag-union type"),
+        };
+        // Copy because the recursive lowerEqualityExpr below may reallocate types.tags.
+        const tags = try self.allocator.dupe(Type.Tag, self.builder.program.types.tagSpan(tag_span));
+        defer self.allocator.free(tags);
+
+        // Match both operands at once so each is evaluated exactly once.
+        const pair_ty = try self.builder.program.types.add(.{
+            .tuple = try self.builder.program.types.addSpan(&[_]Type.TypeId{ ty, ty }),
+        });
+        const scrutinee = try self.builder.program.addExpr(.{ .ty = pair_ty, .data = .{
+            .tuple = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ lhs, rhs }),
+        } });
+
+        const branches = try self.allocator.alloc(Ast.Branch, tags.len + 1);
+        defer self.allocator.free(branches);
+        for (tags, 0..) |tag, i| {
+            branches[i] = try self.tagUnionEqualityBranch(ty, pair_ty, tag, method_name, bool_ty);
+        }
+        // Distinct variants compare unequal.
+        branches[tags.len] = .{
+            .pat = try self.builder.program.addPat(.{ .ty = pair_ty, .data = .wildcard }),
+            .body = try self.boolLiteral(false, bool_ty),
+        };
+
+        return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .match_ = .{
+            .scrutinee = scrutinee,
+            .branches = try self.builder.program.addBranchSpan(branches),
+        } } });
+    }
+
+    fn tagUnionEqualityBranch(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        pair_ty: Type.TypeId,
+        tag: Type.Tag,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.Branch {
+        // Copy because the recursive lowerEqualityExpr below may reallocate types.spans.
+        const payload_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(tag.payloads));
+        defer self.allocator.free(payload_tys);
+
+        const lhs_locals = try self.allocator.alloc(Ast.LocalId, payload_tys.len);
+        defer self.allocator.free(lhs_locals);
+        const rhs_locals = try self.allocator.alloc(Ast.LocalId, payload_tys.len);
+        defer self.allocator.free(rhs_locals);
+        const lhs_pats = try self.allocator.alloc(Ast.PatId, payload_tys.len);
+        defer self.allocator.free(lhs_pats);
+        const rhs_pats = try self.allocator.alloc(Ast.PatId, payload_tys.len);
+        defer self.allocator.free(rhs_pats);
+
+        for (payload_tys, 0..) |payload_ty, j| {
+            lhs_locals[j] = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_ty);
+            rhs_locals[j] = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_ty);
+            lhs_pats[j] = try self.builder.bindPat(lhs_locals[j], payload_ty);
+            rhs_pats[j] = try self.builder.bindPat(rhs_locals[j], payload_ty);
+        }
+
+        const lhs_tag_pat = try self.builder.program.addPat(.{ .ty = ty, .data = .{ .tag = .{
+            .name = tag.name,
+            .payloads = try self.builder.program.addPatSpan(lhs_pats),
+        } } });
+        const rhs_tag_pat = try self.builder.program.addPat(.{ .ty = ty, .data = .{ .tag = .{
+            .name = tag.name,
+            .payloads = try self.builder.program.addPatSpan(rhs_pats),
+        } } });
+        const pair_pat = try self.builder.program.addPat(.{ .ty = pair_ty, .data = .{
+            .tuple = try self.builder.program.addPatSpan(&[_]Ast.PatId{ lhs_tag_pat, rhs_tag_pat }),
+        } });
+
+        // Conjunction of payload equalities; True when the variant has no payloads.
+        var body = try self.boolLiteral(true, bool_ty);
+        var j = payload_tys.len;
+        while (j > 0) {
+            j -= 1;
+            const payload_eq = try self.lowerEqualityExpr(
+                payload_tys[j],
+                try self.builder.localExpr(lhs_locals[j], payload_tys[j]),
+                try self.builder.localExpr(rhs_locals[j], payload_tys[j]),
+                method_name,
+                bool_ty,
+            );
+            body = try self.builder.ifExpr(payload_eq, body, try self.boolLiteral(false, bool_ty), bool_ty);
+        }
+
+        return .{ .pat = pair_pat, .body = body };
     }
 
     fn lowerRecordEqualityExpr(
