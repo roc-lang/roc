@@ -95,16 +95,16 @@ handleSuccess = |res| "success"
 				(ty-lookup (name "Foo.Try") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever"))))
+	(s-nominal-decl
 		(ty-header (name "Foo.Try"))
 		(ty-tag-union
 			(ty-tag-name (name "Success")
 				(ty-lookup (name "U64") (builtin)))
 			(ty-tag-name (name "Failure")
-				(ty-lookup (name "Str") (builtin)))))
-	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever")))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -112,10 +112,10 @@ handleSuccess = |res| "success"
 	(defs
 		(patt (type "Foo.Try -> Str")))
 	(type_decls
-		(nominal (type "Foo.Try")
-			(ty-header (name "Foo.Try")))
 		(nominal (type "Foo")
-			(ty-header (name "Foo"))))
+			(ty-header (name "Foo")))
+		(nominal (type "Foo.Try")
+			(ty-header (name "Foo.Try"))))
 	(expressions
 		(expr (type "Foo.Try -> Str"))))
 ~~~

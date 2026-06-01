@@ -96,6 +96,10 @@ value = Foo.Bar.Baz.Qux.Y
 		(annotation
 			(ty-lookup (name "Foo.Bar.Baz.Qux") (local))))
 	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "A"))))
+	(s-nominal-decl
 		(ty-header (name "nominal_four_level_nested_tag.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "B"))))
@@ -108,11 +112,7 @@ value = Foo.Bar.Baz.Qux.Y
 		(ty-tag-union
 			(ty-tag-name (name "X"))
 			(ty-tag-name (name "Y"))
-			(ty-tag-name (name "Z"))))
-	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "A")))))
+			(ty-tag-name (name "Z")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -120,14 +120,14 @@ value = Foo.Bar.Baz.Qux.Y
 	(defs
 		(patt (type "Foo.Bar.Baz.Qux")))
 	(type_decls
+		(nominal (type "Foo")
+			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar")))
 		(nominal (type "Foo.Bar.Baz")
 			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar.Baz")))
 		(nominal (type "Foo.Bar.Baz.Qux")
-			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux")))
-		(nominal (type "Foo")
-			(ty-header (name "Foo"))))
+			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux"))))
 	(expressions
 		(expr (type "Foo.Bar.Baz.Qux"))))
 ~~~

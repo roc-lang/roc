@@ -9356,214 +9356,6 @@ L2 := [DS].{
 		(p-assign (ident "Test.L2.L3.L4.bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "R"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "U"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "X"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AA"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AD"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AH"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AL"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AP"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "AS"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "AT"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BC"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BD"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BH"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BL"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BP"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BS"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BT"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "BW"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "BX"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CA"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CB"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CC"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CF"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CH"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CL"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CM"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CP"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CQ"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CR"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "CU"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "CV"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "CW"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DE"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DF"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DG"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DJ"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DK"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DL"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DO"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DP"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DQ"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3"))
-		(ty-tag-union
-			(ty-tag-name (name "DT"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4"))
-		(ty-tag-union
-			(ty-tag-name (name "DU"))))
-	(s-nominal-decl
-		(ty-header (name "Test.L2.L3.L4.L5"))
-		(ty-tag-union
-			(ty-tag-name (name "DV"))))
-	(s-nominal-decl
 		(ty-header (name "Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "D"))))
@@ -9592,97 +9384,305 @@ L2 := [DS].{
 		(ty-tag-union
 			(ty-tag-name (name "Q"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "R"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "T"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "U"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "W"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "X"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "AA"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AC"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "AD"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AF"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "AG"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "AH"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AJ"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "AK"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "AL"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AN"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "AO"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "AP"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AR"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "AS"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "AT"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BB"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "BC"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "BD"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BF"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "BG"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "BH"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BJ"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "BK"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "BL"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BN"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "BO"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "BP"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BR"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "BS"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "BT"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BV"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "BW"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "BX"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BZ"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "CA"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "CB"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "CC"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CE"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "CF"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "CG"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "CH"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CJ"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "CK"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "CL"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "CM"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CO"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "CP"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "CQ"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "CR"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "CT"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "CU"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "CV"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "CW"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DD"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "DE"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "DF"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "DG"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DI"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "DJ"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "DK"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "DL"))))
 	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DN"))))
 	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "DO"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "DP"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "DQ"))))
+	(s-nominal-decl
 		(ty-header (name "L2"))
 		(ty-tag-union
-			(ty-tag-name (name "DS")))))
+			(ty-tag-name (name "DS"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3"))
+		(ty-tag-union
+			(ty-tag-name (name "DT"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4"))
+		(ty-tag-union
+			(ty-tag-name (name "DU"))))
+	(s-nominal-decl
+		(ty-header (name "Test.L2.L3.L4.L5"))
+		(ty-tag-union
+			(ty-tag-name (name "DV")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -9810,110 +9810,6 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "Error")))
 	(type_decls
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
-		(nominal (type "L2.L3")
-			(ty-header (name "Test.L2.L3")))
-		(nominal (type "L2.L3.L4")
-			(ty-header (name "Test.L2.L3.L4")))
-		(nominal (type "L2.L3.L4.L5")
-			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "Inner")
 			(ty-header (name "Inner")))
 		(nominal (type "Inner")
@@ -9928,52 +9824,156 @@ L2 := [DS].{
 			(ty-header (name "InnerB")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
 			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5")))
 		(nominal (type "L2")
-			(ty-header (name "L2"))))
+			(ty-header (name "L2")))
+		(nominal (type "L2.L3")
+			(ty-header (name "Test.L2.L3")))
+		(nominal (type "L2.L3.L4")
+			(ty-header (name "Test.L2.L3.L4")))
+		(nominal (type "L2.L3.L4.L5")
+			(ty-header (name "Test.L2.L3.L4.L5"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))

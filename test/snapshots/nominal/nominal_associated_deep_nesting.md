@@ -125,6 +125,10 @@ deepType = C
 		(annotation
 			(ty-lookup (name "Foo.Level1.Level2.Level3") (local))))
 	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever"))))
+	(s-nominal-decl
 		(ty-header (name "Foo.Level1"))
 		(ty-tag-union
 			(ty-tag-name (name "A"))))
@@ -135,11 +139,7 @@ deepType = C
 	(s-nominal-decl
 		(ty-header (name "Foo.Level1.Level2.Level3"))
 		(ty-tag-union
-			(ty-tag-name (name "C"))))
-	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever")))))
+			(ty-tag-name (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -149,14 +149,14 @@ deepType = C
 		(patt (type "U64"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
+		(nominal (type "Foo")
+			(ty-header (name "Foo")))
 		(nominal (type "Foo.Level1")
 			(ty-header (name "Foo.Level1")))
 		(nominal (type "Foo.Level1.Level2")
 			(ty-header (name "Foo.Level1.Level2")))
 		(nominal (type "Foo.Level1.Level2.Level3")
-			(ty-header (name "Foo.Level1.Level2.Level3")))
-		(nominal (type "Foo")
-			(ty-header (name "Foo"))))
+			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
 		(expr (type "U64"))
 		(expr (type "U64"))

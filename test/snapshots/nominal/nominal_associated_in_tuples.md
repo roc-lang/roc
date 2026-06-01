@@ -162,6 +162,10 @@ boxed = Container(X)
 			(ty-apply (name "Container") (local)
 				(ty-lookup (name "Foo.Bar") (local)))))
 	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever"))))
+	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "X"))
@@ -170,10 +174,6 @@ boxed = Container(X)
 		(ty-header (name "Foo.Baz"))
 		(ty-tag-union
 			(ty-tag-name (name "Z"))))
-	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever"))))
 	(s-alias-decl
 		(ty-header (name "Container"))
 		(ty-fn (effectful false)
@@ -189,12 +189,12 @@ boxed = Container(X)
 		(patt (type "(Foo.Bar, Foo.Baz)"))
 		(patt (type "Error")))
 	(type_decls
+		(nominal (type "Foo")
+			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo.Baz")
 			(ty-header (name "Foo.Baz")))
-		(nominal (type "Foo")
-			(ty-header (name "Foo")))
 		(alias (type "Container")
 			(ty-header (name "Container"))))
 	(expressions

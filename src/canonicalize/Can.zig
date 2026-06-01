@@ -864,7 +864,7 @@ fn activeDeclScopeDeclaresValue(self: *Self, ident: Ident.Idx) ?ActiveDeclScope 
     return null;
 }
 
-fn publishTopLevelTypeDeclStatements(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Allocator.Error!void {
+fn publishTypeDeclStatements(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Allocator.Error!void {
     const decl_index = &self.parse_ir.decl_index;
     std.debug.assert(@intFromEnum(scope_idx) < decl_index.scopeCount());
 
@@ -949,6 +949,13 @@ fn publishTypeDeclStatementTopo(
     try states.put(self.env.gpa, ast_stmt_idx, .done);
     if (self.prepared_type_decls.get(ast_stmt_idx)) |stmt_idx| {
         try self.env.store.addScratchStatement(stmt_idx);
+    }
+
+    const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
+    if (ast_stmt == .type_decl) {
+        if (ast_stmt.type_decl.associated) |assoc| {
+            try self.publishTypeDeclStatements(assoc.scope);
+        }
     }
 }
 
@@ -1948,6 +1955,7 @@ fn canonicalizeAssociatedDeclWithAnno(
 /// deeper nesting.
 fn registerNestedTypeDecl(
     self: *Self,
+    ast_stmt_idx: AST.Statement.Idx,
     parent_name: Ident.Idx,
     relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
@@ -1956,7 +1964,7 @@ fn registerNestedTypeDecl(
     const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch return;
     const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse return;
 
-    try self.registerTypeDecl(null, nested_type_decl, parent_name, relative_name_idx, true, true);
+    try self.registerTypeDecl(ast_stmt_idx, nested_type_decl, parent_name, relative_name_idx, true, false);
 
     const nested_qualified_idx = try self.insertQualifiedIdent(
         self.env.getIdent(parent_name),
@@ -2080,7 +2088,7 @@ fn canonicalizeAssociatedItems(
                 // declaration now, at its source-order position, so later
                 // stages see declaration roots in the same order as the
                 // canonical source walk.
-                try self.registerNestedTypeDecl(parent_name, relative_name_idx, type_name, nested_type_decl);
+                try self.registerNestedTypeDecl(stmt_idx, parent_name, relative_name_idx, type_name, nested_type_decl);
 
                 const nested_qualified_idx = try self.insertQualifiedIdent(
                     self.env.getIdent(parent_name),
@@ -2872,7 +2880,7 @@ pub fn canonicalizeFile(
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
 
-    try self.publishTopLevelTypeDeclStatements(file.scope);
+    try self.publishTypeDeclStatements(file.scope);
 
     // Add local type declarations to all_statements
     for (self.scratch_local_type_decls.items) |stmt_idx| {

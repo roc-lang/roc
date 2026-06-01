@@ -3387,29 +3387,69 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(e-lookup-local
 			(p-assign (ident "associated_items_truly_comprehensive.Annotated.L2.alsoTyped"))))
 	(s-nominal-decl
+		(ty-header (name "D1_Forward"))
+		(ty-tag-union
+			(ty-tag-name (name "A"))))
+	(s-nominal-decl
+		(ty-header (name "D1_Backward"))
+		(ty-tag-union
+			(ty-tag-name (name "B"))))
+	(s-nominal-decl
+		(ty-header (name "D1_Multi"))
+		(ty-tag-union
+			(ty-tag-name (name "C"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerFirst_Qual"))
+		(ty-tag-union
+			(ty-tag-name (name "D"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Qual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "E"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerFirst_Unqual"))
+		(ty-tag-union
+			(ty-tag-name (name "F"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "G"))))
 	(s-nominal-decl
+		(ty-header (name "D2_InnerAfter_Qual"))
+		(ty-tag-union
+			(ty-tag-name (name "H"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Qual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "I"))))
+	(s-nominal-decl
+		(ty-header (name "D2_InnerAfter_Unqual"))
+		(ty-tag-union
+			(ty-tag-name (name "J"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "K"))))
 	(s-nominal-decl
+		(ty-header (name "D2_OuterRefsInner"))
+		(ty-tag-union
+			(ty-tag-name (name "L"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "M"))))
 	(s-nominal-decl
+		(ty-header (name "D2_OuterRefsInner_Back"))
+		(ty-tag-union
+			(ty-tag-name (name "N"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "O"))))
+	(s-nominal-decl
+		(ty-header (name "D2_Siblings_Forward"))
+		(ty-tag-union
+			(ty-tag-name (name "P"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA"))
 		(ty-tag-union
@@ -3419,6 +3459,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "R"))))
 	(s-nominal-decl
+		(ty-header (name "D2_Siblings_Backward"))
+		(ty-tag-union
+			(ty-tag-name (name "S"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA"))
 		(ty-tag-union
 			(ty-tag-name (name "T"))))
@@ -3427,9 +3471,17 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "U"))))
 	(s-nominal-decl
+		(ty-header (name "D2_Interleaved"))
+		(ty-tag-union
+			(ty-tag-name (name "V"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D2_Interleaved.Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "W"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern1"))
+		(ty-tag-union
+			(ty-tag-name (name "X"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2"))
 		(ty-tag-union
@@ -3439,6 +3491,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "Z"))))
 	(s-nominal-decl
+		(ty-header (name "D3_Pattern2"))
+		(ty-tag-union
+			(ty-tag-name (name "AA"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "BB"))))
@@ -3446,6 +3502,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2.L3"))
 		(ty-tag-union
 			(ty-tag-name (name "CC"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern3"))
+		(ty-tag-union
+			(ty-tag-name (name "DD"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2"))
 		(ty-tag-union
@@ -3455,6 +3515,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "FF"))))
 	(s-nominal-decl
+		(ty-header (name "D3_Pattern4"))
+		(ty-tag-union
+			(ty-tag-name (name "GG"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "HH"))))
@@ -3462,6 +3526,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2.L3"))
 		(ty-tag-union
 			(ty-tag-name (name "II"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Pattern5"))
+		(ty-tag-union
+			(ty-tag-name (name "JJ"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2"))
 		(ty-tag-union
@@ -3471,6 +3539,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "LL"))))
 	(s-nominal-decl
+		(ty-header (name "D3_Pattern6"))
+		(ty-tag-union
+			(ty-tag-name (name "MM"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "NN"))))
@@ -3478,6 +3550,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2.L3"))
 		(ty-tag-union
 			(ty-tag-name (name "OO"))))
+	(s-nominal-decl
+		(ty-header (name "D3_Siblings"))
+		(ty-tag-union
+			(ty-tag-name (name "PP"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a"))
 		(ty-tag-union
@@ -3495,6 +3571,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "TT"))))
 	(s-nominal-decl
+		(ty-header (name "D4_Pattern1"))
+		(ty-tag-union
+			(ty-tag-name (name "UU"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "VV"))))
@@ -3506,6 +3586,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4"))
 		(ty-tag-union
 			(ty-tag-name (name "XX"))))
+	(s-nominal-decl
+		(ty-header (name "D4_Pattern2"))
+		(ty-tag-union
+			(ty-tag-name (name "YY"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2"))
 		(ty-tag-union
@@ -3519,6 +3603,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "BBB"))))
 	(s-nominal-decl
+		(ty-header (name "D4_Pattern3"))
+		(ty-tag-union
+			(ty-tag-name (name "CCC"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "DDD"))))
@@ -3531,6 +3619,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "FFF"))))
 	(s-nominal-decl
+		(ty-header (name "D4_Pattern4"))
+		(ty-tag-union
+			(ty-tag-name (name "GGG"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "HHH"))))
@@ -3542,6 +3634,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4"))
 		(ty-tag-union
 			(ty-tag-name (name "JJJ"))))
+	(s-nominal-decl
+		(ty-header (name "D5_Pattern1"))
+		(ty-tag-union
+			(ty-tag-name (name "KKK"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2"))
 		(ty-tag-union
@@ -3559,6 +3655,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "OOO"))))
 	(s-nominal-decl
+		(ty-header (name "D5_Pattern2"))
+		(ty-tag-union
+			(ty-tag-name (name "PPP"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "QQQ"))))
@@ -3574,6 +3674,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5"))
 		(ty-tag-union
 			(ty-tag-name (name "TTT"))))
+	(s-nominal-decl
+		(ty-header (name "D5_Pattern3"))
+		(ty-tag-union
+			(ty-tag-name (name "UUU"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2"))
 		(ty-tag-union
@@ -3591,6 +3695,10 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "YYY"))))
 	(s-nominal-decl
+		(ty-header (name "Shadowing"))
+		(ty-tag-union
+			(ty-tag-name (name "ZZZ"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "AAAA"))))
@@ -3599,125 +3707,17 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(ty-tag-union
 			(ty-tag-name (name "BBBB"))))
 	(s-nominal-decl
-		(ty-header (name "associated_items_truly_comprehensive.Annotated.L2"))
-		(ty-tag-union
-			(ty-tag-name (name "EEEE"))))
-	(s-nominal-decl
-		(ty-header (name "D1_Forward"))
-		(ty-tag-union
-			(ty-tag-name (name "A"))))
-	(s-nominal-decl
-		(ty-header (name "D1_Backward"))
-		(ty-tag-union
-			(ty-tag-name (name "B"))))
-	(s-nominal-decl
-		(ty-header (name "D1_Multi"))
-		(ty-tag-union
-			(ty-tag-name (name "C"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerFirst_Qual"))
-		(ty-tag-union
-			(ty-tag-name (name "D"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerFirst_Unqual"))
-		(ty-tag-union
-			(ty-tag-name (name "F"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerAfter_Qual"))
-		(ty-tag-union
-			(ty-tag-name (name "H"))))
-	(s-nominal-decl
-		(ty-header (name "D2_InnerAfter_Unqual"))
-		(ty-tag-union
-			(ty-tag-name (name "J"))))
-	(s-nominal-decl
-		(ty-header (name "D2_OuterRefsInner"))
-		(ty-tag-union
-			(ty-tag-name (name "L"))))
-	(s-nominal-decl
-		(ty-header (name "D2_OuterRefsInner_Back"))
-		(ty-tag-union
-			(ty-tag-name (name "N"))))
-	(s-nominal-decl
-		(ty-header (name "D2_Siblings_Forward"))
-		(ty-tag-union
-			(ty-tag-name (name "P"))))
-	(s-nominal-decl
-		(ty-header (name "D2_Siblings_Backward"))
-		(ty-tag-union
-			(ty-tag-name (name "S"))))
-	(s-nominal-decl
-		(ty-header (name "D2_Interleaved"))
-		(ty-tag-union
-			(ty-tag-name (name "V"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern1"))
-		(ty-tag-union
-			(ty-tag-name (name "X"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern2"))
-		(ty-tag-union
-			(ty-tag-name (name "AA"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern3"))
-		(ty-tag-union
-			(ty-tag-name (name "DD"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern4"))
-		(ty-tag-union
-			(ty-tag-name (name "GG"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern5"))
-		(ty-tag-union
-			(ty-tag-name (name "JJ"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Pattern6"))
-		(ty-tag-union
-			(ty-tag-name (name "MM"))))
-	(s-nominal-decl
-		(ty-header (name "D3_Siblings"))
-		(ty-tag-union
-			(ty-tag-name (name "PP"))))
-	(s-nominal-decl
-		(ty-header (name "D4_Pattern1"))
-		(ty-tag-union
-			(ty-tag-name (name "UU"))))
-	(s-nominal-decl
-		(ty-header (name "D4_Pattern2"))
-		(ty-tag-union
-			(ty-tag-name (name "YY"))))
-	(s-nominal-decl
-		(ty-header (name "D4_Pattern3"))
-		(ty-tag-union
-			(ty-tag-name (name "CCC"))))
-	(s-nominal-decl
-		(ty-header (name "D4_Pattern4"))
-		(ty-tag-union
-			(ty-tag-name (name "GGG"))))
-	(s-nominal-decl
-		(ty-header (name "D5_Pattern1"))
-		(ty-tag-union
-			(ty-tag-name (name "KKK"))))
-	(s-nominal-decl
-		(ty-header (name "D5_Pattern2"))
-		(ty-tag-union
-			(ty-tag-name (name "PPP"))))
-	(s-nominal-decl
-		(ty-header (name "D5_Pattern3"))
-		(ty-tag-union
-			(ty-tag-name (name "UUU"))))
-	(s-nominal-decl
-		(ty-header (name "Shadowing"))
-		(ty-tag-union
-			(ty-tag-name (name "ZZZ"))))
-	(s-nominal-decl
 		(ty-header (name "External1"))
 		(ty-tag-union
 			(ty-tag-name (name "CCCC"))))
 	(s-nominal-decl
 		(ty-header (name "Annotated"))
 		(ty-tag-union
-			(ty-tag-name (name "DDDD")))))
+			(ty-tag-name (name "DDDD"))))
+	(s-nominal-decl
+		(ty-header (name "associated_items_truly_comprehensive.Annotated.L2"))
+		(ty-tag-union
+			(ty-tag-name (name "EEEE")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -3890,114 +3890,6 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "U64"))
 		(patt (type "U64")))
 	(type_decls
-		(nominal (type "D2_InnerFirst_Qual.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Qual.Inner")))
-		(nominal (type "D2_InnerFirst_Unqual.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.Inner")))
-		(nominal (type "D2_InnerAfter_Qual.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Qual.Inner")))
-		(nominal (type "D2_InnerAfter_Unqual.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner")))
-		(nominal (type "D2_OuterRefsInner.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner")))
-		(nominal (type "D2_OuterRefsInner_Back.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner")))
-		(nominal (type "D2_Siblings_Forward.InnerA")
-			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA")))
-		(nominal (type "D2_Siblings_Forward.InnerB")
-			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB")))
-		(nominal (type "D2_Siblings_Backward.InnerA")
-			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA")))
-		(nominal (type "D2_Siblings_Backward.InnerB")
-			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB")))
-		(nominal (type "D2_Interleaved.Inner")
-			(ty-header (name "associated_items_truly_comprehensive.D2_Interleaved.Inner")))
-		(nominal (type "D3_Pattern1.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2")))
-		(nominal (type "D3_Pattern1.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2.L3")))
-		(nominal (type "D3_Pattern2.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2")))
-		(nominal (type "D3_Pattern2.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2.L3")))
-		(nominal (type "D3_Pattern3.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2")))
-		(nominal (type "D3_Pattern3.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2.L3")))
-		(nominal (type "D3_Pattern4.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2")))
-		(nominal (type "D3_Pattern4.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2.L3")))
-		(nominal (type "D3_Pattern5.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2")))
-		(nominal (type "D3_Pattern5.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2.L3")))
-		(nominal (type "D3_Pattern6.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2")))
-		(nominal (type "D3_Pattern6.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2.L3")))
-		(nominal (type "D3_Siblings.L2a")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a")))
-		(nominal (type "D3_Siblings.L2a.L3a")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a")))
-		(nominal (type "D3_Siblings.L2b")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b")))
-		(nominal (type "D3_Siblings.L2b.L3b")
-			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b.L3b")))
-		(nominal (type "D4_Pattern1.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2")))
-		(nominal (type "D4_Pattern1.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3")))
-		(nominal (type "D4_Pattern1.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4")))
-		(nominal (type "D4_Pattern2.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2")))
-		(nominal (type "D4_Pattern2.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3")))
-		(nominal (type "D4_Pattern2.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4")))
-		(nominal (type "D4_Pattern3.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2")))
-		(nominal (type "D4_Pattern3.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2.L3")))
-		(nominal (type "D4_Pattern3.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4")))
-		(nominal (type "D4_Pattern4.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2")))
-		(nominal (type "D4_Pattern4.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3")))
-		(nominal (type "D4_Pattern4.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4")))
-		(nominal (type "D5_Pattern1.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2")))
-		(nominal (type "D5_Pattern1.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3")))
-		(nominal (type "D5_Pattern1.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4")))
-		(nominal (type "D5_Pattern1.L2.L3.L4.L5")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5")))
-		(nominal (type "D5_Pattern2.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2")))
-		(nominal (type "D5_Pattern2.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3")))
-		(nominal (type "D5_Pattern2.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4")))
-		(nominal (type "D5_Pattern2.L2.L3.L4.L5")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5")))
-		(nominal (type "D5_Pattern3.L2")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2")))
-		(nominal (type "D5_Pattern3.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3")))
-		(nominal (type "D5_Pattern3.L2.L3.L4")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4")))
-		(nominal (type "D5_Pattern3.L2.L3.L4.L5")
-			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5")))
-		(nominal (type "Shadowing.L2")
-			(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2")))
-		(nominal (type "Shadowing.L2.L3")
-			(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2.L3")))
-		(nominal (type "Annotated.L2")
-			(ty-header (name "associated_items_truly_comprehensive.Annotated.L2")))
 		(nominal (type "D1_Forward")
 			(ty-header (name "D1_Forward")))
 		(nominal (type "D1_Backward")
@@ -4006,56 +3898,164 @@ anno2 = Annotated.L2.alsoTyped # 889
 			(ty-header (name "D1_Multi")))
 		(nominal (type "D2_InnerFirst_Qual")
 			(ty-header (name "D2_InnerFirst_Qual")))
+		(nominal (type "D2_InnerFirst_Qual.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Qual.Inner")))
 		(nominal (type "D2_InnerFirst_Unqual")
 			(ty-header (name "D2_InnerFirst_Unqual")))
+		(nominal (type "D2_InnerFirst_Unqual.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_InnerFirst_Unqual.Inner")))
 		(nominal (type "D2_InnerAfter_Qual")
 			(ty-header (name "D2_InnerAfter_Qual")))
+		(nominal (type "D2_InnerAfter_Qual.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Qual.Inner")))
 		(nominal (type "D2_InnerAfter_Unqual")
 			(ty-header (name "D2_InnerAfter_Unqual")))
+		(nominal (type "D2_InnerAfter_Unqual.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_InnerAfter_Unqual.Inner")))
 		(nominal (type "D2_OuterRefsInner")
 			(ty-header (name "D2_OuterRefsInner")))
+		(nominal (type "D2_OuterRefsInner.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner.Inner")))
 		(nominal (type "D2_OuterRefsInner_Back")
 			(ty-header (name "D2_OuterRefsInner_Back")))
+		(nominal (type "D2_OuterRefsInner_Back.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_OuterRefsInner_Back.Inner")))
 		(nominal (type "D2_Siblings_Forward")
 			(ty-header (name "D2_Siblings_Forward")))
+		(nominal (type "D2_Siblings_Forward.InnerA")
+			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerA")))
+		(nominal (type "D2_Siblings_Forward.InnerB")
+			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Forward.InnerB")))
 		(nominal (type "D2_Siblings_Backward")
 			(ty-header (name "D2_Siblings_Backward")))
+		(nominal (type "D2_Siblings_Backward.InnerA")
+			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerA")))
+		(nominal (type "D2_Siblings_Backward.InnerB")
+			(ty-header (name "associated_items_truly_comprehensive.D2_Siblings_Backward.InnerB")))
 		(nominal (type "D2_Interleaved")
 			(ty-header (name "D2_Interleaved")))
+		(nominal (type "D2_Interleaved.Inner")
+			(ty-header (name "associated_items_truly_comprehensive.D2_Interleaved.Inner")))
 		(nominal (type "D3_Pattern1")
 			(ty-header (name "D3_Pattern1")))
+		(nominal (type "D3_Pattern1.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2")))
+		(nominal (type "D3_Pattern1.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern1.L2.L3")))
 		(nominal (type "D3_Pattern2")
 			(ty-header (name "D3_Pattern2")))
+		(nominal (type "D3_Pattern2.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2")))
+		(nominal (type "D3_Pattern2.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern2.L2.L3")))
 		(nominal (type "D3_Pattern3")
 			(ty-header (name "D3_Pattern3")))
+		(nominal (type "D3_Pattern3.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2")))
+		(nominal (type "D3_Pattern3.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern3.L2.L3")))
 		(nominal (type "D3_Pattern4")
 			(ty-header (name "D3_Pattern4")))
+		(nominal (type "D3_Pattern4.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2")))
+		(nominal (type "D3_Pattern4.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern4.L2.L3")))
 		(nominal (type "D3_Pattern5")
 			(ty-header (name "D3_Pattern5")))
+		(nominal (type "D3_Pattern5.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2")))
+		(nominal (type "D3_Pattern5.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern5.L2.L3")))
 		(nominal (type "D3_Pattern6")
 			(ty-header (name "D3_Pattern6")))
+		(nominal (type "D3_Pattern6.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2")))
+		(nominal (type "D3_Pattern6.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Pattern6.L2.L3")))
 		(nominal (type "D3_Siblings")
 			(ty-header (name "D3_Siblings")))
+		(nominal (type "D3_Siblings.L2a")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a")))
+		(nominal (type "D3_Siblings.L2a.L3a")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2a.L3a")))
+		(nominal (type "D3_Siblings.L2b")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b")))
+		(nominal (type "D3_Siblings.L2b.L3b")
+			(ty-header (name "associated_items_truly_comprehensive.D3_Siblings.L2b.L3b")))
 		(nominal (type "D4_Pattern1")
 			(ty-header (name "D4_Pattern1")))
+		(nominal (type "D4_Pattern1.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2")))
+		(nominal (type "D4_Pattern1.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3")))
+		(nominal (type "D4_Pattern1.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern1.L2.L3.L4")))
 		(nominal (type "D4_Pattern2")
 			(ty-header (name "D4_Pattern2")))
+		(nominal (type "D4_Pattern2.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2")))
+		(nominal (type "D4_Pattern2.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3")))
+		(nominal (type "D4_Pattern2.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern2.L2.L3.L4")))
 		(nominal (type "D4_Pattern3")
 			(ty-header (name "D4_Pattern3")))
+		(nominal (type "D4_Pattern3.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2")))
+		(nominal (type "D4_Pattern3.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2.L3")))
+		(nominal (type "D4_Pattern3.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern3.L2.L3.L4")))
 		(nominal (type "D4_Pattern4")
 			(ty-header (name "D4_Pattern4")))
+		(nominal (type "D4_Pattern4.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2")))
+		(nominal (type "D4_Pattern4.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3")))
+		(nominal (type "D4_Pattern4.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D4_Pattern4.L2.L3.L4")))
 		(nominal (type "D5_Pattern1")
 			(ty-header (name "D5_Pattern1")))
+		(nominal (type "D5_Pattern1.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2")))
+		(nominal (type "D5_Pattern1.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3")))
+		(nominal (type "D5_Pattern1.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4")))
+		(nominal (type "D5_Pattern1.L2.L3.L4.L5")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern1.L2.L3.L4.L5")))
 		(nominal (type "D5_Pattern2")
 			(ty-header (name "D5_Pattern2")))
+		(nominal (type "D5_Pattern2.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2")))
+		(nominal (type "D5_Pattern2.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3")))
+		(nominal (type "D5_Pattern2.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4")))
+		(nominal (type "D5_Pattern2.L2.L3.L4.L5")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.L4.L5")))
 		(nominal (type "D5_Pattern3")
 			(ty-header (name "D5_Pattern3")))
+		(nominal (type "D5_Pattern3.L2")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2")))
+		(nominal (type "D5_Pattern3.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3")))
+		(nominal (type "D5_Pattern3.L2.L3.L4")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4")))
+		(nominal (type "D5_Pattern3.L2.L3.L4.L5")
+			(ty-header (name "associated_items_truly_comprehensive.D5_Pattern3.L2.L3.L4.L5")))
 		(nominal (type "Shadowing")
 			(ty-header (name "Shadowing")))
+		(nominal (type "Shadowing.L2")
+			(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2")))
+		(nominal (type "Shadowing.L2.L3")
+			(ty-header (name "associated_items_truly_comprehensive.Shadowing.L2.L3")))
 		(nominal (type "External1")
 			(ty-header (name "External1")))
 		(nominal (type "Annotated")
-			(ty-header (name "Annotated"))))
+			(ty-header (name "Annotated")))
+		(nominal (type "Annotated.L2")
+			(ty-header (name "associated_items_truly_comprehensive.Annotated.L2"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))

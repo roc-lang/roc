@@ -135,15 +135,15 @@ result = Foo.transform(Foo.defaultBar)
 		(annotation
 			(ty-lookup (name "Foo.Bar") (local))))
 	(s-nominal-decl
+		(ty-header (name "Foo"))
+		(ty-tag-union
+			(ty-tag-name (name "Whatever"))))
+	(s-nominal-decl
 		(ty-header (name "Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "A"))
 			(ty-tag-name (name "B"))
-			(ty-tag-name (name "C"))))
-	(s-nominal-decl
-		(ty-header (name "Foo"))
-		(ty-tag-union
-			(ty-tag-name (name "Whatever")))))
+			(ty-tag-name (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -154,10 +154,10 @@ result = Foo.transform(Foo.defaultBar)
 		(patt (type "Foo.Bar"))
 		(patt (type "Foo.Bar")))
 	(type_decls
-		(nominal (type "Foo.Bar")
-			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo")
-			(ty-header (name "Foo"))))
+			(ty-header (name "Foo")))
+		(nominal (type "Foo.Bar")
+			(ty-header (name "Foo.Bar"))))
 	(expressions
 		(expr (type "Foo.Bar"))
 		(expr (type "Foo.Bar -> Foo.Bar"))
