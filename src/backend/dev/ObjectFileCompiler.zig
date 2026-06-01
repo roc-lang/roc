@@ -113,8 +113,10 @@ pub const ObjectFileCompiler = struct {
         );
         defer result.deinit();
 
-        // Write to file
-        roc_ctx.writeFile(output_path, result.object_bytes) catch |err| {
+        // Write to file. Use the AV-safe wrapper so a transient AccessDenied
+        // from a Windows filter driver holding the just-created file open is
+        // retried rather than failing the build.
+        writeFileWindowsAvSafe(roc_ctx.std_io, output_path, result.object_bytes) catch |err| {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
