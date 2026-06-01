@@ -8860,7 +8860,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1312)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1294)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -8889,12 +8889,10 @@ L2 := [DS].{
 		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1310)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "5")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-binop (op "add")
@@ -8933,12 +8931,10 @@ L2 := [DS].{
 			(e-num (value "2"))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1410)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "3")))))
+		(e-binop (op "mul")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-num (value "3"))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "5")))
@@ -8955,9 +8951,9 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1511)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1427)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 1507)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1425)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val1"))))
@@ -8984,21 +8980,17 @@ L2 := [DS].{
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1505)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1509)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-lookup-local
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
 		(e-binop (op "add")
@@ -9020,20 +9012,16 @@ L2 := [DS].{
 			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1605)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "Test.L2.val2")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1573)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "1")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-num (value "1"))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "7")))
@@ -9062,12 +9050,10 @@ L2 := [DS].{
 				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1697)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "5")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "d4_4"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -9143,11 +9129,11 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2043)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1673)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2037)
+				(e-dispatch-call (method "plus") (constraint-fn-var 1671)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 1971)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1669)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val1"))))
@@ -9180,12 +9166,10 @@ L2 := [DS].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1969)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-num (value "10")))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
 		(e-binop (op "add")
@@ -9195,18 +9179,14 @@ L2 := [DS].{
 				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2041)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2039)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "val1"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "Test.L2.val2"))))))
-			(args
+		(e-binop (op "add")
+			(e-binop (op "add")
 				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))))
+					(p-assign (ident "val1")))
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))
+			(e-lookup-local
+				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
 		(e-binop (op "add")
@@ -9228,13 +9208,11 @@ L2 := [DS].{
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2035)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "val1"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "Test.L2.val2"))))))
+		(e-binop (op "add")
+			(e-lookup-local
+				(p-assign (ident "val1")))
+			(e-lookup-local
+				(p-assign (ident "Test.L2.val2")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.L5.val5"))
 		(e-binop (op "add")
@@ -9250,18 +9228,14 @@ L2 := [DS].{
 				(p-assign (ident "Test.L2.L3.L4.val4")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2077)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2075)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "val1"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "Test.L2.val2"))))))
-			(args
+		(e-binop (op "add")
+			(e-binop (op "add")
 				(e-lookup-local
-					(p-assign (ident "Test.L2.L3.val3"))))))
+					(p-assign (ident "val1")))
+				(e-lookup-local
+					(p-assign (ident "Test.L2.val2"))))
+			(e-lookup-local
+				(p-assign (ident "Test.L2.L3.val3")))))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
 		(e-binop (op "add")
@@ -9301,7 +9275,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2033)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1292)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -9735,7 +9709,7 @@ L2 := [DS].{
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Error"))
@@ -9745,7 +9719,7 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Error"))
@@ -9756,26 +9730,9 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Error"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Error"))
-		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "_a"))
 		(patt (type "_a"))
@@ -9783,35 +9740,52 @@ L2 := [DS].{
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "_a"))
 		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Error"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
 		(patt (type "_a"))
 		(patt (type "Error"))
-		(patt (type "_a"))
 		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "_a"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
+		(patt (type "_a"))
+		(patt (type "Error"))
+		(patt (type "_a"))
+		(patt (type "_a"))
+		(patt (type "_a"))
 		(patt (type "Error"))
 		(patt (type "Dec"))
 		(patt (type "_a"))
@@ -10022,7 +9996,7 @@ L2 := [DS].{
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Error"))
@@ -10032,7 +10006,7 @@ L2 := [DS].{
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Error"))
@@ -10043,26 +10017,9 @@ L2 := [DS].{
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Error"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Error"))
-		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "_a"))
 		(expr (type "_a"))
@@ -10070,35 +10027,52 @@ L2 := [DS].{
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "_a"))
 		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Error"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
 		(expr (type "_a"))
 		(expr (type "Error"))
-		(expr (type "_a"))
 		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "_a"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
+		(expr (type "_a"))
+		(expr (type "Error"))
+		(expr (type "_a"))
+		(expr (type "_a"))
+		(expr (type "_a"))
 		(expr (type "Error"))
 		(expr (type "Dec"))
 		(expr (type "_a"))

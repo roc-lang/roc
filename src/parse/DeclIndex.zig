@@ -138,7 +138,9 @@ scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
 type_dependency_ids: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
+type_path_by_statement: std.AutoHashMapUnmanaged(u32, TypePathIdx),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
+assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 scope_stack: std.ArrayList(ScopeIdx),
 
 /// Create an empty declaration index.
@@ -152,7 +154,9 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .type_dependency_ids = .empty,
         .type_paths = .empty,
         .type_path_intern = .{},
+        .type_path_by_statement = .{},
         .assoc_value_decls = .{},
+        .assoc_owner_value_decls = .{},
         .scope_stack = .empty,
     };
 }
@@ -167,6 +171,7 @@ pub fn deinit(self: *DeclIndex) void {
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
     }
     deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
+    deinitNameBuckets(TypePathIdx, self.gpa, &self.assoc_owner_value_decls);
     self.scope_decl_builders.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
@@ -174,6 +179,7 @@ pub fn deinit(self: *DeclIndex) void {
     self.type_dependency_ids.deinit(self.gpa);
     self.type_paths.deinit(self.gpa);
     self.type_path_intern.deinit(self.gpa);
+    self.type_path_by_statement.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
 }
 
@@ -263,9 +269,13 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
                     .owner = owner_path,
                     .item = ident,
                 }, idx);
+                try addDeclToBucket(TypePathIdx, self.gpa, &self.assoc_owner_value_decls, owner_path, idx);
             }
         } else if (declKindMayBindType(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].type_decls, ident, idx);
+            if (decl.type_path) |path| {
+                try self.type_path_by_statement.put(self.gpa, decl.statement, path);
+            }
         }
     }
     return idx;
@@ -343,6 +353,12 @@ pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.I
     return bucket.decls.items;
 }
 
+/// Return all associated value declarations owned by one type path.
+pub fn assocOwnerValueDecls(self: *const DeclIndex, owner: TypePathIdx) []const DeclIdx {
+    const bucket = self.assoc_owner_value_decls.get(owner) orelse return &.{};
+    return bucket.decls.items;
+}
+
 /// Intern a parser-owned type path.
 pub fn internTypePath(self: *DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) std.mem.Allocator.Error!TypePathIdx {
     const key = TypePathKey{ .parent = parent, .name = name };
@@ -389,6 +405,11 @@ pub fn findTypePathRelative(self: *const DeclIndex, owner: TypePathIdx, segments
         result = next;
     }
     return result;
+}
+
+/// Return the parser-owned type path for an AST statement, when it declares a type.
+pub fn typePathForStatement(self: *const DeclIndex, statement: u32) ?TypePathIdx {
+    return self.type_path_by_statement.get(statement);
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -609,6 +630,21 @@ test "associated value declarations are keyed by structural owner path" {
     const found_nested = index.findTypePathBySegments(&.{ parent_ident, nested_ident });
     try std.testing.expectEqual(nested_path, found_nested.?);
 
+    const type_scope = try index.enterScope(.module, .file, TokenRegion.empty());
+    _ = try index.addDecl(.{
+        .scope = type_scope,
+        .statement = 42,
+        .kind = .nominal,
+        .name_tok = null,
+        .name_ident = nested_ident,
+        .type_path = nested_path,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    try std.testing.expectEqual(nested_path, index.typePathForStatement(42).?);
+    try index.exitScope(type_scope, TokenRegion.empty());
+
     const scope_idx = try index.enterScope(.associated, .none, TokenRegion.empty());
     index.setScopeOwnerTypePath(scope_idx, nested_path);
     const decl_idx = try index.addDecl(.{
@@ -627,6 +663,10 @@ test "associated value declarations are keyed by structural owner path" {
     const nested_decls = index.assocValueDecls(nested_path, value_ident);
     try std.testing.expectEqual(@as(usize, 1), nested_decls.len);
     try std.testing.expectEqual(decl_idx, nested_decls[0]);
+
+    const owner_decls = index.assocOwnerValueDecls(nested_path);
+    try std.testing.expectEqual(@as(usize, 1), owner_decls.len);
+    try std.testing.expectEqual(decl_idx, owner_decls[0]);
 
     const parent_decls = index.assocValueDecls(parent_path, value_ident);
     try std.testing.expectEqual(@as(usize, 0), parent_decls.len);
