@@ -1758,6 +1758,230 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     }
 
     try self.reportPolymorphicTopLevelValues();
+    try self.reportAmbiguousStaticDispatch();
+}
+
+/// Detect ambiguous static dispatch: a static-dispatch-constrained type variable
+/// that is reachable through no function ARGUMENT position and is no lambda
+/// parameter, so no instantiation can ever pin it down. Such a variable reaches
+/// monomorphization as an unresolved flex/rigid dispatcher, which the lowering
+/// `dispatchTarget` invariant forbids. We catch it here, emit a `MISSING METHOD`
+/// diagnostic, and mark the offending expression a runtime error so lowering
+/// never reaches that invariant.
+///
+/// This runs at the very end of checking, once numeric defaulting, generalization,
+/// recursive-cycle resolution, constraint solving, and the poison passes have all
+/// settled — the same settled-state invariant `reportPolymorphicTopLevelValues`
+/// relies on.
+fn reportAmbiguousStaticDispatch(self: *Self) std.mem.Allocator.Error!void {
+    // Build the exclusion set S of resolved var ids that some instantiation can
+    // pin: (a) every var reachable through an ARGUMENT position of a top-level
+    // def's generalized type (recursing fully into arg structure, including
+    // nested function args AND rets), and (b) every lambda parameter pattern var
+    // (local/nested lambdas included), walked structurally.
+    var pinnable = std.AutoHashMap(Var, void).init(self.gpa);
+    defer pinnable.deinit();
+
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        const def_var = ModuleEnv.varFrom(def_idx);
+        try self.collectArgPositionVars(def_var, &pinnable);
+    }
+
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const args: ?CIR.Pattern.Span = switch (self.cir.store.getExpr(expr_idx)) {
+            .e_lambda => |lambda| lambda.args,
+            .e_hosted_lambda => |lambda| lambda.args,
+            else => null,
+        };
+        if (args) |arg_span| {
+            for (self.cir.store.slicePatterns(arg_span)) |pattern_idx| {
+                try self.collectReachableVars(ModuleEnv.varFrom(pattern_idx), &pinnable);
+            }
+        }
+    }
+
+    // Sweep every expression. Flag any whose own type var is a flex/rigid var
+    // with a non-`from_numeral` static-dispatch constraint and whose resolved id
+    // is not pinnable. Dedup by resolved var id so a value flowing through
+    // multiple expressions is reported once, preferring the first (innermost
+    // node-order) occurrence — which lands the underline on the dispatch use.
+    var reported = std.AutoHashMap(Var, void).init(self.gpa);
+    defer reported.deinit();
+
+    raw_node_idx = 0;
+    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+
+        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        const constraints_range = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            else => continue,
+        };
+        if (constraints_range.len() == 0) continue;
+        if (pinnable.contains(resolved.var_)) continue;
+        if (reported.contains(resolved.var_)) continue;
+
+        // Decide whether to flag based on the constraint origins.
+        //
+        // - `from_numeral`: the var is a numeric literal. Numeric defaulting
+        //   resolves it (to `Dec` when otherwise unconstrained) and reports any
+        //   unsatisfiable conversion separately, so it is never flagged here —
+        //   even when it also carries other constraints (e.g. a literal operand
+        //   of `+` also has a `desugared_binop` constraint).
+        // - `where_clause`: the dispatch is part of an explicit polymorphic
+        //   signature (`f : a -> a where [a.method : ...]`). That is a declared
+        //   contract pinned when callers instantiate the signature, so it is
+        //   legitimate and never flagged.
+        //
+        // Only the remaining un-annotated dispatch origins (`method_call`,
+        // `desugared_binop`, `desugared_unaryop`) can produce an unpinnable flex
+        // dispatcher at monomorphization. Flag using the first such constraint.
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        var has_excluded_origin = false;
+        var first_constraint: ?StaticDispatchConstraint = null;
+        for (constraints) |c| {
+            switch (c.origin) {
+                .from_numeral, .where_clause => {
+                    has_excluded_origin = true;
+                },
+                .method_call, .desugared_binop, .desugared_unaryop => {
+                    if (first_constraint == null) first_constraint = c;
+                },
+            }
+        }
+        if (has_excluded_origin) continue;
+        const constraint = first_constraint orelse continue;
+
+        try reported.put(resolved.var_, {});
+
+        const region = self.cir.store.getExprRegion(expr_idx);
+        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
+
+        const is_binop = constraint.origin == .desugared_binop;
+
+        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+            .region = region,
+            .dispatcher_snapshot = snapshot,
+            .method_name = constraint.fn_name,
+            .is_binop = is_binop,
+            .binop_negated = constraint.binop_negated,
+        } } });
+
+        // Mark the expression a runtime error so lowering skips it and never
+        // reaches the `dispatchTarget` invariant.
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = region,
+        } });
+        self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    }
+}
+
+/// Collect, into `out`, every resolved var id reachable through a function
+/// ARGUMENT position of `var_`. Argument structure is recursed fully (records,
+/// tuples, tag payloads, nested function args AND rets). Return positions of the
+/// outer function are NOT collected (a return-only var is not parameter-pinnable),
+/// but once inside an argument every nested position counts.
+fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out),
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    try self.collectReachableVars(arg, out);
+                }
+                // Recurse into the return type: a curried function returns more
+                // functions whose own arguments are still parameter-pinnable.
+                try self.collectArgPositionVars(func.ret, out);
+            },
+            else => {},
+        },
+        else => {},
+    }
+}
+
+/// Collect, into `out`, `var_`'s resolved id and every resolved var id
+/// structurally reachable from it (tuples, records, tag payloads, function args
+/// and rets). Used to mark whole argument-position type structures as pinnable.
+fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (out.contains(resolved.var_)) return;
+    try out.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .err => {},
+        // A constrained type variable's `where` constraints relate it to other
+        // type variables through the constraint method's signature. For example
+        // `c.is_eq : c, d -> f` makes `d` and `f` reachable from `c`; following
+        // `f.not : f -> e` then reaches `e`. When `c` is parameter-pinnable, every
+        // variable reachable through its constraint signatures is pinnable too,
+        // because instantiating the parameter instantiates the whole constraint
+        // chain. (This is the spec's "recurse fully into arg structure".)
+        .flex, .rigid => {
+            const constraints_range = switch (resolved.desc.content) {
+                .flex => |flex| flex.constraints,
+                .rigid => |rigid| rigid.constraints,
+                else => unreachable,
+            };
+            const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+            for (constraints) |constraint| {
+                try self.collectReachableVars(constraint.fn_var, out);
+            }
+        },
+        .alias => |alias| try self.collectReachableVars(self.types.getAliasBackingVar(alias), out),
+        .structure => |flat| switch (flat) {
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    try self.collectReachableVars(elem, out);
+                }
+            },
+            .nominal_type => |nominal| {
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    try self.collectReachableVars(arg, out);
+                }
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    try self.collectReachableVars(arg, out);
+                }
+                try self.collectReachableVars(func.ret, out);
+            },
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectReachableVars(field_var, out);
+                }
+                try self.collectReachableVars(record.ext, out);
+            },
+            .record_unbound => |fields_range| {
+                const fields = self.types.getRecordFieldsSlice(fields_range);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectReachableVars(field_var, out);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| {
+                        try self.collectReachableVars(arg, out);
+                    }
+                }
+                try self.collectReachableVars(tag_union.ext, out);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+    }
 }
 
 fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {

@@ -46,6 +46,7 @@ const TypePair = problem_mod.TypePair;
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
 const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
+const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
@@ -775,6 +776,7 @@ pub const ReportBuilder = struct {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
+                    .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                 }
             },
             .recursive_alias => |data| {
@@ -1986,6 +1988,65 @@ pub const ReportBuilder = struct {
                 }
             },
         }
+
+        return report;
+    }
+
+    /// Build a report for when a static dispatch method is called on a receiver
+    /// whose type is an unresolved type variable that no instantiation can ever
+    /// pin down. Unresolved type variables have no methods, so the dispatch is
+    /// genuinely ambiguous.
+    fn buildStaticDispatchUnresolvedDispatcher(
+        self: *Self,
+        data: UnresolvedDispatcher,
+    ) !Report {
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        // For a desugared operator, render the source operator symbol rather than
+        // the internal desugared method name (e.g. `==` not `is_eq`, `+` not
+        // `plus`). Equality (`==`/`!=`) gets "compare values with" wording; every
+        // other operator gets generic operator-usage wording.
+        const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
+        const is_equality = data.is_binop and data.method_name.eql(self.can_ir.idents.is_eq);
+
+        if (is_equality) {
+            const op = if (data.binop_negated) "!=" else operator orelse "==";
+            try D.renderSlice(&.{
+                D.bytes("This is trying to compare values with"),
+                D.bytes(op).withAnnotation(.inline_code),
+                D.bytes(", but their type is an unresolved type variable, which has no methods.").withNoPrecedingSpace(),
+            }, self, &report);
+        } else if (data.is_binop and operator != null) {
+            try D.renderSlice(&.{
+                D.bytes("This is trying to use the"),
+                D.bytes(operator.?).withAnnotation(.inline_code),
+                D.bytes("operator on a value whose type is an unresolved type variable, which has no methods."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("This is trying to dispatch a method named"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on an unresolved type variable, but unresolved type variables have no methods."),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+
+        // Add source region highlighting on the offending dispatch call.
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."),
+        }, self, &report);
 
         return report;
     }
