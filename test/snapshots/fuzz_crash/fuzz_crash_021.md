@@ -18,7 +18,6 @@ PARSE ERROR - fuzz_crash_021.md:1:13:1:14
 PARSE ERROR - fuzz_crash_021.md:1:14:1:16
 PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
-PARSE ERROR - fuzz_crash_021.md:4:1:4:1
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -119,17 +118,6 @@ Pair(a, b+ : (
 ^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_ty_anno_close_round`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_021.md:4:1:4:1:**
-```roc
-
-```
-^
-
-
 # TOKENS
 ~~~zig
 UpperIdent,OpSlash,LowerIdent,NoSpaceDotLowerIdent,StringStart,StringPart,StringEnd,
@@ -147,16 +135,12 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-type-decl
-			(header (name "<malformed>")
-				(args))
-			(ty-malformed (tag "expected_ty_anno_close_round")))))
+		(s-malformed (tag "expected_ty_anno_close_round_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc
 
 
-<malformed> : 
 ~~~
 # CANONICALIZE
 ~~~clojure

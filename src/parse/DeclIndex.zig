@@ -78,18 +78,69 @@ pub const Scope = struct {
 
 /// All declarations sharing one source name in one parser scope.
 pub const NameBucket = struct {
-    decls: std.ArrayListUnmanaged(DeclIdx) = .{},
+    first: ?DeclIdx = null,
+    overflow: std.ArrayListUnmanaged(DeclIdx) = .{},
+
+    pub const Iterator = struct {
+        bucket: NameBucket,
+        index: usize = 0,
+
+        pub fn next(self: *Iterator) ?DeclIdx {
+            if (self.index == 0) {
+                self.index = 1;
+                return self.bucket.first;
+            }
+
+            const overflow_index = self.index - 1;
+            if (overflow_index >= self.bucket.overflow.items.len) return null;
+
+            self.index += 1;
+            return self.bucket.overflow.items[overflow_index];
+        }
+    };
+
+    pub fn append(self: *NameBucket, gpa: std.mem.Allocator, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
+        if (self.first == null) {
+            self.first = decl_idx;
+            return;
+        }
+
+        try self.overflow.append(gpa, decl_idx);
+    }
+
+    pub fn deinit(self: *NameBucket, gpa: std.mem.Allocator) void {
+        self.overflow.deinit(gpa);
+    }
+
+    pub fn count(self: NameBucket) usize {
+        return (if (self.first == null) @as(usize, 0) else 1) + self.overflow.items.len;
+    }
+
+    pub fn at(self: NameBucket, index: usize) ?DeclIdx {
+        if (index == 0) return self.first;
+
+        const overflow_index = index - 1;
+        if (overflow_index >= self.overflow.items.len) return null;
+
+        return self.overflow.items[overflow_index];
+    }
+
+    pub fn iter(self: NameBucket) Iterator {
+        return .{ .bucket = self };
+    }
 };
 
 /// Parser-owned type path such as `Parent.Nested`.
 pub const TypePath = struct {
     parent: ?TypePathIdx,
     name: Ident.Idx,
+    scope: ScopeIdx,
     depth: u16,
 };
 
 const TypePathKey = struct {
     parent: ?TypePathIdx,
+    root_scope: ?ScopeIdx,
     name: Ident.Idx,
 };
 
@@ -209,7 +260,7 @@ pub fn deinit(self: *DeclIndex) void {
 fn deinitNameBuckets(comptime K: type, gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(K, NameBucket)) void {
     var iter = map.valueIterator();
     while (iter.next()) |bucket| {
-        bucket.decls.deinit(gpa);
+        bucket.deinit(gpa);
     }
     map.deinit(gpa);
 }
@@ -317,7 +368,7 @@ fn addDeclToBucket(
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    try gop.value_ptr.decls.append(gpa, decl_idx);
+    try gop.value_ptr.append(gpa, decl_idx);
 }
 
 fn declKindMayBindValue(kind: DeclKind) bool {
@@ -359,34 +410,34 @@ pub fn scopeDeclaresValue(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Id
 }
 
 /// Return all value-like declarations for a name in a scope.
-pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) []const DeclIdx {
+pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
     const scope = &self.scopes.items[@intFromEnum(scope_idx)];
-    const bucket = scope.value_decls.get(ident) orelse return &.{};
-    return bucket.decls.items;
+    return scope.value_decls.get(ident) orelse .{};
 }
 
 /// Return all type declarations for a name in a scope.
-pub fn scopeTypeDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) []const DeclIdx {
+pub fn scopeTypeDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
     const scope = &self.scopes.items[@intFromEnum(scope_idx)];
-    const bucket = scope.type_decls.get(ident) orelse return &.{};
-    return bucket.decls.items;
+    return scope.type_decls.get(ident) orelse .{};
 }
 
 /// Return all associated value declarations for an owner type path and item name.
-pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) []const DeclIdx {
-    const bucket = self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse return &.{};
-    return bucket.decls.items;
+pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) NameBucket {
+    return self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse .{};
 }
 
 /// Return all associated value declarations owned by one type path.
-pub fn assocOwnerValueDecls(self: *const DeclIndex, owner: TypePathIdx) []const DeclIdx {
-    const bucket = self.assoc_owner_value_decls.get(owner) orelse return &.{};
-    return bucket.decls.items;
+pub fn assocOwnerValueDecls(self: *const DeclIndex, owner: TypePathIdx) NameBucket {
+    return self.assoc_owner_value_decls.get(owner) orelse .{};
 }
 
 /// Intern a parser-owned type path.
-pub fn internTypePath(self: *DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) std.mem.Allocator.Error!TypePathIdx {
-    const key = TypePathKey{ .parent = parent, .name = name };
+pub fn internTypePath(self: *DeclIndex, scope_idx: ScopeIdx, parent: ?TypePathIdx, name: Ident.Idx) std.mem.Allocator.Error!TypePathIdx {
+    const key = TypePathKey{
+        .parent = parent,
+        .root_scope = if (parent == null) scope_idx else null,
+        .name = name,
+    };
     if (self.type_path_intern.get(key)) |existing| return existing;
 
     const depth: u16 = if (parent) |parent_idx|
@@ -397,6 +448,7 @@ pub fn internTypePath(self: *DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) s
     try self.type_paths.append(self.gpa, .{
         .parent = parent,
         .name = name,
+        .scope = scope_idx,
         .depth = depth,
     });
     try self.type_path_intern.put(self.gpa, key, idx);
@@ -405,15 +457,41 @@ pub fn internTypePath(self: *DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) s
 
 /// Find an already-interned direct child type path.
 pub fn findTypePath(self: *const DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) ?TypePathIdx {
-    return self.type_path_intern.get(.{ .parent = parent, .name = name });
+    if (parent == null) return null;
+    return self.type_path_intern.get(.{ .parent = parent, .root_scope = null, .name = name });
+}
+
+/// Find an already-interned root type path declared in a parser scope.
+pub fn findRootTypePath(self: *const DeclIndex, scope_idx: ScopeIdx, name: Ident.Idx) ?TypePathIdx {
+    return self.type_path_intern.get(.{
+        .parent = null,
+        .root_scope = scope_idx,
+        .name = name,
+    });
 }
 
 /// Find an already-interned type path from source-order path segments.
 pub fn findTypePathBySegments(self: *const DeclIndex, segments: []const Ident.Idx) ?TypePathIdx {
+    for (self.scopes.items, 0..) |_, scope_pos| {
+        const scope_idx: ScopeIdx = @enumFromInt(scope_pos);
+        if (self.findTypePathBySegmentsInScope(scope_idx, segments)) |path| return path;
+    }
+    return null;
+}
+
+/// Find an already-interned type path from source-order path segments rooted in one parser scope.
+pub fn findTypePathBySegmentsInScope(
+    self: *const DeclIndex,
+    scope_idx: ScopeIdx,
+    segments: []const Ident.Idx,
+) ?TypePathIdx {
     var parent: ?TypePathIdx = null;
     var result: ?TypePathIdx = null;
-    for (segments) |segment| {
-        const next = self.findTypePath(parent, segment) orelse return null;
+    for (segments, 0..) |segment, index| {
+        const next = if (index == 0)
+            self.findRootTypePath(scope_idx, segment) orelse return null
+        else
+            self.findTypePath(parent, segment) orelse return null;
         parent = next;
         result = next;
     }
@@ -444,15 +522,12 @@ pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
 
 /// Return the first parser type declaration recorded for a type path.
 pub fn typeDeclForPath(self: *const DeclIndex, path: TypePathIdx) ?DeclIdx {
-    const decls = self.typeDeclsForPath(path);
-    if (decls.len == 0) return null;
-    return decls[0];
+    return self.typeDeclsForPath(path).at(0);
 }
 
 /// Return all parser type declarations recorded for a type path in source order.
-pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) []const DeclIdx {
-    const bucket = self.type_decls_by_path.get(path) orelse return &.{};
-    return bucket.decls.items;
+pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
+    return self.type_decls_by_path.get(path) orelse .{};
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -687,9 +762,9 @@ test "name buckets preserve duplicate declarations in source order" {
     try index.exitScope(scope_idx, TokenRegion.empty());
 
     const decls = index.scopeValueDecls(scope_idx, ident);
-    try std.testing.expectEqual(@as(usize, 2), decls.len);
-    try std.testing.expectEqual(first, decls[0]);
-    try std.testing.expectEqual(second, decls[1]);
+    try std.testing.expectEqual(@as(usize, 2), decls.count());
+    try std.testing.expectEqual(first, decls.at(0).?);
+    try std.testing.expectEqual(second, decls.at(1).?);
 }
 
 test "associated value declarations are keyed by structural owner path" {
@@ -705,12 +780,13 @@ test "associated value declarations are keyed by structural owner path" {
     const nested_ident = Ident.Idx{ .attributes = nested_attrs, .idx = 2 };
     const value_ident = Ident.Idx{ .attributes = value_attrs, .idx = 3 };
 
-    const parent_path = try index.internTypePath(null, parent_ident);
-    const nested_path = try index.internTypePath(parent_path, nested_ident);
+    const type_scope = try index.enterScope(.module, .file, TokenRegion.empty());
+
+    const parent_path = try index.internTypePath(type_scope, null, parent_ident);
+    const nested_path = try index.internTypePath(type_scope, parent_path, nested_ident);
     const found_nested = index.findTypePathBySegments(&.{ parent_ident, nested_ident });
     try std.testing.expectEqual(nested_path, found_nested.?);
 
-    const type_scope = try index.enterScope(.module, .file, TokenRegion.empty());
     _ = try index.addDecl(.{
         .scope = type_scope,
         .statement = 42,
@@ -741,15 +817,15 @@ test "associated value declarations are keyed by structural owner path" {
     try index.exitScope(scope_idx, TokenRegion.empty());
 
     const nested_decls = index.assocValueDecls(nested_path, value_ident);
-    try std.testing.expectEqual(@as(usize, 1), nested_decls.len);
-    try std.testing.expectEqual(decl_idx, nested_decls[0]);
+    try std.testing.expectEqual(@as(usize, 1), nested_decls.count());
+    try std.testing.expectEqual(decl_idx, nested_decls.at(0).?);
 
     const owner_decls = index.assocOwnerValueDecls(nested_path);
-    try std.testing.expectEqual(@as(usize, 1), owner_decls.len);
-    try std.testing.expectEqual(decl_idx, owner_decls[0]);
+    try std.testing.expectEqual(@as(usize, 1), owner_decls.count());
+    try std.testing.expectEqual(decl_idx, owner_decls.at(0).?);
 
     const parent_decls = index.assocValueDecls(parent_path, value_ident);
-    try std.testing.expectEqual(@as(usize, 0), parent_decls.len);
+    try std.testing.expectEqual(@as(usize, 0), parent_decls.count());
 }
 
 test "type path buckets preserve duplicate declarations in source order" {
@@ -760,8 +836,8 @@ test "type path buckets preserve duplicate declarations in source order" {
 
     const attrs = Ident.Attributes.fromString("Repeated");
     const ident = Ident.Idx{ .attributes = attrs, .idx = 1 };
-    const path = try index.internTypePath(null, ident);
     const scope_idx = try index.enterScope(.module, .file, TokenRegion.empty());
+    const path = try index.internTypePath(scope_idx, null, ident);
 
     const first = try index.addDecl(.{
         .scope = scope_idx,
@@ -787,8 +863,8 @@ test "type path buckets preserve duplicate declarations in source order" {
     });
 
     const decls = index.typeDeclsForPath(path);
-    try std.testing.expectEqual(@as(usize, 2), decls.len);
-    try std.testing.expectEqual(first, decls[0]);
-    try std.testing.expectEqual(second, decls[1]);
+    try std.testing.expectEqual(@as(usize, 2), decls.count());
+    try std.testing.expectEqual(first, decls.at(0).?);
+    try std.testing.expectEqual(second, decls.at(1).?);
     try std.testing.expectEqual(first, index.typeDeclForPath(path).?);
 }

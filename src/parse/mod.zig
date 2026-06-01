@@ -318,9 +318,113 @@ test "parser records nested associated owner paths" {
         try std.testing.expectEqualStrings("Parent", env.getIdent(parent.name));
 
         const assoc_decls = ast.decl_index.assocValueDecls(owner_path, name_ident);
-        try std.testing.expectEqual(@as(usize, 1), assoc_decls.len);
+        try std.testing.expectEqual(@as(usize, 1), assoc_decls.count());
         found_value = true;
     }
 
     try std.testing.expect(found_value);
+}
+
+test "parser keeps block-local type paths lexically distinct" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    T := [First].{
+        \\        Inner := [FirstInner]
+        \\    }
+        \\    1
+        \\}
+        \\
+        \\second = {
+        \\    T := [Second].{
+        \\        Inner := [SecondInner]
+        \\    }
+        \\    2
+        \\}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    var first_t_path: ?DeclIndex.TypePathIdx = null;
+    var second_t_path: ?DeclIndex.TypePathIdx = null;
+    var first_inner_path: ?DeclIndex.TypePathIdx = null;
+    var second_inner_path: ?DeclIndex.TypePathIdx = null;
+
+    for (ast.decl_index.decls.items) |decl| {
+        const name_ident = decl.name_ident orelse continue;
+        const name = env.getIdent(name_ident);
+        if (std.mem.eql(u8, name, "T")) {
+            if (first_t_path == null) {
+                first_t_path = decl.type_path orelse return error.MissingFirstTPath;
+            } else if (second_t_path == null) {
+                second_t_path = decl.type_path orelse return error.MissingSecondTPath;
+            }
+        } else if (std.mem.eql(u8, name, "Inner")) {
+            if (first_inner_path == null) {
+                first_inner_path = decl.type_path orelse return error.MissingFirstInnerPath;
+            } else if (second_inner_path == null) {
+                second_inner_path = decl.type_path orelse return error.MissingSecondInnerPath;
+            }
+        }
+    }
+
+    try std.testing.expect(first_t_path != null);
+    try std.testing.expect(second_t_path != null);
+    try std.testing.expect(first_inner_path != null);
+    try std.testing.expect(second_inner_path != null);
+
+    try std.testing.expect(@intFromEnum(first_t_path.?) != @intFromEnum(second_t_path.?));
+    try std.testing.expect(@intFromEnum(first_inner_path.?) != @intFromEnum(second_inner_path.?));
+}
+
+test "parser does not create a type path for malformed associated type headers" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\module []
+        \\
+        \\Outer := [Outer].{
+        \\    Broken(a := [Broken]
+        \\    ok = 1
+        \\}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
+
+    const outer_ident = env.findIdent("Outer") orelse return error.MissingOuterIdent;
+    const broken_ident = env.findIdent("Broken") orelse return error.MissingBrokenIdent;
+    try std.testing.expectEqual(null, ast.decl_index.findTypePathBySegments(&.{ outer_ident, broken_ident }));
+
+    for (ast.decl_index.decls.items) |decl| {
+        const name_ident = decl.name_ident orelse continue;
+        if (!std.mem.eql(u8, env.getIdent(name_ident), "Broken")) continue;
+
+        switch (decl.kind) {
+            .type_alias, .nominal, .@"opaque" => return error.MalformedHeaderRecordedTypeDecl,
+            else => {},
+        }
+    }
 }

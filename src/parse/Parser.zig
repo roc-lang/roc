@@ -472,6 +472,23 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
         return @enumFromInt(@intFromEnum(self.cached_malformed_node.?));
     }
 }
+
+fn recoverMalformedTypeDeclLine(self: *Parser, start: TokenIdx) void {
+    const source = self.tok_buf.env.source;
+    const start_region = self.tok_buf.resolve(start);
+    const statement_start_end: usize = @intCast(start_region.end.offset);
+
+    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+        const current_region = self.tok_buf.resolve(self.pos);
+        const current_start: usize = @intCast(current_region.start.offset);
+        if (current_start > statement_start_end and
+            std.mem.indexOfScalar(u8, source[statement_start_end..current_start], '\n') != null)
+        {
+            return;
+        }
+        self.advance();
+    }
+}
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
@@ -1936,10 +1953,17 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 (statementType == .in_body and self.looksLikeTypeDecl());
             if (is_type_decl_context) {
                 const header = try self.parseTypeHeader();
+                const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+                if (header_node.tag == .malformed) {
+                    self.recoverMalformedTypeDeclLine(start);
+                    const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
+                    return try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
+                }
                 const type_path = blk_path: {
                     const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
                     const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
-                    break :blk_path try self.decl_index.internTypePath(self.currentTypePath(), name_ident);
+                    const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
+                    break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
                 };
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")

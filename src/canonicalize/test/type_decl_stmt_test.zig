@@ -17,6 +17,87 @@ const testing = std.testing;
 const Ident = base.Ident;
 const Statement = CIR.Statement;
 
+fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) !void {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(allocator);
+    defer allocators.deinit();
+
+    const ast = try parse.parse(&allocators, &env.common);
+    defer ast.deinit();
+
+    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    try check(&env, diagnostics);
+}
+
+fn countRedeclarationDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .type_redeclared,
+            .type_alias_redeclared,
+            .nominal_type_redeclared,
+            => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countMutualAliasDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .mutually_recursive_type_aliases => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countUndeclaredTypeDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .undeclared_type => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .qualified_ident_does_not_exist => |d| {
+                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
+            },
+            .nested_value_not_found => |d| {
+                const parent = env.getIdent(d.parent_name);
+                const nested = env.getIdent(d.nested_name);
+                if (std.mem.eql(u8, name, parent) or std.mem.eql(u8, name, nested)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
 test "canonicalization records explicit type declaration tables" {
     const allocator = testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -110,6 +191,147 @@ test "nested type redeclarations are detected after previous associated scope ex
 
     try testing.expect(saw_l2_redeclared);
     try testing.expect(saw_l3_redeclared);
+}
+
+test "block-local type paths with the same text do not redeclare each other" {
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    T := [First].{
+        \\        Inner := [FirstInner]
+        \\    }
+        \\    1
+        \\}
+        \\
+        \\second = {
+        \\    T := [Second].{
+        \\        Inner := [SecondInner]
+        \\    }
+        \\    2
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "block-local associated value lookup resolves through the visible local owner" {
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    T := [First].{
+        \\        marker = 1
+        \\    }
+        \\    T.marker
+        \\}
+        \\
+        \\second = {
+        \\    T := [Second].{
+        \\        marker = 2
+        \\    }
+        \\    T.marker
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "same-named aliases in separate block scopes are not mutually recursive" {
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    A : B
+        \\    B : U64
+        \\    1
+        \\}
+        \\
+        \\second = {
+        \\    B : A
+        \\    A : U64
+        \\    2
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 0), countMutualAliasDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "module-qualified type lookup ignores same-named block-local type roots" {
+    const source =
+        \\module []
+        \\
+        \\T := [ModuleT].{
+        \\    marker = 1
+        \\}
+        \\
+        \\value = {
+        \\    T := [LocalT].{
+        \\        marker = 2
+        \\    }
+        \\    Test.T.marker
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "block-local type use before declaration does not forward resolve" {
+    const source =
+        \\module []
+        \\
+        \\value = {
+        \\    x : T
+        \\    x = 1
+        \\    T := [LocalT]
+        \\    x
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 1), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "malformed associated type header does not suppress later associated value" {
+    const source =
+        \\module [use]
+        \\
+        \\Outer := [Outer].{
+        \\    Broken(a := [Broken]
+        \\    ok = 1
+        \\}
+        \\
+        \\use = Outer.ok
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            const qualified_outer_ok = env.common.findIdent("Test.Outer.ok") orelse return error.MissingQualifiedOuterOkIdent;
+            try testing.expect(env.getExposedNodeIndexById(qualified_outer_ok) != null);
+            try testing.expectEqual(@as(usize, 0), countAssociatedLookupDiagnostics(env, diagnostics, "Outer.ok"));
+        }
+    }.check);
 }
 
 test "local type alias is parsed and canonicalized" {

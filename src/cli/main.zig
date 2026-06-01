@@ -4782,17 +4782,17 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
-fn isCompilerBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
+fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
     const abs_path = if (std.fs.path.isAbsolute(filepath))
         try std.fs.path.resolve(gpa, &.{filepath})
     else
         try std.fs.path.resolve(gpa, &.{ cwd, filepath });
     defer gpa.free(abs_path);
 
-    const builtin_path = try std.fs.path.resolve(gpa, &.{ cwd, "src/build/roc/Builtin.roc" });
-    defer gpa.free(builtin_path);
+    const compiler_builtin_path = try std.fs.path.resolve(gpa, &.{build_options.compiler_builtin_roc_path});
+    defer gpa.free(compiler_builtin_path);
 
-    return std.mem.eql(u8, abs_path, builtin_path);
+    return std.mem.eql(u8, abs_path, compiler_builtin_path);
 }
 
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
@@ -4817,7 +4817,7 @@ fn checkFileWithBuildEnvPreserved(
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.Internal,
     };
-    if (try isCompilerBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
 
@@ -5615,6 +5615,25 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
+}
+
+test "user project src/build/roc/Builtin.roc is not compiler-owned builtin" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const user_project_root = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(user_project_root);
+
+    const classified_as_compiler_builtin = try isCompilerOwnedBuiltinSourcePath(
+        allocator,
+        user_project_root,
+        "src/build/roc/Builtin.roc",
+    );
+
+    try testing.expect(!classified_as_compiler_builtin);
 }
 
 test "classifyNativeRunTermination preserves warning exit code" {

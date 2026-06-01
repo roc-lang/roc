@@ -1027,7 +1027,8 @@ fn valueDeclKindResolvesAsValue(self: *const Self, kind: AST.DeclIndex.DeclKind)
 }
 
 fn valueBucketHasImplementation(self: *const Self, bucket: AST.DeclIndex.NameBucket) bool {
-    for (bucket.decls.items) |decl_idx| {
+    var iter = bucket.iter();
+    while (iter.next()) |decl_idx| {
         const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
         if (self.valueDeclKindResolvesAsValue(decl.kind)) return true;
     }
@@ -1053,7 +1054,8 @@ fn parserTypeDeclCanPrepare(self: *const Self, decl: AST.DeclIndex.Decl) bool {
 }
 
 fn firstUsableParserTypeDecl(self: *const Self, bucket: AST.DeclIndex.NameBucket) ?AST.DeclIndex.DeclIdx {
-    for (bucket.decls.items) |decl_idx| {
+    var iter = bucket.iter();
+    while (iter.next()) |decl_idx| {
         const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
         if (self.parserTypeDeclCanPrepare(decl)) return decl_idx;
     }
@@ -1122,7 +1124,8 @@ fn priorParserTypeDeclStatementForPath(
     const path = self.parserTypePathForAstStatement(idx) orelse return null;
     const decl_index = &self.parse_ir.decl_index;
 
-    for (decl_index.typeDeclsForPath(path)) |decl_idx| {
+    var decl_iter = decl_index.typeDeclsForPath(path).iter();
+    while (decl_iter.next()) |decl_idx| {
         const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
         const candidate_ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
         if (candidate_ast_stmt_idx == idx) return null;
@@ -1151,24 +1154,96 @@ fn parserTypePathForAstStatement(
     return self.parse_ir.decl_index.typePathForStatement(@intFromEnum(ast_stmt_idx));
 }
 
-fn parserTypePathForSegments(
+fn moduleParserScopeIdx(self: *const Self) AST.DeclIndex.ScopeIdx {
+    return self.parse_ir.store.getFile().scope;
+}
+
+fn parserTypePathFromRoot(
+    self: *const Self,
+    root_path: AST.DeclIndex.TypePathIdx,
+    remaining_segments: []const Ident.Idx,
+) ?AST.DeclIndex.TypePathIdx {
+    if (remaining_segments.len == 0) return root_path;
+    return self.parse_ir.decl_index.findTypePathRelative(root_path, remaining_segments);
+}
+
+fn moduleParserTypePathForSegments(
     self: *const Self,
     segments: []const Ident.Idx,
 ) ?AST.DeclIndex.TypePathIdx {
     if (segments.len == 0) return null;
 
     const decl_index = &self.parse_ir.decl_index;
-    if (decl_index.findTypePathBySegments(segments)) |path| return path;
+    if (decl_index.findTypePathBySegmentsInScope(self.moduleParserScopeIdx(), segments)) |path| return path;
 
     if (segments.len > 1 and std.mem.eql(u8, self.env.getIdent(segments[0]), self.env.module_name)) {
-        if (decl_index.findTypePathBySegments(segments[1..])) |path| return path;
-    }
-
-    if (decl_index.findTypePath(null, self.env.display_module_name_idx)) |module_root| {
-        if (decl_index.findTypePathRelative(module_root, segments)) |path| return path;
+        return decl_index.findTypePathBySegmentsInScope(self.moduleParserScopeIdx(), segments[1..]);
     }
 
     return null;
+}
+
+fn visibleParserTypePathForSegments(
+    self: *Self,
+    segments: []const Ident.Idx,
+) ?AST.DeclIndex.TypePathIdx {
+    if (segments.len == 0) return null;
+
+    if (segments.len > 1 and std.mem.eql(u8, self.env.getIdent(segments[0]), self.env.module_name)) {
+        return self.moduleParserTypePathForSegments(segments);
+    }
+
+    const root_ident = segments[0];
+    if (self.scopeLookupTypeBindingInCanonicalScopes(root_ident)) |binding_location| {
+        if (self.typePathForBinding(binding_location.binding.*)) |root_path| {
+            return self.parserTypePathFromRoot(root_path, segments[1..]);
+        }
+    }
+
+    if (self.activeDeclScopeDeclaresType(root_ident)) |active_type| {
+        const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(active_type.decl_idx)];
+        if (decl.type_path) |root_path| {
+            return self.parserTypePathFromRoot(root_path, segments[1..]);
+        }
+    }
+
+    return self.moduleParserTypePathForSegments(segments);
+}
+
+fn parserTypePathForDependencySegments(
+    self: *const Self,
+    from_decl: AST.DeclIndex.Decl,
+    segments: []const Ident.Idx,
+) ?AST.DeclIndex.TypePathIdx {
+    if (segments.len == 0) return null;
+
+    if (segments.len > 1 and std.mem.eql(u8, self.env.getIdent(segments[0]), self.env.module_name)) {
+        return self.moduleParserTypePathForSegments(segments);
+    }
+
+    const decl_index = &self.parse_ir.decl_index;
+    var maybe_scope: ?AST.DeclIndex.ScopeIdx = from_decl.scope;
+    while (maybe_scope) |scope_idx| {
+        const scope = decl_index.scopes.items[@intFromEnum(scope_idx)];
+        if (scope.type_decls.get(segments[0])) |bucket| {
+            var iter = bucket.iter();
+            while (iter.next()) |decl_idx| {
+                const candidate = decl_index.decls.items[@intFromEnum(decl_idx)];
+                if (!self.parserTypeDeclCanPrepare(candidate)) continue;
+                if (scope_idx == from_decl.scope and
+                    scope.forward_policy == .source_order and
+                    candidate.statement >= from_decl.statement)
+                {
+                    continue;
+                }
+                const root_path = candidate.type_path orelse continue;
+                return self.parserTypePathFromRoot(root_path, segments[1..]);
+            }
+        }
+        maybe_scope = scope.parent;
+    }
+
+    return self.moduleParserTypePathForSegments(segments);
 }
 
 fn typePathForBinding(self: *const Self, binding: Scope.TypeBinding) ?AST.DeclIndex.TypePathIdx {
@@ -1180,7 +1255,6 @@ fn qualifierTypePath(
     self: *Self,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?AST.DeclIndex.TypePathIdx {
-    const decl_index = &self.parse_ir.decl_index;
     const top = self.scratch_idents.top();
     defer self.scratch_idents.clearFrom(top);
 
@@ -1190,25 +1264,15 @@ fn qualifierTypePath(
         try self.scratch_idents.append(ident);
     }
 
-    const segments = self.scratch_idents.sliceFromStart(top);
-    if (decl_index.findTypePathBySegments(segments)) |path| return path;
-
-    if (decl_index.findTypePath(null, self.env.display_module_name_idx)) |module_root| {
-        if (decl_index.findTypePathRelative(module_root, segments)) |path| return path;
-    }
-
-    if (segments.len > 1 and std.mem.eql(u8, self.env.getIdent(segments[0]), self.env.module_name)) {
-        return decl_index.findTypePathBySegments(segments[1..]);
-    }
-
-    return null;
+    return self.visibleParserTypePathForSegments(self.scratch_idents.sliceFromStart(top));
 }
 
 fn associatedValueExists(
     self: *const Self,
     key: AST.DeclIndex.AssocValue,
 ) bool {
-    for (self.parse_ir.decl_index.assocValueDecls(key.owner, key.item)) |decl_idx| {
+    var iter = self.parse_ir.decl_index.assocValueDecls(key.owner, key.item).iter();
+    while (iter.next()) |decl_idx| {
         const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
         if (self.valueDeclKindResolvesAsValue(decl.kind)) return true;
     }
@@ -1393,11 +1457,12 @@ const AliasCycleContext = struct {
         if (segments.len == 0) return null;
 
         if (segments.len == 1) {
-            return self.unqualifiedDependencyStatement(from_decl.scope, segments[0]);
+            return self.unqualifiedDependencyStatement(from_decl, segments[0]);
         }
 
-        const path = self.can.parserTypePathForSegments(segments) orelse return null;
-        for (decl_index.typeDeclsForPath(path)) |decl_idx| {
+        const path = self.can.parserTypePathForDependencySegments(from_decl, segments) orelse return null;
+        var decl_iter = decl_index.typeDeclsForPath(path).iter();
+        while (decl_iter.next()) |decl_idx| {
             const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
             if (!self.can.parserTypeDeclCanPrepare(decl)) continue;
             const stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
@@ -1409,21 +1474,27 @@ const AliasCycleContext = struct {
 
     fn unqualifiedDependencyStatement(
         self: *AliasCycleContext,
-        scope_idx: AST.DeclIndex.ScopeIdx,
+        from_decl: AST.DeclIndex.Decl,
         ident: Ident.Idx,
     ) ?AST.Statement.Idx {
         const decl_index = &self.can.parse_ir.decl_index;
-        var maybe_scope: ?AST.DeclIndex.ScopeIdx = scope_idx;
+        var maybe_scope: ?AST.DeclIndex.ScopeIdx = from_decl.scope;
         while (maybe_scope) |idx| {
             const scope = decl_index.scopes.items[@intFromEnum(idx)];
             if (scope.type_decls.get(ident)) |bucket| {
-                for (bucket.decls.items) |decl_idx| {
+                var decl_iter = bucket.iter();
+                while (decl_iter.next()) |decl_idx| {
                     const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
                     if (!self.can.parserTypeDeclCanPrepare(decl)) continue;
+                    if (idx == from_decl.scope and
+                        scope.forward_policy == .source_order and
+                        decl.statement >= from_decl.statement)
+                    {
+                        continue;
+                    }
                     return @enumFromInt(decl.statement);
                 }
             }
-            if (scope.forward_policy != .whole_scope) return null;
             maybe_scope = scope.parent;
         }
 
@@ -1841,6 +1912,19 @@ fn typePathRootName(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) Iden
     }
 }
 
+fn typePathRootScope(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) AST.DeclIndex.ScopeIdx {
+    const decl_index = &self.parse_ir.decl_index;
+    var current = path_idx;
+    while (true) {
+        const path = decl_index.type_paths.items[@intFromEnum(current)];
+        if (path.parent) |parent| {
+            current = parent;
+            continue;
+        }
+        return path.scope;
+    }
+}
+
 fn typePathNeedsModulePrefix(self: *const Self, path_idx: AST.DeclIndex.TypePathIdx) bool {
     const decl_index = &self.parse_ir.decl_index;
     const path = decl_index.type_paths.items[@intFromEnum(path_idx)];
@@ -1915,14 +1999,7 @@ fn parserTypePathForQualifiedIdent(
     }
 
     const segments = self.scratch_idents.sliceFromStart(top);
-    const decl_index = &self.parse_ir.decl_index;
-    if (decl_index.findTypePathBySegments(segments)) |path| return path;
-
-    if (segments.len > 1 and std.mem.eql(u8, self.env.getIdent(segments[0]), self.env.module_name)) {
-        return decl_index.findTypePathBySegments(segments[1..]);
-    }
-
-    return null;
+    return self.visibleParserTypePathForSegments(segments);
 }
 
 fn putTypeBindingInScope(
@@ -2077,21 +2154,23 @@ fn ensureParserTypeDeclBinding(
 fn ensureParserTypeBinding(
     self: *Self,
     ident_idx: Ident.Idx,
-) std.mem.Allocator.Error!void {
+) std.mem.Allocator.Error!?TypeBindingLocation {
     if (try self.parserTypePathForQualifiedIdent(ident_idx)) |path| {
-        for (self.parse_ir.decl_index.typeDeclsForPath(path)) |decl_idx| {
+        var decl_iter = self.parse_ir.decl_index.typeDeclsForPath(path).iter();
+        while (decl_iter.next()) |decl_idx| {
             const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
             if (!self.parserTypeDeclCanPrepare(decl)) continue;
             if (self.activeWholeScopeBindingForDeclScope(decl.scope)) |binding| {
                 if ((try self.ensureParserTypeDeclBinding(decl_idx, binding)) != null) {
-                    return;
+                    return self.typeBindingLocationInScope(binding.canonical_scope, ident_idx);
                 }
             }
         }
     }
 
-    const active_type = self.activeDeclScopeDeclaresType(ident_idx) orelse return;
-    _ = try self.ensureParserTypeDeclBinding(active_type.decl_idx, active_type.binding);
+    const active_type = self.activeDeclScopeDeclaresType(ident_idx) orelse return null;
+    if ((try self.ensureParserTypeDeclBinding(active_type.decl_idx, active_type.binding)) == null) return null;
+    return self.typeBindingLocationInScope(active_type.binding.canonical_scope, ident_idx);
 }
 
 /// Recursively introduce nested item aliases into the current scope.
@@ -2583,20 +2662,24 @@ fn registerNestedTypeDecl(
         );
         try current_scope.introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
 
-        // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
-        // at the module scope so references from outside the associated
-        // block — like `x = Test.MyBool.method(...)` at top level —
-        // can still resolve the nested type after this scope is exited.
-        try self.scopes.items[0].introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
+        const parser_path = self.parserTypePathForAstStatement(ast_stmt_idx);
+        const root_scope = if (parser_path) |path| self.typePathRootScope(path) else null;
+        if (root_scope == self.moduleParserScopeIdx()) {
+            // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
+            // at the module scope so references from outside the associated
+            // block — like `x = Test.MyBool.method(...)` at top level —
+            // can still resolve the nested type after this scope is exited.
+            try self.scopes.items[0].introduceTypeAlias(self.env.gpa, user_qualified_ident_idx, nested_type_decl_idx);
 
-        // The module's main type IS the module namespace, so its
-        // direct nested types are part of the module's own type
-        // surface: file-level items (outside the main type's block)
-        // reference them by their bare name. Publish the bare name
-        // at the module scope for the main type's children so those
-        // references resolve to the real declaration.
-        if (std.mem.eql(u8, self.env.getIdent(type_name), self.env.module_name)) {
-            try self.scopes.items[0].introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
+            // The module's main type IS the module namespace, so its
+            // direct nested types are part of the module's own type
+            // surface: file-level items (outside the main type's block)
+            // reference them by their bare name. Publish the bare name
+            // at the module scope for the main type's children so those
+            // references resolve to the real declaration.
+            if (std.mem.eql(u8, self.env.getIdent(type_name), self.env.module_name)) {
+                try self.scopes.items[0].introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
+            }
         }
     }
 }
@@ -11924,6 +12007,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     };
 
                     const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+                    const ast_stmt_idx = ast_stmt_idxs[current_index];
+                    try self.recordTypeDeclPath(stmt_idx, self.parserTypePathForAstStatement(ast_stmt_idx));
+                    try self.parser_type_decl_states.put(self.env.gpa, ast_stmt_idx, .{ .registered = stmt_idx });
 
                     // Collect local type decls to add to all_statements later
                     try self.scratch_local_type_decls.append(self.env.gpa, stmt_idx);
@@ -13286,15 +13372,20 @@ fn scopeLookupTypeBindingInCanonicalScopes(self: *Self, ident_idx: Ident.Idx) ?T
     var i = self.scopes.items.len;
     while (i > 0) {
         i -= 1;
-        const scope = &self.scopes.items[i];
-
-        // Check unified type bindings
-        if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
-            return TypeBindingLocation{ .scope_index = i, .binding = binding_ptr };
-        }
+        if (self.typeBindingLocationInScope(i, ident_idx)) |location| return location;
     }
 
     return null;
+}
+
+fn typeBindingLocationInScope(
+    self: *Self,
+    scope_idx: usize,
+    ident_idx: Ident.Idx,
+) ?TypeBindingLocation {
+    const scope = &self.scopes.items[scope_idx];
+    const binding_ptr = scope.type_bindings.getPtr(ident_idx) orelse return null;
+    return TypeBindingLocation{ .scope_index = scope_idx, .binding = binding_ptr };
 }
 
 fn scopeLookupTypeBinding(self: *Self, ident_idx: Ident.Idx) std.mem.Allocator.Error!?TypeBindingLocation {
@@ -13308,8 +13399,7 @@ fn scopeLookupOrPrepareTypeDecl(self: *Self, ident_idx: Ident.Idx) std.mem.Alloc
 
 fn scopeLookupOrPrepareTypeBinding(self: *Self, ident_idx: Ident.Idx) std.mem.Allocator.Error!?TypeBindingLocation {
     if (self.scopeLookupTypeBindingInCanonicalScopes(ident_idx)) |binding| return binding;
-    try self.ensureParserTypeBinding(ident_idx);
-    return self.scopeLookupTypeBindingInCanonicalScopes(ident_idx);
+    return try self.ensureParserTypeBinding(ident_idx);
 }
 
 /// Look up a module alias in the scope hierarchy

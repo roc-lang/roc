@@ -2671,14 +2671,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const roc_modules = modules.RocModules.create(b, build_options, zstd);
-
     // Build-time compiler for builtin .roc modules
     //
     // Always rebuild builtins when building roc to ensure they match the compiler.
     // The builtin_compiler is cached by zig, so this only adds overhead when
     // compiler sources actually change.
     const builtin_roc_path = "src/build/roc/Builtin.roc";
+    build_options.addOption([]const u8, "compiler_builtin_roc_path", b.path(builtin_roc_path).getPath(b));
+
+    const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
     const write_compiled_builtins = b.addWriteFiles();
 
