@@ -128,6 +128,9 @@ var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
+/// Patterns for values that resolve from module-global storage rather than
+/// closure capture.
+globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of explicit imported module identifiers to their type information for import validation.
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Builtin types that are automatically available in every non-Builtin module.
@@ -369,6 +372,7 @@ pub fn deinit(
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
+    self.globally_resolvable_patterns.deinit(gpa);
     self.builtin_auto_imported_types.deinit(gpa);
     self.prepared_type_decls.deinit(gpa);
     self.scratch_vars.deinit();
@@ -430,6 +434,7 @@ fn initInternal(
         .var_function_regions = std.AutoHashMapUnmanaged(Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
+        .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
@@ -509,7 +514,23 @@ fn recordExplicitRootDef(self: *Self, ident: Ident.Idx, def_idx: CIR.Def.Idx) st
     }
 }
 
+fn markGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
+    try self.globally_resolvable_patterns.put(self.env.gpa, pattern_idx, {});
+}
+
+fn markBoundPatternsGloballyResolvable(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
+    const bound_vars_top = self.scratch_bound_vars.top();
+    defer self.scratch_bound_vars.clearFrom(bound_vars_top);
+
+    try self.collectBoundVarsToScratch(pattern_idx);
+    for (self.scratch_bound_vars.sliceFromStart(bound_vars_top)) |bound_pattern_idx| {
+        try self.markGloballyResolvablePattern(bound_pattern_idx);
+    }
+}
+
 fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    const def = self.env.store.getDef(def_idx);
+    try self.markBoundPatternsGloballyResolvable(def.pattern);
     try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
 }
 
@@ -1893,6 +1914,7 @@ fn predeclareAssociatedValuePattern(
         try self.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(decl_ident));
 
     const pattern_idx = try self.findOrCreateAssocPattern(qualified_idx, decl_ident, type_qualified_idx, region);
+    try self.markGloballyResolvablePattern(pattern_idx);
     try self.publishAssociatedPatternVisibility(
         relative_name_idx,
         type_name,
@@ -4699,6 +4721,9 @@ fn canonicalizeDeclWithAnnotation(
     // pattern, so a single source-order walk converges on one pattern shared
     // by every reference to the name.
     const pattern_idx = try self.canonicalizePatternOrMalformed(decl.pattern);
+    if (self.currentScopeIdx() == 0) {
+        try self.markBoundPatternsGloballyResolvable(pattern_idx);
+    }
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
     // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.
@@ -5278,6 +5303,7 @@ pub fn canonicalizeExpr(
                                                 try owner_scope.idents.put(self.env.gpa, type_qualified_idx, new_pattern_idx);
                                                 break :blk_fr new_pattern_idx;
                                             };
+                                            try self.markGloballyResolvablePattern(ref_pattern_idx);
                                             try self.used_patterns.put(self.env.gpa, ref_pattern_idx, {});
                                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                                                 .pattern_idx = ref_pattern_idx,
@@ -5627,6 +5653,7 @@ pub fn canonicalizeExpr(
                             // in used_patterns; without this, the def that
                             // eventually adopts this placeholder would be
                             // reported as never used.
+                            try self.markGloballyResolvablePattern(ref_pattern_idx);
                             try self.used_patterns.put(self.env.gpa, ref_pattern_idx, {});
 
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
@@ -12309,19 +12336,10 @@ pub fn scopeLookup(
     return Scope.LookupResult{ .not_found = {} };
 }
 
-/// Returns true when a pattern is globally resolvable via the module's
-/// top-level scope (including associated-item placeholders registered there).
-/// Such patterns are not closure captures.
+/// Returns true when a pattern is globally resolvable. Such patterns are not
+/// closure captures.
 fn isGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) bool {
-    if (self.scopes.items.len == 0) return false;
-
-    const top_scope = &self.scopes.items[0];
-    var values = top_scope.idents.valueIterator();
-    while (values.next()) |top_pattern| {
-        if (top_pattern.* == pattern_idx) return true;
-    }
-
-    return false;
+    return self.globally_resolvable_patterns.contains(pattern_idx);
 }
 
 fn isLocalFunctionPattern(self: *Self, pattern_idx: Pattern.Idx) bool {
