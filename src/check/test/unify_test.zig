@@ -373,19 +373,21 @@ test "unify - alias with concrete" {
 
     try std.testing.expectEqual(.ok, result);
 
-    // Assert that the alias was preserved
-    const resolved = env.module_env.types.resolveVar(a);
-    try std.testing.expect(resolved.desc.content == .alias);
+    // The alias remains a transparent checked view; the concrete structure
+    // constrains its backing var instead of redirecting to the alias root.
+    const resolved_alias = env.module_env.types.resolveVar(a);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
 
-    // Assert that the alias backing var was preserved
     const resolved_backing = env.module_env.types.resolveVar(
-        env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
     );
+    const resolved_concrete = env.module_env.types.resolveVar(b);
     try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(resolved_concrete.var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
-    // Assert that a & b redirect to the alias
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(b));
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
 }
 
 test "unify - alias with concrete other way" {
@@ -403,19 +405,75 @@ test "unify - alias with concrete other way" {
 
     try std.testing.expectEqual(.ok, result);
 
-    // Assert that the alias was preserved
-    const resolved = env.module_env.types.resolveVar(a);
-    try std.testing.expect(resolved.desc.content == .alias);
+    // The concrete root and alias backing unify; the alias root remains the
+    // source-level checked view.
+    const resolved_alias = env.module_env.types.resolveVar(b);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
 
-    // Assert that the alias backing var was preserved
     const resolved_backing = env.module_env.types.resolveVar(
-        env.module_env.types.getAliasBackingVar(resolved.desc.content.alias),
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
+    );
+    const resolved_concrete = env.module_env.types.resolveVar(a);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(resolved_concrete.var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
+
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, b);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
+}
+
+test "unify - alias with own backing structure" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias_content = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+
+    const result = try env.unify(alias_var, backing_var);
+
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved_alias = env.module_env.types.resolveVar(alias_var);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
+
+    const resolved_backing = env.module_env.types.resolveVar(
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
     );
     try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(backing_var).var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
-    // Assert that a & b redirect to the alias
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = resolved.var_ }, env.module_env.types.getSlot(b));
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
+}
+
+test "unify - own backing structure with alias" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias_content = try env.mkAlias("Alias", backing_var, &[_]Var{});
+    const alias_var = try env.module_env.types.freshFromContent(alias_content);
+
+    const result = try env.unify(backing_var, alias_var);
+
+    try std.testing.expectEqual(.ok, result);
+
+    const resolved_alias = env.module_env.types.resolveVar(alias_var);
+    try std.testing.expect(resolved_alias.desc.content == .alias);
+
+    const resolved_backing = env.module_env.types.resolveVar(
+        env.module_env.types.getAliasBackingVar(resolved_alias.desc.content.alias),
+    );
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved_backing.desc.content);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(backing_var).var_, resolved_backing.var_);
+    try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
+
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
+    try std.testing.expectEqual(.not_recursive, occurs_result);
 }
 
 // unification - structure/flex_vars //

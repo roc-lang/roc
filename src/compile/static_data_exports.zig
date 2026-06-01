@@ -433,7 +433,7 @@ const StaticDataBuilder = struct {
 
         if (abi.elem_size != 0) {
             const elem_layout_idx = switch (list_layout.tag) {
-                .list => list_layout.data.list,
+                .list => list_layout.getIdx(),
                 .list_of_zst => layout.Idx.zst,
                 else => staticDataInvariant("List const plan had non-list layout"),
             };
@@ -524,10 +524,10 @@ const StaticDataBuilder = struct {
         if (tuple_layout.tag != .struct_) staticDataInvariant("tuple const plan had non-struct layout");
 
         for (item_plans, 0..) |item_plan, i| {
-            const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
+            const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
             const field_layout = self.layoutValue(field_layout_idx);
             if (self.layouts().layoutSize(field_layout) == 0) continue;
-            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(tuple_layout.data.struct_.idx, @intCast(i));
+            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(tuple_layout.getStruct().idx, @intCast(i));
             try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(items[i]), item_plan, field_layout_idx);
         }
     }
@@ -552,10 +552,10 @@ const StaticDataBuilder = struct {
         if (record_layout.tag != .struct_) staticDataInvariant("record const plan had non-struct layout");
 
         for (field_plans, 0..) |field_plan, i| {
-            const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, @intCast(i));
+            const field_layout_idx = self.layouts().getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
             const field_layout = self.layoutValue(field_layout_idx);
             if (self.layouts().layoutSize(field_layout) == 0) continue;
-            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, @intCast(i));
+            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, @intCast(i));
             try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(fields[i]), field_plan, field_layout_idx);
         }
     }
@@ -610,7 +610,7 @@ const StaticDataBuilder = struct {
             );
         }
 
-        const tag_data = self.layouts().getTagUnionData(tag_layout.data.tag_union.idx);
+        const tag_data = self.layouts().getTagUnionData(tag_layout.getTagUnion().idx);
         tag_data.writeDiscriminant(bytes[base_offset..].ptr, variant.discriminant);
     }
 
@@ -726,8 +726,8 @@ const StaticDataBuilder = struct {
         if (capture_layout.tag == .zst) return;
         if (capture_layout.tag == .struct_) {
             for (slots) |slot| {
-                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(capture_layout.data.struct_.idx, slot.slot);
-                const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(capture_layout.data.struct_.idx, slot.slot);
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(capture_layout.getStruct().idx, slot.slot);
+                const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(capture_layout.getStruct().idx, slot.slot);
                 const capture_node = self.captureNode(fn_value, slot.binder);
                 try self.writeValue(bytes, relocations, base_offset + field_offset, source, source.store.get(capture_node), slot.plan, field_layout);
             }
@@ -955,12 +955,12 @@ fn payloadLayoutForTagArg(
     const variant_layout = layouts.getLayout(variant_layout_idx);
     if (arg_count == 1) {
         if (variant_layout.tag == .struct_ and layouts.getStructInfo(variant_layout).fields.len == 1) {
-            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, 0);
+            return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, 0);
         }
         return variant_layout_idx;
     }
     if (variant_layout.tag != .struct_) staticDataInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
+    return layouts.getStructFieldLayoutByOriginalIndex(variant_layout.getStruct().idx, arg_index);
 }
 
 fn payloadOffsetForTagArg(
@@ -972,7 +972,7 @@ fn payloadOffsetForTagArg(
     if (arg_count <= 1) return 0;
     const variant_layout = layouts.getLayout(variant_layout_idx);
     if (variant_layout.tag != .struct_) staticDataInvariant("multi-payload tag did not use struct payload layout");
-    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.data.struct_.idx, arg_index);
+    return layouts.getStructFieldOffsetByOriginalIndex(variant_layout.getStruct().idx, arg_index);
 }
 
 fn staticDataPtrOffset(word_size: u32, element_alignment: u32, contains_refcounted: bool) u32 {

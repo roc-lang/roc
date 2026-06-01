@@ -3,8 +3,8 @@
 //! can be provided from JavaScript and most other operations return errors.
 
 const std = @import("std");
-const io_mod = @import("io");
-const Io = io_mod.Io;
+const ctx_mod = @import("ctx");
+const CoreCtx = ctx_mod.CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
@@ -50,11 +50,11 @@ pub const WasmContext = struct {
 };
 
 /// Get a WASM filesystem implementation backed by the given context.
-pub fn wasm(wasm_ctx: *WasmContext) Io {
-    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable };
+pub fn wasm(wasm_ctx: *WasmContext, alloc: Allocator, std_io: std.Io) CoreCtx {
+    return .{ .ctx = @ptrCast(wasm_ctx), .vtable = wasm_vtable, .std_io = std_io, .gpa = alloc, .arena = alloc };
 }
 
-const wasm_vtable = Io.VTable{
+const wasm_vtable = CoreCtx.VTable{
     .readFile = &readFileWasm,
     .readFileInto = &readFileIntoWasm,
     .writeFile = &writeFileWasm,
@@ -69,6 +69,12 @@ const wasm_vtable = Io.VTable{
     .rename = &renameWasm,
     .getEnvVar = &getEnvVarWasm,
     .fetchUrl = &fetchUrlWasm,
+    .deleteFile = &deleteFileWasm,
+    .deleteDir = &deleteDirWasm,
+    .deleteTree = &deleteTreeWasm,
+    .createDir = &createDirWasm,
+    .copyFile = &copyFileWasm,
+    .timestampNow = &timestampNowWasm,
     .writeStdout = &writeStdoutWasm,
     .writeStderr = &writeStderrWasm,
     .readStdin = &readStdinWasm,
@@ -96,12 +102,12 @@ fn matchesSourceFile(self: *WasmContext, path: []const u8) bool {
     return false;
 }
 
-fn fileExistsWasm(ctx_ptr: ?*anyopaque, path: []const u8) bool {
+fn fileExistsWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) bool {
     const self = getCtx(ctx_ptr);
     return matchesSourceFile(self, path);
 }
 
-fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Io.ReadError![]u8 {
+fn readFileWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, alloc: Allocator) CoreCtx.ReadError![]u8 {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -113,7 +119,7 @@ fn readFileWasm(ctx_ptr: ?*anyopaque, path: []const u8, alloc: Allocator) Io.Rea
     return error.FileNotFound;
 }
 
-fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Io.ReadError!usize {
+fn readFileIntoWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8, buffer: []u8) CoreCtx.ReadError!usize {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
@@ -129,15 +135,15 @@ fn readFileIntoWasm(ctx_ptr: ?*anyopaque, path: []const u8, buffer: []u8) Io.Rea
     return error.FileNotFound;
 }
 
-fn writeFileWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Io.WriteError!void {
+fn writeFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.WriteError!void {
     return error.AccessDenied;
 }
 
-fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Io.StatError!Io.FileInfo {
+fn statWasm(ctx_ptr: ?*anyopaque, _: std.Io, path: []const u8) CoreCtx.StatError!CoreCtx.FileInfo {
     const self = getCtx(ctx_ptr);
     if (matchesSourceFile(self, path)) {
         if (self.source) |source| {
-            return Io.FileInfo{
+            return CoreCtx.FileInfo{
                 .kind = .file,
                 .size = source.len,
                 .mtime_ns = 0,
@@ -149,12 +155,12 @@ fn statWasm(ctx_ptr: ?*anyopaque, path: []const u8) Io.StatError!Io.FileInfo {
     return error.FileNotFound;
 }
 
-fn listDirWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Io.ListError![]Io.FileEntry {
+fn listDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.ListError![]CoreCtx.FileEntry {
     return error.FileNotFound;
 }
 
-fn dirNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
-    if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
+fn dirNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) ?[]const u8 {
+    if (std.mem.findScalarLast(u8, absolute_path, '/')) |last_slash| {
         if (last_slash == 0) {
             return "/";
         }
@@ -163,14 +169,14 @@ fn dirNameWasm(_: ?*anyopaque, absolute_path: []const u8) ?[]const u8 {
     return null;
 }
 
-fn baseNameWasm(_: ?*anyopaque, absolute_path: []const u8) []const u8 {
-    if (std.mem.lastIndexOfScalar(u8, absolute_path, '/')) |last_slash| {
+fn baseNameWasm(_: ?*anyopaque, _: std.Io, absolute_path: []const u8) []const u8 {
+    if (std.mem.findScalarLast(u8, absolute_path, '/')) |last_slash| {
         return absolute_path[last_slash + 1 ..];
     }
     return absolute_path;
 }
 
-fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
+fn joinPathWasm(_: ?*anyopaque, _: std.Io, parts: []const []const u8, allocator: Allocator) Allocator.Error![]const u8 {
     var total: usize = 0;
     for (parts, 0..) |part, i| {
         total += part.len;
@@ -189,38 +195,62 @@ fn joinPathWasm(_: ?*anyopaque, parts: []const []const u8, allocator: Allocator)
     return buf;
 }
 
-fn canonicalizeWasm(_: ?*anyopaque, root_relative_path: []const u8, alloc: Allocator) Io.CanonicalizeError![]const u8 {
+fn canonicalizeWasm(_: ?*anyopaque, _: std.Io, root_relative_path: []const u8, alloc: Allocator) CoreCtx.CanonicalizeError![]const u8 {
     return alloc.dupe(u8, root_relative_path) catch handleOom();
 }
 
-fn makePathWasm(_: ?*anyopaque, _: []const u8) Io.MakePathError!void {
+fn makePathWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
     return error.AccessDenied;
 }
 
-fn renameWasm(_: ?*anyopaque, _: []const u8, _: []const u8) Io.RenameError!void {
+fn renameWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
     return error.AccessDenied;
 }
 
-fn getEnvVarWasm(_: ?*anyopaque, _: []const u8, _: Allocator) Io.GetEnvVarError![]u8 {
-    return error.EnvironmentVariableNotFound;
+fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx.GetEnvVarError![]u8 {
+    return error.EnvironmentVariableMissing;
 }
 
-fn fetchUrlWasm(_: ?*anyopaque, _: Allocator, _: []const u8, _: []const u8) Io.FetchUrlError!void {
+fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) CoreCtx.FetchUrlError!void {
     return error.Unsupported;
 }
 
-fn writeStdoutWasm(_: ?*anyopaque, _: []const u8) Io.StdioError!void {
-    // WASM: stdout silently dropped (JS host can intercept via import override if desired)
+fn deleteFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
+    return error.AccessDenied;
 }
 
-fn writeStderrWasm(_: ?*anyopaque, _: []const u8) Io.StdioError!void {
-    // WASM: stderr silently dropped
+fn deleteDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
+    return error.AccessDenied;
 }
 
-fn readStdinWasm(_: ?*anyopaque, _: []u8) Io.StdioError!usize {
+fn deleteTreeWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
+    return error.AccessDenied;
+}
+
+fn createDirWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
+    return error.AccessDenied;
+}
+
+fn copyFileWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.CopyError!void {
+    return error.AccessDenied;
+}
+
+fn timestampNowWasm(_: ?*anyopaque, _: std.Io) i128 {
     return 0;
 }
 
-fn isTtyWasm(_: ?*anyopaque) bool {
+fn writeStdoutWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.StdioError!void {
+    // WASM: stdout silently dropped (JS host can intercept via import override if desired)
+}
+
+fn writeStderrWasm(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.StdioError!void {
+    // WASM: stderr silently dropped
+}
+
+fn readStdinWasm(_: ?*anyopaque, _: std.Io, _: []u8) CoreCtx.StdioError!usize {
+    return 0;
+}
+
+fn isTtyWasm(_: ?*anyopaque, _: std.Io) bool {
     return false;
 }

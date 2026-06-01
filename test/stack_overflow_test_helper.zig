@@ -9,11 +9,9 @@ pub const std_options: std.Options = .{
 
 /// Install the compiler crash handler and trigger the requested crash mode so
 /// tests can validate the emitted message in a child process.
-pub fn main() noreturn {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    const gpa = gpa_state.allocator();
-    var args = std.process.argsWithAllocator(gpa) catch {
-        std.debug.print("Failed to read process args in stack overflow helper\n", .{});
+pub fn main(init: std.process.Init) noreturn {
+    var args = std.process.Args.Iterator.initAllocator(init.minimal.args, std.heap.page_allocator) catch {
+        std.debug.print("Failed to read stack overflow helper arguments\n", .{});
         std.process.exit(99);
     };
     _ = args.skip();
@@ -39,8 +37,12 @@ pub fn main() noreturn {
 }
 
 fn triggerHighAccessViolation() noreturn {
-    const bad_addr: usize = if (comptime @bitSizeOf(usize) >= 64) 0x1_0000_1000 else 0x1000;
-    const ptr: *volatile u8 = @ptrFromInt(bad_addr);
+    var bad_addr: usize = if (comptime @bitSizeOf(usize) >= 64) 0x1_0000_1000 else 0x1000;
+    // Read the address back through a volatile pointer so it is a runtime value
+    // in a register. A comptime-constant absolute address makes the Zig 0.16
+    // x86_64 backend emit `mov [moffs], imm`, which it currently fails to encode.
+    const addr_ptr: *volatile usize = &bad_addr;
+    const ptr: *volatile u8 = @ptrFromInt(addr_ptr.*);
     ptr.* = 1;
     std.process.exit(96);
 }

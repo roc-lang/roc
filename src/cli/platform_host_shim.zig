@@ -87,7 +87,7 @@ fn addLirImageGlobal(builder: *Builder, lir_image: []const u8) !Builder.Variable
     const image_const = try builder.stringConst(image_string);
     const image_name = try builder.strtabString("roc_lir_image");
     const image_var = try builder.addVariable(image_name, image_const.typeOf(builder), .default);
-    image_var.setLinkage(.internal, builder);
+    image_var.ptr(builder).global.setLinkage(.internal, builder);
     image_var.setMutability(.global, builder);
     try image_var.setInitializer(image_const, builder);
     return image_var;

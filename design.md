@@ -171,6 +171,43 @@ The word `obligation` is banned in new post-check docs and code. Use the exact
 owner instead: checked dispatch plan, erased callable requirement,
 specialization queue entry, or debug assertion.
 
+## Type Alias Invariant
+
+Source type aliases are transparent views of their backing type. An alias root
+in the checked type store records source spelling and alias arguments. It is not
+a nominal type identity, and it is not the authoritative solved representative
+for a concrete structure.
+
+When unification relates an alias to a concrete structure, the checker must
+unify the concrete structure with the alias backing variable directly. It must
+not allocate a replacement alias, redirect the concrete structure to an alias
+root, redirect the alias backing through the alias root, or otherwise make alias
+preservation depend on union-find representative shape. The alias root may
+remain as a transparent checked view whose backing variable carries the solved
+structure.
+
+This invariant also covers the degenerate case where the concrete structure
+variable is already the alias backing variable. That unification is a no-op
+after resolving the backing. Creating a fresh alias representative in that case
+would make the alias backing resolve back to the alias itself, which is an
+invalid self-referential type-store graph.
+
+Any stage that needs alias spelling, source identity, or user-facing checked
+type presentation must consume explicit checked data produced by checking. It
+must not infer that presentation from a union-find representative chosen during
+structural unification. This keeps the producer responsible for checked
+presentation, keeps consumers simple, and keeps release builds fast: no
+alias-content cloning, no substitution-map reconstruction, and no cycle-repair
+walks are part of normal unification.
+
+For an expression or definition with an explicit type annotation, checking first
+proves that the body is compatible with the annotation. After that succeeds,
+the checked root for the expression or definition is the annotation root. The
+body may have constrained the annotation backing type, underscore variables, or
+alias arguments, but references to the annotated value consume the annotation
+root. This is how alias spelling from annotations is preserved without making
+alias roots union-find representatives for concrete structures.
+
 ## Cache Boundary
 
 The checked module cache is the only checked cache boundary in this design.

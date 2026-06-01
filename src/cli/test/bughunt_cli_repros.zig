@@ -220,7 +220,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B001",
         .name = "bughunt B001: missing import reports a module-resolution diagnostic",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import Missing
@@ -236,7 +236,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B002",
         .name = "bughunt B002: explicit builtin import reports a user diagnostic",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import Str
@@ -252,7 +252,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B011",
         .name = "bughunt B011: 65-argument calls do not exceed ARC masks",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\f = |a0, _a1, _a2, _a3, _a4, _a5, _a6, _a7, _a8, _a9, _a10, _a11, _a12, _a13, _a14, _a15, _a16, _a17, _a18, _a19, _a20, _a21, _a22, _a23, _a24, _a25, _a26, _a27, _a28, _a29, _a30, _a31, _a32, _a33, _a34, _a35, _a36, _a37, _a38, _a39, _a40, _a41, _a42, _a43, _a44, _a45, _a46, _a47, _a48, _a49, _a50, _a51, _a52, _a53, _a54, _a55, _a56, _a57, _a58, _a59, _a60, _a61, _a62, _a63, _a64| a0
@@ -271,7 +271,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B014",
         .name = "bughunt B014: roc docs reports parse errors without ICE text",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\main! =
@@ -285,7 +285,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B015",
         .name = "bughunt B015: float div_trunc_by truncates toward zero",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -306,7 +306,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B017",
         .name = "bughunt B017: duplicate top-level definitions are blocking diagnostics",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\x = 1
@@ -323,7 +323,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B023",
         .name = "bughunt B023: roc test evaluates qualified Bool.True",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\expect Bool.True
@@ -339,7 +339,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B032",
         .name = "bughunt B032: duplicate top-level type declarations are diagnostics",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\Foo := U8
@@ -356,7 +356,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B033",
         .name = "bughunt B033: top-level destructuring is supported or rejected cleanly",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\(a, b) = (1, 2)
@@ -372,7 +372,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B034",
         .name = "bughunt B034: missing platform-required value is diagnostic",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [] { pf: platform "{STR_PLATFORM}" }
             },
         },
@@ -394,7 +394,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B039",
         .name = "bughunt B039: List.join_with on list-valued items type-checks",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\main! = || {
@@ -411,7 +411,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B040",
         .name = "bughunt B040: Str.from_utf8 does not leak runtime allocations",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -427,7 +427,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B041",
         .name = "bughunt B041: dotted local module imports resolve or diagnose cleanly",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import Dir.A
@@ -437,7 +437,7 @@ const tests = [_]CliBugSpec{
             \\    {}
             \\}
             },
-            .{ .path = "Dir/A.roc", .contents = 
+            .{ .path = "Dir/A.roc", .contents =
             \\A :: [].{
             \\    x = 1
             \\}
@@ -461,7 +461,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B044",
         .name = "bughunt B044: platform relation rejects numeric return for unit effect",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\main! = || 1
@@ -475,7 +475,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B053",
         .name = "bughunt B053: unsuffixed numeric method receiver is defaulted",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -491,7 +491,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B054",
         .name = "bughunt B054: tail-recursive list concat does not leak",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -512,7 +512,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B055",
         .name = "bughunt B055: --allow-errors missing methods do not panic lowering",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -528,7 +528,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B061",
         .name = "bughunt B061: boxed builtin nominal constants can be planned",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\x : Box(Try(I64, [E]))
@@ -548,7 +548,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B062",
         .name = "bughunt B062: zero-sized list concat does not leak",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -564,7 +564,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B066",
         .name = "bughunt B066: transitive nominal method owners are available",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import A
@@ -574,14 +574,14 @@ const tests = [_]CliBugSpec{
             \\    {}
             \\}
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\import B
             \\
             \\A :: [].{
             \\    make = B.make
             \\}
             },
-            .{ .path = "B.roc", .contents = 
+            .{ .path = "B.roc", .contents =
             \\B :: [].{
             \\    Color := [Red, Blue].{
             \\        to_inspect : Color -> Str
@@ -604,7 +604,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B070",
         .name = "bughunt B070: inclusive U8 max range terminates",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -620,7 +620,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B071",
         .name = "bughunt B071: unannotated imported-nominal list results lower safely",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [make_glue] { pf: platform "{GLUE_PLATFORM}" }
             \\
             \\import pf.Types exposing [Types]
@@ -658,7 +658,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B072",
         .name = "bughunt B072: roc glue lowers the synthetic app",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [make_glue] { pf: platform "{GLUE_PLATFORM}" }
             \\
             \\import pf.Types exposing [Types]
@@ -686,7 +686,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B074",
         .name = "bughunt B074: effectful top-level definitions are rejected",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -704,7 +704,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B075",
         .name = "bughunt B075: hosted effects inside expect do not panic the test runner",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -725,7 +725,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B081",
         .name = "bughunt B081: List.join_with list values terminate at runtime",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\main! = || {
@@ -742,7 +742,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B083",
         .name = "bughunt B083: Box equality uses value semantics or is rejected earlier",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -758,7 +758,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B084",
         .name = "bughunt B084: higher-order effectful lambda calls lower safely",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -774,7 +774,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B086",
         .name = "bughunt B086: top-level user nominal constants have backing metadata",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -795,7 +795,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B087",
         .name = "bughunt B087: warning-only runs exit successfully",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -814,7 +814,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B089",
         .name = "bughunt B089: adjacent invalid UTF-8 bytes collapse to one replacement",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -830,7 +830,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B093",
         .name = "bughunt B093: duplicate record-builder fields are diagnostics",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\B(a) := { value : a }.{
@@ -855,7 +855,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B094",
         .name = "bughunt B094: Str.repeat short-circuits empty strings",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -871,7 +871,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B101",
         .name = "bughunt B101: imported boxed callables preserve callable payloads",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -879,7 +879,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(I64.to_str(A.run(41.I64)))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    make : I64 -> Box((I64 -> I64))
             \\    make = |n| Box.box(|x| x + n)
@@ -900,7 +900,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B102",
         .name = "bughunt B102: imported boxed polymorphic identity is sealed per use",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -908,7 +908,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(Str.inspect({ n: A.id_num(41.I64), s: A.id_str("ok") }))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    identity = |x| x
             \\    id_num = Box.unbox(Box.box(identity))
@@ -924,7 +924,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B103",
         .name = "bughunt B103: recursive functions can be boxed and unboxed",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -948,7 +948,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B104",
         .name = "bughunt B104: function-valued tag payloads lower safely",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -973,7 +973,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B105",
         .name = "bughunt B105: imported function-valued tag payloads lower safely",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -981,7 +981,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(I64.to_str(A.run(A.make)))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Value := [F((I64 -> I64)), N(I64)]
             \\
@@ -1004,7 +1004,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B106",
         .name = "bughunt B106: top-level record constants can contain function fields",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1022,7 +1022,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B107",
         .name = "bughunt B107: top-level tag constants can contain function payloads",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1049,7 +1049,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B108",
         .name = "bughunt B108: open-error custom tags are released on host exit",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_OPEN_PLATFORM}" }
             \\
             \\main! = |_| Err(CustomError)
@@ -1063,7 +1063,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B109",
         .name = "bughunt B109: open-error payload tags are released with correct alignment",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_OPEN_PLATFORM}" }
             \\
             \\main! = |_| Err(CustomError("payload that allocates outside small string storage"))
@@ -1077,7 +1077,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B110",
         .name = "bughunt B110: imported recursive boxed-tree equality terminates",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1085,7 +1085,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(Str.inspect(A.a == A.b))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Tree := [Leaf(I64), Node(Box(Tree), Box(Tree))]
             \\
@@ -1105,7 +1105,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B111",
         .name = "bughunt B111: recursive boxed-tree custom equality terminates",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1138,7 +1138,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B112",
         .name = "bughunt B112: top-level boxed function constants can be called",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1159,7 +1159,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B113",
         .name = "bughunt B113: imported top-level boxed function constants can be called",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1170,7 +1170,7 @@ const tests = [_]CliBugSpec{
             \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    boxed : Box((I64 -> I64))
             \\    boxed = Box.box(|x| x + 1.I64)
@@ -1185,7 +1185,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B114",
         .name = "bughunt B114: host can call a top-level boxed function constant",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1204,7 +1204,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B115",
         .name = "bughunt B115: host can roundtrip a top-level boxed function constant",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1226,7 +1226,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B116",
         .name = "bughunt B116: host can store a top-level boxed function constant",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1249,7 +1249,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B117",
         .name = "bughunt B117: imported attached methods can return functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1260,7 +1260,7 @@ const tests = [_]CliBugSpec{
             \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Holder := { n : I64 }.{
             \\        make : Holder -> (I64 -> I64)
@@ -1280,7 +1280,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B118",
         .name = "bughunt B118: static-dispatch methods can return functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1307,7 +1307,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B119",
         .name = "bughunt B119: imported static-dispatch methods can return functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1315,7 +1315,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(I64.to_str(A.use(A.m)))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Maker := { tag : I64 }.{
             \\        make : Maker -> (I64 -> I64)
@@ -1337,7 +1337,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B120",
         .name = "bughunt B120: imported attached methods are available through qualified values",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1345,7 +1345,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(A.x.show())
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Id := [Id(I64)].{
             \\        show : Id -> Str
@@ -1367,7 +1367,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B121",
         .name = "bughunt B121: imported nominal operators use attached operator methods",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1375,7 +1375,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(Str.inspect(A.a + A.b))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Thing := [Thing(I64)].{
             \\        plus : Thing, Thing -> Thing
@@ -1398,7 +1398,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B122",
         .name = "bughunt B122: boxed imported nominal equality uses payload equality",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1406,7 +1406,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(Str.inspect(Box.box(A.a) == Box.box(A.b)))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Thing := [Thing(I64)].{
             \\        is_eq : Thing, Thing -> Bool
@@ -1429,7 +1429,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B123",
         .name = "bughunt B123: recursive data can carry function payloads",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1454,7 +1454,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B124",
         .name = "bughunt B124: imported recursive data can carry function payloads",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1462,7 +1462,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(I64.to_str(A.run(A.tree)))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Tree := [Leaf((I64 -> I64)), Node(Box(Tree), Box(Tree))]
             \\
@@ -1485,7 +1485,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B125",
         .name = "bughunt B125: record function fields can be called directly",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1504,7 +1504,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B126",
         .name = "bughunt B126: record function fields can be returned and called",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1526,7 +1526,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B127",
         .name = "bughunt B127: list function payloads can be selected and called",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1549,7 +1549,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B128",
         .name = "bughunt B128: top-level list constants can contain functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1573,7 +1573,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B129",
         .name = "bughunt B129: imported list constants can contain functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1587,7 +1587,7 @@ const tests = [_]CliBugSpec{
             \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    fs = [|x| x + 1.I64, |x| x + 10.I64]
             \\}
@@ -1601,7 +1601,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B130",
         .name = "bughunt B130: tuple function payloads can be called",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1620,7 +1620,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B131",
         .name = "bughunt B131: top-level tuple constants can contain functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1638,7 +1638,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B132",
         .name = "bughunt B132: imported tuple constants can contain functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1646,7 +1646,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(I64.to_str((A.t.0)(A.t.1)))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    t = (|x| x + 1.I64, 41.I64)
             \\}
@@ -1660,7 +1660,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B133",
         .name = "bughunt B133: Try payloads can contain functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1683,7 +1683,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B134",
         .name = "bughunt B134: imported Try payloads can contain functions",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1697,7 +1697,7 @@ const tests = [_]CliBugSpec{
             \\    Stdout.line!(I64.to_str(f(41.I64)))
             \\}
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    v = Ok(|x| x + 1.I64)
             \\}
@@ -1711,7 +1711,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B135",
         .name = "bughunt B135: record updates preserve function fields",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1731,7 +1731,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B136",
         .name = "bughunt B136: while loops can update function variables",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1755,7 +1755,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B137",
         .name = "bughunt B137: for loops can destructure function fields",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1777,7 +1777,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B138",
         .name = "bughunt B138: host can call imported boxed functions stored in tag payloads",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -1791,7 +1791,7 @@ const tests = [_]CliBugSpec{
             \\    Stdout.line!(I64.to_str(out))
             \\}
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Value := [F(Box((I64 -> I64)))]
             \\
@@ -1808,7 +1808,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B139",
         .name = "bughunt B139: function variable reassignment is not a warning",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -2126,7 +2126,7 @@ const tests = [_]CliBugSpec{
         .bug_id = "B164",
         .name = "bughunt B164: imported polymorphic recursive boxed-tree equality is rejected cleanly",
         .files = &.{
-            .{ .path = "main.roc", .contents = 
+            .{ .path = "main.roc", .contents =
             \\app [main!] { pf: platform "{FX_PLATFORM}" }
             \\
             \\import pf.Stdout
@@ -2134,7 +2134,7 @@ const tests = [_]CliBugSpec{
             \\
             \\main! = || Stdout.line!(Str.inspect(A.a == A.b))
             },
-            .{ .path = "A.roc", .contents = 
+            .{ .path = "A.roc", .contents =
             \\A :: [].{
             \\    Tree(a) := [Node(Box(Tree(a)), Box(Tree(a))), Leaf(a)]
             \\
@@ -2274,7 +2274,7 @@ const tests = [_]CliBugSpec{
         .id = 182,
         .bug_id = "B182",
         .name = "bughunt B182: recursive nominal definitions are accepted",
-        .files = &.{.{ .path = "main.roc", .contents = 
+        .files = &.{.{ .path = "main.roc", .contents =
         \\app [main!] { pf: platform "{FX_PLATFORM}" }
         \\
         \\import pf.Stdout
@@ -2282,7 +2282,7 @@ const tests = [_]CliBugSpec{
         \\Tree := [Node(Tree)]
         \\
         \\main! = || Stdout.line!("ok")
-    }},
+        }},
         .command = .check,
         .expect = .success,
     },
@@ -2731,7 +2731,7 @@ fn appendReplacing(
     replacement: []const u8,
 ) !void {
     var rest = input;
-    while (std.mem.indexOf(u8, rest, needle)) |idx| {
+    while (std.mem.find(u8, rest, needle)) |idx| {
         try out.appendSlice(gpa, rest[0..idx]);
         try out.appendSlice(gpa, replacement);
         rest = rest[idx + needle.len ..];
@@ -2827,7 +2827,7 @@ fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
         const full_path = try pathJoin(gpa, &.{ test_dir, file.path });
         defer gpa.free(full_path);
         if (std.fs.path.dirname(full_path)) |dir| {
-            try std.fs.cwd().makePath(dir);
+            try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
         }
         try std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = rendered });
     }
@@ -2850,34 +2850,34 @@ fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: 
     }
 }
 
-fn isCleanUserFailure(result: std.process.Child.RunResult) bool {
+fn isCleanUserFailure(result: std.process.RunResult) bool {
     const exited_nonzero = switch (result.term) {
-        .Exited => |code| code != 0,
+        .exited => |code| code != 0,
         else => return false,
     };
     if (!exited_nonzero) return false;
 
     const combined_has_internal =
-        std.mem.indexOf(u8, result.stderr, "Internal compiler error") != null or
-        std.mem.indexOf(u8, result.stderr, "thread ") != null or
-        std.mem.indexOf(u8, result.stderr, "panic:") != null or
-        std.mem.indexOf(u8, result.stderr, "SIGABRT") != null or
-        std.mem.indexOf(u8, result.stderr, "Compiler bug") != null or
-        std.mem.indexOf(u8, result.stdout, "Internal compiler error") != null or
-        std.mem.indexOf(u8, result.stdout, "panic:") != null;
+        std.mem.find(u8, result.stderr, "Internal compiler error") != null or
+        std.mem.find(u8, result.stderr, "thread ") != null or
+        std.mem.find(u8, result.stderr, "panic:") != null or
+        std.mem.find(u8, result.stderr, "SIGABRT") != null or
+        std.mem.find(u8, result.stderr, "Compiler bug") != null or
+        std.mem.find(u8, result.stdout, "Internal compiler error") != null or
+        std.mem.find(u8, result.stdout, "panic:") != null;
     return !combined_has_internal;
 }
 
 fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, stderr, "error(gpa):") != null) return "memory error detected";
-    if (std.mem.indexOf(u8, stderr, "allocation(s) not freed") != null) return "memory leak detected";
+    if (std.mem.find(u8, stderr, "error(gpa):") != null) return "memory error detected";
+    if (std.mem.find(u8, stderr, "allocation(s) not freed") != null) return "memory leak detected";
     return null;
 }
 
 fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
-        .Exited => |code| @intCast(code),
-        .Signal => |sig| @as(u32, sig) | 0x80000000,
+        .exited => |code| @intCast(code),
+        .signal => |sig| @as(u32, sig) | 0x80000000,
         else => 0xFFFFFFFF,
     };
 }
@@ -2886,7 +2886,7 @@ fn mismatchMessage(gpa: Allocator, prefix: []const u8, expected: []const u8, act
     return std.fmt.allocPrint(gpa, "{s}: expected '{s}', got '{s}'", .{ prefix, expected, actual }) catch prefix;
 }
 
-fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.RunResult, timer: *harness.Timer) TestResult {
+fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResult, timer: *harness.Timer) TestResult {
     const duration_ns = timer.read();
 
     if (hasMemoryErrors(result.stderr)) |msg| {
@@ -2901,7 +2901,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
     }
 
     switch (result.term) {
-        .Signal => {
+        .signal => {
             return .{
                 .status = .crash,
                 .duration_ns = duration_ns,
@@ -2917,7 +2917,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
     switch (expected) {
         .success => {
             const ok = switch (result.term) {
-                .Exited => |code| code == 0,
+                .exited => |code| code == 0,
                 else => false,
             };
             if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
@@ -2932,13 +2932,13 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
         },
         .success_stdout_exact => |expected_stdout| {
             const ok = switch (result.term) {
-                .Exited => |code| code == 0 and std.mem.eql(u8, result.stdout, expected_stdout),
+                .exited => |code| code == 0 and std.mem.eql(u8, result.stdout, expected_stdout),
                 else => false,
             };
             if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
 
             const msg = if (switch (result.term) {
-                .Exited => |code| code == 0,
+                .exited => |code| code == 0,
                 else => false,
             })
                 mismatchMessage(gpa, "stdout mismatch", expected_stdout, result.stdout)
@@ -2956,13 +2956,13 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
         },
         .warning_stdout_exact => |expected_stdout| {
             const ok = switch (result.term) {
-                .Exited => |code| code == 2 and std.mem.eql(u8, result.stdout, expected_stdout),
+                .exited => |code| code == 2 and std.mem.eql(u8, result.stdout, expected_stdout),
                 else => false,
             };
             if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
 
             const msg = if (switch (result.term) {
-                .Exited => |code| code == 2,
+                .exited => |code| code == 2,
                 else => false,
             })
                 mismatchMessage(gpa, "stdout mismatch", expected_stdout, result.stdout)
@@ -2991,7 +2991,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
         },
         .success_or_clean_failure => {
             const ok = switch (result.term) {
-                .Exited => |code| code == 0,
+                .exited => |code| code == 0,
                 else => false,
             };
             if (ok or isCleanUserFailure(result)) return .{ .status = .pass, .duration_ns = duration_ns };
@@ -3010,7 +3010,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.Child.Ru
 fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
-    const repo_root = std.fs.cwd().realpathAlloc(gpa, ".") catch
+    const repo_root = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch
         return .{ .status = .crash, .message = "failed to resolve repo root" };
 
     const cache_dirs = util.createIsolatedTestCacheDirs(gpa) catch
@@ -3021,8 +3021,8 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
         currentProcessIdForFilename(),
         spec.id,
     }) catch return .{ .status = .crash, .message = "OOM" };
-    std.fs.cwd().deleteTree(test_dir) catch {};
-    std.fs.cwd().makePath(test_dir) catch |err| {
+    std.Io.Dir.cwd().deleteTree(std.testing.io, test_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(std.testing.io, test_dir) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "failed to create temp dir: {}", .{err}) catch "failed to create temp dir";
         return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
     };
@@ -3038,7 +3038,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     const argv = buildArgv(gpa, spec, main_path, test_dir, repo_root) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to build argv" };
 
-    var env_map = std.process.getEnvMap(gpa) catch
+    var env_map = util.buildIsolatedTestEnvMap(gpa, null) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
@@ -3046,9 +3046,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set zig cache env" };
 
-    const child_result = std.process.Child.run(.{
-        .allocator = gpa,
-        .argv = argv,
+    const child_result = util.runChildWithTimeout(gpa, argv, .{
         .cwd = repo_root,
         .env_map = &env_map,
         .max_output_bytes = 2 * 1024 * 1024,
@@ -3134,8 +3132,8 @@ const Pool = harness.ProcessPool(CliBugSpec, TestResult, .{
 fn matchesFilters(spec: CliBugSpec, filters: []const []const u8) bool {
     if (filters.len == 0) return true;
     for (filters) |filter| {
-        if (std.mem.indexOf(u8, spec.bug_id, filter) != null) return true;
-        if (std.mem.indexOf(u8, spec.name, filter) != null) return true;
+        if (std.mem.find(u8, spec.bug_id, filter) != null) return true;
+        if (std.mem.find(u8, spec.name, filter) != null) return true;
     }
     return false;
 }

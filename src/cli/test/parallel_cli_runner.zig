@@ -22,6 +22,12 @@ const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 
+var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
+/// Override the default debug IO so that `std.Options.debug_io` uses a properly
+/// initialized Threaded instance with a real allocator. Without this, the default
+/// `global_single_threaded` has `.allocator = .failing` and IO operations fail.
+pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
+
 // Test spec types
 
 /// A single CLI test operation — one atomic unit of work.
@@ -124,6 +130,7 @@ fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const Cl
 }
 
 fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
+    if (spec.skip) return true;
     return spec.skip_on_windows and builtin.os.tag == .windows;
 }
 
@@ -137,8 +144,8 @@ fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8)
 fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []const u8) bool {
     if (filters.len == 0) return true;
     for (filters) |f| {
-        if (std.mem.indexOf(u8, name, f) != null) return true;
-        if (std.mem.indexOf(u8, roc_file, f) != null) return true;
+        if (std.mem.find(u8, name, f) != null) return true;
+        if (std.mem.find(u8, roc_file, f) != null) return true;
     }
     return false;
 }
@@ -258,7 +265,7 @@ fn currentProcessIdForFilename() u64 {
 }
 
 fn deleteIfExists(path: []const u8) !void {
-    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+    std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -298,7 +305,14 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     };
     defer cleanupOutputArtifacts(allocator, output_name);
 
-    var env_map = std.process.getEnvMap(allocator) catch
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+    var env_map = environ.createMap(allocator) catch
         return .{ .status = .crash, .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
@@ -327,10 +341,9 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     build_argv_buf[argc] = spec.roc_file;
     argc += 1;
 
-    const build_result = std.process.Child.run(.{
-        .allocator = allocator,
+    const build_result = std.process.run(allocator, std.Options.debug_io, .{
         .argv = build_argv_buf[0..argc],
-        .env_map = &env_map,
+        .environ_map = &env_map,
     }) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "build spawn error: {}", .{err}) catch "build spawn error";
         return .{ .status = .fail, .duration_ns = timer.read(), .message = msg };
@@ -349,15 +362,14 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     allocator.free(build_result.stdout);
     allocator.free(build_result.stderr);
 
-    std.fs.cwd().access(output_name, .{}) catch {
+    std.Io.Dir.cwd().access(std.Options.debug_io, output_name, .{}) catch {
         return .{ .status = .fail, .duration_ns = timer.read(), .message = "build succeeded but binary not created" };
     };
 
     // Step 2: Run
     switch (spec.test_kind) {
         .native_run => {
-            const run_result = std.process.Child.run(.{
-                .allocator = allocator,
+            const run_result = std.process.run(allocator, std.Options.debug_io, .{
                 .argv = &[_][]const u8{output_name},
             }) catch |err| {
                 const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
@@ -366,8 +378,7 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
             return checkRunResult(run_result, &timer, "run failed");
         },
         .io_spec => |io_spec| {
-            const run_result = std.process.Child.run(.{
-                .allocator = allocator,
+            const run_result = std.process.run(allocator, std.Options.debug_io, .{
                 .argv = &[_][]const u8{ output_name, "--test", io_spec },
             }) catch |err| {
                 const msg = std.fmt.allocPrint(allocator, "io_spec run spawn error: {}", .{err}) catch "run spawn error";
@@ -378,7 +389,7 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     }
 }
 
-fn checkRunResult(result: std.process.Child.RunResult, timer: *harness.Timer, fail_msg: []const u8) TestResult {
+fn checkRunResult(result: std.process.RunResult, timer: *harness.Timer, fail_msg: []const u8) TestResult {
     if (hasMemoryErrors(result.stderr)) |mem_msg| {
         return .{
             .status = .fail,
@@ -404,22 +415,22 @@ fn checkRunResult(result: std.process.Child.RunResult, timer: *harness.Timer, fa
 
 fn isSuccess(term: std.process.Child.Term) bool {
     return switch (term) {
-        .Exited => |code| code == 0,
+        .exited => |code| code == 0,
         else => false,
     };
 }
 
 fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
-        .Exited => |code| @intCast(code),
-        .Signal => |sig| @as(u32, sig) | 0x80000000,
+        .exited => |code| @intCast(code),
+        .signal => |sig| @as(u32, @intFromEnum(sig)) | 0x80000000,
         else => 0xFFFFFFFF,
     };
 }
 
 fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, stderr, "error(gpa):") != null) return "memory error detected";
-    if (std.mem.indexOf(u8, stderr, "allocation(s) not freed") != null) return "memory leak detected";
+    if (std.mem.find(u8, stderr, "error(gpa):") != null) return "memory error detected";
+    if (std.mem.find(u8, stderr, "allocation(s) not freed") != null) return "memory leak detected";
     return null;
 }
 
@@ -427,12 +438,13 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
 /// duplication when the harness appends `--worker <idx>` per spawn).
-fn buildCliWorkerArgvTemplate(arena: Allocator) ![]const []const u8 {
+fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) ![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path_slice = try std.fs.selfExePath(&self_path_buf);
-    const self_path = try arena.dupe(u8, self_path_slice);
+    const self_path_len = try std.process.executablePath(std.Options.debug_io, &self_path_buf);
+    const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
 
-    const original_args = try std.process.argsAlloc(arena);
+    const raw = try process_args.toSlice(arena);
+    const original_args: []const []const u8 = @ptrCast(raw);
 
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     try argv.append(arena, self_path);
@@ -606,15 +618,23 @@ fn printUsage() void {
 }
 
 /// Entry point for the parallel CLI test runner.
-pub fn main() !void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    // Initialize the debug IO with a real allocator so std.Options.debug_io
+    // can spawn processes, create directories, delete files, etc.
+    debug_threaded_io_instance = .init(init.gpa, .{
+        .argv0 = .init(init.minimal.args),
+        .environ = init.minimal.environ,
+    });
+    defer debug_threaded_io_instance.deinit();
+
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     var spec_arena = std.heap.ArenaAllocator.init(gpa);
     defer spec_arena.deinit();
 
-    const args = try harness.parseStandardArgs(spec_arena.allocator());
+    const args = try harness.parseStandardArgs(spec_arena.allocator(), init.minimal.args);
 
     if (args.help_requested) {
         printUsage();
@@ -639,7 +659,7 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
-        serializeResult(std.fs.File.stdout().handle, result);
+        serializeResult(std.Io.File.stdout().handle, result);
         return;
     }
 
@@ -653,15 +673,15 @@ pub fn main() !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
-        const stdin = std.fs.File.stdin();
-        const stdout_handle = std.fs.File.stdout().handle;
+        const stdin_handle = std.Io.File.stdin().handle;
+        const stdout_handle = std.Io.File.stdout().handle;
 
         var line_buf: [32]u8 = undefined;
         outer: while (true) {
             var line_len: usize = 0;
             while (true) {
                 if (line_len >= line_buf.len) break :outer;
-                const n = stdin.read(line_buf[line_len .. line_len + 1]) catch break :outer;
+                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
                 if (n == 0) break :outer;
                 if (line_buf[line_len] == '\n') break;
                 line_len += 1;
@@ -690,10 +710,10 @@ pub fn main() !void {
     // single-test Child worker. On POSIX it's unused (fork path doesn't
     // re-exec). Always pass the positional `roc_binary` path through so the
     // child uses the same binary.
-    const worker_argv_template = try buildCliWorkerArgvTemplate(spec_arena.allocator());
+    const worker_argv_template = try buildCliWorkerArgvTemplate(spec_arena.allocator(), init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.run(tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
+    Pool.run(init.io, tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
     const wall_ns = wall_timer.read();
 
     printResults(tests, results, args.verbose, gpa, wall_ns, max_children);

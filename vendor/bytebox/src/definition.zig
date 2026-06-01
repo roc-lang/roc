@@ -94,6 +94,60 @@ const Section = enum(u8) { Custom, FunctionType, Import, Function, Table, Memory
 const k_function_type_sentinel_byte: u8 = 0x60;
 const k_block_type_void_sentinel_byte: u8 = 0x40;
 
+/// Zig-0.16 compat: fixedBufferStream was removed.
+/// This provides the same interface used by the decode functions below.
+const FixedBufferStream = struct {
+    buffer: []const u8,
+    pos: usize = 0,
+
+    const Reader = struct {
+        parent: *FixedBufferStream,
+
+        pub fn readByte(r: Reader) error{EndOfStream}!u8 {
+            if (r.parent.pos >= r.parent.buffer.len) return error.EndOfStream;
+            const b = r.parent.buffer[r.parent.pos];
+            r.parent.pos += 1;
+            return b;
+        }
+
+        pub fn readInt(r: Reader, comptime T: type, endian: std.builtin.Endian) error{EndOfStream}!T {
+            const n = @divExact(@typeInfo(T).int.bits, 8);
+            if (r.parent.pos + n > r.parent.buffer.len) return error.EndOfStream;
+            const bytes = r.parent.buffer[r.parent.pos..][0..n];
+            r.parent.pos += n;
+            return std.mem.readInt(T, bytes, endian);
+        }
+
+        pub fn read(r: Reader, buf: []u8) error{EndOfStream}!usize {
+            const available = r.parent.buffer.len - r.parent.pos;
+            const n = @min(buf.len, available);
+            @memcpy(buf[0..n], r.parent.buffer[r.parent.pos..][0..n]);
+            r.parent.pos += n;
+            return n;
+        }
+    };
+
+    pub fn reader(self: *FixedBufferStream) Reader {
+        return .{ .parent = self };
+    }
+
+    pub fn getPos(self: *FixedBufferStream) error{}!usize {
+        return self.pos;
+    }
+
+    pub fn getEndPos(self: *FixedBufferStream) error{}!usize {
+        return self.buffer.len;
+    }
+
+    pub fn seekBy(self: *FixedBufferStream, offset: usize) error{}!void {
+        self.pos += offset;
+    }
+};
+
+fn fixedBufferStream(buffer: []const u8) FixedBufferStream {
+    return .{ .buffer = buffer, .pos = 0 };
+}
+
 fn eosError(e: anyerror) MalformedError {
     if (e == error.EndOfStream) {
         return MalformedError.MalformedUnexpectedEnd;
@@ -113,22 +167,30 @@ fn readBytes(reader: anytype, bytes: []u8) MalformedError!usize {
 }
 
 fn decodeLEB128(comptime T: type, reader: anytype) MalformedError!T {
-    if (@typeInfo(T).int.signedness == .signed) {
-        return std.leb.readIleb128(T, reader) catch |e| {
-            if (e == error.Overflow) {
-                return error.MalformedLEB128;
-            } else {
-                return eosError(e);
+    // Zig-0.16 compat: std.leb.readIleb128/readUleb128 removed; inline LEB128 decode.
+    const info = @typeInfo(T).int;
+    const bits = info.bits;
+    const ShiftT = std.math.Log2Int(T);
+    var result: T = 0;
+    var shift: u16 = 0;
+    while (true) {
+        const byte = reader.readByte() catch |e| return eosError(e);
+        const low7: T = @intCast(byte & 0x7F);
+        if (shift < bits) {
+            result |= low7 << @as(ShiftT, @intCast(shift));
+        } else if (low7 != 0) {
+            return error.MalformedLEB128;
+        }
+        shift += 7;
+        if (shift > bits + 63) return error.MalformedLEB128;
+        if (byte & 0x80 == 0) {
+            if (info.signedness == .signed and shift < bits) {
+                if (byte & 0x40 != 0) {
+                    result |= @as(T, @bitCast(@as(std.meta.Int(.unsigned, bits), std.math.maxInt(T)))) << @as(ShiftT, @intCast(shift));
+                }
             }
-        };
-    } else {
-        return std.leb.readUleb128(T, reader) catch |e| {
-            if (e == error.Overflow) {
-                return error.MalformedLEB128;
-            } else {
-                return eosError(e);
-            }
-        };
+            return result;
+        }
     }
 }
 
@@ -145,11 +207,19 @@ fn decodeWasmOpcode(reader: anytype) MalformedError!WasmOpcode {
         extended = extended << 8;
         extended |= byte2;
 
-        wasm_op = std.meta.intToEnum(WasmOpcode, extended) catch {
+        wasm_op = blk: {
+            // Zig-0.16 compat: std.meta.intToEnum removed; validate manually.
+            inline for (std.meta.fields(WasmOpcode)) |f| {
+                if (f.value == extended) break :blk @enumFromInt(extended);
+            }
             return error.MalformedIllegalOpcode;
         };
     } else {
-        wasm_op = std.meta.intToEnum(WasmOpcode, byte) catch {
+        wasm_op = blk: {
+            // Zig-0.16 compat: std.meta.intToEnum removed; validate manually.
+            inline for (std.meta.fields(WasmOpcode)) |f| {
+                if (f.value == byte) break :blk @enumFromInt(byte);
+            }
             return error.MalformedIllegalOpcode;
         };
     }
@@ -166,7 +236,7 @@ fn decodeFloat(comptime T: type, reader: anytype) MalformedError!T {
 
 fn decodeVec(reader: anytype) MalformedError!v128 {
     var bytes: [16]u8 = undefined;
-    _ = reader.read(&bytes) catch |e| eosError(e);
+    _ = try readBytes(reader, &bytes);
     return std.mem.bytesToValue(v128, &bytes);
 }
 
@@ -656,7 +726,11 @@ pub const GlobalMut = enum(u8) {
 
     fn decode(reader: anytype) !GlobalMut {
         const byte = try readByte(&reader);
-        const value = std.meta.intToEnum(GlobalMut, byte) catch {
+        const value: GlobalMut = blk: {
+            // Zig-0.16 compat: std.meta.intToEnum removed; validate manually.
+            inline for (std.meta.fields(GlobalMut)) |f| {
+                if (f.value == byte) break :blk @enumFromInt(byte);
+            }
             return error.MalformedMutability;
         };
         return value;
@@ -909,7 +983,7 @@ pub const Instruction = struct {
                         block_type = .Void;
                         block_value = BlockTypeValue{ .TypeIndex = 0 };
                     } else {
-                        _reader.context.pos -= 1; // move the stream backwards 1 byte to reconstruct the integer
+                        _reader.parent.pos -= 1; // move the stream backwards 1 byte to reconstruct the integer
                         const index_33bit = try decodeLEB128(i33, _reader);
                         if (index_33bit < 0) {
                             return error.MalformedBytecode;
@@ -1438,7 +1512,7 @@ pub const NameCustomSection = struct {
             }
         };
 
-        var fixed_buffer_stream = std.io.fixedBufferStream(bytes);
+        var fixed_buffer_stream = fixedBufferStream(bytes);
         var reader = fixed_buffer_stream.reader();
 
         while (try fixed_buffer_stream.getPos() != try fixed_buffer_stream.getEndPos()) {
@@ -2710,23 +2784,27 @@ const ModuleValidator = struct {
     }
 
     fn popControl(self: *ModuleValidator) !ControlFrame {
-        const frame: *const ControlFrame = &self.control_stack.items[self.control_stack.items.len - 1];
+        const frame_ref: *const ControlFrame = &self.control_stack.items[self.control_stack.items.len - 1];
 
-        var i = frame.end_types.len;
+        var i = frame_ref.end_types.len;
         while (i > 0) : (i -= 1) {
-            if (frame.is_unreachable and self.type_stack.items.len == frame.types_stack_height) {
+            if (frame_ref.is_unreachable and self.type_stack.items.len == frame_ref.types_stack_height) {
                 break;
             }
-            try self.popType(frame.end_types[i - 1]);
+            try self.popType(frame_ref.end_types[i - 1]);
         }
 
-        if (self.type_stack.items.len != frame.types_stack_height) {
+        if (self.type_stack.items.len != frame_ref.types_stack_height) {
             return error.ValidationTypeStackHeightMismatch;
         }
 
+        // Copy the frame before pop() invalidates it: Zig 0.16's ArrayList.pop()
+        // assigns `undefined` to the popped slot, so dereferencing frame_ref afterwards
+        // would read garbage (manifesting as `switch on corrupt value` on frame.opcode).
+        const frame = frame_ref.*;
         _ = self.control_stack.pop();
 
-        return frame.*;
+        return frame;
     }
 
     fn freeControlTypes(self: *ModuleValidator, frame: *const ControlFrame) !void {
@@ -2861,7 +2939,7 @@ pub const ModuleDefinition = struct {
 
                 const name: []u8 = try _allocator.alloc(u8, name_length);
                 errdefer _allocator.free(name);
-                const read_length = try reader.read(name);
+                const read_length = try readBytes(reader, name);
                 if (read_length != name_length) {
                     return error.MalformedUnexpectedEnd;
                 }
@@ -2878,7 +2956,7 @@ pub const ModuleDefinition = struct {
         var validator = ModuleValidator.init(allocator, self.log);
         defer validator.deinit();
 
-        var stream = std.io.fixedBufferStream(wasm);
+        var stream = fixedBufferStream(wasm);
         var reader = stream.reader();
 
         // wasm header
@@ -2896,7 +2974,12 @@ pub const ModuleDefinition = struct {
         var num_functions_parsed: u32 = 0;
 
         while (stream.pos < stream.buffer.len) {
-            const section_id: Section = std.meta.intToEnum(Section, try readByte(&reader)) catch {
+            const section_byte = try readByte(&reader);
+            const section_id: Section = blk: {
+                // Zig-0.16 compat: std.meta.intToEnum removed; validate manually.
+                inline for (std.meta.fields(Section)) |f| {
+                    if (f.value == section_byte) break :blk @enumFromInt(section_byte);
+                }
                 return error.MalformedSectionId;
             };
             const section_size_bytes: usize = try decodeLEB128(u32, reader);
@@ -2919,7 +3002,7 @@ pub const ModuleDefinition = struct {
                     const name_length: usize = stream.pos - section_start_pos;
                     const data_length: usize = section_size_bytes - name_length;
                     try section.data.resize(data_length);
-                    const data_length_read = try reader.read(section.data.items);
+                    const data_length_read = try readBytes(reader, section.data.items);
                     if (data_length != data_length_read) {
                         return error.MalformedUnexpectedEnd;
                     }

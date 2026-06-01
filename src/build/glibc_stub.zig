@@ -136,7 +136,7 @@ pub fn compileAssemblyStub(
         }),
     });
     // Add the assembly file as a source
-    lib.addAssemblyFile(asm_path);
+    lib.root_module.addAssemblyFile(asm_path);
 
     // Allow unresolved symbols at link time
     lib.linker_allow_shlib_undefined = true;

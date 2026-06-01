@@ -11,6 +11,20 @@ const std = @import("std");
 /// in the interpreter for stack allocations.
 pub const max_roc_alignment: std.mem.Alignment = .@"16";
 
+/// Helper for creating an Io.Writer.Allocating from a deprecated Managed(u8).
+/// Zig 0.16 removed Managed.writer(); this bridges the gap.
+pub fn managedWriter(managed: *std.array_list.Managed(u8)) std.Io.Writer.Allocating {
+    var unmanaged: std.ArrayList(u8) = .{ .items = managed.items, .capacity = managed.capacity };
+    return std.Io.Writer.Allocating.fromArrayList(managed.allocator, &unmanaged);
+}
+
+/// Sync an Io.Writer.Allocating back to a Managed(u8).
+pub fn managedWriterFinish(aw: *std.Io.Writer.Allocating, managed: *std.array_list.Managed(u8)) void {
+    const unmanaged = aw.toArrayList();
+    managed.items = unmanaged.items;
+    managed.capacity = unmanaged.capacity;
+}
+
 pub const SafeList = @import("safe_list.zig").SafeList;
 pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;

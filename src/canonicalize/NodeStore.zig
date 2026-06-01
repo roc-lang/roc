@@ -303,7 +303,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 75;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
@@ -1491,7 +1491,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                     @as(CIR.Pattern.Idx, @enumFromInt(list_data.pattern_idx))
                 else
                     null;
-                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                break :blk @as(@FieldType(@FieldType(CIR.Pattern, "list"), "rest_info"), .{
                     .index = list_data.rest_index,
                     .pattern = rest_pattern,
                 });
@@ -1891,7 +1891,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .body = @intFromEnum(s.body),
             } });
         },
-        .s_break => |_| {
+        .s_break => {
             node.tag = .statement_break;
         },
         .s_return => |s| {
@@ -2023,7 +2023,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .elems_len = e.elems.span.len,
             } });
         },
-        .e_empty_list => |_| {
+        .e_empty_list => {
             node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
@@ -2075,7 +2075,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .has_suffix = e.has_suffix,
             } });
         },
-        .e_num_from_numeral => |_| {
+        .e_num_from_numeral => {
             node.tag = .expr_num_from_numeral;
             node.setPayload(.{ .expr_num_from_numeral = .{} });
         },
@@ -2239,7 +2239,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .expr = @intFromEnum(d.expr),
             } });
         },
-        .e_ellipsis => |_| {
+        .e_ellipsis => {
             node.tag = .expr_ellipsis;
         },
         .e_anno_only => |anno| {
@@ -2336,7 +2336,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .fields_ext_idx = fields_ext_idx,
             } });
         },
-        .e_empty_record => |_| {
+        .e_empty_record => {
             node.tag = .expr_empty_record;
         },
         .e_zero_argument_tag => |e| {
@@ -2778,7 +2778,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 .name = @intFromEnum(tv.ref),
             } });
         },
-        .underscore => |_| {
+        .underscore => {
             node.tag = .ty_underscore;
         },
         .lookup => |t| {
@@ -3739,6 +3739,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
+        .private_type_in_exposed_type => |r| {
+            node.tag = .diag_private_type_in_exposed_type;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.private_type) } });
+        },
+        .private_type_in_exposed_field => |r| {
+            node.tag = .diag_private_type_in_exposed_field;
+            region = r.region;
+            node.setPayload(.{ .diag_three_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.field_name), .ident3 = @bitCast(r.private_type) } });
+        },
         .type_from_missing_module => |r| {
             node.tag = .diag_type_from_missing_module;
             region = r.region;
@@ -4060,6 +4070,23 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .type_not_exposed = .{
                 .module_name = @as(base.Ident.Idx, @bitCast(p.ident1)),
                 .type_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_type => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_type = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_field => {
+            const p = payload.diag_three_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_field = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .field_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident3)),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -4504,8 +4531,8 @@ test "NodeStore empty CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_empty_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize using CompactWriter
     var writer = CompactWriter.init();
@@ -4515,16 +4542,13 @@ test "NodeStore empty CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4570,8 +4594,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_basic_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4581,16 +4605,13 @@ test "NodeStore basic CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4662,8 +4683,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_multiple_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_multiple_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4673,16 +4694,13 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

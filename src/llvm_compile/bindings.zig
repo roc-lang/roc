@@ -438,21 +438,6 @@ pub extern fn LLVMInitializeX86AsmParser() void;
 /// Initializes LoongArch assembly parser.
 pub extern fn LLVMInitializeLoongArchAsmParser() void;
 
-// LLD linker functions
-extern fn ZigLLDLinkCOFF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-extern fn ZigLLDLinkELF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-extern fn ZigLLDLinkMachO(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-
-/// Links object files using LLD for Windows COFF format.
-pub const LinkCOFF = ZigLLDLinkCOFF;
-/// Links object files using LLD for Unix ELF format.
-pub const LinkELF = ZigLLDLinkELF;
-/// Links object files using LLD for macOS Mach-O format.
-pub const LinkMachO = ZigLLDLinkMachO;
-/// Links object files using LLD for WebAssembly format.
-pub const LinkWasm = ZigLLDLinkWasm;
-
 /// Archive file format types supported by LLVM.
 pub const ArchiveKind = enum(c_int) {
     GNU,
