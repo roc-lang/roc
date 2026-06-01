@@ -188,6 +188,61 @@ pub fn pushStringPair(self: *SExprTree, key: []const u8, value: []const u8) std.
     try self.endNode(begin, attrs);
 }
 
+/// Push a formatted string (copied into data buffer) onto the stack.
+pub fn pushStringFmt(self: *SExprTree, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
+    const begin: u32 = @intCast(self.data.items.len);
+    var writer = self.data.writer();
+    try writer.print(fmt, args);
+    const end: u32 = @intCast(self.data.items.len);
+    try self.stack.append(Node{ .String = .{ .begin = begin, .end = end } });
+}
+
+/// Push a formatted string key-value pair onto the stack.
+pub fn pushStringPairFmt(self: *SExprTree, key: []const u8, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
+    const begin = self.beginNode();
+    try self.pushStaticAtom(key);
+    try self.pushStringFmt(fmt, args);
+    const attrs = self.beginNode();
+    try self.endNode(begin, attrs);
+}
+
+/// Reserve bytes in the data buffer for a caller-owned formatter that needs a
+/// temporary output buffer. The caller must finish with pushReservedString or
+/// discardReservedStringBuffer.
+pub fn reserveStringBuffer(self: *SExprTree, byte_count: usize) std.mem.Allocator.Error!u32 {
+    const begin: u32 = @intCast(self.data.items.len);
+    try self.data.resize(@as(usize, begin) + byte_count);
+    return begin;
+}
+
+/// Return the currently reserved data-buffer bytes starting at `begin`.
+pub fn reservedStringBuffer(self: *SExprTree, begin: u32) []u8 {
+    return self.data.items[@intCast(begin)..];
+}
+
+/// Release bytes reserved with `reserveStringBuffer` without pushing a node.
+pub fn discardReservedStringBuffer(self: *SExprTree, begin: u32) void {
+    self.data.shrinkRetainingCapacity(@intCast(begin));
+}
+
+/// Push a string produced inside a reserved data-buffer range.
+pub fn pushReservedString(self: *SExprTree, begin: u32, value: []const u8) std.mem.Allocator.Error!void {
+    const start: usize = @intCast(begin);
+    std.debug.assert(start + value.len <= self.data.items.len);
+    std.mem.copyForwards(u8, self.data.items[start..][0..value.len], value);
+    self.data.shrinkRetainingCapacity(start + value.len);
+    try self.stack.append(Node{ .String = .{ .begin = begin, .end = @intCast(start + value.len) } });
+}
+
+/// Push a key-value pair for a string produced inside a reserved data-buffer range.
+pub fn pushReservedStringPair(self: *SExprTree, key: []const u8, begin: u32, value: []const u8) std.mem.Allocator.Error!void {
+    const node_begin = self.beginNode();
+    try self.pushStaticAtom(key);
+    try self.pushReservedString(begin, value);
+    const attrs = self.beginNode();
+    try self.endNode(node_begin, attrs);
+}
+
 /// Push a dynamic atom (copied into data buffer) onto the stack
 pub fn pushDynamicAtom(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!void {
     const begin: u32 = @intCast(self.data.items.len);

@@ -2648,9 +2648,7 @@ pub const ReportBuilder = struct {
                     const elem_type_str = try report.addOwnedString(self.getFormattedString(elem_content_idx));
 
                     try report.document.addText("    element ");
-                    var buf: [20]u8 = undefined;
-                    const index_str = std.fmt.bufPrint(&buf, "{}", .{i}) catch "?";
-                    try report.document.addAnnotated(index_str, .emphasized);
+                    try self.addAnnotatedFmt(report, "{d}", .{i}, .emphasized);
                     try report.document.addText(": ");
                     try report.document.addAnnotated(elem_type_str, .type_variable);
                     try report.document.addLineBreak();
@@ -2826,8 +2824,8 @@ pub const ReportBuilder = struct {
                             try report.document.addReflowingText(" field doesn't support equality:");
                             try report.document.addLineBreak();
                             // Recurse with more indent
-                            var deeper_indent_buf: [64]u8 = undefined;
-                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            const deeper_indent = try self.allocDeeperIndent(indent);
+                            defer self.gpa.free(deeper_indent);
                             _ = try self.explainWhyNoEquality(report, field_content, deeper_indent);
                             return true;
                         }
@@ -2838,16 +2836,14 @@ pub const ReportBuilder = struct {
                     const elems = self.snapshots.sliceVars(tuple.elems);
                     for (elems, 0..) |elem_content, i| {
                         if (!self.snapshotSupportsEquality(elem_content)) {
-                            var buf: [20]u8 = undefined;
-                            const index_str = std.fmt.bufPrint(&buf, "{}", .{i}) catch "?";
                             try report.document.addText(indent);
                             try report.document.addReflowingText("Element ");
-                            try report.document.addAnnotated(index_str, .emphasized);
+                            try self.addAnnotatedFmt(report, "{d}", .{i}, .emphasized);
                             try report.document.addReflowingText(" doesn't support equality:");
                             try report.document.addLineBreak();
                             // Recurse with more indent
-                            var deeper_indent_buf: [64]u8 = undefined;
-                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            const deeper_indent = try self.allocDeeperIndent(indent);
+                            defer self.gpa.free(deeper_indent);
                             _ = try self.explainWhyNoEquality(report, elem_content, deeper_indent);
                             return true;
                         }
@@ -2867,17 +2863,15 @@ pub const ReportBuilder = struct {
                                 try report.document.addReflowingText("The ");
                                 try report.document.addAnnotated(tag_name, .emphasized);
                                 if (args.len > 1) {
-                                    var buf: [32]u8 = undefined;
-                                    const payload_str = std.fmt.bufPrint(&buf, " tag's payload {}", .{i}) catch " tag's payload";
-                                    try report.document.addReflowingText(payload_str);
+                                    try self.addReflowingTextFmt(report, " tag's payload {d}", .{i});
                                 } else {
                                     try report.document.addReflowingText(" tag's payload");
                                 }
                                 try report.document.addReflowingText(" doesn't support equality:");
                                 try report.document.addLineBreak();
                                 // Recurse with more indent
-                                var deeper_indent_buf: [64]u8 = undefined;
-                                const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                                const deeper_indent = try self.allocDeeperIndent(indent);
+                                defer self.gpa.free(deeper_indent);
                                 _ = try self.explainWhyNoEquality(report, arg_content, deeper_indent);
                                 return true;
                             }
@@ -2897,8 +2891,8 @@ pub const ReportBuilder = struct {
                             try report.document.addReflowingText(" type's backing structure doesn't support equality:");
                             try report.document.addLineBreak();
                             // Recurse with more indent
-                            var deeper_indent_buf: [64]u8 = undefined;
-                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            const deeper_indent = try self.allocDeeperIndent(indent);
+                            defer self.gpa.free(deeper_indent);
                             _ = try self.explainWhyNoEquality(report, backing, deeper_indent);
                             return true;
                         }
@@ -3417,6 +3411,22 @@ pub const ReportBuilder = struct {
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, index);
         return try report.addOwnedString(self.bytes_buf.items);
+    }
+
+    fn addAnnotatedFmt(self: *Self, report: *Report, comptime fmt: []const u8, args: anytype, annotation: reporting.Annotation) !void {
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print(fmt, args);
+        try report.document.addAnnotated(self.bytes_buf.items, annotation);
+    }
+
+    fn addReflowingTextFmt(self: *Self, report: *Report, comptime fmt: []const u8, args: anytype) !void {
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print(fmt, args);
+        try report.document.addReflowingText(self.bytes_buf.items);
+    }
+
+    fn allocDeeperIndent(self: *Self, indent: []const u8) ![]u8 {
+        return try std.fmt.allocPrint(self.gpa, "{s}    ", .{indent});
     }
 
     // Given a buffer and a number, write a the human-readably ordinal number

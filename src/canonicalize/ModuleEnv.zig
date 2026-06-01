@@ -1079,18 +1079,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const MAX_IDENT_FIXED_BUFFER = 100;
-            if (owned_ident.len > MAX_IDENT_FIXED_BUFFER - 1) {
-                try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore to suppress this warning.");
-            } else {
-                // format the identifier with an underscore
-                try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
-                var buf: [MAX_IDENT_FIXED_BUFFER]u8 = undefined;
-                const owned_ident_with_underscore = try std.fmt.bufPrint(&buf, "_{s}", .{owned_ident});
-
-                try report.document.addUnqualifiedSymbol(owned_ident_with_underscore);
-                try report.document.addReflowingText(" to suppress this warning.");
-            }
+            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+            const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
+            defer allocator.free(ident_with_underscore);
+            try report.document.addUnqualifiedSymbol(ident_with_underscore);
+            try report.document.addReflowingText(" to suppress this warning.");
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("The unused variable is declared here:");
@@ -3614,19 +3607,9 @@ pub fn insertQualifiedIdent(
     parent: []const u8,
     child: []const u8,
 ) std.mem.Allocator.Error!Ident.Idx {
-    const total_len = parent.len + 1 + child.len; // parent + '.' + child
-
-    if (total_len <= 256) {
-        // Use stack buffer for small identifiers
-        var buf: [256]u8 = undefined;
-        const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ parent, child }) catch unreachable;
-        return try self.insertIdent(Ident.for_text(qualified));
-    } else {
-        // Use heap allocation for large identifiers
-        const qualified = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ parent, child });
-        defer self.gpa.free(qualified);
-        return try self.insertIdent(Ident.for_text(qualified));
-    }
+    const qualified = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ parent, child });
+    defer self.gpa.free(qualified);
+    return try self.insertIdent(Ident.for_text(qualified));
 }
 
 /// Registers a method identifier mapping for fast index-based lookup.

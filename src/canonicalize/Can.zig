@@ -128,6 +128,10 @@ scratch_vars: base.Scratch(TypeVar),
 scratch_idents: base.Scratch(Ident.Idx),
 /// Scratch type variable identifiers for underscore validation
 scratch_type_var_validation: base.Scratch(Ident.Idx),
+/// Scratch bytes for short-lived name and literal construction.
+scratch_bytes: base.Scratch(u8),
+/// Scratch bytes used only while interning qualified identifiers.
+qualified_ident_bytes: base.Scratch(u8),
 /// Scratch type variable problems
 scratch_type_var_problems: base.Scratch(TypeVarProblem),
 /// Scratch ident
@@ -245,6 +249,82 @@ const TypeBindingLocation = struct {
     binding: *Scope.TypeBinding,
 };
 
+fn scratchBytesTop(self: *const Self) u32 {
+    return self.scratch_bytes.top();
+}
+
+fn clearScratchBytesFrom(self: *Self, top: u32) void {
+    self.scratch_bytes.clearFrom(top);
+}
+
+fn scratchBytesFrom(self: *Self, top: u32) []const u8 {
+    return self.scratch_bytes.sliceFromStart(top);
+}
+
+fn scratchSliceOffsetIn(scratch: *const base.Scratch(u8), bytes: []const u8) ?usize {
+    const items = scratch.items.items;
+    if (items.len == 0 or bytes.len == 0) return null;
+
+    const src_start = @intFromPtr(bytes.ptr);
+    const items_start = @intFromPtr(items.ptr);
+    const items_end = items_start + items.len;
+    return if (src_start >= items_start and src_start < items_end)
+        src_start - items_start
+    else
+        null;
+}
+
+fn scratchAppendSlice(self: *Self, bytes: []const u8) std.mem.Allocator.Error!void {
+    const src_offset = scratchSliceOffsetIn(&self.scratch_bytes, bytes);
+
+    try self.scratch_bytes.items.ensureUnusedCapacity(bytes.len);
+
+    const source = if (src_offset) |offset|
+        self.scratch_bytes.items.items[offset..][0..bytes.len]
+    else
+        bytes;
+    try self.scratch_bytes.items.appendSlice(source);
+}
+
+fn scratchAppendByte(self: *Self, byte: u8) std.mem.Allocator.Error!void {
+    try self.scratch_bytes.append(byte);
+}
+
+fn scratchFmt(self: *Self, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error![]const u8 {
+    const top = self.scratchBytesTop();
+    var writer = self.scratch_bytes.items.writer();
+    try writer.print(fmt, args);
+    return self.scratchBytesFrom(top);
+}
+
+fn appendQualifiedText(scratch: *base.Scratch(u8), parent: []const u8, child: []const u8) std.mem.Allocator.Error![]const u8 {
+    const top = scratch.top();
+    const parent_offset = scratchSliceOffsetIn(scratch, parent);
+    const child_offset = scratchSliceOffsetIn(scratch, child);
+
+    try scratch.items.ensureUnusedCapacity(parent.len + 1 + child.len);
+
+    const items = scratch.items.items;
+    const parent_source = if (parent_offset) |offset| items[offset..][0..parent.len] else parent;
+    const child_source = if (child_offset) |offset| items[offset..][0..child.len] else child;
+
+    scratch.items.appendSliceAssumeCapacity(parent_source);
+    scratch.items.appendAssumeCapacity('.');
+    scratch.items.appendSliceAssumeCapacity(child_source);
+    return scratch.sliceFromStart(top);
+}
+
+fn scratchQualifiedText(self: *Self, parent: []const u8, child: []const u8) std.mem.Allocator.Error![]const u8 {
+    return appendQualifiedText(&self.scratch_bytes, parent, child);
+}
+
+fn insertQualifiedIdent(self: *Self, parent: []const u8, child: []const u8) std.mem.Allocator.Error!Ident.Idx {
+    const top = self.qualified_ident_bytes.top();
+    defer self.qualified_ident_bytes.clearFrom(top);
+    const qualified = try appendQualifiedText(&self.qualified_ident_bytes, parent, child);
+    return try self.env.insertIdent(Ident.for_text(qualified));
+}
+
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,
@@ -277,6 +357,8 @@ pub fn deinit(
     self.scratch_vars.deinit();
     self.scratch_idents.deinit();
     self.scratch_type_var_validation.deinit();
+    self.scratch_bytes.deinit();
+    self.qualified_ident_bytes.deinit();
     self.scratch_type_var_problems.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_seen_record_fields.deinit();
@@ -337,6 +419,8 @@ fn initInternal(
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
+        .scratch_bytes = try base.Scratch(u8).init(gpa),
+        .qualified_ident_bytes = try base.Scratch(u8).init(gpa),
         .scratch_type_var_problems = try base.Scratch(TypeVarProblem).init(gpa),
         .scratch_record_fields = try base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
@@ -1063,7 +1147,7 @@ fn registerTypeDecl(
     const qualified_name_idx = if (parent_name) |parent_idx| blk: {
         const parent_text = self.env.getIdent(parent_idx);
         const type_text = self.env.getIdent(type_header.name);
-        break :blk try self.env.insertQualifiedIdent(parent_text, type_text);
+        break :blk try self.insertQualifiedIdent(parent_text, type_text);
     } else type_header.name;
 
     // Compute relative_name: the type name without the module prefix
@@ -1073,7 +1157,7 @@ fn registerTypeDecl(
         // Nested case: build "Num.U8" from relative_parent="Num" and type="U8"
         const rel_parent_text = self.env.getIdent(rel_parent_idx);
         const type_relative = self.env.getIdent(type_header.relative_name);
-        break :blk try self.env.insertQualifiedIdent(rel_parent_text, type_relative);
+        break :blk try self.insertQualifiedIdent(rel_parent_text, type_relative);
     } else type_header.relative_name;
 
     // Create a new header with the qualified name if needed
@@ -1373,12 +1457,12 @@ fn predeclareAssociatedTypePlaceholdersFromScope(
         const nested_ident = self.parse_ir.tokens.resolveIdentifier(nested_name_tok) orelse continue;
         const region = self.parse_ir.tokenizedRegionToRegion(.{ .start = decl.region.start, .end = decl.region.end });
 
-        const nested_qualified = try self.env.insertQualifiedIdent(
+        const nested_qualified = try self.insertQualifiedIdent(
             self.env.getIdent(parent_name),
             self.env.getIdent(nested_ident),
         );
         const nested_relative = if (relative_parent_name) |relative_parent|
-            try self.env.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_ident))
+            try self.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_ident))
         else
             nested_ident;
 
@@ -1412,7 +1496,7 @@ fn predeclareAssociatedTypePlaceholdersFromScope(
 
         if (decl.associated_scope) |nested_scope_idx| {
             const nested_relative_parent = if (relative_parent_name) |relative_parent|
-                try self.env.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_ident))
+                try self.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_ident))
             else
                 nested_ident;
             try self.predeclareAssociatedTypePlaceholdersFromScope(nested_qualified, nested_relative_parent, nested_scope_idx);
@@ -1448,22 +1532,15 @@ fn introduceNestedItemAliases(
                         // Build fully qualified name (e.g., "Module.Outer.Inner.val")
                         const qualified_text = self.env.getIdent(qualified_parent_idx);
                         const decl_text = self.env.getIdent(decl_ident);
-                        const full_qualified_ident_idx = try self.env.insertQualifiedIdent(qualified_text, decl_text);
+                        const full_qualified_ident_idx = try self.insertQualifiedIdent(qualified_text, decl_text);
 
                         // Look up the fully qualified pattern
                         switch (self.scopeLookup(.ident, full_qualified_ident_idx)) {
                             .found => |pattern_idx| {
                                 const scope = &self.scopes.items[self.scopes.items.len - 1];
 
-                                // Build prefixed name for this scope (e.g., "Inner.val")
-                                // Need to copy prefix to buffer to avoid invalidation
-                                var prefix_buf: [256]u8 = undefined;
-                                if (prefix.len > prefix_buf.len) continue;
-                                @memcpy(prefix_buf[0..prefix.len], prefix);
-                                const safe_prefix = prefix_buf[0..prefix.len];
-
                                 const decl_text_fresh = self.env.getIdent(decl_ident);
-                                const prefixed_ident_idx = try self.env.insertQualifiedIdent(safe_prefix, decl_text_fresh);
+                                const prefixed_ident_idx = try self.insertQualifiedIdent(prefix, decl_text_fresh);
                                 try scope.idents.put(self.env.gpa, prefixed_ident_idx, pattern_idx);
                             },
                             .not_found => {},
@@ -1480,20 +1557,13 @@ fn introduceNestedItemAliases(
                     // Build fully qualified name for the nested type
                     const qualified_text = self.env.getIdent(qualified_parent_idx);
                     const nested_type_text = self.env.getIdent(nested_type_ident);
-                    const nested_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_type_text);
-
-                    // Build new prefix (e.g., "Inner.Deep")
-                    // Need to copy to buffer to avoid invalidation
-                    var new_prefix_buf: [256]u8 = undefined;
-                    if (prefix.len > new_prefix_buf.len) continue;
-                    @memcpy(new_prefix_buf[0..prefix.len], prefix);
+                    const nested_qualified_idx = try self.insertQualifiedIdent(qualified_text, nested_type_text);
 
                     // Re-fetch nested_type_text after insertQualifiedIdent may have reallocated
                     const nested_type_text_fresh = self.env.getIdent(nested_type_ident);
-                    if (prefix.len + 1 + nested_type_text_fresh.len > new_prefix_buf.len) continue;
-                    new_prefix_buf[prefix.len] = '.';
-                    @memcpy(new_prefix_buf[prefix.len + 1 ..][0..nested_type_text_fresh.len], nested_type_text_fresh);
-                    const new_prefix = new_prefix_buf[0 .. prefix.len + 1 + nested_type_text_fresh.len];
+                    const prefix_top = self.scratchBytesTop();
+                    defer self.clearScratchBytesFrom(prefix_top);
+                    const new_prefix = try self.scratchQualifiedText(prefix, nested_type_text_fresh);
 
                     // Recursively introduce items from this nested type
                     try self.introduceNestedItemAliases(nested_qualified_idx, new_prefix, nested_assoc.statements);
@@ -1709,7 +1779,7 @@ fn publishRelativeAssocName(
     const rel_idx = relative_name_idx orelse return;
     const rel_text = self.env.getIdent(rel_idx);
     const decl_text = self.env.getIdent(decl_ident);
-    const rel_qualified = try self.env.insertQualifiedIdent(rel_text, decl_text);
+    const rel_qualified = try self.insertQualifiedIdent(rel_text, decl_text);
     try self.scopes.items[0].idents.put(self.env.gpa, rel_qualified, pattern_idx);
 }
 
@@ -1747,7 +1817,7 @@ fn publishAssociatedPatternVisibility(
     }
 
     if (self.scopes.items.len > 0) {
-        const bare_type_qualified = try self.env.insertQualifiedIdent(
+        const bare_type_qualified = try self.insertQualifiedIdent(
             self.env.getIdent(type_name),
             self.env.getIdent(decl_ident),
         );
@@ -1769,11 +1839,11 @@ fn predeclareAssociatedValuePattern(
 ) std.mem.Allocator.Error!void {
     const parent_text = self.env.getIdent(parent_name);
     const decl_text = self.env.getIdent(decl_ident);
-    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+    const qualified_idx = try self.insertQualifiedIdent(parent_text, decl_text);
     const type_qualified_idx: Ident.Idx = if (parent_name.eql(type_name))
         qualified_idx
     else
-        try self.env.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(decl_ident));
+        try self.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(decl_ident));
 
     const pattern_idx = try self.findOrCreateAssocPattern(qualified_idx, decl_ident, type_qualified_idx, region);
     try self.publishAssociatedPatternVisibility(
@@ -1888,7 +1958,7 @@ fn registerNestedTypeDecl(
 
     try self.registerTypeDecl(null, nested_type_decl, parent_name, relative_name_idx, true, true);
 
-    const nested_qualified_idx = try self.env.insertQualifiedIdent(
+    const nested_qualified_idx = try self.insertQualifiedIdent(
         self.env.getIdent(parent_name),
         self.env.getIdent(nested_type_ident),
     );
@@ -1900,7 +1970,7 @@ fn registerNestedTypeDecl(
         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
         try current_scope.introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
 
-        const user_qualified_ident_idx = try self.env.insertQualifiedIdent(
+        const user_qualified_ident_idx = try self.insertQualifiedIdent(
             self.env.getIdent(type_name),
             self.env.getIdent(nested_type_ident),
         );
@@ -1956,12 +2026,12 @@ fn predeclareAssociatedValuesFromScope(
                 const nested_assoc = nested_type_decl.associated orelse continue;
                 const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
                 const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
-                const nested_parent = try self.env.insertQualifiedIdent(
+                const nested_parent = try self.insertQualifiedIdent(
                     self.env.getIdent(parent_name),
                     self.env.getIdent(nested_type_ident),
                 );
                 const nested_relative = if (relative_name_idx) |relative_parent|
-                    try self.env.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_type_ident))
+                    try self.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_type_ident))
                 else
                     nested_type_ident;
                 try self.predeclareAssociatedValuesFromScope(nested_parent, nested_relative, nested_type_ident, nested_assoc.scope);
@@ -2012,7 +2082,7 @@ fn canonicalizeAssociatedItems(
                 // canonical source walk.
                 try self.registerNestedTypeDecl(parent_name, relative_name_idx, type_name, nested_type_decl);
 
-                const nested_qualified_idx = try self.env.insertQualifiedIdent(
+                const nested_qualified_idx = try self.insertQualifiedIdent(
                     self.env.getIdent(parent_name),
                     self.env.getIdent(nested_type_ident),
                 );
@@ -2021,7 +2091,7 @@ fn canonicalizeAssociatedItems(
                 // so nested items inside the block get prefixes like
                 // `Outer.Inner.item`.
                 const nested_relative_for_block: ?Ident.Idx = if (relative_name_idx) |rel_idx|
-                    try self.env.insertQualifiedIdent(self.env.getIdent(rel_idx), self.env.getIdent(nested_type_ident))
+                    try self.insertQualifiedIdent(self.env.getIdent(rel_idx), self.env.getIdent(nested_type_ident))
                 else
                     nested_type_ident;
 
@@ -2086,7 +2156,7 @@ fn canonicalizeAssociatedItems(
                                         const parent_text = self.env.getIdent(parent_name);
                                         const decl_text = self.env.getIdent(decl_ident);
 
-                                        break :blk2 try self.env.insertQualifiedIdent(parent_text, decl_text);
+                                        break :blk2 try self.insertQualifiedIdent(parent_text, decl_text);
                                     };
 
                                     // Type-qualified form (e.g. "Str.count_utf8_bytes")
@@ -2096,7 +2166,7 @@ fn canonicalizeAssociatedItems(
                                     else blk_tq: {
                                         const type_text = self.env.getIdent(type_name);
                                         const decl_text = self.env.getIdent(decl_ident);
-                                        break :blk_tq try self.env.insertQualifiedIdent(type_text, decl_text);
+                                        break :blk_tq try self.insertQualifiedIdent(type_text, decl_text);
                                     };
 
                                     // Canonicalize with the qualified name and type annotation
@@ -2142,7 +2212,7 @@ fn canonicalizeAssociatedItems(
                                         const type_text = self.env.getIdent(type_name);
                                         const decl_text = self.env.getIdent(decl_ident);
 
-                                        break :blk2 try self.env.insertQualifiedIdent(type_text, decl_text);
+                                        break :blk2 try self.insertQualifiedIdent(type_text, decl_text);
                                     };
 
                                     // Find the scope where the parent type is defined (linear search backward)
@@ -2181,7 +2251,7 @@ fn canonicalizeAssociatedItems(
                     const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
-                    const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
+                    const qualified_idx = try self.insertQualifiedIdent(parent_text, name_text);
 
                     // Adopt any pre-existing forward-reference placeholder keyed by
                     // the type-qualified name (e.g. `Str.count_utf8_bytes` inside
@@ -2198,7 +2268,7 @@ fn canonicalizeAssociatedItems(
                         else blk_tq: {
                             const tn = self.env.getIdent(type_name);
                             const nn = self.env.getIdent(name_ident);
-                            break :blk_tq try self.env.insertQualifiedIdent(tn, nn);
+                            break :blk_tq try self.insertQualifiedIdent(tn, nn);
                         };
                         if (tq_for_adopt.eql(qualified_idx)) break :blk_adopt null;
                         var s_idx = self.scopes.items.len;
@@ -2238,7 +2308,7 @@ fn canonicalizeAssociatedItems(
                         // captured before this point.
                         const type_text_now = self.env.getIdent(type_name);
                         const name_text_now = self.env.getIdent(name_ident);
-                        break :blk_atq try self.env.insertQualifiedIdent(type_text_now, name_text_now);
+                        break :blk_atq try self.insertQualifiedIdent(type_text_now, name_text_now);
                     };
 
                     var anno_search_idx = self.scopes.items.len;
@@ -2283,7 +2353,7 @@ fn canonicalizeAssociatedItems(
                         // Build qualified name (e.g., "Foo.bar")
                         const parent_text = self.env.getIdent(parent_name);
                         const decl_text = self.env.getIdent(decl_ident);
-                        const qualified_idx = try self.env.insertQualifiedIdent(parent_text, decl_text);
+                        const qualified_idx = try self.insertQualifiedIdent(parent_text, decl_text);
 
                         // Type-qualified form used to pick up any forward-reference
                         // placeholder a sibling body created.
@@ -2291,7 +2361,7 @@ fn canonicalizeAssociatedItems(
                             qualified_idx
                         else blk_tqd: {
                             const type_text = self.env.getIdent(type_name);
-                            break :blk_tqd try self.env.insertQualifiedIdent(type_text, decl_text);
+                            break :blk_tqd try self.insertQualifiedIdent(type_text, decl_text);
                         };
 
                         // Canonicalize with the qualified name
@@ -2333,7 +2403,7 @@ fn canonicalizeAssociatedItems(
                             qualified_idx
                         else blk2: {
                             const type_text = self.env.getIdent(type_name);
-                            break :blk2 try self.env.insertQualifiedIdent(type_text, decl_text);
+                            break :blk2 try self.insertQualifiedIdent(type_text, decl_text);
                         };
 
                         // Find the scope where the parent type is defined (linear search backward)
@@ -2412,7 +2482,7 @@ fn canonicalizeTopLevelTypeDecl(
         const qualified_type_ident = if (std.mem.eql(u8, module_name_text, type_name_text))
             type_ident
         else
-            try self.env.insertQualifiedIdent(module_name_text, type_name_text);
+            try self.insertQualifiedIdent(module_name_text, type_name_text);
 
         try self.processAssociatedBlock(qualified_type_ident, type_ident, type_ident, assoc);
     }
@@ -3990,8 +4060,9 @@ fn canonicalizeImportStatement(
 
                 // Use a unique placeholder identifier that starts with '#' to ensure it can't
                 // collide with user-defined identifiers (# starts a comment in Roc)
-                var buf: [32]u8 = undefined;
-                const placeholder_text = std.fmt.bufPrint(&buf, "#malformed_import_{d}", .{self.malformed_import_count}) catch unreachable;
+                const scratch_top = self.scratchBytesTop();
+                defer self.clearScratchBytesFrom(scratch_top);
+                const placeholder_text = try self.scratchFmt("#malformed_import_{d}", .{self.malformed_import_count});
                 self.malformed_import_count += 1;
                 break :blk try self.env.insertIdent(base.Ident.for_text(placeholder_text));
             }
@@ -4760,12 +4831,13 @@ fn canonicalizeRecordField(
 }
 
 /// Parse an integer with underscores.
-pub fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8) !T {
-    var buf: [128]u8 = undefined;
+pub fn parseIntWithUnderscores(allocator: std.mem.Allocator, comptime T: type, text: []const u8, int_base: u8) !T {
+    const buf = try allocator.alloc(u8, text.len);
+    defer allocator.free(buf);
+
     var len: usize = 0;
     for (text) |char| {
         if (char != '_') {
-            if (len >= buf.len) return error.Overflow;
             buf[len] = char;
             len += 1;
         }
@@ -4813,7 +4885,7 @@ fn recordNumeralLiteralForExpr(
 
 /// Parse an integer literal's textual form into a CIR.IntValue, honoring an
 /// optional leading minus and `0x`/`0o`/`0b`/`0d` base prefixes.
-pub fn parseIntText(num_text: []const u8) ?CIR.IntValue {
+pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) ?CIR.IntValue {
     const is_negated = num_text[0] == '-';
     const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
@@ -4847,7 +4919,7 @@ pub fn parseIntText(num_text: []const u8) ?CIR.IntValue {
 
     const digit_part = num_text[first_digit..];
 
-    const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch {
+    const u128_val = parseIntWithUnderscores(allocator, u128, digit_part, int_base) catch {
         return null;
     };
 
@@ -5077,7 +5149,7 @@ pub fn canonicalizeExpr(
                                 // Build the fully qualified name and try to look it up
                                 const type_text = self.env.getIdent(module_alias);
                                 const field_text = self.env.getIdent(ident);
-                                const type_qualified_idx = try self.env.insertQualifiedIdent(type_text, field_text);
+                                const type_qualified_idx = try self.insertQualifiedIdent(type_text, field_text);
 
                                 // For auto-imported types (like Str, Bool from Builtin module),
                                 // we need to look up the method in the Builtin module, not current scope
@@ -5089,7 +5161,7 @@ pub fn canonicalizeExpr(
                                         // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
                                         // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
                                         const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
-                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_type_text, field_text);
+                                        const fully_qualified_idx = try self.insertQualifiedIdent(qualified_type_text, field_text);
                                         const qualified_text = self.env.getIdent(fully_qualified_idx);
 
                                         // Try to find the method in the Builtin module's exposed items
@@ -5239,24 +5311,19 @@ pub fn canonicalizeExpr(
                             // e.g., for Outer.Inner.inner: qualifiers[1..] = [Inner], field = inner
                             // Result: "Inner.inner"
                             // For simple access like Outer.outer, this is just "outer" (field_text)
-                            var nested_path_buf: [512]u8 = undefined;
+                            const lookup_scratch_top = self.scratchBytesTop();
+                            defer self.clearScratchBytesFrom(lookup_scratch_top);
                             const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
-                                var pos: usize = 0;
                                 for (qualifier_tokens[1..]) |qtok| {
                                     const qtok_idx = @as(Token.Idx, @intCast(qtok));
                                     if (self.parse_ir.tokens.resolveIdentifier(qtok_idx)) |q_ident| {
                                         const q_text = self.env.getIdent(q_ident);
-                                        if (pos + q_text.len + 1 > nested_path_buf.len) break :nested_blk field_text;
-                                        @memcpy(nested_path_buf[pos..][0..q_text.len], q_text);
-                                        pos += q_text.len;
-                                        nested_path_buf[pos] = '.';
-                                        pos += 1;
+                                        try self.scratchAppendSlice(q_text);
+                                        try self.scratchAppendByte('.');
                                     }
                                 }
-                                if (pos + field_text.len > nested_path_buf.len) break :nested_blk field_text;
-                                @memcpy(nested_path_buf[pos..][0..field_text.len], field_text);
-                                pos += field_text.len;
-                                break :nested_blk nested_path_buf[0..pos];
+                                try self.scratchAppendSlice(field_text);
+                                break :nested_blk self.scratchBytesFrom(lookup_scratch_top);
                             } else field_text;
 
                             const target_node_idx_opt: ?u32 = if (auto_imported_type_info) |info| blk: {
@@ -5266,7 +5333,6 @@ pub fn canonicalizeExpr(
                                 // build the full qualified name using qualified_type_ident.
                                 // For regular user module imports (statement_idx is null), build the full path
                                 // using module name + nested path (for nested access like Outer.Inner.inner).
-                                var full_lookup_buf: [512]u8 = undefined;
                                 const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
                                     // Build the fully qualified member name using the type's qualified ident
                                     // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
@@ -5276,7 +5342,7 @@ pub fn canonicalizeExpr(
                                     // Note: qualified_type_ident is always stored in the calling module's ident store
                                     // (self.env), since Ident.Idx values are not transferable between stores.
                                     const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_path);
+                                    const fully_qualified_idx = try self.insertQualifiedIdent(qualified_text, nested_path);
                                     break :name_blk self.env.getIdent(fully_qualified_idx);
                                 } else name_blk: {
                                     // For nested module access (qualifier_tokens.len > 1), exposed items
@@ -5289,13 +5355,7 @@ pub fn canonicalizeExpr(
                                         break :name_blk field_text;
                                     }
                                     const mod_name = module_env.module_name;
-                                    if (mod_name.len + 1 + nested_path.len > full_lookup_buf.len) {
-                                        break :name_blk nested_path;
-                                    }
-                                    @memcpy(full_lookup_buf[0..mod_name.len], mod_name);
-                                    full_lookup_buf[mod_name.len] = '.';
-                                    @memcpy(full_lookup_buf[mod_name.len + 1 ..][0..nested_path.len], nested_path);
-                                    break :name_blk full_lookup_buf[0 .. mod_name.len + 1 + nested_path.len];
+                                    break :name_blk try self.scratchQualifiedText(mod_name, nested_path);
                                 };
 
                                 // Look up the associated item by its name
@@ -5632,18 +5692,14 @@ pub fn canonicalizeExpr(
             const numeric_expr: CIR.Expr = switch (literal.compact) {
                 .small_dec => |value| blk: {
                     const scaled: i128 = @as(i128, value.numerator) * std.math.pow(i128, 10, @as(i128, 18 - value.denominator_power_of_ten));
-                    var int_bytes: [16]u8 = undefined;
-                    @memcpy(&int_bytes, std.mem.asBytes(&scaled));
                     break :blk CIR.Expr{ .e_typed_frac = .{
-                        .value = .{ .bytes = int_bytes, .kind = .i128 },
+                        .value = .{ .bytes = @bitCast(scaled), .kind = .i128 },
                         .type_name = type_ident,
                     } };
                 },
                 .dec => |value| blk: {
-                    var int_bytes: [16]u8 = undefined;
-                    @memcpy(&int_bytes, std.mem.asBytes(&value));
                     break :blk CIR.Expr{ .e_typed_frac = .{
-                        .value = .{ .bytes = int_bytes, .kind = .i128 },
+                        .value = .{ .bytes = @bitCast(value), .kind = .i128 },
                         .type_name = type_ident,
                     } };
                 },
@@ -7878,7 +7934,7 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
 
     // Step 3: Look up T.map2
     const type_name_text = self.env.getIdent(type_name);
-    const map2_method_name = try self.env.insertQualifiedIdent(type_name_text, "map2");
+    const map2_method_name = try self.insertQualifiedIdent(type_name_text, "map2");
 
     const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_method_name)) {
         .found => |found| found,
@@ -8238,16 +8294,10 @@ fn lookupImportedExposedTypeNode(
     type_path_text: []const u8,
 ) std.mem.Allocator.Error!?u32 {
     const module_name_text = imported_env.module_name;
-    const total_len = module_name_text.len + 1 + type_path_text.len;
-    const module_qualified_node_idx = if (total_len <= 256) blk: {
-        var buf: [256]u8 = undefined;
-        const module_qualified_text = std.fmt.bufPrint(&buf, "{s}.{s}", .{ module_name_text, type_path_text }) catch unreachable;
-        break :blk lookupExposedNodeByText(imported_env, module_qualified_text);
-    } else blk: {
-        const module_qualified_text = try std.fmt.allocPrint(self.env.gpa, "{s}.{s}", .{ module_name_text, type_path_text });
-        defer self.env.gpa.free(module_qualified_text);
-        break :blk lookupExposedNodeByText(imported_env, module_qualified_text);
-    };
+    const scratch_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(scratch_top);
+    const module_qualified_text = try self.scratchQualifiedText(module_name_text, type_path_text);
+    const module_qualified_node_idx = lookupExposedNodeByText(imported_env, module_qualified_text);
 
     if (module_qualified_node_idx) |target_node_idx| {
         return target_node_idx;
@@ -8729,14 +8779,17 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
                             const hex_code = input[i + 3 .. close_paren];
                             if (std.fmt.parseInt(u21, hex_code, 16)) |codepoint| {
                                 if (std.unicode.utf8ValidCodepoint(codepoint)) {
-                                    var buf: [4]u8 = undefined;
-                                    const len = std.unicode.utf8Encode(codepoint, &buf) catch {
+                                    const old_len = result.items.len;
+                                    try result.resize(allocator, old_len + 4);
+                                    const encoded = result.items[old_len..][0..4];
+                                    const len = std.unicode.utf8Encode(codepoint, encoded) catch {
+                                        result.shrinkRetainingCapacity(old_len);
                                         // Invalid, keep original
                                         try result.append(allocator, input[i]);
                                         i += 1;
                                         continue;
                                     };
-                                    try result.appendSlice(allocator, buf[0..len]);
+                                    result.shrinkRetainingCapacity(old_len + len);
                                     i = close_paren + 1;
                                     continue;
                                 }
@@ -13465,7 +13518,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                 // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
                 const qualified_type_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
                 const method_name_text = self.env.getIdent(method_name);
-                const qualified_method_name = try self.env.insertQualifiedIdent(qualified_type_text, method_name_text);
+                const qualified_method_name = try self.insertQualifiedIdent(qualified_type_text, method_name_text);
                 const qualified_text = self.env.getIdent(qualified_method_name);
 
                 // Look up the qualified method in the module's exposed items
@@ -14120,11 +14173,11 @@ fn reportExecutionRequiresAppOrDefaultApp(self: *Self) std.mem.Allocator.Error!v
 const min_i128_negated: u128 = 170141183460469231731687303715884105728;
 
 test "min_i128_negated is actually the minimum i128, negated" {
-    var min_i128_buf: [64]u8 = undefined;
-    const min_i128_str = std.fmt.bufPrint(&min_i128_buf, "{}", .{std.math.minInt(i128)}) catch unreachable;
+    const min_i128_str = try std.fmt.allocPrint(std.testing.allocator, "{}", .{std.math.minInt(i128)});
+    defer std.testing.allocator.free(min_i128_str);
 
-    var negated_buf: [64]u8 = undefined;
-    const negated_str = std.fmt.bufPrint(&negated_buf, "-{}", .{min_i128_negated}) catch unreachable;
+    const negated_str = try std.fmt.allocPrint(std.testing.allocator, "-{}", .{min_i128_negated});
+    defer std.testing.allocator.free(negated_str);
 
     try std.testing.expectEqualStrings(min_i128_str, negated_str);
 }

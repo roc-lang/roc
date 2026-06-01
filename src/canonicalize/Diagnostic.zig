@@ -1325,18 +1325,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        const MAX_IDENT_FIXED_BUFFER = 100;
-        if (owned_ident.len > MAX_IDENT_FIXED_BUFFER - 1) {
-            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore to suppress this warning.");
-        } else {
-            // format the identifier with an underscore
-            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
-            var buf: [MAX_IDENT_FIXED_BUFFER]u8 = undefined;
-            const owned_ident_with_underscore = try std.fmt.bufPrint(&buf, "_{s}", .{owned_ident});
-
-            try report.document.addUnqualifiedSymbol(owned_ident_with_underscore);
-            try report.document.addReflowingText(" to suppress this warning.");
-        }
+        try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+        const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});
+        defer gpa.free(ident_with_underscore);
+        try report.document.addUnqualifiedSymbol(ident_with_underscore);
+        try report.document.addReflowingText(" to suppress this warning.");
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("The unused variable is declared here:");

@@ -1996,9 +1996,7 @@ pub const Header = union(enum) {
                 try tree.pushStaticAtom("default-app");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
-                var buf: [32]u8 = undefined;
-                const idx_str = std.fmt.bufPrint(&buf, "{d}", .{a.main_fn_idx}) catch "(error)";
-                try tree.pushStringPair("main-fn-idx", idx_str);
+                try tree.pushStringPairFmt("main-fn-idx", "{d}", .{a.main_fn_idx});
                 try tree.endNode(begin, attrs);
             },
             .malformed => |a| {

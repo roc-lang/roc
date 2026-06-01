@@ -546,19 +546,17 @@ const Builder = struct {
     }
 
     fn writeBool(self: *Builder, value: bool) void {
-        const byte: [1]u8 = if (value) .{1} else .{0};
-        self.hasher.update(&byte);
+        const byte: u8 = if (value) 1 else 0;
+        self.hasher.update(std.mem.asBytes(&byte));
     }
 
     fn writeU32(self: *Builder, value: u32) void {
-        var bytes: [4]u8 = undefined;
-        bytes = .{
+        self.hasher.update(&.{
             @as(u8, @truncate(value)),
             @as(u8, @truncate(value >> 8)),
             @as(u8, @truncate(value >> 16)),
             @as(u8, @truncate(value >> 24)),
-        };
-        self.hasher.update(&bytes);
+        });
     }
 };
 
@@ -580,19 +578,17 @@ fn writeByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void 
 }
 
 fn writeBoolValue(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
-    const byte: [1]u8 = if (value) .{1} else .{0};
-    hasher.update(&byte);
+    const byte: u8 = if (value) 1 else 0;
+    hasher.update(std.mem.asBytes(&byte));
 }
 
 fn writeU32Value(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var bytes: [4]u8 = undefined;
-    bytes = .{
+    hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
         @as(u8, @truncate(value >> 16)),
         @as(u8, @truncate(value >> 24)),
-    };
-    hasher.update(&bytes);
+    });
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {

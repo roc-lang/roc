@@ -515,6 +515,13 @@ pub const IntValue = struct {
         }
     }
 
+    pub fn pushStringPair(self: IntValue, tree: *SExprTree, key: []const u8) std.mem.Allocator.Error!void {
+        const begin = try tree.reserveStringBuffer(40);
+        errdefer tree.discardReservedStringBuffer(begin);
+        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
+        try tree.pushReservedStringPair(key, begin, value_str);
+    }
+
     /// Calculate the int requirements of an IntValue
     pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
         var is_negated = false;

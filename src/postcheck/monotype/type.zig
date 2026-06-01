@@ -276,9 +276,8 @@ fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
 }
 
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &buf, value, .little);
-    hasher.update(&buf);
+    const little = std.mem.nativeToLittle(u32, value);
+    hasher.update(std.mem.asBytes(&little));
 }
 
 fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {

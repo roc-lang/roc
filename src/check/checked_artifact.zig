@@ -184,14 +184,12 @@ fn hashBytes(bytes: []const u8) [32]u8 {
 }
 
 fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var bytes: [4]u8 = undefined;
-    bytes = .{
+    hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
         @as(u8, @truncate(value >> 16)),
         @as(u8, @truncate(value >> 24)),
-    };
-    hasher.update(&bytes);
+    });
 }
 
 fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
@@ -3819,19 +3817,17 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     }
 
     fn writeBool(self: *SubstitutedCheckedTypeKeyBuilder, value: bool) void {
-        const byte: [1]u8 = if (value) .{1} else .{0};
-        self.hasher.update(&byte);
+        const byte: u8 = if (value) 1 else 0;
+        self.hasher.update(std.mem.asBytes(&byte));
     }
 
     fn writeU32(self: *SubstitutedCheckedTypeKeyBuilder, value: u32) void {
-        var bytes: [4]u8 = undefined;
-        bytes = .{
+        self.hasher.update(&.{
             @as(u8, @truncate(value)),
             @as(u8, @truncate(value >> 8)),
             @as(u8, @truncate(value >> 16)),
             @as(u8, @truncate(value >> 24)),
-        };
-        self.hasher.update(&bytes);
+        });
     }
 };
 

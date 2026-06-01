@@ -82,23 +82,23 @@ test "calculateLineNumberWidth" {
 }
 
 test "formatLineNumber" {
-    var buffer: [100]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
 
     // Test width 1
     try formatLineNumber(writer, 5, 1);
-    try testing.expectEqualStrings("5", stream.getWritten());
+    try testing.expectEqualStrings("5", buffer.items);
 
     // Test width 3
-    stream.reset();
+    buffer.clearRetainingCapacity();
     try formatLineNumber(writer, 5, 3);
-    try testing.expectEqualStrings("  5", stream.getWritten());
+    try testing.expectEqualStrings("  5", buffer.items);
 
     // Test width 4 with large number
-    stream.reset();
+    buffer.clearRetainingCapacity();
     try formatLineNumber(writer, 1234, 4);
-    try testing.expectEqualStrings("1234", stream.getWritten());
+    try testing.expectEqualStrings("1234", buffer.items);
 }
 
 test "calculateUnderlineLength" {
@@ -116,16 +116,16 @@ test "calculateUnderlineLength" {
 }
 
 test "printSpaces" {
-    var buffer: [100]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var buffer = std.array_list.Managed(u8).init(testing.allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
 
     try printSpaces(writer, 0);
-    try testing.expectEqualStrings("", stream.getWritten());
+    try testing.expectEqualStrings("", buffer.items);
 
-    stream.reset();
+    buffer.clearRetainingCapacity();
     try printSpaces(writer, 5);
-    try testing.expectEqualStrings("     ", stream.getWritten());
+    try testing.expectEqualStrings("     ", buffer.items);
 }
 
 test "integration - format source region" {

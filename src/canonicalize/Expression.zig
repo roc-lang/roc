@@ -655,9 +655,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = int_expr.value.bufPrint(&value_buf) catch unreachable;
-                try tree.pushStringPair("value", value_str);
+                try int_expr.value.pushStringPair(tree, "value");
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -668,9 +666,10 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [400]u8 = undefined;
-                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, e.value);
-                try tree.pushStringPair("value", value_str);
+                const value_begin = try tree.reserveStringBuffer(400);
+                errdefer tree.discardReservedStringBuffer(value_begin);
+                const value_str = builtins.compiler_rt_128.f32_to_str(tree.reservedStringBuffer(value_begin)[0..400], e.value);
+                try tree.pushReservedStringPair("value", value_begin, value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -681,9 +680,10 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [400]u8 = undefined;
-                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, e.value);
-                try tree.pushStringPair("value", value_str);
+                const value_begin = try tree.reserveStringBuffer(400);
+                errdefer tree.discardReservedStringBuffer(value_begin);
+                const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], e.value);
+                try tree.pushReservedStringPair("value", value_begin, value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -695,9 +695,10 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, 18);
-                var value_buf: [400]u8 = undefined;
-                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, dec_value_f64);
-                try tree.pushStringPair("value", value_str);
+                const value_begin = try tree.reserveStringBuffer(400);
+                errdefer tree.discardReservedStringBuffer(value_begin);
+                const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], dec_value_f64);
+                try tree.pushReservedStringPair("value", value_begin, value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -708,21 +709,18 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var num_buf: [32]u8 = undefined;
-                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.value.numerator}) catch "fmt_error";
-                try tree.pushStringPair("numerator", num_str);
+                try tree.pushStringPairFmt("numerator", "{}", .{e.value.numerator});
 
-                var denom_buf: [32]u8 = undefined;
-                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.value.denominator_power_of_ten}) catch "fmt_error";
-                try tree.pushStringPair("denominator-power-of-ten", denom_str);
+                try tree.pushStringPairFmt("denominator-power-of-ten", "{}", .{e.value.denominator_power_of_ten});
 
                 const numerator_f64: f64 = @floatFromInt(e.value.numerator);
                 const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
                 const value_f64 = numerator_f64 / denominator_f64;
 
-                var value_buf: [400]u8 = undefined;
-                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, value_f64);
-                try tree.pushStringPair("value", value_str);
+                const value_begin = try tree.reserveStringBuffer(400);
+                errdefer tree.discardReservedStringBuffer(value_begin);
+                const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], value_f64);
+                try tree.pushReservedStringPair("value", value_begin, value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -742,9 +740,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
-                try tree.pushStringPair("value", value_str);
+                try e.value.pushStringPair(tree, "value");
 
                 const type_name = ir.getIdent(e.type_name);
                 try tree.pushStringPair("type", type_name);
@@ -770,9 +766,7 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
-                try tree.pushStringPair("value", value_str);
+                try e.value.pushStringPair(tree, "value");
 
                 const type_name = ir.getIdent(e.type_name);
                 try tree.pushStringPair("type", type_name);
@@ -1346,9 +1340,7 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 // Push the index as an attribute
-                var buf: [16]u8 = undefined;
-                const index_str = std.fmt.bufPrint(&buf, "{d}", .{e.elem_index}) catch "?";
-                try tree.pushStringPair("index", index_str);
+                try tree.pushStringPairFmt("index", "{d}", .{e.elem_index});
                 const attrs = tree.beginNode();
 
                 // Push the tuple expression

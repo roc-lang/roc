@@ -80,12 +80,7 @@ pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, pal
     const title_length = report.title.len;
     const padding = if (title_length < PADDING_WIDTH) PADDING_WIDTH - title_length else 0;
 
-    // stack allocate a buffer for our variable padding width
-    var buf: [PADDING_WIDTH]u8 = undefined;
-    for (buf[0..padding]) |*b| {
-        b.* = '-';
-    }
-    try writer.writeAll(buf[0..padding]);
+    try writer.splatByteAll('-', padding);
 
     try writer.writeAll("\n\n");
 
