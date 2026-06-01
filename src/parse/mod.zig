@@ -228,8 +228,6 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
 }
 
 test "parser records top-level type declaration dependencies" {
-    if (true) return error.SkipZigTest;
-
     const gpa = std.testing.allocator;
     const source =
         \\module []
@@ -268,4 +266,50 @@ test "parser records top-level type declaration dependencies" {
     }
 
     return error.ExpectedTypeDecl;
+}
+
+test "parser records nested associated owner paths" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\module []
+        \\
+        \\Parent := [P].{
+        \\    Nested := [N].{
+        \\        val = 1
+        \\    }
+        \\}
+    ;
+
+    var allocators: Allocators = undefined;
+    allocators.initInPlace(gpa);
+    defer allocators.deinit();
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(&allocators, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    var found_value = false;
+    for (ast.decl_index.decls.items) |decl| {
+        if (decl.kind != .value) continue;
+        const name_ident = decl.name_ident orelse continue;
+        if (!std.mem.eql(u8, env.getIdent(name_ident), "val")) continue;
+
+        const owner_path = decl.owner_type_path orelse return error.MissingOwnerPath;
+        const owner = ast.decl_index.type_paths.items[@intFromEnum(owner_path)];
+        try std.testing.expectEqualStrings("Nested", env.getIdent(owner.name));
+        const parent_path = owner.parent orelse return error.MissingParentPath;
+        const parent = ast.decl_index.type_paths.items[@intFromEnum(parent_path)];
+        try std.testing.expectEqualStrings("Parent", env.getIdent(parent.name));
+
+        const assoc_decls = ast.decl_index.assocValueDecls(owner_path, name_ident);
+        try std.testing.expectEqual(@as(usize, 1), assoc_decls.len);
+        found_value = true;
+    }
+
+    try std.testing.expect(found_value);
 }

@@ -1486,7 +1486,8 @@ fn adoptPlaceholderTypeAlias(
         const stmt_idx = typeBindingStatement(binding) orelse continue;
         if (!self.typeStatementAwaitingRealDecl(stmt_idx)) continue;
 
-        try self.currentScope().type_bindings.put(self.env.gpa, target_name, binding);
+        const binding_copy = binding;
+        try self.currentScope().type_bindings.put(self.env.gpa, target_name, binding_copy);
         return;
     }
 }
@@ -1499,8 +1500,9 @@ fn publishTypeAliasToCurrentScope(
     if (alias_name.eql(target_name)) return;
     if (self.scopeLookupTypeDecl(alias_name) != null) return;
     const target = self.scopeLookupTypeBinding(target_name) orelse return;
-    if (typeBindingStatement(target.binding.*) == null) return;
-    try self.currentScope().type_bindings.put(self.env.gpa, alias_name, target.binding.*);
+    const binding_copy = target.binding.*;
+    if (typeBindingStatement(binding_copy) == null) return;
+    try self.currentScope().type_bindings.put(self.env.gpa, alias_name, binding_copy);
 }
 
 fn refreshTypeBindingKindForStatement(

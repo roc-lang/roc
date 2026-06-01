@@ -31,6 +31,7 @@ tok_buf: TokenizedBuffer,
 store: NodeStore,
 decl_index: DeclIndex,
 scope_pending_annos: std.ArrayList(?DeclIndex.DeclIdx),
+type_path_stack: std.ArrayList(DeclIndex.TypePathIdx),
 collect_type_dependencies: bool,
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
@@ -49,6 +50,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .store = store,
         .decl_index = DeclIndex.init(gpa),
         .scope_pending_annos = .empty,
+        .type_path_stack = .empty,
         .collect_type_dependencies = false,
         .scratch_nodes = .{},
         .diagnostics = .{},
@@ -61,6 +63,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
+    parser.type_path_stack.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -207,6 +210,9 @@ fn enterDeclScope(
         .start = region.start,
         .end = region.end,
     });
+    if (kind == .associated) {
+        self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath());
+    }
     while (self.scope_pending_annos.items.len <= @intFromEnum(scope_idx)) {
         try self.scope_pending_annos.append(self.gpa, null);
     }
@@ -230,6 +236,18 @@ fn currentPendingAnno(self: *Parser) ?*?DeclIndex.DeclIdx {
     return &self.scope_pending_annos.items[@intFromEnum(scope_idx)];
 }
 
+fn currentTypePath(self: *const Parser) ?DeclIndex.TypePathIdx {
+    if (self.type_path_stack.items.len == 0) return null;
+    return self.type_path_stack.items[self.type_path_stack.items.len - 1];
+}
+
+fn currentAssociatedOwnerPath(self: *const Parser) ?DeclIndex.TypePathIdx {
+    const scope_idx = self.decl_index.currentScope() orelse return null;
+    const scope = self.decl_index.scopes.items[@intFromEnum(scope_idx)];
+    if (scope.kind != .associated) return null;
+    return scope.owner_type_path;
+}
+
 fn tokenIdentsEqual(self: *Parser, a: ?Token.Idx, b: ?Token.Idx) bool {
     const a_tok = a orelse return false;
     const b_tok = b orelse return false;
@@ -243,8 +261,10 @@ fn recordStatementDecl(
     statement_idx: AST.Statement.Idx,
     statement: AST.Statement,
     type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
 ) Error!void {
     const scope_idx = self.decl_index.currentScope() orelse return;
+    const owner_type_path = self.currentAssociatedOwnerPath();
 
     var record = switch (statement) {
         .decl => |decl| blk: {
@@ -258,6 +278,7 @@ fn recordStatementDecl(
                 .statement = @intFromEnum(statement_idx),
                 .kind = .value,
                 .name_tok = name_tok,
+                .owner_type_path = owner_type_path,
                 .pattern = @intFromEnum(decl.pattern),
                 .anno = null,
                 .region = .{ .start = decl.region.start, .end = decl.region.end },
@@ -268,6 +289,7 @@ fn recordStatementDecl(
             .statement = @intFromEnum(statement_idx),
             .kind = .var_decl,
             .name_tok = v.name,
+            .owner_type_path = owner_type_path,
             .pattern = null,
             .anno = null,
             .region = .{ .start = v.region.start, .end = v.region.end },
@@ -302,6 +324,8 @@ fn recordStatementDecl(
                 .statement = @intFromEnum(statement_idx),
                 .kind = kind,
                 .name_tok = header.name,
+                .owner_type_path = owner_type_path,
+                .type_path = type_path,
                 .pattern = null,
                 .anno = @intFromEnum(td.anno),
                 .associated_scope = if (td.associated) |assoc| assoc.scope else null,
@@ -314,6 +338,7 @@ fn recordStatementDecl(
             .statement = @intFromEnum(statement_idx),
             .kind = if (ta.is_var) .var_anno else .value_anno,
             .name_tok = ta.name,
+            .owner_type_path = owner_type_path,
             .pattern = null,
             .anno = @intFromEnum(ta.anno),
             .region = .{ .start = ta.region.start, .end = ta.region.end },
@@ -334,11 +359,13 @@ fn recordStatementDecl(
         return;
     }
 
-    if (record.kind == .value) {
+    if (record.kind == .value or record.kind == .var_decl) {
         if (self.currentPendingAnno()) |pending| {
             if (pending.*) |anno_idx| {
                 const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
-                if (self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+                const kinds_match = (record.kind == .value and anno.kind == .value_anno) or
+                    (record.kind == .var_decl and anno.kind == .var_anno);
+                if (kinds_match and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
                     self.decl_index.pairAnnotation(anno_idx, decl_idx);
                 }
             }
@@ -360,7 +387,18 @@ fn addStatementWithTypeDependencies(
     type_dependencies: DeclIndex.Span,
 ) Error!AST.Statement.Idx {
     const idx = try self.store.addStatement(statement);
-    try self.recordStatementDecl(idx, statement, type_dependencies);
+    try self.recordStatementDecl(idx, statement, type_dependencies, null);
+    return idx;
+}
+
+fn addTypeDeclStatement(
+    self: *Parser,
+    statement: AST.Statement,
+    type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
+) Error!AST.Statement.Idx {
+    const idx = try self.store.addStatement(statement);
+    try self.recordStatementDecl(idx, statement, type_dependencies, type_path);
     return idx;
 }
 
@@ -1895,6 +1933,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 (statementType == .in_body and self.looksLikeTypeDecl());
             if (is_type_decl_context) {
                 const header = try self.parseTypeHeader();
+                const type_path = blk_path: {
+                    const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
+                    const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
+                    break :blk_path try self.decl_index.internTypePath(self.currentTypePath(), name_ident);
+                };
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
@@ -1931,7 +1974,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     self.advance(); // consume .
                     self.advance(); // consume {
                     const associated_start = self.pos - 1;
-                    associated = try self.parseStatementOnlyBlock(associated_start);
+                    associated = try self.parseStatementOnlyBlock(associated_start, type_path);
 
                     // Report error if this is a type alias
                     if (kind == .alias) {
@@ -1942,14 +1985,14 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     }
                 }
 
-                const statement_idx = try self.addStatementWithTypeDependencies(.{ .type_decl = .{
+                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
                     .kind = kind,
                     .where = where_clause,
                     .associated = associated,
                     .region = .{ .start = start, .end = self.pos },
-                } }, type_dependencies);
+                } }, type_dependencies, type_path);
                 if (associated) |assoc| {
                     self.decl_index.setScopeOwner(assoc.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
                 }
@@ -4069,7 +4112,16 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
 ///     ...
 ///     <stmtN>
 /// }
-pub fn parseStatementOnlyBlock(self: *Parser, start: u32) Error!AST.Associated {
+pub fn parseStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+    if (owner_type_path) |path| {
+        try self.type_path_stack.append(self.gpa, path);
+    }
+    defer {
+        if (owner_type_path != null) {
+            _ = self.type_path_stack.pop();
+        }
+    }
+
     const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = start, .end = start });
     const scratch_top = self.store.scratchStatementTop();
 

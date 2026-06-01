@@ -16,6 +16,8 @@ const Ident = base.Ident;
 pub const ScopeIdx = enum(u32) { _ };
 /// Stable index of one declaration-like source form.
 pub const DeclIdx = enum(u32) { _ };
+/// Stable index of one parser-owned type path.
+pub const TypePathIdx = enum(u32) { _ };
 
 /// Contiguous range into a side table.
 pub const Span = struct {
@@ -46,6 +48,13 @@ pub const ScopeKind = enum {
     associated,
 };
 
+/// Source-order visibility policy for forward references in a scope.
+pub const ForwardPolicy = enum {
+    whole_scope,
+    source_order,
+    function_only,
+};
+
 /// AST entity that owns a parser declaration scope.
 pub const ScopeOwner = union(enum) {
     none,
@@ -59,9 +68,35 @@ pub const Scope = struct {
     parent: ?ScopeIdx,
     kind: ScopeKind,
     owner: ScopeOwner,
+    forward_policy: ForwardPolicy,
+    owner_type_path: ?TypePathIdx,
     decls: Span,
-    value_decls: std.AutoHashMapUnmanaged(Ident.Idx, DeclIdx),
+    value_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
+    type_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
     region: TokenRegion,
+};
+
+/// All declarations sharing one source name in one parser scope.
+pub const NameBucket = struct {
+    decls: std.ArrayListUnmanaged(DeclIdx) = .{},
+};
+
+/// Parser-owned type path such as `Parent.Nested`.
+pub const TypePath = struct {
+    parent: ?TypePathIdx,
+    name: Ident.Idx,
+    depth: u16,
+};
+
+const TypePathKey = struct {
+    parent: ?TypePathIdx,
+    name: Ident.Idx,
+};
+
+/// Associated value declaration lookup key.
+pub const AssocValue = struct {
+    owner: TypePathIdx,
+    item: Ident.Idx,
 };
 
 /// Syntactic declaration category recorded by the parser.
@@ -89,6 +124,8 @@ pub const Decl = struct {
     paired_decl: ?DeclIdx = null,
     paired_anno: ?DeclIdx = null,
     associated_scope: ?ScopeIdx = null,
+    owner_type_path: ?TypePathIdx = null,
+    type_path: ?TypePathIdx = null,
     type_dependencies: Span = Span.empty(),
     region: TokenRegion,
 };
@@ -99,6 +136,9 @@ decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
 scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
 type_dependency_ids: std.ArrayList(Ident.Idx),
+type_paths: std.ArrayList(TypePath),
+type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
+assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
 scope_stack: std.ArrayList(ScopeIdx),
 
 /// Create an empty declaration index.
@@ -110,6 +150,9 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .scope_decl_ids = .empty,
         .scope_decl_builders = .empty,
         .type_dependency_ids = .empty,
+        .type_paths = .empty,
+        .type_path_intern = .{},
+        .assoc_value_decls = .{},
         .scope_stack = .empty,
     };
 }
@@ -120,14 +163,26 @@ pub fn deinit(self: *DeclIndex) void {
         builder.deinit(self.gpa);
     }
     for (self.scopes.items) |*scope| {
-        scope.value_decls.deinit(self.gpa);
+        deinitNameBuckets(Ident.Idx, self.gpa, &scope.value_decls);
+        deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
     }
+    deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
     self.scope_decl_builders.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
     self.type_dependency_ids.deinit(self.gpa);
+    self.type_paths.deinit(self.gpa);
+    self.type_path_intern.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
+}
+
+fn deinitNameBuckets(comptime K: type, gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(K, NameBucket)) void {
+    var iter = map.valueIterator();
+    while (iter.next()) |bucket| {
+        bucket.decls.deinit(gpa);
+    }
+    map.deinit(gpa);
 }
 
 /// Push a new current declaration scope and return its index.
@@ -139,12 +194,19 @@ pub fn enterScope(
 ) std.mem.Allocator.Error!ScopeIdx {
     const parent = if (self.scope_stack.items.len == 0) null else self.scope_stack.items[self.scope_stack.items.len - 1];
     const idx: ScopeIdx = @enumFromInt(self.scopes.items.len);
+    const forward_policy: ForwardPolicy = switch (kind) {
+        .module, .associated => .whole_scope,
+        .block => .source_order,
+    };
     try self.scopes.append(self.gpa, .{
         .parent = parent,
         .kind = kind,
         .owner = owner,
+        .forward_policy = forward_policy,
+        .owner_type_path = null,
         .decls = Span.empty(),
         .value_decls = .{},
+        .type_decls = .{},
         .region = region,
     });
     try self.scope_decl_builders.append(self.gpa, .{});
@@ -183,6 +245,11 @@ pub fn setScopeOwner(self: *DeclIndex, idx: ScopeIdx, owner: ScopeOwner) void {
     self.scopes.items[@intFromEnum(idx)].owner = owner;
 }
 
+/// Update a scope's associated owner path once known.
+pub fn setScopeOwnerTypePath(self: *DeclIndex, idx: ScopeIdx, owner_type_path: ?TypePathIdx) void {
+    self.scopes.items[@intFromEnum(idx)].owner_type_path = owner_type_path;
+}
+
 /// Append a declaration to its owning scope.
 pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     const idx: DeclIdx = @enumFromInt(self.decls.items.len);
@@ -190,10 +257,32 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     try self.scope_decl_builders.items[@intFromEnum(decl.scope)].append(self.gpa, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
-            try self.scopes.items[@intFromEnum(decl.scope)].value_decls.put(self.gpa, ident, idx);
+            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].value_decls, ident, idx);
+            if (decl.owner_type_path) |owner_path| {
+                try addDeclToBucket(AssocValue, self.gpa, &self.assoc_value_decls, .{
+                    .owner = owner_path,
+                    .item = ident,
+                }, idx);
+            }
+        } else if (declKindMayBindType(decl.kind)) {
+            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].type_decls, ident, idx);
         }
     }
     return idx;
+}
+
+fn addDeclToBucket(
+    comptime K: type,
+    gpa: std.mem.Allocator,
+    map: *std.AutoHashMapUnmanaged(K, NameBucket),
+    key: K,
+    decl_idx: DeclIdx,
+) std.mem.Allocator.Error!void {
+    const gop = try map.getOrPut(gpa, key);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    try gop.value_ptr.decls.append(gpa, decl_idx);
 }
 
 fn declKindMayBindValue(kind: DeclKind) bool {
@@ -212,10 +301,94 @@ fn declKindMayBindValue(kind: DeclKind) bool {
     };
 }
 
+fn declKindMayBindType(kind: DeclKind) bool {
+    return switch (kind) {
+        .type_alias,
+        .nominal,
+        .@"opaque",
+        => true,
+        .value,
+        .value_anno,
+        .var_decl,
+        .var_anno,
+        .import,
+        .file_import,
+        => false,
+    };
+}
+
 /// Return whether a scope directly declares a value-like name.
 pub fn scopeDeclaresValue(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) bool {
     const scope = &self.scopes.items[@intFromEnum(scope_idx)];
     return scope.value_decls.contains(ident);
+}
+
+/// Return all value-like declarations for a name in a scope.
+pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) []const DeclIdx {
+    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    const bucket = scope.value_decls.get(ident) orelse return &.{};
+    return bucket.decls.items;
+}
+
+/// Return all type declarations for a name in a scope.
+pub fn scopeTypeDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) []const DeclIdx {
+    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    const bucket = scope.type_decls.get(ident) orelse return &.{};
+    return bucket.decls.items;
+}
+
+/// Return all associated value declarations for an owner type path and item name.
+pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) []const DeclIdx {
+    const bucket = self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse return &.{};
+    return bucket.decls.items;
+}
+
+/// Intern a parser-owned type path.
+pub fn internTypePath(self: *DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) std.mem.Allocator.Error!TypePathIdx {
+    const key = TypePathKey{ .parent = parent, .name = name };
+    if (self.type_path_intern.get(key)) |existing| return existing;
+
+    const depth: u16 = if (parent) |parent_idx|
+        self.type_paths.items[@intFromEnum(parent_idx)].depth + 1
+    else
+        1;
+    const idx: TypePathIdx = @enumFromInt(self.type_paths.items.len);
+    try self.type_paths.append(self.gpa, .{
+        .parent = parent,
+        .name = name,
+        .depth = depth,
+    });
+    try self.type_path_intern.put(self.gpa, key, idx);
+    return idx;
+}
+
+/// Find an already-interned direct child type path.
+pub fn findTypePath(self: *const DeclIndex, parent: ?TypePathIdx, name: Ident.Idx) ?TypePathIdx {
+    return self.type_path_intern.get(.{ .parent = parent, .name = name });
+}
+
+/// Find an already-interned type path from source-order path segments.
+pub fn findTypePathBySegments(self: *const DeclIndex, segments: []const Ident.Idx) ?TypePathIdx {
+    var parent: ?TypePathIdx = null;
+    var result: ?TypePathIdx = null;
+    for (segments) |segment| {
+        const next = self.findTypePath(parent, segment) orelse return null;
+        parent = next;
+        result = next;
+    }
+    return result;
+}
+
+/// Find a path relative to an existing owner path.
+pub fn findTypePathRelative(self: *const DeclIndex, owner: TypePathIdx, segments: []const Ident.Idx) ?TypePathIdx {
+    var parent: ?TypePathIdx = owner;
+    var result: ?TypePathIdx = null;
+    for (segments) |segment| {
+        const next = self.findTypePath(parent, segment) orelse return null;
+        parent = next;
+        result = next;
+    }
+    return result;
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -269,8 +442,6 @@ pub fn declCount(self: *const DeclIndex) usize {
 }
 
 test "scopeDeclaresValue records only value-binding declarations" {
-    if (true) return error.SkipZigTest;
-
     const gpa = std.testing.allocator;
 
     var index = DeclIndex.init(gpa);
@@ -358,8 +529,6 @@ test "scopeDeclaresValue records only value-binding declarations" {
 }
 
 test "type dependency spans preserve parser-recorded type references" {
-    if (true) return error.SkipZigTest;
-
     const gpa = std.testing.allocator;
 
     var index = DeclIndex.init(gpa);
@@ -381,4 +550,84 @@ test "type dependency spans preserve parser-recorded type references" {
 
     index.clearTypeDependenciesFrom(start);
     try std.testing.expectEqual(start, index.typeDependencyTop());
+}
+
+test "name buckets preserve duplicate declarations in source order" {
+    const gpa = std.testing.allocator;
+
+    var index = DeclIndex.init(gpa);
+    defer index.deinit();
+
+    const scope_idx = try index.enterScope(.module, .file, TokenRegion.empty());
+    const attrs = Ident.Attributes.fromString("dup");
+    const ident = Ident.Idx{ .attributes = attrs, .idx = 1 };
+
+    const first = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 0,
+        .kind = .value,
+        .name_tok = null,
+        .name_ident = ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    const second = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 1,
+        .kind = .value_anno,
+        .name_tok = null,
+        .name_ident = ident,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+
+    try index.exitScope(scope_idx, TokenRegion.empty());
+
+    const decls = index.scopeValueDecls(scope_idx, ident);
+    try std.testing.expectEqual(@as(usize, 2), decls.len);
+    try std.testing.expectEqual(first, decls[0]);
+    try std.testing.expectEqual(second, decls[1]);
+}
+
+test "associated value declarations are keyed by structural owner path" {
+    const gpa = std.testing.allocator;
+
+    var index = DeclIndex.init(gpa);
+    defer index.deinit();
+
+    const parent_attrs = Ident.Attributes.fromString("Parent");
+    const nested_attrs = Ident.Attributes.fromString("Nested");
+    const value_attrs = Ident.Attributes.fromString("val");
+    const parent_ident = Ident.Idx{ .attributes = parent_attrs, .idx = 1 };
+    const nested_ident = Ident.Idx{ .attributes = nested_attrs, .idx = 2 };
+    const value_ident = Ident.Idx{ .attributes = value_attrs, .idx = 3 };
+
+    const parent_path = try index.internTypePath(null, parent_ident);
+    const nested_path = try index.internTypePath(parent_path, nested_ident);
+    const found_nested = index.findTypePathBySegments(&.{ parent_ident, nested_ident });
+    try std.testing.expectEqual(nested_path, found_nested.?);
+
+    const scope_idx = try index.enterScope(.associated, .none, TokenRegion.empty());
+    index.setScopeOwnerTypePath(scope_idx, nested_path);
+    const decl_idx = try index.addDecl(.{
+        .scope = scope_idx,
+        .statement = 0,
+        .kind = .value,
+        .name_tok = null,
+        .name_ident = value_ident,
+        .owner_type_path = nested_path,
+        .pattern = null,
+        .anno = null,
+        .region = TokenRegion.empty(),
+    });
+    try index.exitScope(scope_idx, TokenRegion.empty());
+
+    const nested_decls = index.assocValueDecls(nested_path, value_ident);
+    try std.testing.expectEqual(@as(usize, 1), nested_decls.len);
+    try std.testing.expectEqual(decl_idx, nested_decls[0]);
+
+    const parent_decls = index.assocValueDecls(parent_path, value_ident);
+    try std.testing.expectEqual(@as(usize, 0), parent_decls.len);
 }
