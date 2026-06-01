@@ -1745,6 +1745,32 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     try testing.expect(result.stderr.len > 0);
 }
 
+test "roc check does not hang on tag union type alias inside List (issue 9481)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // A type alias for a tag union (`Rle(a)`), used as the element type of a `List`,
+    // and then compared with `==` against a list literal, caused the type checker to
+    // build a self-referential alias: the alias backing var redirected back to the
+    // alias var.
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/tag_union_alias_hang.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The command must not abort/panic (exit code 134 / a signal indicates SIGABRT).
+    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    try testing.expect(!did_panic);
+
+    // Neither the infinite-loop guard nor the coordinator watchdog should have fired.
+    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "Coordinator stuck") != null or
+        std.mem.indexOf(u8, result.stderr, "Infinite loop") != null or
+        std.mem.indexOf(u8, result.stderr, "INFINITE TYPE") != null;
+    try testing.expect(!has_panic_text);
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
 test "roc check succeeds on Parser type module" {
     const testing = std.testing;
     const gpa = testing.allocator;

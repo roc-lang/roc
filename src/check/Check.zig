@@ -5651,8 +5651,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
         } else {
-            // Otherwise, unify the raw var with the intermediate var
-            _ = try self.unify(expr_var_raw, expr_var, env);
+            // Otherwise, make the explicit annotation the checked root for
+            // this expression. The body has already constrained the
+            // annotation's backing and any underscore variables above.
+            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
         }
     }
 
