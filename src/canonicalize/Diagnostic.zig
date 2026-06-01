@@ -154,6 +154,17 @@ pub const Diagnostic = union(enum) {
         type_name: Ident.Idx,
         region: Region,
     },
+    private_type_in_exposed_type: struct {
+        exposed_type: Ident.Idx,
+        private_type: Ident.Idx,
+        region: Region,
+    },
+    private_type_in_exposed_field: struct {
+        exposed_type: Ident.Idx,
+        field_name: Ident.Idx,
+        private_type: Ident.Idx,
+        region: Region,
+    },
     type_from_missing_module: struct {
         module_name: Ident.Idx,
         type_name: Ident.Idx,
@@ -367,6 +378,8 @@ pub const Diagnostic = union(enum) {
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
+            .private_type_in_exposed_type => |d| d.region,
+            .private_type_in_exposed_field => |d| d.region,
             .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
             .nested_type_not_found => |d| d.region,

@@ -1725,6 +1725,103 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .private_type_in_exposed_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "PRIVATE TYPE IN EXPOSED TYPE", .warning);
+            const exposed_type = try report.addOwnedString(self.getIdent(data.exposed_type));
+            const private_type = try report.addOwnedString(self.getIdent(data.private_type));
+
+            try report.document.addReflowingText("The exposed type ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText(" refers to ");
+            try report.document.addType(private_type);
+            try report.document.addReflowingText(", but ");
+            try report.document.addType(private_type);
+            try report.document.addReflowingText(" is private to this module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Other modules can see ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText("'s public shape, but they cannot name this private type.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("It's referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Expose the referenced type, make ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText(" opaque with ");
+            try report.document.addInlineCode("::");
+            try report.document.addReflowingText(", or move the type into ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText("'s associated block.");
+
+            break :blk report;
+        },
+        .private_type_in_exposed_field => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "PRIVATE TYPE IN EXPOSED FIELD", .warning);
+            const exposed_type = try report.addOwnedString(self.getIdent(data.exposed_type));
+            const field_name = try report.addOwnedString(self.getIdent(data.field_name));
+            const private_type = try report.addOwnedString(self.getIdent(data.private_type));
+
+            try report.document.addReflowingText("The ");
+            try report.document.addUnqualifiedSymbol(field_name);
+            try report.document.addReflowingText(" field of ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText(" refers to ");
+            try report.document.addType(private_type);
+            try report.document.addReflowingText(", but ");
+            try report.document.addType(private_type);
+            try report.document.addReflowingText(" is private to this module.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Other modules can see this field because ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText(" is exposed and not opaque, but they cannot name this private type.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("It's referenced here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Expose the referenced type, make ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText(" opaque with ");
+            try report.document.addInlineCode("::");
+            try report.document.addReflowingText(", or move the type into ");
+            try report.document.addType(exposed_type);
+            try report.document.addReflowingText("'s associated block.");
+
+            break :blk report;
+        },
         .type_from_missing_module => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
