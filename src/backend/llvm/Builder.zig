@@ -76,13 +76,20 @@ metadata_string_map: std.AutoArrayHashMapUnmanaged(void, void),
 metadata_string_indices: std.ArrayList(u32),
 metadata_string_bytes: std.ArrayList(u8),
 
+/// Default capacity for function arguments in internal buffers.
 pub const expected_args_len = 16;
+/// Default capacity for attributes in internal buffers.
 pub const expected_attrs_len = 16;
+/// Default capacity for struct fields in internal buffers.
 pub const expected_fields_len = 32;
+/// Default capacity for GEP indices in internal buffers.
 pub const expected_gep_indices_len = 8;
+/// Default capacity for switch cases in internal buffers.
 pub const expected_cases_len = 8;
+/// Default capacity for phi incoming values in internal buffers.
 pub const expected_incoming_len = 8;
 
+/// Configuration options for initializing the LLVM IR builder.
 pub const Options = struct {
     allocator: Allocator,
     strip: bool = true,
@@ -91,6 +98,7 @@ pub const Options = struct {
     triple: []const u8 = &.{},
 };
 
+/// Interned string handle for efficient string storage and comparison.
 pub const String = enum(u32) {
     none = maxInt(u31),
     empty,
@@ -165,6 +173,7 @@ pub const String = enum(u32) {
     };
 };
 
+/// LLVM binary operation opcodes for arithmetic and bitwise operations.
 pub const BinaryOpcode = enum(u4) {
     add = 0,
     sub = 1,
@@ -181,6 +190,7 @@ pub const BinaryOpcode = enum(u4) {
     xor = 12,
 };
 
+/// LLVM type conversion opcodes for casting between types.
 pub const CastOpcode = enum(u4) {
     trunc = 0,
     zext = 1,
@@ -197,6 +207,7 @@ pub const CastOpcode = enum(u4) {
     addrspacecast = 12,
 };
 
+/// LLVM comparison predicates for integer and floating-point comparisons.
 pub const CmpPredicate = enum(u6) {
     fcmp_false = 0,
     fcmp_oeq = 1,
@@ -226,6 +237,7 @@ pub const CmpPredicate = enum(u6) {
     icmp_sle = 41,
 };
 
+/// Represents an LLVM type, including primitives, pointers, arrays, structs, and functions.
 pub const Type = enum(u32) {
     void,
     half,
@@ -937,6 +949,7 @@ pub const Type = enum(u32) {
     }
 };
 
+/// LLVM function and parameter attributes affecting calling conventions and optimization.
 pub const Attribute = union(Kind) {
     // Parameter Attributes
     zeroext,
@@ -1597,6 +1610,7 @@ pub const Attribute = union(Kind) {
     }
 };
 
+/// A collection of LLVM attributes that can be applied to a function or parameter.
 pub const Attributes = enum(u32) {
     none,
     _,
@@ -1625,6 +1639,7 @@ pub const Attributes = enum(u32) {
     }
 };
 
+/// Complete set of attributes for a function including return, function-level, and parameter attributes.
 pub const FunctionAttributes = enum(u32) {
     none,
     _,
@@ -1794,6 +1809,7 @@ pub const FunctionAttributes = enum(u32) {
     }
 };
 
+/// Symbol linkage type controlling visibility and merging behavior across modules.
 pub const Linkage = enum(u4) {
     private = 9,
     internal = 3,
@@ -1819,6 +1835,7 @@ pub const Linkage = enum(u4) {
     }
 };
 
+/// Dynamic symbol preemption behavior for shared library symbols.
 pub const Preemption = enum {
     dso_preemptable,
     dso_local,
@@ -1829,6 +1846,7 @@ pub const Preemption = enum {
     }
 };
 
+/// Symbol visibility controlling access from other modules.
 pub const Visibility = enum(u2) {
     default = 0,
     hidden = 1,
@@ -1847,6 +1865,7 @@ pub const Visibility = enum(u2) {
     }
 };
 
+/// Windows DLL storage class for import/export declarations.
 pub const DllStorageClass = enum(u2) {
     default = 0,
     dllimport = 1,
@@ -1857,6 +1876,7 @@ pub const DllStorageClass = enum(u2) {
     }
 };
 
+/// Thread-local storage model for global variables.
 pub const ThreadLocal = enum(u3) {
     default = 0,
     generaldynamic = 1,
@@ -1892,8 +1912,10 @@ pub const ThreadLocal = enum(u3) {
     }
 };
 
+/// Whether a global variable is mutable or constant.
 pub const Mutability = enum { global, constant };
 
+/// Address significance for global values enabling certain optimizations.
 pub const UnnamedAddr = enum(u2) {
     default = 0,
     unnamed_addr = 1,
@@ -1904,6 +1926,7 @@ pub const UnnamedAddr = enum(u2) {
     }
 };
 
+/// LLVM address space for pointers, with target-specific semantics.
 pub const AddrSpace = enum(u24) {
     default,
     _,
@@ -2014,6 +2037,7 @@ pub const AddrSpace = enum(u24) {
     }
 };
 
+/// Indicates whether a global variable is initialized outside the current module.
 pub const ExternallyInitialized = enum {
     default,
     externally_initialized,
@@ -2023,6 +2047,7 @@ pub const ExternallyInitialized = enum {
     }
 };
 
+/// Memory alignment as a power of two, stored as the exponent.
 pub const Alignment = enum(u6) {
     default = maxInt(u6),
     _,
@@ -2086,6 +2111,7 @@ pub const Alignment = enum(u6) {
     }
 };
 
+/// LLVM calling convention specifying how arguments and return values are passed.
 pub const CallConv = enum(u10) {
     ccc,
 
@@ -2215,6 +2241,7 @@ pub const CallConv = enum(u10) {
     }
 };
 
+/// Interned string stored in the LLVM string table for symbol names.
 pub const StrtabString = enum(u32) {
     none = maxInt(u31),
     empty,
@@ -2276,6 +2303,7 @@ pub const StrtabString = enum(u32) {
     };
 };
 
+/// Interns a string in the symbol string table and returns its handle.
 pub fn strtabString(self: *Builder, bytes: []const u8) Allocator.Error!StrtabString {
     try self.strtab_string_bytes.ensureUnusedCapacity(self.gpa, bytes.len);
     try self.strtab_string_indices.ensureUnusedCapacity(self.gpa, 1);
@@ -2289,12 +2317,14 @@ pub fn strtabString(self: *Builder, bytes: []const u8) Allocator.Error!StrtabStr
     return StrtabString.fromIndex(gop.index);
 }
 
+/// Returns an existing string table entry if it exists, without allocating.
 pub fn strtabStringIfExists(self: *const Builder, bytes: []const u8) ?StrtabString {
     return StrtabString.fromIndex(
         self.strtab_string_map.getIndexAdapted(bytes, StrtabString.Adapter{ .builder = self }) orelse return null,
     );
 }
 
+/// Creates a formatted string in the string table using printf-style formatting.
 pub fn strtabStringFmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allocator.Error!StrtabString {
     try self.strtab_string_map.ensureUnusedCapacity(self.gpa, 1);
     try self.strtab_string_bytes.ensureUnusedCapacity(self.gpa, @intCast(std.fmt.count(fmt_str, fmt_args)));
@@ -2302,17 +2332,20 @@ pub fn strtabStringFmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: a
     return self.strtabStringFmtAssumeCapacity(fmt_str, fmt_args);
 }
 
+/// Creates a formatted string assuming capacity has been pre-allocated.
 pub fn strtabStringFmtAssumeCapacity(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) StrtabString {
     self.strtab_string_bytes.printAssumeCapacity(fmt_str, fmt_args);
     return self.trailingStrtabStringAssumeCapacity();
 }
 
+/// Interns bytes already appended to the string buffer as a new string table entry.
 pub fn trailingStrtabString(self: *Builder) Allocator.Error!StrtabString {
     try self.strtab_string_indices.ensureUnusedCapacity(self.gpa, 1);
     try self.strtab_string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingStrtabStringAssumeCapacity();
 }
 
+/// Interns trailing bytes assuming capacity has been pre-allocated.
 pub fn trailingStrtabStringAssumeCapacity(self: *Builder) StrtabString {
     const start = self.strtab_string_indices.getLast();
     const bytes: []const u8 = self.strtab_string_bytes.items[start..];
@@ -2325,6 +2358,7 @@ pub fn trailingStrtabStringAssumeCapacity(self: *Builder) StrtabString {
     return StrtabString.fromIndex(gop.index);
 }
 
+/// Represents a global value in the LLVM module (function, variable, or alias).
 pub const Global = struct {
     linkage: Linkage = .external,
     preemption: Preemption = .dso_preemptable,
@@ -2542,6 +2576,7 @@ pub const Global = struct {
     };
 };
 
+/// An LLVM alias that provides an alternate name for another global value.
 pub const Alias = struct {
     global: Global.Index,
     thread_local: ThreadLocal = .default,
@@ -2591,6 +2626,7 @@ pub const Alias = struct {
     };
 };
 
+/// An LLVM global variable with optional initializer and memory attributes.
 pub const Variable = struct {
     global: Global.Index,
     thread_local: ThreadLocal = .default,
@@ -2675,6 +2711,7 @@ pub const Variable = struct {
     };
 };
 
+/// LLVM intrinsic functions with well-known semantics for code generation.
 pub const Intrinsic = enum {
     // Variable Argument Handling
     va_start,
@@ -4095,6 +4132,7 @@ pub const Intrinsic = enum {
     });
 };
 
+/// An LLVM function with its signature, basic blocks, and instructions.
 pub const Function = struct {
     global: Global.Index,
     call_conv: CallConv = CallConv.default,
@@ -5200,6 +5238,7 @@ pub const Function = struct {
     }
 };
 
+/// Source location information for debug info, either absent or with line/column/scope.
 pub const DebugLocation = union(enum) {
     no_location: void,
     location: Location,
@@ -5224,6 +5263,7 @@ pub const DebugLocation = union(enum) {
     }
 };
 
+/// Work-in-progress function being constructed with mutable instruction lists.
 pub const WipFunction = struct {
     builder: *Builder,
     function: Function.Index,
@@ -7065,6 +7105,7 @@ pub const WipFunction = struct {
     }
 };
 
+/// Comparison condition for floating-point fcmp instructions.
 pub const FloatCondition = enum(u4) {
     oeq = 1,
     ogt = 2,
@@ -7082,6 +7123,7 @@ pub const FloatCondition = enum(u4) {
     une = 14,
 };
 
+/// Comparison condition for integer icmp instructions.
 pub const IntegerCondition = enum(u6) {
     eq = 32,
     ne = 33,
@@ -7095,6 +7137,7 @@ pub const IntegerCondition = enum(u6) {
     sle = 41,
 };
 
+/// Indicates whether a memory access is volatile or normal.
 pub const MemoryAccessKind = enum(u1) {
     normal,
     @"volatile",
@@ -7123,6 +7166,7 @@ pub const MemoryAccessKind = enum(u1) {
     }
 };
 
+/// Synchronization scope for atomic operations (single-thread or system-wide).
 pub const SyncScope = enum(u1) {
     singlethread,
     system,
@@ -7151,6 +7195,7 @@ pub const SyncScope = enum(u1) {
     }
 };
 
+/// Memory ordering constraint for atomic operations.
 pub const AtomicOrdering = enum(u3) {
     none = 0,
     unordered = 1,
@@ -7194,6 +7239,7 @@ const MemoryAccessInfo = packed struct(u32) {
     _: u13 = undefined,
 };
 
+/// Fast-math flags enabling aggressive floating-point optimizations.
 pub const FastMath = packed struct(u8) {
     unsafe_algebra: bool = false, // Legacy
     nnan: bool = false,
@@ -7215,6 +7261,7 @@ pub const FastMath = packed struct(u8) {
     };
 };
 
+/// Simplified fast-math mode selection (normal or all optimizations enabled).
 pub const FastMathKind = enum {
     normal,
     fast,
@@ -7227,6 +7274,7 @@ pub const FastMathKind = enum {
     }
 };
 
+/// An LLVM constant value that can be used in global initializers and constant expressions.
 pub const Constant = enum(u32) {
     false,
     true,
@@ -7873,6 +7921,7 @@ pub const Constant = enum(u32) {
     }
 };
 
+/// An SSA value that can be an instruction result, constant, or metadata reference.
 pub const Value = enum(u32) {
     none = maxInt(u31),
     false = first_constant + @intFromEnum(Constant.false),
@@ -7947,6 +7996,7 @@ pub const Value = enum(u32) {
     }
 };
 
+/// LLVM metadata for debug info, annotations, and other non-code information.
 pub const Metadata = packed struct(u32) {
     index: u29,
     kind: Kind,
@@ -8807,6 +8857,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
     return self;
 }
 
+/// Clears all data and frees all memory, leaving the builder in a reusable state.
 pub fn clearAndFree(self: *Builder) void {
     self.module_asm.clearAndFree(self.gpa);
 
@@ -8909,12 +8960,14 @@ pub fn deinit(self: *Builder) void {
     self.* = undefined;
 }
 
+/// Finalizes the module-level inline assembly, ensuring it ends with a newline.
 pub fn finishModuleAsm(self: *Builder, aw: *Writer.Allocating) Allocator.Error!void {
     self.module_asm = aw.toArrayList();
     if (self.module_asm.getLastOrNull()) |last| if (last != '\n')
         try self.module_asm.append(self.gpa, '\n');
 }
 
+/// Interns a string and returns its handle for later retrieval.
 pub fn string(self: *Builder, bytes: []const u8) Allocator.Error!String {
     try self.string_bytes.ensureUnusedCapacity(self.gpa, bytes.len);
     try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
@@ -8928,16 +8981,19 @@ pub fn string(self: *Builder, bytes: []const u8) Allocator.Error!String {
     return String.fromIndex(gop.index);
 }
 
+/// Interns a null-terminated string including the null byte.
 pub fn stringNull(self: *Builder, bytes: [:0]const u8) Allocator.Error!String {
     return self.string(bytes[0 .. bytes.len + 1]);
 }
 
+/// Returns an existing string handle if the string is already interned.
 pub fn stringIfExists(self: *const Builder, bytes: []const u8) ?String {
     return String.fromIndex(
         self.string_map.getIndexAdapted(bytes, String.Adapter{ .builder = self }) orelse return null,
     );
 }
 
+/// Creates a formatted string using printf-style formatting and interns it.
 pub fn fmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allocator.Error!String {
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     try self.string_bytes.ensureUnusedCapacity(self.gpa, @intCast(std.fmt.count(fmt_str, fmt_args)));
@@ -8945,17 +9001,20 @@ pub fn fmt(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) Allo
     return self.fmtAssumeCapacity(fmt_str, fmt_args);
 }
 
+/// Creates a formatted string assuming capacity has been pre-allocated.
 pub fn fmtAssumeCapacity(self: *Builder, comptime fmt_str: []const u8, fmt_args: anytype) String {
     self.string_bytes.printAssumeCapacity(fmt_str, fmt_args);
     return self.trailingStringAssumeCapacity();
 }
 
+/// Interns bytes already appended to the string buffer as a new entry.
 pub fn trailingString(self: *Builder) Allocator.Error!String {
     try self.string_indices.ensureUnusedCapacity(self.gpa, 1);
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingStringAssumeCapacity();
 }
 
+/// Interns trailing bytes assuming capacity has been pre-allocated.
 pub fn trailingStringAssumeCapacity(self: *Builder) String {
     const start = self.string_indices.getLast();
     const bytes: []const u8 = self.string_bytes.items[start..];
@@ -8968,6 +9027,7 @@ pub fn trailingStringAssumeCapacity(self: *Builder) String {
     return String.fromIndex(gop.index);
 }
 
+/// Creates a function type with the given return type, parameter types, and varargs mode.
 pub fn fnType(
     self: *Builder,
     ret: Type,
@@ -8980,16 +9040,19 @@ pub fn fnType(
     }
 }
 
+/// Creates an integer type with the specified bit width.
 pub fn intType(self: *Builder, bits: u24) Allocator.Error!Type {
     try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
     return self.intTypeAssumeCapacity(bits);
 }
 
+/// Creates a pointer type in the specified address space.
 pub fn ptrType(self: *Builder, addr_space: AddrSpace) Allocator.Error!Type {
     try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
     return self.ptrTypeAssumeCapacity(addr_space);
 }
 
+/// Creates a fixed-length or scalable vector type with the specified element type.
 pub fn vectorType(
     self: *Builder,
     kind: Type.Vector.Kind,
@@ -9002,12 +9065,14 @@ pub fn vectorType(
     }
 }
 
+/// Creates an array type with the specified length and element type.
 pub fn arrayType(self: *Builder, len: u64, child: Type) Allocator.Error!Type {
     comptime assert(@sizeOf(Type.Array) >= @sizeOf(Type.Vector));
     try self.ensureUnusedTypeCapacity(1, Type.Array, 0);
     return self.arrayTypeAssumeCapacity(len, child);
 }
 
+/// Creates an anonymous struct type with the specified field types.
 pub fn structType(
     self: *Builder,
     kind: Type.Structure.Kind,
@@ -9019,6 +9084,7 @@ pub fn structType(
     }
 }
 
+/// Creates a named opaque struct type that can have its body set later.
 pub fn opaqueType(self: *Builder, name: String) Allocator.Error!Type {
     try self.string_map.ensureUnusedCapacity(self.gpa, 1);
     if (name.slice(self)) |id| {
@@ -9032,6 +9098,7 @@ pub fn opaqueType(self: *Builder, name: String) Allocator.Error!Type {
     return self.opaqueTypeAssumeCapacity(name);
 }
 
+/// Sets the body of a previously created named opaque type.
 pub fn namedTypeSetBody(
     self: *Builder,
     named_type: Type,
@@ -9042,6 +9109,7 @@ pub fn namedTypeSetBody(
         @intFromEnum(body_type);
 }
 
+/// Interns an attribute and returns its index for use in attribute lists.
 pub fn attr(self: *Builder, attribute: Attribute) Allocator.Error!Attribute.Index {
     try self.attributes.ensureUnusedCapacity(self.gpa, 1);
 
@@ -9050,6 +9118,7 @@ pub fn attr(self: *Builder, attribute: Attribute) Allocator.Error!Attribute.Inde
     return @enumFromInt(gop.index);
 }
 
+/// Creates a sorted, deduplicated attribute set from individual attribute indices.
 pub fn attrs(self: *Builder, attributes: []Attribute.Index) Allocator.Error!Attributes {
     std.sort.heap(Attribute.Index, attributes, self, struct {
         pub fn lessThan(builder: *const Builder, lhs: Attribute.Index, rhs: Attribute.Index) bool {
@@ -9062,6 +9131,7 @@ pub fn attrs(self: *Builder, attributes: []Attribute.Index) Allocator.Error!Attr
     return @enumFromInt(try self.attrGeneric(@ptrCast(attributes)));
 }
 
+/// Creates a function attribute set combining function, return, and parameter attributes.
 pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Error!FunctionAttributes {
     try self.function_attributes_set.ensureUnusedCapacity(self.gpa, 1);
     const function_attributes: FunctionAttributes = @enumFromInt(try self.attrGeneric(@ptrCast(
@@ -9075,6 +9145,7 @@ pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Erro
     return function_attributes;
 }
 
+/// Adds a new global value to the module with the given name and properties.
 pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.Error!Global.Index {
     assert(!name.isAnon());
     try self.ensureUnusedTypeCapacity(1, NoExtra, 0);
@@ -9082,6 +9153,7 @@ pub fn addGlobal(self: *Builder, name: StrtabString, global: Global) Allocator.E
     return self.addGlobalAssumeCapacity(name, global);
 }
 
+/// Adds a global value assuming capacity has been pre-allocated.
 pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Global) Global.Index {
     _ = self.ptrTypeAssumeCapacity(global.addr_space);
     var id = name;
@@ -9106,10 +9178,12 @@ pub fn addGlobalAssumeCapacity(self: *Builder, name: StrtabString, global: Globa
     }
 }
 
+/// Looks up a global value by name, returning null if not found.
 pub fn getGlobal(self: *const Builder, name: StrtabString) ?Global.Index {
     return @enumFromInt(self.globals.getIndex(name) orelse return null);
 }
 
+/// Adds a new alias to the module that refers to another global value.
 pub fn addAlias(
     self: *Builder,
     name: StrtabString,
@@ -9124,6 +9198,7 @@ pub fn addAlias(
     return self.addAliasAssumeCapacity(name, ty, addr_space, aliasee);
 }
 
+/// Adds an alias assuming capacity has been pre-allocated.
 pub fn addAliasAssumeCapacity(
     self: *Builder,
     name: StrtabString,
@@ -9140,6 +9215,7 @@ pub fn addAliasAssumeCapacity(
     return alias_index;
 }
 
+/// Adds a new global variable to the module.
 pub fn addVariable(
     self: *Builder,
     name: StrtabString,
@@ -9153,6 +9229,7 @@ pub fn addVariable(
     return self.addVariableAssumeCapacity(ty, name, addr_space);
 }
 
+/// Adds a global variable assuming capacity has been pre-allocated.
 pub fn addVariableAssumeCapacity(
     self: *Builder,
     ty: Type,
@@ -9168,6 +9245,7 @@ pub fn addVariableAssumeCapacity(
     return variable_index;
 }
 
+/// Adds a new function declaration or definition to the module.
 pub fn addFunction(
     self: *Builder,
     ty: Type,
@@ -9181,6 +9259,7 @@ pub fn addFunction(
     return self.addFunctionAssumeCapacity(ty, name, addr_space);
 }
 
+/// Adds a function assuming capacity has been pre-allocated.
 pub fn addFunctionAssumeCapacity(
     self: *Builder,
     ty: Type,
@@ -9200,6 +9279,7 @@ pub fn addFunctionAssumeCapacity(
     return function_index;
 }
 
+/// Gets or creates an LLVM intrinsic function with the given overloaded types.
 pub fn getIntrinsic(
     self: *Builder,
     id: Intrinsic,
@@ -9295,6 +9375,7 @@ pub fn getIntrinsic(
     return function_index;
 }
 
+/// Creates an integer constant from an integral value.
 pub fn intConst(self: *Builder, ty: Type, value: anytype) Allocator.Error!Constant {
     const int_value = switch (@typeInfo(@TypeOf(value))) {
         .int, .comptime_int => value,
@@ -9311,10 +9392,12 @@ pub fn intConst(self: *Builder, ty: Type, value: anytype) Allocator.Error!Consta
     return self.bigIntConst(ty, std.math.big.int.Mutable.init(&limbs, int_value).toConst());
 }
 
+/// Creates an integer value from an integral value.
 pub fn intValue(self: *Builder, ty: Type, value: anytype) Allocator.Error!Value {
     return (try self.intConst(ty, value)).toValue();
 }
 
+/// Creates an integer constant from a big integer.
 pub fn bigIntConst(self: *Builder, ty: Type, value: std.math.big.int.Const) Allocator.Error!Constant {
     try self.constant_map.ensureUnusedCapacity(self.gpa, 1);
     try self.constant_items.ensureUnusedCapacity(self.gpa, 1);
@@ -9322,10 +9405,12 @@ pub fn bigIntConst(self: *Builder, ty: Type, value: std.math.big.int.Const) Allo
     return self.bigIntConstAssumeCapacity(ty, value);
 }
 
+/// Creates an integer value from a big integer.
 pub fn bigIntValue(self: *Builder, ty: Type, value: std.math.big.int.Const) Allocator.Error!Value {
     return (try self.bigIntConst(ty, value)).toValue();
 }
 
+/// Creates a floating-point constant from a compile-time float.
 pub fn fpConst(self: *Builder, ty: Type, comptime val: comptime_float) Allocator.Error!Constant {
     return switch (ty) {
         .half => try self.halfConst(val),
@@ -9339,10 +9424,12 @@ pub fn fpConst(self: *Builder, ty: Type, comptime val: comptime_float) Allocator
     };
 }
 
+/// Creates a floating-point value from a compile-time float.
 pub fn fpValue(self: *Builder, ty: Type, comptime value: comptime_float) Allocator.Error!Value {
     return (try self.fpConst(ty, value)).toValue();
 }
 
+/// Creates a NaN (Not a Number) constant for the given floating-point type.
 pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     return switch (ty) {
         .half => try self.halfConst(std.math.nan(f16)),
@@ -9356,137 +9443,167 @@ pub fn nanConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     };
 }
 
+/// Creates a NaN value for the given floating-point type.
 pub fn nanValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.nanConst(ty)).toValue();
 }
 
+/// Creates a half-precision (f16) floating-point constant.
 pub fn halfConst(self: *Builder, val: f16) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.halfConstAssumeCapacity(val);
 }
 
+/// Creates a half-precision (f16) floating-point value.
 pub fn halfValue(self: *Builder, value: f16) Allocator.Error!Value {
     return (try self.halfConst(value)).toValue();
 }
 
+/// Creates a bfloat16 floating-point constant.
 pub fn bfloatConst(self: *Builder, val: f32) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.bfloatConstAssumeCapacity(val);
 }
 
+/// Creates a bfloat16 floating-point value.
 pub fn bfloatValue(self: *Builder, value: f32) Allocator.Error!Value {
     return (try self.bfloatConst(value)).toValue();
 }
 
+/// Creates a single-precision (f32) floating-point constant.
 pub fn floatConst(self: *Builder, val: f32) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.floatConstAssumeCapacity(val);
 }
 
+/// Creates a single-precision (f32) floating-point value.
 pub fn floatValue(self: *Builder, value: f32) Allocator.Error!Value {
     return (try self.floatConst(value)).toValue();
 }
 
+/// Creates a double-precision (f64) floating-point constant.
 pub fn doubleConst(self: *Builder, val: f64) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Double, 0);
     return self.doubleConstAssumeCapacity(val);
 }
 
+/// Creates a double-precision (f64) floating-point value.
 pub fn doubleValue(self: *Builder, value: f64) Allocator.Error!Value {
     return (try self.doubleConst(value)).toValue();
 }
 
+/// Creates a quad-precision (f128) floating-point constant.
 pub fn fp128Const(self: *Builder, val: f128) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
     return self.fp128ConstAssumeCapacity(val);
 }
 
+/// Creates a quad-precision (f128) floating-point value.
 pub fn fp128Value(self: *Builder, value: f128) Allocator.Error!Value {
     return (try self.fp128Const(value)).toValue();
 }
 
+/// Creates an x86 extended precision (f80) floating-point constant.
 pub fn x86_fp80Const(self: *Builder, val: f80) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp80, 0);
     return self.x86_fp80ConstAssumeCapacity(val);
 }
 
+/// Creates an x86 extended precision (f80) floating-point value.
 pub fn x86_fp80Value(self: *Builder, value: f80) Allocator.Error!Value {
     return (try self.x86_fp80Const(value)).toValue();
 }
 
+/// Creates a PowerPC double-double (ppc_fp128) floating-point constant.
 pub fn ppc_fp128Const(self: *Builder, val: [2]f64) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
     return self.ppc_fp128ConstAssumeCapacity(val);
 }
 
+/// Creates a PowerPC double-double (ppc_fp128) floating-point value.
 pub fn ppc_fp128Value(self: *Builder, value: [2]f64) Allocator.Error!Value {
     return (try self.ppc_fp128Const(value)).toValue();
 }
 
+/// Creates a null pointer constant for the given pointer type.
 pub fn nullConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.nullConstAssumeCapacity(ty);
 }
 
+/// Creates a null pointer value for the given pointer type.
 pub fn nullValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.nullConst(ty)).toValue();
 }
 
+/// Creates a none/undef constant for the given type.
 pub fn noneConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.noneConstAssumeCapacity(ty);
 }
 
+/// Creates a none/undef value for the given type.
 pub fn noneValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.noneConst(ty)).toValue();
 }
 
+/// Creates a struct constant with the given field values.
 pub fn structConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.structConstAssumeCapacity(ty, vals);
 }
 
+/// Creates a struct value with the given field values.
 pub fn structValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
     return (try self.structConst(ty, vals)).toValue();
 }
 
+/// Creates an array constant with the given element values.
 pub fn arrayConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.arrayConstAssumeCapacity(ty, vals);
 }
 
+/// Creates an array value with the given element values.
 pub fn arrayValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
     return (try self.arrayConst(ty, vals)).toValue();
 }
 
+/// Creates a string constant from an interned string.
 pub fn stringConst(self: *Builder, val: String) Allocator.Error!Constant {
     try self.ensureUnusedTypeCapacity(1, Type.Array, 0);
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.stringConstAssumeCapacity(val);
 }
 
+/// Creates a string value from an interned string.
 pub fn stringValue(self: *Builder, val: String) Allocator.Error!Value {
     return (try self.stringConst(val)).toValue();
 }
 
+/// Creates a vector constant with the given element values.
 pub fn vectorConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
     return self.vectorConstAssumeCapacity(ty, vals);
 }
 
+/// Creates a vector value with the given element values.
 pub fn vectorValue(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Value {
     return (try self.vectorConst(ty, vals)).toValue();
 }
 
+/// Creates a splat vector constant with all elements set to the same value.
 pub fn splatConst(self: *Builder, ty: Type, val: Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Splat, 0);
     return self.splatConstAssumeCapacity(ty, val);
 }
 
+/// Creates a splat vector value with all elements set to the same value.
 pub fn splatValue(self: *Builder, ty: Type, val: Constant) Allocator.Error!Value {
     return (try self.splatConst(ty, val)).toValue();
 }
 
+/// Creates a zero-initialized constant for the given type.
 pub fn zeroInitConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Fp128, 0);
     try self.constant_limbs.ensureUnusedCapacity(
@@ -9496,28 +9613,34 @@ pub fn zeroInitConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     return self.zeroInitConstAssumeCapacity(ty);
 }
 
+/// Creates a zero-initialized value for the given type.
 pub fn zeroInitValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.zeroInitConst(ty)).toValue();
 }
 
+/// Creates an undefined constant for the given type.
 pub fn undefConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.undefConstAssumeCapacity(ty);
 }
 
+/// Creates an undefined value for the given type.
 pub fn undefValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.undefConst(ty)).toValue();
 }
 
+/// Creates a poison constant for the given type.
 pub fn poisonConst(self: *Builder, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.poisonConstAssumeCapacity(ty);
 }
 
+/// Creates a poison value for the given type.
 pub fn poisonValue(self: *Builder, ty: Type) Allocator.Error!Value {
     return (try self.poisonConst(ty)).toValue();
 }
 
+/// Creates a block address constant for indirect branching.
 pub fn blockAddrConst(
     self: *Builder,
     function: Function.Index,
@@ -9527,6 +9650,7 @@ pub fn blockAddrConst(
     return self.blockAddrConstAssumeCapacity(function, block);
 }
 
+/// Creates a block address value for indirect branching.
 pub fn blockAddrValue(
     self: *Builder,
     function: Function.Index,
@@ -9535,24 +9659,29 @@ pub fn blockAddrValue(
     return (try self.blockAddrConst(function, block)).toValue();
 }
 
+/// Creates a DSO-local equivalent constant for a function.
 pub fn dsoLocalEquivalentConst(self: *Builder, function: Function.Index) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.dsoLocalEquivalentConstAssumeCapacity(function);
 }
 
+/// Creates a DSO-local equivalent value for a function.
 pub fn dsoLocalEquivalentValue(self: *Builder, function: Function.Index) Allocator.Error!Value {
     return (try self.dsoLocalEquivalentConst(function)).toValue();
 }
 
+/// Creates a no-CFI constant bypassing control flow integrity checks.
 pub fn noCfiConst(self: *Builder, function: Function.Index) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, NoExtra, 0);
     return self.noCfiConstAssumeCapacity(function);
 }
 
+/// Creates a no-CFI value bypassing control flow integrity checks.
 pub fn noCfiValue(self: *Builder, function: Function.Index) Allocator.Error!Value {
     return (try self.noCfiConst(function)).toValue();
 }
 
+/// Creates a type conversion constant expression.
 pub fn convConst(
     self: *Builder,
     val: Constant,
@@ -9562,6 +9691,7 @@ pub fn convConst(
     return self.convConstAssumeCapacity(val, ty);
 }
 
+/// Creates a type conversion value expression.
 pub fn convValue(
     self: *Builder,
     val: Constant,
@@ -9570,15 +9700,18 @@ pub fn convValue(
     return (try self.convConst(val, ty)).toValue();
 }
 
+/// Creates a cast constant expression with a specific operation.
 pub fn castConst(self: *Builder, tag: Constant.Tag, val: Constant, ty: Type) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Cast, 0);
     return self.castConstAssumeCapacity(tag, val, ty);
 }
 
+/// Creates a cast value expression with a specific operation.
 pub fn castValue(self: *Builder, tag: Constant.Tag, val: Constant, ty: Type) Allocator.Error!Value {
     return (try self.castConst(tag, val, ty)).toValue();
 }
 
+/// Creates a getelementptr constant expression for address calculation.
 pub fn gepConst(
     self: *Builder,
     comptime kind: Constant.GetElementPtr.Kind,
@@ -9592,6 +9725,7 @@ pub fn gepConst(
     return self.gepConstAssumeCapacity(kind, ty, base, inrange, indices);
 }
 
+/// Creates a getelementptr value expression for address calculation.
 pub fn gepValue(
     self: *Builder,
     comptime kind: Constant.GetElementPtr.Kind,
@@ -9603,6 +9737,7 @@ pub fn gepValue(
     return (try self.gepConst(kind, ty, base, inrange, indices)).toValue();
 }
 
+/// Creates a binary operation constant expression.
 pub fn binConst(
     self: *Builder,
     tag: Constant.Tag,
@@ -9613,10 +9748,12 @@ pub fn binConst(
     return self.binConstAssumeCapacity(tag, lhs, rhs);
 }
 
+/// Creates a binary operation value expression.
 pub fn binValue(self: *Builder, tag: Constant.Tag, lhs: Constant, rhs: Constant) Allocator.Error!Value {
     return (try self.binConst(tag, lhs, rhs)).toValue();
 }
 
+/// Creates an inline assembly constant.
 pub fn asmConst(
     self: *Builder,
     ty: Type,
@@ -9628,6 +9765,7 @@ pub fn asmConst(
     return self.asmConstAssumeCapacity(ty, info, assembly, constraints);
 }
 
+/// Creates an inline assembly value.
 pub fn asmValue(
     self: *Builder,
     ty: Type,
@@ -9653,12 +9791,14 @@ pub fn resolveAlignmentForwardReference(b: *Builder, fwd_ref: Alignment.Lazy, va
     b.alignment_forward_references.items[index] = value;
 }
 
+/// Dumps the LLVM IR to stderr for debugging.
 pub fn dump(b: *Builder, io: Io) void {
     var buffer: [4000]u8 = undefined;
     const stderr: Io.File = .stderr();
     b.printToFile(io, stderr, &buffer) catch {};
 }
 
+/// Prints the LLVM IR to a file at the given path.
 pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void {
     var buffer: [4000]u8 = undefined;
     const file = try dir.createFile(io, path, .{});
@@ -9666,12 +9806,14 @@ pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void
     try b.printToFile(io, file, &buffer);
 }
 
+/// Prints the LLVM IR to a file handle.
 pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) !void {
     var fw = file.writer(io, buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();
 }
 
+/// Prints the LLVM IR to a writer.
 pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void {
     var need_newline = false;
     var metadata_formatter: Metadata.Formatter = .{ .builder = self, .need_comma = undefined };
@@ -12102,6 +12244,7 @@ fn metadataExtraData(self: *const Builder, comptime T: type, index: Metadata.Ite
     return self.metadataExtraDataTrail(T, index).data;
 }
 
+/// Interns a metadata string and returns its handle.
 pub fn metadataString(self: *Builder, bytes: []const u8) Allocator.Error!Metadata.String {
     assert(bytes.len > 0);
     try self.metadata_string_bytes.ensureUnusedCapacity(self.gpa, bytes.len);
@@ -12121,6 +12264,7 @@ pub fn metadataString(self: *Builder, bytes: []const u8) Allocator.Error!Metadat
     return @enumFromInt(gop.index);
 }
 
+/// Creates a metadata string from a string table string.
 pub fn metadataStringFromStrtabString(
     self: *Builder,
     str: StrtabString,
@@ -12128,6 +12272,7 @@ pub fn metadataStringFromStrtabString(
     return try self.metadataString(str.slice(self).?);
 }
 
+/// Creates a formatted metadata string using printf-style formatting.
 pub fn metadataStringFmt(
     self: *Builder,
     comptime fmt_str: []const u8,
@@ -12142,6 +12287,7 @@ pub fn metadataStringFmt(
     return self.metadataStringFmtAssumeCapacity(fmt_str, fmt_args);
 }
 
+/// Creates a formatted metadata string assuming capacity has been pre-allocated.
 pub fn metadataStringFmtAssumeCapacity(
     self: *Builder,
     comptime fmt_str: []const u8,
@@ -12151,12 +12297,14 @@ pub fn metadataStringFmtAssumeCapacity(
     return self.trailingMetadataStringAssumeCapacity();
 }
 
+/// Interns trailing bytes as a new metadata string entry.
 pub fn trailingMetadataString(self: *Builder) Allocator.Error!Metadata.String {
     try self.metadata_string_indices.ensureUnusedCapacity(self.gpa, 1);
     try self.metadata_string_map.ensureUnusedCapacity(self.gpa, 1);
     return self.trailingMetadataStringAssumeCapacity();
 }
 
+/// Interns trailing bytes assuming capacity has been pre-allocated.
 pub fn trailingMetadataStringAssumeCapacity(self: *Builder) Metadata.String {
     const start = self.metadata_string_indices.getLast();
     const bytes: []const u8 = self.metadata_string_bytes.items[start..];
@@ -12170,12 +12318,14 @@ pub fn trailingMetadataStringAssumeCapacity(self: *Builder) Metadata.String {
     return @enumFromInt(gop.index);
 }
 
+/// Adds a named metadata entry to the module.
 pub fn addNamedMetadata(self: *Builder, name: String, operands: []const Metadata) Allocator.Error!void {
     try self.metadata_extra.ensureUnusedCapacity(self.gpa, operands.len);
     try self.metadata_named.ensureUnusedCapacity(self.gpa, 1);
     self.addNamedMetadataAssumeCapacity(name, operands);
 }
 
+/// Creates a debug info file metadata entry.
 pub fn debugFile(
     self: *Builder,
     filename: ?Metadata.String,
@@ -12185,6 +12335,7 @@ pub fn debugFile(
     return self.debugFileAssumeCapacity(filename, directory);
 }
 
+/// Creates a debug info compile unit metadata entry.
 pub fn debugCompileUnit(
     self: *Builder,
     file: ?Metadata,
@@ -12197,6 +12348,7 @@ pub fn debugCompileUnit(
     return self.debugCompileUnitAssumeCapacity(file, producer, enums, globals, options);
 }
 
+/// Creates a debug info subprogram (function) metadata entry.
 pub fn debugSubprogram(
     self: *Builder,
     file: ?Metadata,
@@ -12221,6 +12373,7 @@ pub fn debugSubprogram(
     );
 }
 
+/// Creates a debug info lexical block scope metadata entry.
 pub fn debugLexicalBlock(
     self: *Builder,
     scope: ?Metadata,
@@ -12232,6 +12385,7 @@ pub fn debugLexicalBlock(
     return self.debugLexicalBlockAssumeCapacity(scope, file, line, column);
 }
 
+/// Creates a debug info source location metadata entry.
 pub fn debugLocation(
     self: *Builder,
     line: u32,
@@ -12243,6 +12397,7 @@ pub fn debugLocation(
     return self.debugLocationAssumeCapacity(line, column, scope, inlined_at);
 }
 
+/// Creates a debug info boolean type metadata entry.
 pub fn debugBoolType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12252,6 +12407,7 @@ pub fn debugBoolType(
     return self.debugBoolTypeAssumeCapacity(name, size_in_bits);
 }
 
+/// Creates a debug info unsigned integer type metadata entry.
 pub fn debugUnsignedType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12261,6 +12417,7 @@ pub fn debugUnsignedType(
     return self.debugUnsignedTypeAssumeCapacity(name, size_in_bits);
 }
 
+/// Creates a debug info signed integer type metadata entry.
 pub fn debugSignedType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12270,6 +12427,7 @@ pub fn debugSignedType(
     return self.debugSignedTypeAssumeCapacity(name, size_in_bits);
 }
 
+/// Creates a debug info floating-point type metadata entry.
 pub fn debugFloatType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12279,11 +12437,13 @@ pub fn debugFloatType(
     return self.debugFloatTypeAssumeCapacity(name, size_in_bits);
 }
 
+/// Creates a forward reference placeholder for recursive debug types.
 pub fn debugForwardReference(self: *Builder) Allocator.Error!Metadata {
     try self.metadata_forward_references.ensureUnusedCapacity(self.gpa, 1);
     return self.debugForwardReferenceAssumeCapacity();
 }
 
+/// Creates a debug info struct/class type metadata entry.
 pub fn debugStructType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12308,6 +12468,7 @@ pub fn debugStructType(
     );
 }
 
+/// Creates a debug info union type metadata entry.
 pub fn debugUnionType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12332,6 +12493,7 @@ pub fn debugUnionType(
     );
 }
 
+/// Creates a debug info enumeration type metadata entry.
 pub fn debugEnumerationType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12356,6 +12518,7 @@ pub fn debugEnumerationType(
     );
 }
 
+/// Creates a debug info array type metadata entry.
 pub fn debugArrayType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12380,6 +12543,7 @@ pub fn debugArrayType(
     );
 }
 
+/// Creates a debug info vector type metadata entry.
 pub fn debugVectorType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12404,6 +12568,7 @@ pub fn debugVectorType(
     );
 }
 
+/// Creates a debug info pointer type metadata entry.
 pub fn debugPointerType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12428,6 +12593,7 @@ pub fn debugPointerType(
     );
 }
 
+/// Creates a debug info struct/union member type metadata entry.
 pub fn debugMemberType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12452,6 +12618,7 @@ pub fn debugMemberType(
     );
 }
 
+/// Creates debug info metadata for a typedef derived type.
 pub fn debugTypedefType(
     self: *Builder,
     name: ?Metadata.String,
@@ -12476,11 +12643,13 @@ pub fn debugTypedefType(
     );
 }
 
+/// Creates a debug info subroutine (function) type metadata entry.
 pub fn debugSubroutineType(self: *Builder, types_tuple: ?Metadata) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.SubroutineType, 0);
     return self.debugSubroutineTypeAssumeCapacity(types_tuple);
 }
 
+/// Creates a debug info enumerator (enum value) metadata entry.
 pub fn debugEnumerator(
     self: *Builder,
     name: ?Metadata.String,
@@ -12494,6 +12663,7 @@ pub fn debugEnumerator(
     return self.debugEnumeratorAssumeCapacity(name, unsigned, bit_width, value);
 }
 
+/// Creates a debug info subrange metadata entry for array bounds.
 pub fn debugSubrange(
     self: *Builder,
     lower_bound: ?Metadata,
@@ -12503,15 +12673,18 @@ pub fn debugSubrange(
     return self.debugSubrangeAssumeCapacity(lower_bound, count);
 }
 
+/// Creates a debug info expression metadata entry for variable locations.
 pub fn debugExpression(self: *Builder, elements: []const u32) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, Metadata.Expression, elements.len);
     return self.debugExpressionAssumeCapacity(elements);
 }
 
+/// Creates a metadata tuple from an array of metadata elements.
 pub fn metadataTuple(self: *Builder, elements: []const Metadata) Allocator.Error!Metadata {
     return self.metadataTupleOptionals(@ptrCast(elements));
 }
 
+/// Creates a metadata tuple from an array of optional metadata elements.
 pub fn metadataTupleOptionals(
     self: *Builder,
     elements: []const Metadata.Optional,
@@ -12520,6 +12693,7 @@ pub fn metadataTupleOptionals(
     return self.metadataTupleOptionalsAssumeCapacity(elements);
 }
 
+/// Creates a debug info local variable metadata entry.
 pub fn debugLocalVar(
     self: *Builder,
     name: ?Metadata.String,
@@ -12532,6 +12706,7 @@ pub fn debugLocalVar(
     return self.debugLocalVarAssumeCapacity(name, file, scope, line, ty);
 }
 
+/// Creates a debug info function parameter metadata entry.
 pub fn debugParameter(
     self: *Builder,
     name: ?Metadata.String,
@@ -12545,6 +12720,7 @@ pub fn debugParameter(
     return self.debugParameterAssumeCapacity(name, file, scope, line, ty, arg_no);
 }
 
+/// Creates a debug info global variable metadata entry.
 pub fn debugGlobalVar(
     self: *Builder,
     name: ?Metadata.String,
@@ -12569,6 +12745,7 @@ pub fn debugGlobalVar(
     );
 }
 
+/// Creates a debug info global variable expression metadata entry.
 pub fn debugGlobalVarExpression(
     self: *Builder,
     variable: ?Metadata,
@@ -12578,6 +12755,7 @@ pub fn debugGlobalVarExpression(
     return self.debugGlobalVarExpressionAssumeCapacity(variable, expression);
 }
 
+/// Creates a metadata entry wrapping a constant value.
 pub fn metadataConstant(self: *Builder, value: Constant) Allocator.Error!Metadata {
     try self.ensureUnusedMetadataCapacity(1, NoExtra, 0);
     return self.metadataConstantAssumeCapacity(value);
@@ -12664,6 +12842,7 @@ fn debugFileAssumeCapacity(
     });
 }
 
+/// Creates a debug info compile unit assuming capacity has been pre-allocated.
 pub fn debugCompileUnitAssumeCapacity(
     self: *Builder,
     file: ?Metadata,
@@ -13303,11 +13482,13 @@ fn metadataConstantAssumeCapacity(self: *Builder, constant: Constant) Metadata {
     return .{ .index = @intCast(gop.index), .kind = .node };
 }
 
+/// Information about the producer tool for embedding in bitcode.
 pub const Producer = struct {
     name: []const u8,
     version: std.SemanticVersion,
 };
 
+/// Serializes the LLVM IR to bitcode format.
 pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitcode_writer.Error![]const u32 {
     const BitcodeWriter = bitcode_writer.BitcodeWriter(&.{ Type, FunctionAttributes });
     var bitcode = BitcodeWriter.init(allocator, .{
