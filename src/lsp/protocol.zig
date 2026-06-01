@@ -276,7 +276,7 @@ fn copyString(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
 }
 
 fn stringifyValue(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
-    var writer: std.io.Writer.Allocating = .init(allocator);
+    var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
     std.json.Stringify.value(value, .{}, &writer.writer) catch return error.OutOfMemory;
     return writer.toOwnedSlice();

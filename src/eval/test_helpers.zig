@@ -20,7 +20,6 @@ const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 
 const Allocator = std.mem.Allocator;
-const Allocators = base.Allocators;
 const Can = can.Can;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -32,6 +31,49 @@ const LayoutStore = @import("layout").Store;
 const LayoutIdx = @import("layout").Idx;
 const LirProcSpecId = lir.LirProcSpecId;
 const LirImage = lir.LirImage;
+
+const EvalDynLib = switch (builtin.target.os.tag) {
+    .windows => struct {
+        handle: std.os.windows.HMODULE,
+
+        const kernel32 = struct {
+            extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?std.os.windows.HMODULE;
+            extern "kernel32" fn GetProcAddress(hModule: std.os.windows.HMODULE, lpProcName: [*:0]const u8) callconv(.winapi) ?std.os.windows.FARPROC;
+            extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
+        };
+
+        fn open(allocator: Allocator, path: []const u8) !@This() {
+            const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+            defer allocator.free(wide_path);
+            const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
+            return .{ .handle = handle };
+        }
+
+        fn close(self: *@This()) void {
+            _ = kernel32.FreeLibrary(self.handle);
+        }
+
+        fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
+            const proc = kernel32.GetProcAddress(self.handle, name.ptr) orelse return null;
+            return @ptrCast(proc);
+        }
+    },
+    else => struct {
+        inner: std.DynLib,
+
+        fn open(_: Allocator, path: []const u8) !@This() {
+            return .{ .inner = try std.DynLib.open(path) };
+        }
+
+        fn close(self: *@This()) void {
+            self.inner.close();
+        }
+
+        fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
+            return self.inner.lookup(T, name);
+        }
+    },
+};
 
 /// Captures an eval backend's string output and host allocation count.
 pub const EvalRunResult = struct {
@@ -48,7 +90,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         return 64 * 1024;
     }
 
-    fn create(size: usize, page_size: usize) !@This() {
+    fn create(_: anytype, size: usize, page_size: usize) !@This() {
         const aligned_size = std.mem.alignForward(usize, size, page_size);
         const buffer = try std.heap.wasm_allocator.alignedAlloc(
             u8,
@@ -65,8 +107,8 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         };
     }
 
-    fn createWithMinSize(preferred_size: usize, _: usize, page_size: usize) !@This() {
-        return create(preferred_size, page_size);
+    fn createWithMinSize(_: std.Io, preferred_size: usize, _: usize, page_size: usize) !@This() {
+        return create({}, preferred_size, page_size);
     }
 
     fn deinit(self: *@This(), _: Allocator) void {
@@ -84,6 +126,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
     fn updateHeader(_: *@This()) void {}
 } else @import("ipc").SharedMemoryAllocator;
 
+/// Monotonic stage timer (std.time.Timer was removed in Zig 0.16).
 const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     fn start() !@This() {
         return .{};
@@ -92,7 +135,41 @@ const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     fn read(_: *@This()) u64 {
         return 0;
     }
-} else std.time.Timer;
+} else struct {
+    start_ns: u64,
+
+    fn start() error{}!@This() {
+        return .{ .start_ns = readNs() };
+    }
+
+    fn read(self: *@This()) u64 {
+        return readNs() - self.start_ns;
+    }
+
+    fn readNs() u64 {
+        if (builtin.os.tag == .windows) {
+            const k32 = struct {
+                extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) std.os.windows.BOOL;
+                extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) std.os.windows.BOOL;
+            };
+            var counter: i64 = undefined;
+            var freq: i64 = undefined;
+            _ = k32.QueryPerformanceCounter(&counter);
+            _ = k32.QueryPerformanceFrequency(&freq);
+            // Use i128 to avoid overflow on the multiplication; QPC counter * 1e9
+            // exceeds i64 within ~30 minutes of uptime on a typical 10MHz QPF.
+            return @intCast(@divTrunc(@as(i128, counter) * 1_000_000_000, @as(i128, freq)));
+        }
+        if (builtin.os.tag == .linux) {
+            var ts: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        }
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    }
+};
 
 /// Public `SourceKind` declaration.
 pub const SourceKind = enum {
@@ -415,6 +492,7 @@ pub fn parseAndCheckProgramForProblems(
 /// Public `compileProgram` function.
 pub fn compileProgram(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -422,13 +500,13 @@ pub fn compileProgram(
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, .native);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
     }
 
-    const wasm_lowered = try lowerParsedProgramToLir(allocator, &resources, .u32);
+    const wasm_lowered = try lowerParsedProgramToLir(allocator, io, &resources, .u32);
     errdefer {
         var owned = wasm_lowered;
         owned.deinit(allocator);
@@ -444,6 +522,7 @@ pub fn compileProgram(
 /// Public `compileProgramForTarget` function.
 pub fn compileProgramForTarget(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -452,7 +531,7 @@ pub fn compileProgramForTarget(
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
@@ -467,27 +546,30 @@ pub fn compileProgramForTarget(
 /// Public `compileInspectedProgram` function.
 pub fn compileInspectedProgram(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
 ) !CompiledProgram {
-    return compileInspectedProgramImpl(allocator, source_kind, source, imports, null);
+    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null);
 }
 
 /// Same as `compileInspectedProgram` but reuses a pre-published Builtin
 /// artifact owned by the caller.
 pub fn compileInspectedProgramWithBuiltin(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
 ) !CompiledProgram {
-    return compileInspectedProgramImpl(allocator, source_kind, source, imports, pre_published_builtin);
+    return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, pre_published_builtin);
 }
 
 fn compileInspectedProgramImpl(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -504,13 +586,13 @@ fn compileInspectedProgramImpl(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, .native);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, .native);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
     }
 
-    const wasm_lowered = try lowerParsedProgramToLir(allocator, &resources, .u32);
+    const wasm_lowered = try lowerParsedProgramToLir(allocator, io, &resources, .u32);
     errdefer {
         var owned = wasm_lowered;
         owned.deinit(allocator);
@@ -526,29 +608,32 @@ fn compileInspectedProgramImpl(
 /// Public `compileInspectedProgramForTarget` function.
 pub fn compileInspectedProgramForTarget(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) !CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, source_kind, source, imports, target_usize, null);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null);
 }
 
 /// Same as `compileInspectedProgramForTarget` but reuses a pre-published
 /// Builtin artifact owned by the caller.
 pub fn compileInspectedProgramForTargetWithBuiltin(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
 ) !CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, source_kind, source, imports, target_usize, pre_published_builtin);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin);
 }
 
 fn compileInspectedProgramForTargetImpl(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -566,7 +651,7 @@ fn compileInspectedProgramForTargetImpl(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
@@ -579,8 +664,8 @@ fn compileInspectedProgramForTargetImpl(
 }
 
 /// Public `compileInspectedExpr` function.
-pub fn compileInspectedExpr(allocator: Allocator, source: []const u8) !CompiledInspectedExpr {
-    return compileInspectedProgram(allocator, .expr, source, &.{});
+pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8) !CompiledInspectedExpr {
+    return compileInspectedProgram(allocator, io, .expr, source, &.{});
 }
 
 /// Public `cleanupParseAndCanonical` function.
@@ -856,17 +941,12 @@ pub fn parseCheckModule(
     module_env.module_name = module_name;
     try module_env.common.calcLineStarts(module_env.gpa);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    errdefer allocators.deinit();
-
     var parse_elapsed: u64 = 0;
     var parse_timer = try StageTimer.start();
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(allocator, &module_env.common);
     parse_elapsed = parse_timer.read();
     errdefer {
         parse_ast.deinit();
-        allocators.deinit();
     }
     if (parse_ast.tokenize_diagnostics.items.len > 0 or parse_ast.parse_diagnostics.items.len > 0) {
         return error.ParseError;
@@ -896,7 +976,8 @@ pub fn parseCheckModule(
 
     const czer = try allocator.create(Can);
     errdefer allocator.destroy(czer);
-    czer.* = try Can.initModule(&allocators, module_env, parse_ast, .{
+    const roc_ctx = @import("ctx").CoreCtx.testing(allocator, allocator);
+    czer.* = try Can.initModule(roc_ctx, module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
@@ -971,11 +1052,12 @@ pub fn parseCheckModule(
 
 fn lowerParsedProgramToLir(
     allocator: Allocator,
+    io: std.Io,
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
     if (resources.borrowed_builtin_artifact == null) {
-        return lowerCheckedModuleSetToLir(allocator, &resources.checked_artifact, resources.import_artifacts, target_usize);
+        return lowerCheckedModuleSetToLir(allocator, io, &resources.checked_artifact, resources.import_artifacts, target_usize);
     }
 
     const borrowed = resources.borrowed_builtin_artifact.?;
@@ -986,12 +1068,13 @@ fn lowerParsedProgramToLir(
     for (resources.import_artifacts, 0..) |*module, i| {
         import_views[i + 1] = check.CheckedArtifact.importedView(module);
     }
-    return lowerCheckedRootWithViews(allocator, &resources.checked_artifact, import_views, target_usize);
+    return lowerCheckedRootWithViews(allocator, io, &resources.checked_artifact, import_views, target_usize);
 }
 
 /// Lower already-published checked modules to a LIR image.
 pub fn lowerCheckedModuleSetToLir(
     allocator: Allocator,
+    io: std.Io,
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
     import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
     target_usize: base.target.TargetUsize,
@@ -1001,17 +1084,18 @@ pub fn lowerCheckedModuleSetToLir(
     for (import_modules, 0..) |*module, i| {
         import_views[i] = check.CheckedArtifact.importedView(module);
     }
-    return lowerCheckedRootWithViews(allocator, root_module, import_views, target_usize);
+    return lowerCheckedRootWithViews(allocator, io, root_module, import_views, target_usize);
 }
 
 fn lowerCheckedRootWithViews(
     allocator: Allocator,
+    io: std.Io,
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
     import_views: []const check.CheckedArtifact.ImportedModuleView,
     target_usize: base.target.TargetUsize,
 ) !LoweredProgram {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.createWithMinSize(EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
+    var shm = try SharedMemoryAllocator.createWithMinSize(io, EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
     errdefer shm.deinit(allocator);
 
     const shm_allocator = shm.allocator();
@@ -1276,7 +1360,7 @@ fn renderCheckedModuleProblems(
         try report.render(&out.writer, .color_terminal);
     }
     const raw = try out.toOwnedSlice();
-    const trimmed = std.mem.trimRight(u8, raw, "\r\n");
+    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
     if (trimmed.len == raw.len) return raw;
     const result = try allocator.dupe(u8, trimmed);
     allocator.free(raw);
@@ -1583,16 +1667,16 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
         owned.deinit();
     }
 
-    const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, bitcode.bitcode, .{
+    const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, std.Options.debug_io, bitcode.bitcode, .{
         .function_sections = false,
         .use_module_target_triple = true,
     });
     defer {
-        std.fs.cwd().deleteFile(std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
         allocator.free(dylib_path);
     }
 
-    var lib = try std.DynLib.open(std.mem.sliceTo(dylib_path, 0));
+    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
     defer lib.close();
 
     const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
@@ -1674,7 +1758,7 @@ fn copyReturnedRocStr(
     const layout_val = layout_store.getLayout(ret_layout);
     const is_str =
         ret_layout == .str or
-        (layout_val.tag == .scalar and layout_val.data.scalar.tag == .str);
+        (layout_val.tag == .scalar and layout_val.getScalar().tag == .str);
 
     if (!is_str) {
         std.debug.panic(

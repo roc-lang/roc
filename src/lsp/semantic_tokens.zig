@@ -11,12 +11,12 @@ const std = @import("std");
 const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
+const CoreCtx = can.CoreCtx;
 const base = @import("base");
 const eval_mod = @import("eval");
 const compiled_builtins = @import("compiled_builtins");
 const line_info = @import("line_info.zig");
 
-const Allocators = base.Allocators;
 const Token = tokenize.Token;
 const Tokenizer = tokenize.Tokenizer;
 const CommonEnv = base.CommonEnv;
@@ -234,7 +234,7 @@ pub fn extractSemanticTokens(
     const regions = tokenizer.output.tokens.items(.region);
 
     // Build semantic tokens list
-    var tokens: std.ArrayListUnmanaged(SemanticToken) = .{};
+    var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
     errdefer tokens.deinit(allocator);
 
     for (tags, regions) |tag, region| {
@@ -281,10 +281,6 @@ pub fn extractSemanticTokensWithImports(
     imported_envs: ?[]*ModuleEnv,
 ) ![]SemanticToken {
     // Create ModuleEnv with source
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var module_env = ModuleEnv.init(allocator, source) catch {
         // Fall back to token-only extraction on error
         return extractSemanticTokens(allocator, source, info);
@@ -292,7 +288,7 @@ pub fn extractSemanticTokensWithImports(
     defer module_env.deinit();
 
     // Parse the source
-    const parse_ast = parse.parse(&allocators, &module_env.common) catch {
+    const parse_ast = parse.parse(allocator, &module_env.common) catch {
         // Fall back to token-only extraction on parse error
         return extractSemanticTokens(allocator, source, info);
     };
@@ -312,7 +308,8 @@ pub fn extractSemanticTokensWithImports(
     defer builtin_module.deinit();
 
     // Create canonicalizer and run
-    var canonicalizer = can.Can.initModule(&allocators, &module_env, parse_ast, .{
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var canonicalizer = can.Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -340,7 +337,7 @@ pub fn extractSemanticTokensWithImports(
     // Create a semantic collector to walk the CIR
     var collector = SemanticCollector{
         .allocator = allocator,
-        .tokens = std.ArrayListUnmanaged(SemanticToken){},
+        .tokens = .empty,
         .module_env = &module_env,
         .info = info,
         .source = source,

@@ -188,9 +188,18 @@ fn compileAndRunInner(source: []const u8) !u8 {
     // The runner writes the synthetic source itself via EchoCtx — the wasm
     // fallback's setSource is only consulted for non-synthetic paths.
 
+    // On wasm32-freestanding there is no real `std.Io` — the host JS provides
+    // I/O through the WasmFilesystem vtable and direct `extern "env"` calls.
+    // We pass `std.Io.failing` as a tripwire: if any code path on WASM ever
+    // tries to actually use the std.Io (e.g. a `writeStreamingAll` outside
+    // the explicit `is_wasm` branches), it traps loudly instead of silently
+    // dereferencing `undefined`.
+    const wasm_std_io: std.Io = std.Io.failing;
+
     return runner.runEcho(.{
         .runtime_fba = &fba,
-        .fallback_io = WasmFilesystem.wasm(&wasm_ctx),
+        .fallback_io = WasmFilesystem.wasm(&wasm_ctx, allocator, wasm_std_io),
+        .std_io = wasm_std_io,
         .source = source,
         .extras = extras,
         .diagnostics = jsDiagnostics(),

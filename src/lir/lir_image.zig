@@ -103,6 +103,8 @@ pub const LirStoreImage = extern struct {
             .strings = try self.strings.view(base_ptr, image_size),
             .allocator = allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,
+            .patterns = std.ArrayList(LIR.LirPattern).empty,
+            .pattern_ids = std.ArrayList(LIR.LirPatternId).empty,
         };
     }
 };

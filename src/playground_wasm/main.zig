@@ -24,6 +24,7 @@ const eval = @import("eval");
 const lir = @import("lir");
 const types = @import("types");
 const can = @import("can");
+const CoreCtx = can.CoreCtx;
 const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
@@ -815,11 +816,7 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -851,11 +848,7 @@ fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -1013,7 +1006,7 @@ fn compileReplInspectedModule(source: []const u8) !ReplCompiledModule {
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1243,11 +1236,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(allocator, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
@@ -1366,7 +1355,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.initModule(&allocators, env, result.parse_ast.?, .{
+    const roc_ctx = CoreCtx.default(allocator, allocator, @as(std.Io, undefined));
+    var czer = try Can.initModule(roc_ctx, env, result.parse_ast.?, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -1602,7 +1592,7 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     // Collect HTML in a buffer first, then escape it for JSON
     var html_buffer: [65536]u8 = undefined;
-    var html_writer = std.io.Writer.fixed(&html_buffer);
+    var html_writer = std.Io.Writer.fixed(&html_buffer);
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
@@ -1646,6 +1636,7 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
+/// Write REPL step result as JSON
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
@@ -2123,7 +2114,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         const error_msg = switch (err) {
             error.OutOfMemory => "Out of memory while generating types",
-            // Add other specific error messages if pushTypesToSExprTree can return other errors
+            error.WriteFailed => "Write failed while generating types",
         };
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
@@ -2138,7 +2129,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: *std.io.Writer, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.Io.Writer, report: reporting.Report) !void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -2200,7 +2191,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping (without surrounding quotes)
-fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, str: []const u8) !void {
     try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
@@ -2284,10 +2275,9 @@ export fn freeWasmString(ptr: [*]u8) void {
 /// Helper to create a simple error JSON string, following the length-prefix allocation pattern.
 fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
     // 1. Format the string into a temporary buffer to determine its length.
-    var temp_buffer = std.array_list.Managed(u8).init(allocator);
-    defer temp_buffer.deinit();
-    temp_buffer.writer().print("{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
-    const json_len = temp_buffer.items.len;
+    var fmt_buf: [4096]u8 = undefined;
+    const json_str = std.fmt.bufPrint(&fmt_buf, "{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
+    const json_len = json_str.len;
 
     // 2. Allocate memory for [u32: length][u8...: data][u8: null terminator]
     const total_len = @sizeOf(u32) + json_len + 1;
@@ -2298,7 +2288,7 @@ fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
 
     // 4. Copy the JSON data
     const data_ptr = final_buffer.ptr + @sizeOf(u32);
-    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], temp_buffer.items);
+    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], json_str);
 
     // 5. Null-terminate
     final_buffer[@sizeOf(u32) + json_len] = 0;

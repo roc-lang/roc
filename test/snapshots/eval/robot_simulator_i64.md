@@ -223,7 +223,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 228)
+						(e-dispatch-call (method "plus") (constraint-fn-var 227)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -246,7 +246,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "minus") (constraint-fn-var 385)
+						(e-dispatch-call (method "minus") (constraint-fn-var 382)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -269,7 +269,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "plus") (constraint-fn-var 542)
+						(e-dispatch-call (method "plus") (constraint-fn-var 537)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -292,7 +292,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "x")
-						(e-dispatch-call (method "minus") (constraint-fn-var 699)
+						(e-dispatch-call (method "minus") (constraint-fn-var 692)
 							(receiver
 								(e-field-access (field "x")
 									(receiver
@@ -314,7 +314,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 845)
+				(e-call (constraint-fn-var 836)
 					(e-lookup-local
 						(p-assign (ident "advance_y")))
 					(e-record
@@ -333,7 +333,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1261)
+				(e-call (constraint-fn-var 1250)
 					(e-lookup-local
 						(p-assign (ident "retreat_y")))
 					(e-record
@@ -352,7 +352,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1677)
+				(e-call (constraint-fn-var 1664)
 					(e-lookup-local
 						(p-assign (ident "advance_x")))
 					(e-record
@@ -371,7 +371,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2093)
+				(e-call (constraint-fn-var 2078)
 					(e-lookup-local
 						(p-assign (ident "retreat_x")))
 					(e-record
@@ -390,10 +390,10 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2650)
+				(e-call (constraint-fn-var 2633)
 					(e-lookup-local
 						(p-assign (ident "advance_y")))
-					(e-call (constraint-fn-var 2509)
+					(e-call (constraint-fn-var 2492)
 						(e-lookup-local
 							(p-assign (ident "retreat_y")))
 						(e-record

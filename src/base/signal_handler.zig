@@ -76,8 +76,10 @@ threadlocal var thread_stack_bounds: ?StackBounds = null;
 threadlocal var thread_alt_stack_storage: [ALT_STACK_SIZE]u8 align(16) = undefined;
 threadlocal var current_thread_installed = false;
 
-var install_mutex: if (supports_posix_signals or supports_windows_exceptions) std.Thread.Mutex else void =
-    if (supports_posix_signals or supports_windows_exceptions) .{} else {};
+// zig 0.16 moved the blocking Thread.Mutex behind std.Io; for this one-time,
+// process-wide install guard we use the io-free std.atomic.Mutex (tryLock spin).
+var install_mutex: if (supports_posix_signals or supports_windows_exceptions) std.atomic.Mutex else void =
+    if (supports_posix_signals or supports_windows_exceptions) .unlocked else {};
 var process_handlers_installed = false;
 
 var stack_overflow_callback: ?StackOverflowCallback = null;
@@ -146,18 +148,58 @@ pub const FaultKind = enum {
 };
 
 fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
-    if (comptime builtin.os.tag != .linux) {
-        return null;
-    }
-
+    // zig 0.16 no longer exposes posix.ucontext_t / posix.REG, so for Linux we
+    // read the faulting stack pointer from a locally-declared ucontext layout
+    // (the kernel signal-frame ABI). For other arches/OSes we return null and
+    // classifyFault falls back to the faulting address (guard-page check).
+    if (comptime builtin.os.tag != .linux) return null;
     const raw_context = context orelse return null;
-    const ucontext: *const posix.ucontext_t = @ptrCast(@alignCast(raw_context));
-
-    return switch (builtin.cpu.arch) {
-        .aarch64 => ucontext.mcontext.sp,
-        .x86_64 => @intCast(ucontext.mcontext.gregs[posix.REG.RSP]),
-        else => null,
-    };
+    switch (comptime builtin.cpu.arch) {
+        .x86_64 => {
+            // Linux x86_64 ucontext_t / mcontext_t; RSP is gregs[15] (REG_RSP).
+            const stack_t = extern struct { ss_sp: ?*anyopaque, ss_flags: i32, ss_size: usize };
+            const mcontext_t = extern struct { gregs: [23]u64, fpregs: ?*anyopaque, reserved1: [8]u64 };
+            const ucontext_t = extern struct {
+                uc_flags: u64,
+                uc_link: ?*anyopaque,
+                uc_stack: stack_t,
+                uc_mcontext: mcontext_t,
+            };
+            const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
+            return @intCast(uc.uc_mcontext.gregs[15]);
+        },
+        .aarch64 => {
+            // Linux aarch64 ucontext_t; uc_sigmask precedes uc_mcontext, which
+            // holds fault_address, regs[31], then sp.
+            //
+            // uc_mcontext (the kernel's struct sigcontext) is 16-byte aligned:
+            // its trailing FP/SIMD __reserved area is __aligned__(16). That
+            // alignment inserts 8 bytes of padding after the 1024-bit uc_sigmask,
+            // so uc_mcontext must be modeled as a 16-aligned struct rather than
+            // flattened — otherwise every field shifts 8 bytes early and `sp`
+            // lands on regs[30] (the link register). The trailing 16-aligned
+            // reserved field reproduces that alignment (mirrors std's mcontext_t).
+            const stack_t = extern struct { ss_sp: ?*anyopaque, ss_flags: i32, ss_size: usize };
+            const mcontext_t = extern struct {
+                fault_address: u64,
+                regs: [31]u64,
+                sp: u64,
+                pc: u64,
+                pstate: u64,
+                reserved: [256 * 16]u8 align(16),
+            };
+            const ucontext_t = extern struct {
+                uc_flags: u64,
+                uc_link: ?*anyopaque,
+                uc_stack: stack_t,
+                uc_sigmask: [16]u64,
+                uc_mcontext: mcontext_t,
+            };
+            const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
+            return @intCast(uc.uc_mcontext.sp);
+        },
+        else => return null,
+    }
 }
 
 /// Install crash handling for the current thread.
@@ -212,7 +254,7 @@ pub fn classifyFault(fault_addr: usize, stack_pointer: ?usize, bounds: ?StackBou
 }
 
 fn installPosixProcessHandlers(callbacks: Callbacks) bool {
-    install_mutex.lock();
+    while (!install_mutex.tryLock()) {}
     defer install_mutex.unlock();
 
     stack_overflow_callback = callbacks.stack_overflow;
@@ -250,7 +292,7 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
 const WINDOWS_STACK_GUARANTEE: ULONG = 32 * 1024;
 
 fn installWindows(callbacks: Callbacks) bool {
-    install_mutex.lock();
+    while (!install_mutex.tryLock()) {}
     defer install_mutex.unlock();
 
     stack_overflow_callback = callbacks.stack_overflow;
@@ -304,25 +346,25 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
     ExitProcess(139);
 }
 
-fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, context: ?*anyopaque) callconv(.c) void {
+fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyopaque) callconv(.c) void {
     const fault_addr = getFaultAddress(info);
     const stack_pointer = stackPointerFromSignalContext(context);
 
     switch (classifyFault(fault_addr, stack_pointer, thread_stack_bounds)) {
         .stack_overflow => {
             if (stack_overflow_callback) |callback| callback();
-            posix.exit(134);
+            std.process.exit(134);
         },
         .access_violation => {
             if (access_violation_callback) |callback| callback(fault_addr);
-            posix.exit(139);
+            std.process.exit(139);
         },
     }
 }
 
-fn handleFpeSignal(_: i32, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn handleFpeSignal(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     if (arithmetic_error_callback) |callback| callback();
-    posix.exit(136);
+    std.process.exit(136);
 }
 
 fn getFaultAddress(info: *const posix.siginfo_t) usize {

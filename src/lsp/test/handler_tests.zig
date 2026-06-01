@@ -8,7 +8,7 @@ const transport_module = @import("../transport.zig");
 /// Get the path to the test platform for creating valid Roc files
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
-    const repo_root = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(repo_root);
     const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
@@ -24,15 +24,15 @@ fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
 }
 
 fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
-    var reader = std.io.fixedBufferStream(bytes);
+    const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
-    var sink = std.io.fixedBufferStream(&sink_storage);
+    const sink: std.Io.Writer = .fixed(&sink_storage);
 
-    const ReaderType = @TypeOf(reader.reader());
-    const WriterType = @TypeOf(sink.writer());
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, reader.reader(), sink.writer(), null);
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, std.testing.io, reader, sink, null);
 
-    var responses = std.ArrayList([]u8){};
+    var responses: std.ArrayList([]u8) = .empty;
     errdefer {
         for (responses.items) |body| allocator.free(body);
         responses.deinit(allocator);
@@ -69,7 +69,7 @@ test "formatting handler formats simple expression" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "format.roc" });
     defer allocator.free(file_path);
@@ -118,7 +118,7 @@ test "formatting handler formats simple expression" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -129,20 +129,20 @@ test "formatting handler formats simple expression" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     // Module-member completion responses can exceed 16 KiB depending on
     // builtin surface area and metadata included in items.
     var writer_buffer: [65536]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -177,7 +177,7 @@ test "document symbol handler extracts function declarations" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "symbols.roc" });
     defer allocator.free(file_path);
@@ -226,7 +226,7 @@ test "document symbol handler extracts function declarations" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -237,18 +237,18 @@ test "document symbol handler extracts function declarations" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -280,7 +280,7 @@ test "document symbol handler returns empty for empty document" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "empty.roc" });
     defer allocator.free(file_path);
@@ -325,7 +325,7 @@ test "document symbol handler returns empty for empty document" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -336,18 +336,18 @@ test "document symbol handler returns empty for empty document" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -374,7 +374,7 @@ test "folding range handler finds bracket ranges" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "fold.roc" });
     defer allocator.free(file_path);
@@ -421,7 +421,7 @@ test "folding range handler finds bracket ranges" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -432,18 +432,18 @@ test "folding range handler finds bracket ranges" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -474,7 +474,7 @@ test "selection range handler returns range hierarchy" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "select.roc" });
     defer allocator.free(file_path);
@@ -521,7 +521,7 @@ test "selection range handler returns range hierarchy" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -532,18 +532,18 @@ test "selection range handler returns range hierarchy" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -586,7 +586,7 @@ test "document highlight handler finds variable occurrences" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "highlight.roc" });
     defer allocator.free(file_path);
@@ -633,7 +633,7 @@ test "document highlight handler finds variable occurrences" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -644,18 +644,18 @@ test "document highlight handler finds variable occurrences" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -685,7 +685,7 @@ test "document highlight handler returns empty for non-identifier" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "highlight2.roc" });
     defer allocator.free(file_path);
@@ -731,7 +731,7 @@ test "document highlight handler returns empty for non-identifier" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -742,18 +742,18 @@ test "document highlight handler returns empty for non-identifier" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -781,7 +781,7 @@ test "definition handler finds local variable definition" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition.roc" });
     defer allocator.free(file_path);
@@ -829,7 +829,7 @@ test "definition handler finds local variable definition" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -840,18 +840,18 @@ test "definition handler finds local variable definition" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -891,7 +891,7 @@ test "definition handler returns null for undefined symbol" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition_undef.roc" });
     defer allocator.free(file_path);
@@ -938,7 +938,7 @@ test "definition handler returns null for undefined symbol" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -949,18 +949,18 @@ test "definition handler returns null for undefined symbol" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -988,7 +988,7 @@ test "hover handler returns type info for type annotation" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "hover_anno.roc" });
     defer allocator.free(file_path);
@@ -1036,7 +1036,7 @@ test "hover handler returns type info for type annotation" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1047,18 +1047,18 @@ test "hover handler returns type info for type annotation" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1090,7 +1090,7 @@ test "definition handler navigates to builtin type from type annotation" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition_type.roc" });
     defer allocator.free(file_path);
@@ -1138,7 +1138,7 @@ test "definition handler navigates to builtin type from type annotation" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1149,18 +1149,18 @@ test "definition handler navigates to builtin type from type annotation" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1200,7 +1200,7 @@ test "document symbols works after goto definition (regression test)" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "regression.roc" });
     defer allocator.free(file_path);
@@ -1256,7 +1256,7 @@ test "document symbols works after goto definition (regression test)" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1268,18 +1268,18 @@ test "document symbols works after goto definition (regression test)" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1318,7 +1318,7 @@ test "multiple goto definition calls don't break document symbols" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "multi_def.roc" });
     defer allocator.free(file_path);
@@ -1382,7 +1382,7 @@ test "multiple goto definition calls don't break document symbols" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1395,18 +1395,18 @@ test "multiple goto definition calls don't break document symbols" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1445,7 +1445,7 @@ test "document symbol handler returns symbols with correct names" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "outline.roc" });
     defer allocator.free(file_path);
@@ -1470,7 +1470,7 @@ test "document symbol handler returns symbols with correct names" {
     defer allocator.free(roc_source);
 
     // Write the file to disk (required for platform resolution)
-    try tmp.dir.writeFile(.{ .sub_path = "outline.roc", .data = roc_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "outline.roc", .data = roc_source });
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1485,7 +1485,7 @@ test "document symbol handler returns symbols with correct names" {
     defer allocator.free(initialized_msg);
 
     // Escape the source for JSON
-    var escaped_source = std.ArrayList(u8){};
+    var escaped_source: std.ArrayList(u8) = .empty;
     defer escaped_source.deinit(allocator);
     for (roc_source) |c| {
         switch (c) {
@@ -1524,7 +1524,7 @@ test "document symbol handler returns symbols with correct names" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1535,18 +1535,18 @@ test "document symbol handler returns symbols with correct names" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1592,7 +1592,7 @@ test "document symbol handler works independently of check" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "independent.roc" });
     defer allocator.free(file_path);
@@ -1613,7 +1613,7 @@ test "document symbol handler works independently of check" {
     defer allocator.free(roc_source);
 
     // Write the file to disk (required for platform resolution)
-    try tmp.dir.writeFile(.{ .sub_path = "independent.roc", .data = roc_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "independent.roc", .data = roc_source });
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1628,7 +1628,7 @@ test "document symbol handler works independently of check" {
     defer allocator.free(initialized_msg);
 
     // Escape the source for JSON
-    var escaped_source = std.ArrayList(u8){};
+    var escaped_source: std.ArrayList(u8) = .empty;
     defer escaped_source.deinit(allocator);
     for (roc_source) |c| {
         switch (c) {
@@ -1669,7 +1669,7 @@ test "document symbol handler works independently of check" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1680,18 +1680,18 @@ test "document symbol handler works independently of check" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [32768]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1729,7 +1729,7 @@ test "completion handler returns module definitions" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "completion.roc" });
     defer allocator.free(file_path);
@@ -1776,7 +1776,7 @@ test "completion handler returns module definitions" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1787,17 +1787,17 @@ test "completion handler returns module definitions" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1837,7 +1837,7 @@ test "completion handler returns module members after dot" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "module_completion.roc" });
     defer allocator.free(file_path);
@@ -1886,7 +1886,7 @@ test "completion handler returns module members after dot" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -1897,18 +1897,18 @@ test "completion handler returns module members after dot" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     // Module completions can be very large depending on builtins and docs.
     var writer_buffer: [1024 * 1024]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -1950,7 +1950,7 @@ test "completion handler returns module names in expression context" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "module_name_completion.roc" });
     defer allocator.free(file_path);
@@ -1997,7 +1997,7 @@ test "completion handler returns module names in expression context" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2008,17 +2008,17 @@ test "completion handler returns module names in expression context" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2064,7 +2064,7 @@ test "completion handler returns types after colon" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "type_completion.roc" });
     defer allocator.free(file_path);
@@ -2114,7 +2114,7 @@ test "completion handler returns types after colon" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2125,17 +2125,17 @@ test "completion handler returns types after colon" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2183,7 +2183,7 @@ test "completion handler returns List module members after List dot" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "list_completion.roc" });
     defer allocator.free(file_path);
@@ -2235,7 +2235,7 @@ test "completion handler returns List module members after List dot" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2246,17 +2246,17 @@ test "completion handler returns List module members after List dot" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2301,7 +2301,7 @@ test "completion handler returns local variables in block scope" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "local_completion.roc" });
     defer allocator.free(file_path);
@@ -2352,7 +2352,7 @@ test "completion handler returns local variables in block scope" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2363,17 +2363,17 @@ test "completion handler returns local variables in block scope" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2405,7 +2405,7 @@ test "completion handler returns lambda parameters" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "lambda_param_completion.roc" });
     defer allocator.free(file_path);
@@ -2454,7 +2454,7 @@ test "completion handler returns lambda parameters" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2465,17 +2465,17 @@ test "completion handler returns lambda parameters" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2507,7 +2507,7 @@ test "completion handler returns top-level definitions" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "toplevel_completion.roc" });
     defer allocator.free(file_path);
@@ -2555,7 +2555,7 @@ test "completion handler returns top-level definitions" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2566,17 +2566,17 @@ test "completion handler returns top-level definitions" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);
@@ -2607,7 +2607,7 @@ test "completion handler returns record fields after dot" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "record_completion.roc" });
     defer allocator.free(file_path);
@@ -2656,7 +2656,7 @@ test "completion handler returns record fields after dot" {
     const exit_msg = try frame(allocator, exit_body);
     defer allocator.free(exit_msg);
 
-    var builder = std.ArrayList(u8){};
+    var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
@@ -2667,17 +2667,17 @@ test "completion handler returns record fields after dot" {
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 
-    var reader_stream = std.io.fixedBufferStream(combined);
+    const reader_stream: std.Io.Reader = .fixed(combined);
     var writer_buffer: [16384]u8 = undefined;
-    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
-    const ReaderType = @TypeOf(reader_stream.reader());
-    const WriterType = @TypeOf(writer_stream.writer());
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
-    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
         for (responses) |body| allocator.free(body);
         allocator.free(responses);

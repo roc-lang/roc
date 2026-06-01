@@ -280,9 +280,7 @@ pub fn initWithOwnerModules(
 
 /// Preflight module state required by type-checking.
 /// This is intentionally private so `Check.init` is the only public entry point.
-fn preflightForTypeChecking(
-    cir: *ModuleEnv,
-) std.mem.Allocator.Error!void {
+fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
     try cir.getIdentStore().enableRuntimeInserts(cir.gpa);
     // Type checking rewrites some expressions into dispatch calls, which can
     // append argument spans to the CIR index store. Existing CIR spans are valid
@@ -373,9 +371,9 @@ fn initAssumePrepared(
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
-        .deferred_def_unifications = .{},
-        .deferred_cycle_envs = .{},
-        .value_lookup_tracking = .{},
+        .deferred_def_unifications = .empty,
+        .deferred_cycle_envs = .empty,
+        .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
@@ -3582,12 +3580,12 @@ fn checkPatternHelp(
     };
 
     switch (pattern) {
-        .assign => |_| {
+        .assign => {
             // Assigned variables start out as flex (initialized in preflight),
             // and their type is refined by usage. Reassignments reuse the same
             // pattern var, so never overwrite existing constraints here.
         },
-        .underscore => |_| {
+        .underscore => {
             // Underscore can be anything; leave its placeholder flex intact.
         },
         // str //
@@ -3875,11 +3873,11 @@ fn checkPatternHelp(
                 .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env),
             }
         },
-        .frac_f32_literal => |_| {
+        .frac_f32_literal => {
             // Phase 5: Use nominal F32 type
             try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F32", env), env);
         },
-        .frac_f64_literal => |_| {
+        .frac_f64_literal => {
             // Phase 5: Use nominal F64 type
             try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F64", env), env);
         },
@@ -4217,11 +4215,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     switch (expr) {
         // str //
-        .e_str_segment => |_| {
+        .e_str_segment => {
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(expr_var, str_var, env);
         },
-        .e_bytes_literal => |_| {
+        .e_bytes_literal => {
             // Create List(U8) type
             const u8_content = try self.mkNumberTypeContent("U8", env);
             const u8_var = try self.freshFromContent(u8_content, env, expr_region);
@@ -4418,7 +4416,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Unify expr_var with the flex_var (which is now constrained to the explicit type)
             _ = try self.unify(expr_var, flex_var, env);
         },
-        .e_typed_frac => |_| {
+        .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
             const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
 
@@ -5653,8 +5651,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
         } else {
-            // Otherwise, unify the raw var with the intermediate var
-            _ = try self.unify(expr_var_raw, expr_var, env);
+            // Otherwise, make the explicit annotation the checked root for
+            // this expression. The body has already constrained the
+            // annotation's backing and any underscore variables above.
+            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
         }
     }
 
@@ -6162,7 +6162,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
-            .s_crash => |_| {
+            .s_crash => {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
@@ -6204,7 +6204,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, env);
             },
-            .s_break => |_| {
+            .s_break => {
                 // Nothing to do for break
                 // try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },

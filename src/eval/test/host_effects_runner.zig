@@ -25,6 +25,10 @@ const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const collections = @import("collections");
 
+/// Process-wide `std.Io` initialized from `main(init)` and consumed by helpers
+/// that don't get an `io` parameter (e.g. pool worker callbacks).
+var app_io: std.Io = undefined;
+
 /// Public struct `TestCase`.
 pub const TestCase = struct {
     name: []const u8,
@@ -236,39 +240,39 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
         return .{ .success = result };
     }
 
-    const pipe_fds = posix.pipe() catch return .{ .fork_failed = {} };
+    const pipe_fds = harness.pipe() catch return .{ .fork_failed = {} };
     const pipe_read = pipe_fds[0];
     const pipe_write = pipe_fds[1];
 
-    const fork_result = posix.fork() catch {
-        posix.close(pipe_read);
-        posix.close(pipe_write);
+    const fork_result = harness.fork() catch {
+        harness.closeFd(pipe_read);
+        harness.closeFd(pipe_write);
         return .{ .fork_failed = {} };
     };
 
     if (fork_result == 0) {
-        posix.close(pipe_read);
+        harness.closeFd(pipe_read);
         var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
 
         const run = eval_fn(child_alloc, lowered) catch |err| {
             const name = @errorName(err);
             harness.writeAll(pipe_write, name);
-            posix.close(pipe_write);
+            harness.closeFd(pipe_write);
             std.c._exit(2);
         };
         serializeRun(pipe_write, run);
-        posix.close(pipe_write);
+        harness.closeFd(pipe_write);
         std.c._exit(0);
     }
 
-    posix.close(pipe_write);
+    harness.closeFd(pipe_write);
 
     var result_buf: std.ArrayListUnmanaged(u8) = .empty;
     var read_buf: [4096]u8 = undefined;
     var read_error = false;
     while (true) {
-        const bytes_read = posix.read(pipe_read, &read_buf) catch {
+        const bytes_read = harness.posixRead(pipe_read, &read_buf) catch {
             read_error = true;
             break;
         };
@@ -278,9 +282,9 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
             break;
         };
     }
-    posix.close(pipe_read);
+    harness.closeFd(pipe_read);
 
-    const wait_result = posix.waitpid(fork_result, 0);
+    const wait_result = harness.waitpid(fork_result, 0);
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
     if (termination_signal != 0) {
@@ -334,7 +338,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         else => return err,
     };
     switch (eval_result) {
-        .value => |_| {},
+        .value => {},
     }
 
     return runtime_env.snapshot(allocator);
@@ -409,7 +413,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
                 else => return false,
             },
             .dbg_contains => |fragment| switch (actual) {
-                .dbg => |actual_msg| if (std.mem.indexOf(u8, actual_msg, fragment) == null) return false,
+                .dbg => |actual_msg| if (std.mem.find(u8, actual_msg, fragment) == null) return false,
                 else => return false,
             },
             .dbg_any => switch (actual) {
@@ -430,7 +434,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
 }
 
 fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, tc.source_kind, tc.source, tc.imports) catch |err| {
+    var compiled = helpers.compileProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,
@@ -839,14 +843,17 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
 }
 
 /// Public function `main`.
-pub fn main() !void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) !void {
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
+    const io = init.io;
+    app_io = io;
+
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
-    const cli = try harness.parseStandardArgs(args_arena.allocator());
+    const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
 
     if (cli.help_requested) {
         printHelp();
@@ -860,8 +867,8 @@ pub fn main() !void {
     if (cli.filters.len > 0) {
         for (all_tests) |tc| {
             for (cli.filters) |pattern| {
-                if (std.mem.indexOf(u8, tc.name, pattern) != null or
-                    std.mem.indexOf(u8, tc.source, pattern) != null)
+                if (std.mem.find(u8, tc.name, pattern) != null or
+                    std.mem.find(u8, tc.source, pattern) != null)
                 {
                     try filtered_buf.append(gpa, tc);
                     break;
@@ -896,7 +903,7 @@ pub fn main() !void {
     // worker_argv_template is null — this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.run(tests, results, max_children, hang_timeout_ms, gpa, null);
+    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, null);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;
