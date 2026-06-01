@@ -64,6 +64,11 @@ const PlaceholderInfo = struct {
     item_name_idx: Ident.Idx, // The unqualified item name (e.g., "baz")
 };
 
+const AssociatedValueName = struct {
+    type_prefix: Ident.Idx,
+    item_name: Ident.Idx,
+};
+
 const TypeDeclVisitState = enum {
     visiting,
     done,
@@ -140,6 +145,8 @@ import_indices: std.StringHashMapUnmanaged(Import.Idx),
 /// Parser-declared type statements allocated from declaration headers before
 /// type annotation canonicalization fills them in.
 prepared_type_decls: std.AutoHashMapUnmanaged(AST.Statement.Idx, Statement.Idx) = .{},
+/// Module-scope associated value names known from the parser declaration inventory.
+module_assoc_value_names: std.AutoHashMapUnmanaged(AssociatedValueName, void) = .{},
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -375,6 +382,7 @@ pub fn deinit(
     self.globally_resolvable_patterns.deinit(gpa);
     self.builtin_auto_imported_types.deinit(gpa);
     self.prepared_type_decls.deinit(gpa);
+    self.module_assoc_value_names.deinit(gpa);
     self.scratch_vars.deinit();
     self.scratch_idents.deinit();
     self.scratch_type_var_validation.deinit();
@@ -438,6 +446,7 @@ fn initInternal(
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
+        .module_assoc_value_names = std.AutoHashMapUnmanaged(AssociatedValueName, void){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
@@ -797,7 +806,12 @@ fn prebindTypeDecl(
 
     const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch return;
     const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse return;
-    if (self.scopeLookupTypeDecl(name_ident) != null) return;
+    if (self.scopeLookupTypeDecl(name_ident) != null) {
+        if (type_decl.associated) |assoc| {
+            try self.recordTopLevelAssociatedItems(name_ident, assoc);
+        }
+        return;
+    }
 
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
     const header_idx = try self.env.addTypeHeader(.{
@@ -823,8 +837,17 @@ fn prebindTypeDecl(
     try self.introduceType(name_ident, stmt_idx, region);
 
     if (type_decl.associated) |assoc| {
-        try self.predeclareAssociatedTypePlaceholdersFromScope(name_ident, name_ident, assoc.scope);
+        try self.recordTopLevelAssociatedItems(name_ident, assoc);
     }
+}
+
+fn recordTopLevelAssociatedItems(
+    self: *Self,
+    type_name: Ident.Idx,
+    assoc: anytype,
+) std.mem.Allocator.Error!void {
+    try self.predeclareAssociatedTypePlaceholdersFromScope(type_name, type_name, assoc.scope);
+    try self.recordAssociatedValueInventoryFromScope(type_name, type_name, type_name, assoc.scope);
 }
 
 fn prepareModuleScope(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Allocator.Error!void {
@@ -1771,13 +1794,6 @@ fn adoptAssocForwardReference(
                 mut_regions.deinit(self.env.gpa);
                 self.rebindPlaceholderPatternIdent(kv.value.pattern_idx, qualified_ident);
                 try self.registerAssocPatternQualifiers(qualified_ident, kv.value.pattern_idx);
-                if (type_qualified_ident) |tq| {
-                    var publish_idx = self.scopes.items.len;
-                    while (publish_idx > 0) {
-                        publish_idx -= 1;
-                        try self.scopes.items[publish_idx].idents.put(self.env.gpa, tq, kv.value.pattern_idx);
-                    }
-                }
                 return kv.value.pattern_idx;
             }
         }
@@ -1851,6 +1867,38 @@ fn publishRelativeAssocName(
     try self.scopes.items[0].idents.put(self.env.gpa, rel_qualified, pattern_idx);
 }
 
+fn moduleLocalAssociatedPrefix(self: *Self, prefix_idx: Ident.Idx) std.mem.Allocator.Error!?Ident.Idx {
+    const prefix_text = self.env.getIdent(prefix_idx);
+    if (prefix_text.len <= self.env.module_name.len + 1) return null;
+    if (!std.mem.startsWith(u8, prefix_text, self.env.module_name)) return null;
+    if (prefix_text[self.env.module_name.len] != '.') return null;
+
+    return try self.env.insertIdent(base.Ident.for_text(prefix_text[self.env.module_name.len + 1 ..]));
+}
+
+fn putModuleAssociatedPatternAlias(
+    self: *Self,
+    prefix_idx: Ident.Idx,
+    decl_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    const prefix_text = self.env.getIdent(prefix_idx);
+    const decl_text = self.env.getIdent(decl_ident);
+    const prefixed_ident = try self.insertQualifiedIdent(prefix_text, decl_text);
+    try self.scopes.items[0].idents.put(self.env.gpa, prefixed_ident, pattern_idx);
+}
+
+fn putModuleLocalAssociatedPatternAlias(
+    self: *Self,
+    relative_name_idx: ?Ident.Idx,
+    decl_ident: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    const relative_idx = relative_name_idx orelse return;
+    const local_prefix_idx = (try self.moduleLocalAssociatedPrefix(relative_idx)) orelse return;
+    try self.putModuleAssociatedPatternAlias(local_prefix_idx, decl_ident, pattern_idx);
+}
+
 fn registerAssocPatternQualifiers(
     self: *Self,
     qualified_ident: Ident.Idx,
@@ -1864,45 +1912,25 @@ fn registerAssocPatternQualifiers(
     }
 }
 
-fn putIdentInScopeAndAncestors(
+fn putAssociatedPatternAliases(
     self: *Self,
-    start_scope_idx: usize,
-    ident: Ident.Idx,
-    pattern_idx: CIR.Pattern.Idx,
-) std.mem.Allocator.Error!void {
-    std.debug.assert(start_scope_idx < self.scopes.items.len);
-
-    var scope_idx = start_scope_idx;
-    while (true) {
-        try self.scopes.items[scope_idx].idents.put(self.env.gpa, ident, pattern_idx);
-        if (scope_idx == 0) break;
-        scope_idx -= 1;
-    }
-}
-
-fn publishAssociatedPatternVisibility(
-    self: *Self,
-    relative_name_idx: ?Ident.Idx,
-    type_name: Ident.Idx,
-    decl_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
-    type_qualified_ident: Ident.Idx,
+    relative_name_idx: ?Ident.Idx,
+    local_qualified_ident: ?Ident.Idx,
+    decl_ident: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
 ) std.mem.Allocator.Error!void {
     if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
         try self.scopes.items[0].idents.put(self.env.gpa, qualified_ident, pattern_idx);
         try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
     }
+    try self.putModuleLocalAssociatedPatternAlias(relative_name_idx, decl_ident, pattern_idx);
 
-    const associated_scope_idx = self.currentScopeIdx();
-    try self.putIdentInScopeAndAncestors(associated_scope_idx, type_qualified_ident, pattern_idx);
-
-    const bare_type_qualified = try self.insertQualifiedIdent(
-        self.env.getIdent(type_name),
-        self.env.getIdent(decl_ident),
-    );
-    if (!bare_type_qualified.eql(type_qualified_ident)) {
-        try self.putIdentInScopeAndAncestors(associated_scope_idx, bare_type_qualified, pattern_idx);
+    if (local_qualified_ident) |ident| {
+        try self.currentScope().idents.put(self.env.gpa, ident, pattern_idx);
+        if (self.currentScopeIdx() != 0 and std.mem.eql(u8, self.env.module_name, "Builtin")) {
+            try self.scopes.items[0].idents.put(self.env.gpa, ident, pattern_idx);
+        }
     }
 }
 
@@ -1910,28 +1938,28 @@ fn predeclareAssociatedValuePattern(
     self: *Self,
     parent_name: Ident.Idx,
     relative_name_idx: ?Ident.Idx,
-    type_name: Ident.Idx,
+    local_prefix_idx: ?Ident.Idx,
     decl_ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!void {
     const parent_text = self.env.getIdent(parent_name);
     const decl_text = self.env.getIdent(decl_ident);
     const qualified_idx = try self.insertQualifiedIdent(parent_text, decl_text);
-    const type_qualified_idx: Ident.Idx = if (parent_name.eql(type_name))
-        qualified_idx
-    else
-        try self.insertQualifiedIdent(self.env.getIdent(type_name), self.env.getIdent(decl_ident));
+    const local_qualified_idx: ?Ident.Idx = if (local_prefix_idx) |prefix_idx| blk: {
+        const prefix_text = self.env.getIdent(prefix_idx);
+        const decl_text_fresh = self.env.getIdent(decl_ident);
+        break :blk try self.insertQualifiedIdent(prefix_text, decl_text_fresh);
+    } else null;
 
-    const pattern_idx = try self.findOrCreateAssocPattern(qualified_idx, decl_ident, type_qualified_idx, region);
+    const pattern_idx = try self.findOrCreateAssocPattern(qualified_idx, decl_ident, local_qualified_idx, region);
     try self.markGloballyResolvablePattern(pattern_idx);
-    try self.publishAssociatedPatternVisibility(
-        relative_name_idx,
-        type_name,
-        decl_ident,
-        qualified_idx,
-        type_qualified_idx,
-        pattern_idx,
-    );
+    try self.putModuleLocalAssociatedPatternAlias(relative_name_idx, decl_ident, pattern_idx);
+    if (local_qualified_idx) |idx| {
+        try self.currentScope().idents.put(self.env.gpa, idx, pattern_idx);
+        if (self.currentScopeIdx() != 0 and std.mem.eql(u8, self.env.module_name, "Builtin")) {
+            try self.scopes.items[0].idents.put(self.env.gpa, idx, pattern_idx);
+        }
+    }
 }
 
 /// Canonicalize an associated item declaration with a qualified name
@@ -2077,7 +2105,7 @@ fn predeclareAssociatedValuesFromScope(
     self: *Self,
     parent_name: Ident.Idx,
     relative_name_idx: ?Ident.Idx,
-    type_name: Ident.Idx,
+    local_prefix_idx: ?Ident.Idx,
     scope_idx: AST.DeclIndex.ScopeIdx,
 ) std.mem.Allocator.Error!void {
     const decl_index = &self.parse_ir.decl_index;
@@ -2091,7 +2119,7 @@ fn predeclareAssociatedValuesFromScope(
             .type_anno => |ta| {
                 const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse continue;
                 const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
-                try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, type_name, name_ident, region);
+                try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, local_prefix_idx, name_ident, region);
             },
             .decl => |value_decl| {
                 if (decl.paired_anno != null) continue;
@@ -2099,7 +2127,7 @@ fn predeclareAssociatedValuesFromScope(
                 if (pattern != .ident) continue;
                 const decl_ident = self.parse_ir.tokens.resolveIdentifier(pattern.ident.ident_tok) orelse continue;
                 const region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
-                try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, type_name, decl_ident, region);
+                try self.predeclareAssociatedValuePattern(parent_name, relative_name_idx, local_prefix_idx, decl_ident, region);
             },
             .type_decl => |nested_type_decl| {
                 const nested_assoc = nested_type_decl.associated orelse continue;
@@ -2113,11 +2141,88 @@ fn predeclareAssociatedValuesFromScope(
                     try self.insertQualifiedIdent(self.env.getIdent(relative_parent), self.env.getIdent(nested_type_ident))
                 else
                     nested_type_ident;
-                try self.predeclareAssociatedValuesFromScope(nested_parent, nested_relative, nested_type_ident, nested_assoc.scope);
+                const nested_local_prefix: ?Ident.Idx = if (local_prefix_idx) |prefix_idx|
+                    try self.insertQualifiedIdent(self.env.getIdent(prefix_idx), self.env.getIdent(nested_type_ident))
+                else
+                    null;
+                try self.predeclareAssociatedValuesFromScope(nested_parent, nested_relative, nested_local_prefix, nested_assoc.scope);
             },
             else => {},
         }
     }
+}
+
+fn recordAssociatedValueInventoryFromScope(
+    self: *Self,
+    parent_name: Ident.Idx,
+    relative_name_idx: Ident.Idx,
+    type_name: Ident.Idx,
+    scope_idx: AST.DeclIndex.ScopeIdx,
+) std.mem.Allocator.Error!void {
+    const decl_index = &self.parse_ir.decl_index;
+    std.debug.assert(@intFromEnum(scope_idx) < decl_index.scopeCount());
+
+    for (decl_index.scopeDecls(scope_idx)) |decl_idx| {
+        const decl = decl_index.decls.items[@intFromEnum(decl_idx)];
+        const stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
+        const stmt = self.parse_ir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .type_anno => |ta| {
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse continue;
+                try self.recordAssociatedValueInventoryIdent(relative_name_idx, type_name, name_ident);
+            },
+            .decl => |value_decl| {
+                if (decl.paired_anno != null) continue;
+                const pattern = self.parse_ir.store.getPattern(value_decl.pattern);
+                if (pattern != .ident) continue;
+                const decl_ident = self.parse_ir.tokens.resolveIdentifier(pattern.ident.ident_tok) orelse continue;
+                try self.recordAssociatedValueInventoryIdent(relative_name_idx, type_name, decl_ident);
+            },
+            .type_decl => |nested_type_decl| {
+                const nested_assoc = nested_type_decl.associated orelse continue;
+                const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch continue;
+                const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(nested_header.name) orelse continue;
+                const nested_parent = try self.insertQualifiedIdent(
+                    self.env.getIdent(parent_name),
+                    self.env.getIdent(nested_type_ident),
+                );
+                const nested_relative = try self.insertQualifiedIdent(
+                    self.env.getIdent(relative_name_idx),
+                    self.env.getIdent(nested_type_ident),
+                );
+                try self.recordAssociatedValueInventoryFromScope(nested_parent, nested_relative, nested_type_ident, nested_assoc.scope);
+            },
+            else => {},
+        }
+    }
+}
+
+fn recordAssociatedValueInventoryIdent(
+    self: *Self,
+    relative_name_idx: Ident.Idx,
+    type_name: Ident.Idx,
+    decl_ident: Ident.Idx,
+) std.mem.Allocator.Error!void {
+    try self.recordAssociatedValueInventoryAlias(relative_name_idx, decl_ident);
+
+    if (try self.moduleLocalAssociatedPrefix(relative_name_idx)) |module_local_prefix| {
+        try self.recordAssociatedValueInventoryAlias(module_local_prefix, decl_ident);
+    }
+
+    if (self.builtinNumericMethodAlias(type_name)) |builtin_numeric_alias| {
+        try self.recordAssociatedValueInventoryAlias(builtin_numeric_alias, decl_ident);
+    }
+}
+
+fn recordAssociatedValueInventoryAlias(
+    self: *Self,
+    prefix_idx: Ident.Idx,
+    decl_ident: Ident.Idx,
+) std.mem.Allocator.Error!void {
+    try self.module_assoc_value_names.put(self.env.gpa, .{
+        .type_prefix = prefix_idx,
+        .item_name = decl_ident,
+    }, {});
 }
 
 fn prepareAssociatedScope(
@@ -2275,16 +2380,6 @@ fn canonicalizeAssociatedItems(
                                     // Add unqualified name (e.g., "bar") to current scope only
                                     try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
-                                    // Skip the module-scope publish for the
-                                    // Builtin module — its items are auto-imported
-                                    // elsewhere and the extra entries would collide
-                                    // with the existing builtin bindings.
-                                    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
-                                        try self.scopes.items[0].idents.put(self.env.gpa, qualified_idx, pattern_idx);
-                                        try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
-                                    }
-
-                                    // Add type-qualified name (e.g., "Foo.bar") to the scope where the type is defined and ALL ancestor scopes
                                     const type_qualified_ident_idx = if (parent_name.eql(type_name))
                                         qualified_idx
                                     else blk2: {
@@ -2294,8 +2389,13 @@ fn canonicalizeAssociatedItems(
                                         break :blk2 try self.insertQualifiedIdent(type_text, decl_text);
                                     };
 
-                                    // Add type-qualified name to the type's home scope and all ancestors
-                                    try self.putIdentInScopeAndAncestors(self.currentScopeIdx(), type_qualified_ident_idx, pattern_idx);
+                                    try self.putAssociatedPatternAliases(
+                                        qualified_idx,
+                                        relative_name_idx,
+                                        type_qualified_ident_idx,
+                                        decl_ident,
+                                        pattern_idx,
+                                    );
 
                                     break :blk true; // Found and processed matching decl
                                 }
@@ -2374,27 +2474,13 @@ fn canonicalizeAssociatedItems(
                         break :blk_atq try self.insertQualifiedIdent(type_text_now, name_text_now);
                     };
 
-                    var anno_scope_idx = self.currentScopeIdx();
-                    while (true) {
-                        const anno_scope_ptr = &self.scopes.items[anno_scope_idx];
-                        // Pick up any forward-reference placeholder for the
-                        // type-qualified name keyed at the module scope, so the
-                        // anno-only pattern coincides with reference sites that
-                        // ran before the annotation was canonicalized.
-                        if (anno_scope_ptr.forward_references.fetchRemove(anno_type_qualified_idx)) |kv| {
-                            var mut_regions = kv.value.reference_regions;
-                            mut_regions.deinit(self.env.gpa);
-                            _ = anno_scope_ptr.idents.remove(anno_type_qualified_idx);
-                            try self.used_patterns.put(self.env.gpa, kv.value.pattern_idx, {});
-                        }
-                        try anno_scope_ptr.idents.put(self.env.gpa, anno_type_qualified_idx, anno_pattern_idx);
-                        if (anno_scope_idx == 0) break;
-                        anno_scope_idx -= 1;
-                    }
-
-                    if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
-                        try self.publishRelativeAssocName(relative_name_idx, name_ident, anno_pattern_idx);
-                    }
+                    try self.putAssociatedPatternAliases(
+                        qualified_idx,
+                        relative_name_idx,
+                        anno_type_qualified_idx,
+                        name_ident,
+                        anno_pattern_idx,
+                    );
                 }
             },
             .decl => |decl| {
@@ -2439,20 +2525,6 @@ fn canonicalizeAssociatedItems(
                         // Add unqualified name (e.g., "bar") to current scope only
                         try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
-                        // Publish the fully-qualified parent-prefixed name
-                        // (e.g. `Test.MyBool.my_eq`) at the module scope so
-                        // top-level references like
-                        // `x = Test.MyBool.my_eq(...)` resolve after this
-                        // associated block's scope exits. Skip in the
-                        // Builtin module — its items are auto-imported via a
-                        // separate path and adding them again here collides
-                        // with the existing bindings.
-                        if (!std.mem.eql(u8, self.env.module_name, "Builtin")) {
-                            try self.scopes.items[0].idents.put(self.env.gpa, qualified_idx, pattern_idx);
-                            try self.publishRelativeAssocName(relative_name_idx, decl_ident, pattern_idx);
-                        }
-
-                        // Add type-qualified name (e.g., "Foo.bar") to the associated scope and all ancestor scopes
                         const type_qualified_ident_idx = if (parent_name.eql(type_name))
                             qualified_idx
                         else blk2: {
@@ -2460,8 +2532,13 @@ fn canonicalizeAssociatedItems(
                             break :blk2 try self.insertQualifiedIdent(type_text, decl_text);
                         };
 
-                        // Add type-qualified name to the associated scope and all ancestors
-                        try self.putIdentInScopeAndAncestors(self.currentScopeIdx(), type_qualified_ident_idx, pattern_idx);
+                        try self.putAssociatedPatternAliases(
+                            qualified_idx,
+                            relative_name_idx,
+                            type_qualified_ident_idx,
+                            decl_ident,
+                            pattern_idx,
+                        );
                     }
                 } else {
                     // Non-identifier patterns are not supported in associated blocks
@@ -5259,7 +5336,15 @@ pub fn canonicalizeExpr(
                                         // sibling's def picks up this same pattern when it
                                         // arrives. The enclosing scope reports any
                                         // forward reference that never gets filled.
-                                        if (local_associated_owner_scope_idx) |owner_scope_idx| {
+                                        if (local_associated_owner_scope_idx) |owner_scope_idx| park_forward_ref: {
+                                            if (owner_scope_idx == 0 and
+                                                !self.module_assoc_value_names.contains(.{
+                                                    .type_prefix = module_alias,
+                                                    .item_name = ident,
+                                                }))
+                                            {
+                                                break :park_forward_ref;
+                                            }
                                             std.debug.assert(owner_scope_idx < self.scopes.items.len);
                                             const owner_scope = &self.scopes.items[owner_scope_idx];
                                             const gop = try owner_scope.forward_references.getOrPut(self.env.gpa, type_qualified_idx);
