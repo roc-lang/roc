@@ -5578,16 +5578,16 @@ pub fn canonicalizeExpr(
 
                         const parser_decl_scope = self.parse_ir.decl_index.scopes.items[@intFromEnum(active_decl_scope.parser_scope)];
                         const owner_scope_idx: usize = switch (parser_decl_scope.kind) {
-                            .module, .associated => 0,
+                            .module => 0,
+                            .associated => active_decl_scope.canonical_scope,
                             .block => active_decl_scope.canonical_scope,
                         };
                         std.debug.assert(owner_scope_idx < self.scopes.items.len);
 
                         // Park each placeholder in the canonical scope that owns
-                        // the parser declaration. Module and associated items are
-                        // globally resolvable; block-local values must stay in
-                        // their block scope so closure capture analysis sees them
-                        // as locals, not globals.
+                        // the parser declaration. Global resolution is explicit
+                        // pattern metadata, so associated placeholders do not
+                        // need module-scope bindings.
                         {
                             const owner_scope = &self.scopes.items[owner_scope_idx];
 
