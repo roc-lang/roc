@@ -337,6 +337,37 @@ pub const LirImageProgram = struct {
 /// Public `LoweredProgram` declaration.
 pub const LoweredProgram = LirImageProgram;
 
+/// Public `BoolRoot` declaration.
+pub const BoolRoot = struct {
+    symbol_name: [:0]const u8,
+    proc: LirProcSpecId,
+    arg_layouts: []const LayoutIdx,
+    ret_layout: LayoutIdx,
+};
+
+/// Public `BoolRootEvalResult` declaration.
+pub const BoolRootEvalResult = union(enum) {
+    passed: bool,
+    crashed: []const u8,
+};
+
+/// Public `LlvmTestOpt` declaration.
+pub const LlvmTestOpt = enum {
+    size,
+    speed,
+};
+
+/// Public `deinitBoolRootEvalResults` function.
+pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalResult) void {
+    for (results) |result| {
+        switch (result) {
+            .passed => {},
+            .crashed => |message| allocator.free(message),
+        }
+    }
+    allocator.free(results);
+}
+
 /// Public `CompiledProgram` declaration.
 pub const CompiledProgram = struct {
     resources: ParsedResources,
@@ -1440,9 +1471,8 @@ pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) 
     return arg_layouts;
 }
 
-/// Public `entrypointParamSlotSize` function.
-pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
-    const layouts = &lowered.view.layouts;
+/// Public `entrypointParamSlotSizeForLayouts` function.
+pub fn entrypointParamSlotSizeForLayouts(layouts: *const LayoutStore, layout_idx: LayoutIdx) u32 {
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
@@ -1461,10 +1491,15 @@ pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: Layou
     return if (size == 0) 0 else 8;
 }
 
-/// Public `zeroedEntrypointArgBuffer` function.
-pub fn zeroedEntrypointArgBuffer(
+/// Public `entrypointParamSlotSize` function.
+pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
+    return entrypointParamSlotSizeForLayouts(&lowered.view.layouts, layout_idx);
+}
+
+/// Public `zeroedEntrypointArgBufferForLayouts` function.
+pub fn zeroedEntrypointArgBufferForLayouts(
     allocator: Allocator,
-    lowered: *const LoweredProgram,
+    layouts: *const LayoutStore,
     arg_layouts: []const LayoutIdx,
 ) !?[]align(collections.max_roc_alignment.toByteUnits()) u8 {
     const EntrypointArgOrder = struct {
@@ -1480,10 +1515,8 @@ pub fn zeroedEntrypointArgBuffer(
         defer allocator.free(ordered);
 
         for (arg_layouts, 0..) |arg_layout, i| {
-            const size_align = lowered.view.layouts.layoutSizeAlign(
-                lowered.view.layouts.getLayout(arg_layout),
-            );
-            const slot_size = entrypointParamSlotSize(lowered, arg_layout);
+            const size_align = layouts.layoutSizeAlign(layouts.getLayout(arg_layout));
+            const slot_size = entrypointParamSlotSizeForLayouts(layouts, arg_layout);
             ordered[i] = .{
                 .index = i,
                 .alignment = @intCast(size_align.alignment.toByteUnits()),
@@ -1510,7 +1543,7 @@ pub fn zeroedEntrypointArgBuffer(
 
     var total_size: usize = 0;
     for (arg_layouts, 0..) |arg_layout, i| {
-        total_size = @max(total_size, @as(usize, arg_offsets[i]) + entrypointParamSlotSize(lowered, arg_layout));
+        total_size = @max(total_size, @as(usize, arg_offsets[i]) + entrypointParamSlotSizeForLayouts(layouts, arg_layout));
     }
 
     if (total_size == 0) return null;
@@ -1518,6 +1551,239 @@ pub fn zeroedEntrypointArgBuffer(
     const buffer = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(total_size, 1));
     @memset(buffer, 0);
     return buffer;
+}
+
+/// Public `zeroedEntrypointArgBuffer` function.
+pub fn zeroedEntrypointArgBuffer(
+    allocator: Allocator,
+    lowered: *const LoweredProgram,
+    arg_layouts: []const LayoutIdx,
+) !?[]align(collections.max_roc_alignment.toByteUnits()) u8 {
+    return zeroedEntrypointArgBufferForLayouts(allocator, &lowered.view.layouts, arg_layouts);
+}
+
+fn boolRootRetBuffer(
+    allocator: Allocator,
+    layouts: *const LayoutStore,
+    ret_layout: LayoutIdx,
+) ![]align(collections.max_roc_alignment.toByteUnits()) u8 {
+    const size_align = layouts.layoutSizeAlign(layouts.getLayout(ret_layout));
+    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
+    @memset(ret_buf, 0);
+    return ret_buf;
+}
+
+fn copyRuntimeCrashMessage(allocator: Allocator, runtime_env: *const RuntimeHostEnv) ![]const u8 {
+    return switch (runtime_env.crashState()) {
+        .did_not_crash => try allocator.dupe(u8, "Roc crashed"),
+        .crashed => |msg| try allocator.dupe(u8, msg),
+    };
+}
+
+fn deinitPartialBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalResult, len: usize) void {
+    for (results[0..len]) |result| {
+        switch (result) {
+            .passed => {},
+            .crashed => |message| allocator.free(message),
+        }
+    }
+    allocator.free(results);
+}
+
+fn runExecutableBoolRoot(
+    allocator: Allocator,
+    layouts: *const LayoutStore,
+    executable: *const ExecutableMemory,
+    root: BoolRoot,
+    runtime_env: *RuntimeHostEnv,
+) !BoolRootEvalResult {
+    runtime_env.resetObservation();
+    runtime_env.resetAllocationTracker();
+
+    const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
+
+    const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
+    defer allocator.free(ret_buf);
+
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    const sj = crash_boundary.set();
+    if (sj == 0) {
+        executable.callRocABI(
+            @ptrCast(runtime_env.get_ops()),
+            @ptrCast(ret_buf.ptr),
+            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        );
+    }
+
+    const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
+        .did_not_crash => .{ .passed = ret_buf[0] != 0 },
+        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+    };
+    runtime_env.resetAllocationTracker();
+    return result;
+}
+
+/// Public `devEvalBoolRoots` function.
+pub fn devEvalBoolRoots(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    roots: []const BoolRoot,
+) ![]BoolRootEvalResult {
+    if (comptime !backend.host_lir_codegen_available) {
+        return error.DevBackendUnavailable;
+    } else {
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, &.{});
+        defer codegen.deinit();
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+        var runtime_env = RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+
+        const results = try allocator.alloc(BoolRootEvalResult, roots.len);
+        var result_len: usize = 0;
+        errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
+
+        for (roots, 0..) |root, i| {
+            const entrypoint = try codegen.generateEntrypointWrapper(
+                root.symbol_name,
+                root.proc,
+                root.arg_layouts,
+                root.ret_layout,
+            );
+            var executable = try ExecutableMemory.initWithEntryOffset(
+                codegen.getGeneratedCode(),
+                entrypoint.offset,
+            );
+            defer executable.deinit();
+
+            results[i] = try runExecutableBoolRoot(allocator, layouts, &executable, root, &runtime_env);
+            result_len += 1;
+        }
+
+        return results;
+    }
+}
+
+fn llvmCompileOptions(opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
+    const llvm_compile = @import("llvm_compile");
+    return switch (opt) {
+        .size => .{
+            .function_sections = false,
+            .use_module_target_triple = true,
+            .opt_level = llvm_compile.bindings.CodeGenOptLevel.Default,
+            .is_small = true,
+        },
+        .speed => .{
+            .function_sections = false,
+            .use_module_target_triple = true,
+            .opt_level = llvm_compile.bindings.CodeGenOptLevel.Aggressive,
+            .is_small = false,
+        },
+    };
+}
+
+fn callLlvmBoolRoot(
+    allocator: Allocator,
+    layouts: *const LayoutStore,
+    entry: *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void,
+    root: BoolRoot,
+    runtime_env: *RuntimeHostEnv,
+) !BoolRootEvalResult {
+    runtime_env.resetObservation();
+    runtime_env.resetAllocationTracker();
+
+    const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
+
+    const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
+    defer allocator.free(ret_buf);
+
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    const sj = crash_boundary.set();
+    if (sj == 0) {
+        entry(
+            runtime_env.get_ops(),
+            ret_buf.ptr,
+            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        );
+    }
+
+    const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
+        .did_not_crash => .{ .passed = ret_buf[0] != 0 },
+        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+    };
+    runtime_env.resetAllocationTracker();
+    return result;
+}
+
+/// Public `llvmEvalBoolRoots` function.
+pub fn llvmEvalBoolRoots(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    roots: []const BoolRoot,
+    opt: LlvmTestOpt,
+) ![]BoolRootEvalResult {
+    if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
+
+    const llvm_compile = @import("llvm_compile");
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, store);
+    codegen.layout_store = layouts;
+    defer codegen.deinit();
+
+    const entrypoints = try allocator.alloc(llvm_compile.MonoLlvmCodeGen.Entrypoint, roots.len);
+    defer allocator.free(entrypoints);
+    for (roots, 0..) |root, i| {
+        entrypoints[i] = .{
+            .symbol_name = root.symbol_name,
+            .proc = root.proc,
+            .arg_layouts = root.arg_layouts,
+            .ret_layout = root.ret_layout,
+        };
+    }
+
+    const bitcode = try codegen.generateEntrypointModule("roc_test_module", entrypoints);
+    defer {
+        var owned = bitcode;
+        owned.deinit();
+    }
+
+    const dylib_path = try llvm_compile.compileToSharedLibrary(
+        allocator,
+        std.Options.debug_io,
+        bitcode.bitcode,
+        llvmCompileOptions(opt),
+    );
+    defer {
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        allocator.free(dylib_path);
+    }
+
+    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
+    defer lib.close();
+
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
+        runtime_env.setLongjmpOnCrash(false);
+    }
+
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const results = try allocator.alloc(BoolRootEvalResult, roots.len);
+    var result_len: usize = 0;
+    errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
+
+    for (roots, 0..) |root, i| {
+        const entry = lib.lookup(EntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable;
+        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env);
+        result_len += 1;
+    }
+
+    return results;
 }
 
 /// Public `lirInterpreterInspectedStr` function.

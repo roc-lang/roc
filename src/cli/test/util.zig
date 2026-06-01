@@ -14,7 +14,7 @@ fn milliTimestamp() i64 {
     return std.Io.Timestamp.now(io, .awake).toMilliseconds();
 }
 
-var next_cache_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var next_test_dir_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 /// Default timeout for CLI test child processes that would otherwise run unbounded.
 pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
@@ -30,16 +30,29 @@ pub const IsolatedCacheDirs = struct {
     }
 };
 
+/// Absolute paths reserved for one CLI test job.
+pub const TestProcessDirs = struct {
+    roc_cache_dir: []u8,
+    zig_local_cache_dir: []u8,
+    work_dir: []u8,
+
+    pub fn deinit(self: TestProcessDirs, allocator: std.mem.Allocator) void {
+        allocator.free(self.work_dir);
+        allocator.free(self.zig_local_cache_dir);
+        allocator.free(self.roc_cache_dir);
+    }
+};
+
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
-fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
-    const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache" });
+fn reserveUniqueTestDir(allocator: std.mem.Allocator, namespace: []const u8) ![]u8 {
+    const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test", namespace });
     defer allocator.free(cache_parent_rel);
 
     try std.Io.Dir.cwd().createDirPath(io, cache_parent_rel);
 
     while (true) {
-        const cache_dir_id = next_cache_dir_id.fetchAdd(1, .monotonic);
+        const cache_dir_id = next_test_dir_id.fetchAdd(1, .monotonic);
         // Zig 0.16 removed std.time.nanoTimestamp and std.crypto.random. This is
         // test code, so seed a PRNG from the test seed mixed with the per-call
         // monotonic counter to produce a unique-ish temp-dir suffix.
@@ -234,7 +247,7 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
 
-    const cache_root_rel = try reserveTestCacheRoot(allocator);
+    const cache_root_rel = try reserveUniqueTestDir(allocator, "cache");
     defer allocator.free(cache_root_rel);
 
     const roc_cache_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "roc-cache" });
@@ -251,9 +264,37 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
     };
 }
 
+/// Create unique Roc cache, Zig local cache, and work directories for one CLI test job.
+pub fn createIsolatedTestDirs(allocator: std.mem.Allocator) !TestProcessDirs {
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(cwd_path);
+
+    const work_dir_rel = try reserveUniqueTestDir(allocator, "work");
+    defer allocator.free(work_dir_rel);
+
+    const roc_cache_rel = try std.fs.path.join(allocator, &.{ work_dir_rel, "roc-cache" });
+    defer allocator.free(roc_cache_rel);
+    try std.Io.Dir.cwd().createDirPath(io, roc_cache_rel);
+
+    const zig_local_cache_rel = try std.fs.path.join(allocator, &.{ work_dir_rel, "zig-local-cache" });
+    defer allocator.free(zig_local_cache_rel);
+    try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
+
+    return .{
+        .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
+        .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
+        .work_dir = try std.fs.path.join(allocator, &.{ cwd_path, work_dir_rel }),
+    };
+}
+
+/// Remove the per-job work directory for a passing CLI test.
+pub fn cleanupTestWorkDir(work_dir: []const u8) void {
+    std.Io.Dir.cwd().deleteTree(io, work_dir) catch {};
+}
+
 /// Build an environment map for a test Roc subprocess.
 /// Unless the caller already set them, this gives the subprocess unique Roc,
-/// URL package, and Zig local cache roots so concurrent CLI tests cannot share cache state.
+/// URL package, and Zig local cache roots.
 pub fn buildIsolatedTestEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,

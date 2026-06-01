@@ -93,6 +93,13 @@ fn getLlvmTriple(target: std.Target) []const u8 {
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
+    pub const Entrypoint = struct {
+        symbol_name: []const u8,
+        proc: LirProcSpecId,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    };
+
     allocator: Allocator,
     target: std.Target,
     triple: []const u8,
@@ -260,7 +267,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn generateEntrypointModule(
         self: *MonoLlvmCodeGen,
         module_name: []const u8,
-        entrypoints: anytype,
+        entrypoints: []const Entrypoint,
     ) Error!ModuleBitcodeResult {
         self.reset();
 
@@ -274,7 +281,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.compileAllProcSpecs(procs);
         try self.compilePendingRcHelpers();
 
-        inline for (entrypoints) |entrypoint| {
+        for (entrypoints) |entrypoint| {
             try self.generateEntrypointWrapper(
                 entrypoint.symbol_name,
                 entrypoint.proc,

@@ -1,8 +1,7 @@
 //! Parallel CLI test runner for Roc platform integration tests.
 //!
-//! Replaces the 5 sequential test_runner invocations in `zig build test-cli`
-//! with a single binary that runs all platform tests in parallel using a
-//! fork-based process pool (via src/build/test_harness.zig).
+//! Runs platform fixtures as an explicit `--opt` matrix using a fork-based
+//! process pool (via src/build/test_harness.zig).
 //!
 //! Usage:
 //!   parallel_cli_runner <roc_binary> [options]
@@ -11,6 +10,7 @@
 //!   --filter <pattern>   Run only tests whose name contains <pattern> (repeatable)
 //!   --threads <N>        Max concurrent child processes (default: CPU count)
 //!   --timeout <ms>       Per-test timeout in ms (default: 120000)
+//!   --include-llvm       Include size and speed LLVM backend jobs
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
@@ -30,7 +30,26 @@ pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_i
 
 // Test spec types
 
-/// A single CLI test operation — one atomic unit of work.
+const OptMode = enum(u8) {
+    interpreter,
+    dev,
+    size,
+    speed,
+
+    fn cliName(self: OptMode) []const u8 {
+        return switch (self) {
+            .interpreter => "interpreter",
+            .dev => "dev",
+            .size => "size",
+            .speed => "speed",
+        };
+    }
+};
+
+const base_test_opts = [_]OptMode{ .interpreter, .dev };
+const llvm_test_opts = [_]OptMode{ .size, .speed };
+
+/// A single CLI test operation — one matrix cell of work.
 const CliTestSpec = struct {
     /// Unique id within this runner invocation. This keeps generated binary
     /// names distinct even on hosts that run all specs in the same process.
@@ -41,8 +60,8 @@ const CliTestSpec = struct {
     roc_file: []const u8,
     /// Platform name (for display grouping)
     platform: []const u8,
-    /// Backend: null = interpreter, "dev" = dev backend
-    backend: ?[]const u8,
+    /// Execution mode passed through `--opt`.
+    opt: OptMode,
     /// What kind of test to run
     test_kind: TestKind,
 
@@ -54,79 +73,80 @@ const CliTestSpec = struct {
     };
 };
 
-/// Which platform/backend combos to test (mirrors build.zig's 5 invocations).
-const RunConfig = struct {
-    platform_name: []const u8,
-    backend: ?[]const u8,
-};
-
-const run_configs = [_]RunConfig{
-    .{ .platform_name = "int", .backend = null },
-    .{ .platform_name = "str", .backend = null },
-    .{ .platform_name = "int", .backend = "dev" },
-    .{ .platform_name = "str", .backend = "dev" },
-    .{ .platform_name = "fx", .backend = "dev" },
-};
-
 // Spec generation
 
-fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const CliTestSpec {
+fn buildTestSpecs(allocator: Allocator, filters: []const []const u8, include_llvm: bool) ![]const CliTestSpec {
     var specs: std.ArrayListUnmanaged(CliTestSpec) = .empty;
 
-    for (&run_configs) |cfg| {
-        const platform = platform_config.findPlatform(cfg.platform_name) orelse continue;
-
-        switch (platform.test_apps) {
-            .single => |app_name| {
-                const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
-                const name = try fmtTestName(allocator, roc_file, cfg.backend);
-                if (matchesFilters(name, roc_file, filters)) {
-                    try specs.append(allocator, .{
-                        .id = specs.items.len,
-                        .name = name,
-                        .roc_file = roc_file,
-                        .platform = platform.name,
-                        .backend = cfg.backend,
-                        .test_kind = .native_run,
-                    });
-                }
-            },
-            .spec_list => |io_specs| {
-                for (io_specs) |spec| {
-                    if (skipIoSpecOnHost(spec)) continue;
-
-                    const name = try fmtTestName(allocator, spec.roc_file, cfg.backend);
-                    if (matchesFilters(name, spec.roc_file, filters)) {
-                        try specs.append(allocator, .{
-                            .id = specs.items.len,
-                            .name = name,
-                            .roc_file = spec.roc_file,
-                            .platform = platform.name,
-                            .backend = cfg.backend,
-                            .test_kind = .{ .io_spec = spec.io_spec },
-                        });
-                    }
-                }
-            },
-            .simple_list => |simple_specs| {
-                for (simple_specs) |spec| {
-                    const name = try fmtTestName(allocator, spec.roc_file, cfg.backend);
-                    if (matchesFilters(name, spec.roc_file, filters)) {
-                        try specs.append(allocator, .{
-                            .id = specs.items.len,
-                            .name = name,
-                            .roc_file = spec.roc_file,
-                            .platform = platform.name,
-                            .backend = cfg.backend,
-                            .test_kind = .native_run,
-                        });
-                    }
-                }
-            },
+    for (&platform_config.platforms) |platform| {
+        for (&base_test_opts) |opt| {
+            try appendPlatformSpecs(allocator, &specs, platform, opt, filters);
+        }
+        if (include_llvm) {
+            for (&llvm_test_opts) |opt| {
+                try appendPlatformSpecs(allocator, &specs, platform, opt, filters);
+            }
         }
     }
 
     return specs.toOwnedSlice(allocator);
+}
+
+fn appendPlatformSpecs(
+    allocator: Allocator,
+    specs: *std.ArrayListUnmanaged(CliTestSpec),
+    platform: platform_config.PlatformConfig,
+    opt: OptMode,
+    filters: []const []const u8,
+) !void {
+    switch (platform.test_apps) {
+        .single => |app_name| {
+            const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
+            const name = try fmtTestName(allocator, roc_file, opt);
+            if (matchesFilters(name, roc_file, filters)) {
+                try specs.append(allocator, .{
+                    .id = specs.items.len,
+                    .name = name,
+                    .roc_file = roc_file,
+                    .platform = platform.name,
+                    .opt = opt,
+                    .test_kind = .native_run,
+                });
+            }
+        },
+        .spec_list => |io_specs| {
+            for (io_specs) |spec| {
+                if (skipIoSpecOnHost(spec)) continue;
+
+                const name = try fmtTestName(allocator, spec.roc_file, opt);
+                if (matchesFilters(name, spec.roc_file, filters)) {
+                    try specs.append(allocator, .{
+                        .id = specs.items.len,
+                        .name = name,
+                        .roc_file = spec.roc_file,
+                        .platform = platform.name,
+                        .opt = opt,
+                        .test_kind = .{ .io_spec = spec.io_spec },
+                    });
+                }
+            }
+        },
+        .simple_list => |simple_specs| {
+            for (simple_specs) |spec| {
+                const name = try fmtTestName(allocator, spec.roc_file, opt);
+                if (matchesFilters(name, spec.roc_file, filters)) {
+                    try specs.append(allocator, .{
+                        .id = specs.items.len,
+                        .name = name,
+                        .roc_file = spec.roc_file,
+                        .platform = platform.name,
+                        .opt = opt,
+                        .test_kind = .native_run,
+                    });
+                }
+            }
+        },
+    }
 }
 
 fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
@@ -134,11 +154,8 @@ fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
     return spec.skip_on_windows and builtin.os.tag == .windows;
 }
 
-fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8) ![]const u8 {
-    if (backend) |b| {
-        return std.fmt.allocPrint(allocator, "{s} [{s}]", .{ roc_file, b });
-    }
-    return std.fmt.allocPrint(allocator, "{s}", .{roc_file});
+fn fmtTestName(allocator: Allocator, roc_file: []const u8, opt: OptMode) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s} [{s}]", .{ roc_file, opt.cliName() });
 }
 
 fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []const u8) bool {
@@ -154,15 +171,28 @@ fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []con
 
 const TestStatus = enum(u8) {
     pass = 0,
-    fail = 1,
-    skip = 2,
+    build_failed = 1,
+    run_failed = 2,
     timeout = 3,
     crash = 4,
+    infra_error = 5,
+    skip = 6,
+};
+
+const TestPhase = enum(u8) {
+    setup = 0,
+    build = 1,
+    run = 2,
+    cleanup = 3,
+    harness = 4,
 };
 
 const WireHeader = extern struct {
     status: u8,
+    phase: u8,
     duration_ns: u64,
+    build_ns: u64,
+    run_ns: u64,
     exit_code: u32,
     stderr_len: u32,
     stdout_len: u32,
@@ -171,7 +201,10 @@ const WireHeader = extern struct {
 
 const TestResult = struct {
     status: TestStatus = .crash,
+    phase: TestPhase = .harness,
     duration_ns: u64 = 0,
+    build_ns: u64 = 0,
+    run_ns: u64 = 0,
     exit_code: u32 = 0,
     stderr_capture: ?[]const u8 = null,
     stdout_capture: ?[]const u8 = null,
@@ -190,7 +223,10 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
 
     const header = WireHeader{
         .status = @intFromEnum(result.status),
+        .phase = @intFromEnum(result.phase),
         .duration_ns = result.duration_ns,
+        .build_ns = result.build_ns,
+        .run_ns = result.run_ns,
         .exit_code = result.exit_code,
         .stderr_len = @intCast(stderr_out.len),
         .stdout_len = @intCast(stdout_out.len),
@@ -218,7 +254,10 @@ fn serializeResultStreamed(fd: posix.fd_t, result: TestResult) void {
 
     const header = WireHeader{
         .status = @intFromEnum(result.status),
+        .phase = @intFromEnum(result.phase),
         .duration_ns = result.duration_ns,
+        .build_ns = result.build_ns,
+        .run_ns = result.run_ns,
         .exit_code = result.exit_code,
         .stderr_len = @intCast(stderr_out.len),
         .stdout_len = @intCast(stdout_out.len),
@@ -245,7 +284,10 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 
     return .{
         .status = @enumFromInt(header.status),
+        .phase = @enumFromInt(header.phase),
         .duration_ns = header.duration_ns,
+        .build_ns = header.build_ns,
+        .run_ns = header.run_ns,
         .exit_code = header.exit_code,
         .stderr_capture = stderr_capture,
         .stdout_capture = stdout_capture,
@@ -256,6 +298,7 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 // Child test execution
 
 var roc_binary_path: []const u8 = "";
+var project_root_path: []const u8 = "";
 
 fn currentProcessIdForFilename() u64 {
     if (comptime builtin.os.tag == .windows) {
@@ -289,23 +332,31 @@ fn cleanupOutputArtifacts(allocator: Allocator, output_name: []const u8) void {
     deleteOutputArtifacts(allocator, output_name) catch {};
 }
 
-fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
-    var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
+fn absoluteFromProjectRoot(allocator: Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return allocator.dupe(u8, path);
+    }
+    return std.fs.path.join(allocator, &.{ project_root_path, path });
+}
 
-    const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
-        return .{ .status = .crash, .message = "failed to create cache dirs" };
-    defer cache_dirs.deinit(allocator);
+fn runSingleTest(allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestResult {
+    var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
 
-    const pid = currentProcessIdForFilename();
-    const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}_{d}", .{ pid, spec.id }) catch
-        return .{ .status = .crash, .message = "OOM" };
+    const dirs = util.createIsolatedTestDirs(allocator) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test directories" };
+    defer dirs.deinit(allocator);
+
+    const roc_file = absoluteFromProjectRoot(allocator, spec.roc_file) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to resolve Roc file path" };
+
+    const output_name = std.fs.path.join(allocator, &.{ dirs.work_dir, "app" }) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate output path" };
+
     deleteOutputArtifacts(allocator, output_name) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "failed to remove stale output artifact: {}", .{err}) catch "failed to remove stale output artifact";
-        return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
+        const msg = std.fmt.allocPrint(allocator, "failed to remove stale output file: {}", .{err}) catch "failed to remove stale output file";
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = msg };
     };
-    defer cleanupOutputArtifacts(allocator, output_name);
 
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
     const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
         .block = .global,
     } else blk: {
@@ -313,111 +364,267 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
         break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
     };
     var env_map = environ.createMap(allocator) catch
-        return .{ .status = .crash, .message = "failed to get env" };
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to copy environment" };
     defer env_map.deinit();
-    env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
-        return .{ .status = .crash, .message = "failed to set roc cache env" };
-    env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
-        return .{ .status = .crash, .message = "failed to set env" };
+    env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ROC_CACHE_DIR" };
+    env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set XDG_CACHE_HOME" };
+    env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ZIG_LOCAL_CACHE_DIR" };
 
-    // Step 1: Build
-    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{output_name}) catch
-        return .{ .status = .crash, .message = "OOM" };
-
-    var build_argv_buf: [5][]const u8 = undefined;
-    var argc: usize = 0;
-    build_argv_buf[argc] = roc_binary_path;
-    argc += 1;
-    build_argv_buf[argc] = "build";
-    argc += 1;
-    build_argv_buf[argc] = output_arg;
-    argc += 1;
-    if (spec.backend) |b| {
-        const backend_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{b}) catch
-            return .{ .status = .crash, .message = "OOM" };
-        build_argv_buf[argc] = backend_arg;
-        argc += 1;
-    }
-    build_argv_buf[argc] = spec.roc_file;
-    argc += 1;
-
-    const build_result = std.process.run(allocator, std.Options.debug_io, .{
-        .argv = build_argv_buf[0..argc],
-        .environ_map = &env_map,
-    }) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "build spawn error: {}", .{err}) catch "build spawn error";
-        return .{ .status = .fail, .duration_ns = timer.read(), .message = msg };
+    const result = switch (spec.opt) {
+        .interpreter => runInterpreterTest(allocator, spec, roc_file, &env_map, dirs.work_dir, &timer, timeout_ms),
+        .dev, .size, .speed => runCompiledTest(allocator, spec, roc_file, output_name, &env_map, dirs.work_dir, &timer, timeout_ms),
     };
 
-    if (!isSuccess(build_result.term)) {
-        return .{
-            .status = .fail,
-            .duration_ns = timer.read(),
-            .exit_code = exitCode(build_result.term),
-            .stderr_capture = build_result.stderr,
-            .stdout_capture = build_result.stdout,
-            .message = "build failed",
-        };
+    if (result.status == .pass) {
+        util.cleanupTestWorkDir(dirs.work_dir);
+        return result;
     }
-    allocator.free(build_result.stdout);
-    allocator.free(build_result.stderr);
-
-    std.Io.Dir.cwd().access(std.Options.debug_io, output_name, .{}) catch {
-        return .{ .status = .fail, .duration_ns = timer.read(), .message = "build succeeded but binary not created" };
-    };
-
-    // Step 2: Run
-    switch (spec.test_kind) {
-        .native_run => {
-            const run_result = std.process.run(allocator, std.Options.debug_io, .{
-                .argv = &[_][]const u8{output_name},
-            }) catch |err| {
-                const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
-                return .{ .status = .fail, .duration_ns = timer.read(), .message = msg };
-            };
-            return checkRunResult(run_result, &timer, "run failed");
-        },
-        .io_spec => |io_spec| {
-            const run_result = std.process.run(allocator, std.Options.debug_io, .{
-                .argv = &[_][]const u8{ output_name, "--test", io_spec },
-            }) catch |err| {
-                const msg = std.fmt.allocPrint(allocator, "io_spec run spawn error: {}", .{err}) catch "run spawn error";
-                return .{ .status = .fail, .duration_ns = timer.read(), .message = msg };
-            };
-            return checkRunResult(run_result, &timer, "io_spec test failed");
-        },
-    }
+    return addPreservedWorkDirMessage(allocator, result, dirs.work_dir);
 }
 
-fn checkRunResult(result: std.process.RunResult, timer: *harness.Timer, fail_msg: []const u8) TestResult {
+fn runInterpreterTest(
+    allocator: Allocator,
+    spec: CliTestSpec,
+    roc_file: []const u8,
+    env_map: *const std.process.Environ.Map,
+    work_dir: []const u8,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) TestResult {
+    const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{spec.opt.cliName()}) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate opt arg" };
+
+    var argv_buf: [5][]const u8 = undefined;
+    var argc: usize = 0;
+    argv_buf[argc] = roc_binary_path;
+    argc += 1;
+    argv_buf[argc] = "run";
+    argc += 1;
+    argv_buf[argc] = opt_arg;
+    argc += 1;
+    switch (spec.test_kind) {
+        .native_run => {},
+        .io_spec => |io_spec| {
+            const test_arg = std.fmt.allocPrint(allocator, "--test={s}", .{io_spec}) catch
+                return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate IO spec arg" };
+            argv_buf[argc] = test_arg;
+            argc += 1;
+        },
+    }
+    argv_buf[argc] = roc_file;
+    argc += 1;
+
+    var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
+    const run_result = util.runChildWithTimeout(allocator, argv_buf[0..argc], .{
+        .cwd = work_dir,
+        .env_map = env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+        .timeout_ms = timeout_ms,
+    }) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
+        return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .run_ns = run_timer.read(), .message = msg };
+    };
+    const run_ns = run_timer.read();
+    return resultFromProcess(run_result, timer, .run, 0, run_ns, "run failed");
+}
+
+fn runCompiledTest(
+    allocator: Allocator,
+    spec: CliTestSpec,
+    roc_file: []const u8,
+    output_name: []const u8,
+    env_map: *const std.process.Environ.Map,
+    work_dir: []const u8,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) TestResult {
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{output_name}) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate output arg" };
+    const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{spec.opt.cliName()}) catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate opt arg" };
+
+    const build_argv = &[_][]const u8{ roc_binary_path, "build", output_arg, opt_arg, roc_file };
+
+    var build_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .message = "no clock" };
+    const build_result = util.runChildWithTimeout(allocator, build_argv, .{
+        .cwd = work_dir,
+        .env_map = env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+        .timeout_ms = timeout_ms,
+    }) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "build spawn error: {}", .{err}) catch "build spawn error";
+        return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .build_ns = build_timer.read(), .message = msg };
+    };
+    const build_ns = build_timer.read();
+    if (!processSucceeded(build_result.term)) {
+        return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
+    }
+
+    if (!builtOutputExists(allocator, output_name)) {
+        return .{ .status = .build_failed, .phase = .build, .duration_ns = timer.read(), .build_ns = build_ns, .message = "build succeeded but output file was not created" };
+    }
+
+    var run_argv_buf: [3][]const u8 = undefined;
+    var argc: usize = 0;
+    run_argv_buf[argc] = output_name;
+    argc += 1;
+    switch (spec.test_kind) {
+        .native_run => {},
+        .io_spec => |io_spec| {
+            run_argv_buf[argc] = "--test";
+            argc += 1;
+            run_argv_buf[argc] = io_spec;
+            argc += 1;
+        },
+    }
+
+    var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .build_ns = build_ns, .message = "no clock" };
+    const run_result = util.runChildWithTimeout(allocator, run_argv_buf[0..argc], .{
+        .cwd = work_dir,
+        .max_output_bytes = 10 * 1024 * 1024,
+        .timeout_ms = timeout_ms,
+    }) catch |err| {
+        const msg = std.fmt.allocPrint(allocator, "run spawn error: {}", .{err}) catch "run spawn error";
+        return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .build_ns = build_ns, .run_ns = run_timer.read(), .message = msg };
+    };
+    const run_ns = run_timer.read();
+    return resultFromProcess(run_result, timer, .run, build_ns, run_ns, "run failed");
+}
+
+fn builtOutputExists(allocator: Allocator, output_name: []const u8) bool {
+    std.Io.Dir.cwd().access(std.Options.debug_io, output_name, .{}) catch {
+        if (builtin.os.tag == .windows) {
+            const exe_name = std.fmt.allocPrint(allocator, "{s}.exe", .{output_name}) catch return false;
+            defer allocator.free(exe_name);
+            std.Io.Dir.cwd().access(std.Options.debug_io, exe_name, .{}) catch return false;
+        } else {
+            return false;
+        }
+    };
+    return true;
+}
+
+fn resultFromProcess(
+    result: std.process.RunResult,
+    timer: *harness.Timer,
+    phase: TestPhase,
+    build_ns: u64,
+    run_ns: u64,
+    fail_msg: []const u8,
+) TestResult {
+    if (processTimedOut(result.stderr)) {
+        return .{
+            .status = .timeout,
+            .phase = phase,
+            .duration_ns = timer.read(),
+            .build_ns = build_ns,
+            .run_ns = run_ns,
+            .exit_code = exitCode(result.term),
+            .stderr_capture = result.stderr,
+            .stdout_capture = result.stdout,
+            .message = "child command timed out",
+        };
+    }
     if (hasMemoryErrors(result.stderr)) |mem_msg| {
         return .{
-            .status = .fail,
+            .status = if (phase == .build) .build_failed else .run_failed,
+            .phase = phase,
             .duration_ns = timer.read(),
+            .build_ns = build_ns,
+            .run_ns = run_ns,
             .exit_code = exitCode(result.term),
             .stderr_capture = result.stderr,
             .stdout_capture = result.stdout,
             .message = mem_msg,
         };
     }
-    if (!isSuccess(result.term)) {
-        return .{
-            .status = .fail,
-            .duration_ns = timer.read(),
-            .exit_code = exitCode(result.term),
-            .stderr_capture = result.stderr,
-            .stdout_capture = result.stdout,
-            .message = fail_msg,
-        };
+    switch (result.term) {
+        .exited => |code| {
+            if (code == 0) {
+                return .{ .status = .pass, .phase = phase, .duration_ns = timer.read(), .build_ns = build_ns, .run_ns = run_ns };
+            }
+            return .{
+                .status = if (phase == .build) .build_failed else .run_failed,
+                .phase = phase,
+                .duration_ns = timer.read(),
+                .build_ns = build_ns,
+                .run_ns = run_ns,
+                .exit_code = @intCast(code),
+                .stderr_capture = result.stderr,
+                .stdout_capture = result.stdout,
+                .message = fail_msg,
+            };
+        },
+        .signal => {
+            return .{
+                .status = .crash,
+                .phase = phase,
+                .duration_ns = timer.read(),
+                .build_ns = build_ns,
+                .run_ns = run_ns,
+                .exit_code = exitCode(result.term),
+                .stderr_capture = result.stderr,
+                .stdout_capture = result.stdout,
+                .message = fail_msg,
+            };
+        },
+        else => {
+            return .{
+                .status = .crash,
+                .phase = phase,
+                .duration_ns = timer.read(),
+                .build_ns = build_ns,
+                .run_ns = run_ns,
+                .exit_code = exitCode(result.term),
+                .stderr_capture = result.stderr,
+                .stdout_capture = result.stdout,
+                .message = fail_msg,
+            };
+        },
     }
-    return .{ .status = .pass, .duration_ns = timer.read() };
 }
 
-fn isSuccess(term: std.process.Child.Term) bool {
+fn processSucceeded(term: std.process.Child.Term) bool {
     return switch (term) {
         .exited => |code| code == 0,
         else => false,
     };
+}
+
+fn processTimedOut(stderr: []const u8) bool {
+    return std.mem.find(u8, stderr, "child command timed out") != null;
+}
+
+fn statusLabel(status: TestStatus) []const u8 {
+    return switch (status) {
+        .pass => "passed",
+        .build_failed => "build failed",
+        .run_failed => "run failed",
+        .timeout => "timed out",
+        .crash => "crashed",
+        .infra_error => "infrastructure error",
+        .skip => "skipped",
+    };
+}
+
+fn phaseLabel(phase: TestPhase) []const u8 {
+    return switch (phase) {
+        .setup => "setup",
+        .build => "build",
+        .run => "run",
+        .cleanup => "cleanup",
+        .harness => "harness",
+    };
+}
+
+fn addPreservedWorkDirMessage(allocator: Allocator, result: TestResult, work_dir: []const u8) TestResult {
+    var updated = result;
+    const prefix = result.message orelse statusLabel(result.status);
+    updated.message = std.fmt.allocPrint(allocator, "{s}; preserved work dir: {s}", .{ prefix, work_dir }) catch result.message;
+    return updated;
 }
 
 fn exitCode(term: std.process.Child.Term) u32 {
@@ -473,7 +680,10 @@ fn dupeOptional(gpa: Allocator, value: ?[]const u8) ?[]const u8 {
 fn stabilizeResult(gpa: Allocator, result: TestResult) TestResult {
     return .{
         .status = result.status,
+        .phase = result.phase,
         .duration_ns = result.duration_ns,
+        .build_ns = result.build_ns,
+        .run_ns = result.run_ns,
         .exit_code = result.exit_code,
         .stderr_capture = dupeOptional(gpa, result.stderr_capture),
         .stdout_capture = dupeOptional(gpa, result.stdout_capture),
@@ -505,78 +715,99 @@ fn printResults(
     wall_ns: u64,
     max_children: usize,
 ) void {
-    var passed: usize = 0;
-    var failed: usize = 0;
-    var crashed: usize = 0;
-    var skipped: usize = 0;
-    var timed_out: usize = 0;
+    const status_count = 7;
+    const opt_count = 4;
+    const all_opts = [_]OptMode{ .interpreter, .dev, .size, .speed };
+    var status_counts = [_]usize{0} ** status_count;
+    var opt_counts = [_]usize{0} ** opt_count;
+    var opt_failures = [_]usize{0} ** opt_count;
 
     for (tests, 0..) |tc, i| {
         const r = results[i];
         const ms = harness.nsToMs(r.duration_ns);
+        status_counts[@intFromEnum(r.status)] += 1;
+        opt_counts[@intFromEnum(tc.opt)] += 1;
+        if (r.status != .pass and r.status != .skip) {
+            opt_failures[@intFromEnum(tc.opt)] += 1;
+        }
 
         switch (r.status) {
             .pass => {
-                passed += 1;
                 if (verbose) std.debug.print("  PASS  {s}  ({d:.1}ms)\n", .{ tc.name, ms });
             },
-            .fail => {
-                failed += 1;
-                std.debug.print("  FAIL  {s}  ({d:.1}ms)\n", .{ tc.name, ms });
-                if (r.message) |msg| std.debug.print("        {s}\n", .{msg});
-                if (r.exit_code != 0) {
-                    if (r.exit_code & 0x80000000 != 0) {
-                        std.debug.print("        signal {d}\n", .{r.exit_code & 0x7FFFFFFF});
-                    } else {
-                        std.debug.print("        exit code {d}\n", .{r.exit_code});
-                    }
-                }
-                printCapturedOutput("stderr", r.stderr_capture);
-                printCapturedOutput("stdout", r.stdout_capture);
-                printRepro(tc.name);
-            },
-            .crash => {
-                crashed += 1;
-                std.debug.print("  CRASH {s}  ({d:.1}ms)\n", .{ tc.name, ms });
-                if (r.message) |msg| std.debug.print("        {s}\n", .{msg});
-                printCapturedOutput("stderr", r.stderr_capture);
-                printRepro(tc.name);
-            },
-            .timeout => {
-                timed_out += 1;
-                std.debug.print("  HANG  {s}\n", .{tc.name});
-                printRepro(tc.name);
-            },
+            .build_failed, .run_failed, .timeout, .crash, .infra_error => printProblemResult(tc, r, ms),
             .skip => {
-                skipped += 1;
                 if (verbose) std.debug.print("  SKIP  {s}\n", .{tc.name});
             },
         }
     }
 
     const wall_ms = harness.nsToMs(wall_ns);
-    std.debug.print("\n{d} passed, {d} failed", .{ passed, failed });
-    if (crashed > 0) std.debug.print(", {d} crashed", .{crashed});
-    if (timed_out > 0) std.debug.print(", {d} hung", .{timed_out});
-    if (skipped > 0) std.debug.print(", {d} skipped", .{skipped});
+    std.debug.print("\n{d} passed", .{status_counts[@intFromEnum(TestStatus.pass)]});
+    if (status_counts[@intFromEnum(TestStatus.build_failed)] > 0) std.debug.print(", {d} build failed", .{status_counts[@intFromEnum(TestStatus.build_failed)]});
+    if (status_counts[@intFromEnum(TestStatus.run_failed)] > 0) std.debug.print(", {d} run failed", .{status_counts[@intFromEnum(TestStatus.run_failed)]});
+    if (status_counts[@intFromEnum(TestStatus.crash)] > 0) std.debug.print(", {d} crashed", .{status_counts[@intFromEnum(TestStatus.crash)]});
+    if (status_counts[@intFromEnum(TestStatus.timeout)] > 0) std.debug.print(", {d} timed out", .{status_counts[@intFromEnum(TestStatus.timeout)]});
+    if (status_counts[@intFromEnum(TestStatus.infra_error)] > 0) std.debug.print(", {d} infra errors", .{status_counts[@intFromEnum(TestStatus.infra_error)]});
+    if (status_counts[@intFromEnum(TestStatus.skip)] > 0) std.debug.print(", {d} skipped", .{status_counts[@intFromEnum(TestStatus.skip)]});
     std.debug.print(" ({d} total) in {d:.0}ms using {d} worker(s)\n", .{ tests.len, wall_ms, max_children });
+
+    std.debug.print("\n=== Backend Matrix ===\n", .{});
+    for (all_opts) |opt| {
+        const opt_idx = @intFromEnum(opt);
+        if (opt_counts[opt_idx] == 0) continue;
+        std.debug.print("  {s:<11} {d:>4} run, {d:>4} failed\n", .{ opt.cliName(), opt_counts[opt_idx], opt_failures[opt_idx] });
+    }
 
     // Timing summary
     var durations: std.ArrayListUnmanaged(u64) = .empty;
+    var build_durations: std.ArrayListUnmanaged(u64) = .empty;
+    var run_durations: std.ArrayListUnmanaged(u64) = .empty;
+    var opt_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
     defer durations.deinit(gpa);
+    defer build_durations.deinit(gpa);
+    defer run_durations.deinit(gpa);
+    defer {
+        for (&opt_durations) |*list| list.deinit(gpa);
+    }
     for (results) |r| {
         if (r.duration_ns > 0) durations.append(gpa, r.duration_ns) catch continue;
+        if (r.build_ns > 0) build_durations.append(gpa, r.build_ns) catch {};
+        if (r.run_ns > 0) run_durations.append(gpa, r.run_ns) catch {};
+    }
+    for (tests, results) |tc, r| {
+        if (r.duration_ns > 0) opt_durations[@intFromEnum(tc.opt)].append(gpa, r.duration_ns) catch {};
     }
     if (harness.computeTimingStats(durations.items)) |_| {
         std.debug.print("\n=== Timing Summary (ms) ===\n", .{});
         harness.printStatsHeader();
         harness.printStatsRow("total", harness.computeTimingStats(durations.items));
+        harness.printStatsRow("build", harness.computeTimingStats(build_durations.items));
+        harness.printStatsRow("run", harness.computeTimingStats(run_durations.items));
+        for (all_opts) |opt| {
+            harness.printStatsRow(opt.cliName(), harness.computeTimingStats(opt_durations[@intFromEnum(opt)].items));
+        }
     }
 
     var duration_arr = gpa.alloc(u64, results.len) catch return;
     defer gpa.free(duration_arr);
     for (results, 0..) |r, i| duration_arr[i] = r.duration_ns;
     harness.printSlowestN(CliTestSpec, tests, duration_arr, 5, gpa, getTestName);
+}
+
+fn printProblemResult(tc: CliTestSpec, r: TestResult, ms: f64) void {
+    std.debug.print("  {s:<12} {s}  ({d:.1}ms, phase={s})\n", .{ statusLabel(r.status), tc.name, ms, phaseLabel(r.phase) });
+    if (r.message) |msg| std.debug.print("        {s}\n", .{msg});
+    if (r.exit_code != 0) {
+        if (r.exit_code & 0x80000000 != 0) {
+            std.debug.print("        signal {d}\n", .{r.exit_code & 0x7FFFFFFF});
+        } else {
+            std.debug.print("        exit code {d}\n", .{r.exit_code});
+        }
+    }
+    printCapturedOutput("stderr", r.stderr_capture);
+    printCapturedOutput("stdout", r.stdout_capture);
+    printRepro(tc.name);
 }
 
 fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
@@ -599,7 +830,7 @@ fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
 }
 
 fn printRepro(test_name: []const u8) void {
-    std.debug.print("        Repro: zig build test-cli -- --test-filter \"{s}\"\n\n", .{test_name});
+    std.debug.print("        Repro: zig build test-platforms -- --test-filter \"{s}\"\n\n", .{test_name});
 }
 
 // Main
@@ -612,6 +843,7 @@ fn printUsage() void {
         \\  --filter <pattern>   Run tests matching pattern (repeatable)
         \\  --threads <N>        Max concurrent workers (default: CPU count)
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000)
+        \\  --include-llvm       Include size and speed LLVM backend jobs
         \\  --verbose            Show PASS results with timing
         \\
     , .{});
@@ -646,9 +878,13 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    roc_binary_path = args.positional[0];
+    project_root_path = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", spec_arena.allocator());
+    roc_binary_path = if (std.fs.path.isAbsolute(args.positional[0]))
+        args.positional[0]
+    else
+        try std.fs.path.join(spec_arena.allocator(), &.{ project_root_path, args.positional[0] });
 
-    const tests = try buildTestSpecs(spec_arena.allocator(), args.filters);
+    const tests = try buildTestSpecs(spec_arena.allocator(), args.filters, args.include_llvm);
     if (tests.len == 0) return;
 
     // Worker mode: parent spawned us with `--worker <idx>` to run a single
@@ -700,7 +936,12 @@ pub fn main(init: std.process.Init) !void {
     const max_children = args.max_threads orelse @min(cpu_count, tests.len);
 
     std.debug.print("=== CLI Test Runner ===\n", .{});
-    std.debug.print("{d} tests, {d} workers, {d}s timeout\n\n", .{ tests.len, max_children, args.timeout_ms / 1000 });
+    std.debug.print("{d} tests, {d} workers, {d}s timeout", .{ tests.len, max_children, args.timeout_ms / 1000 });
+    if (args.include_llvm) {
+        std.debug.print(", backends: interpreter, dev, size, speed\n\n", .{});
+    } else {
+        std.debug.print(", backends: interpreter, dev\n\n", .{});
+    }
 
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
@@ -726,7 +967,7 @@ pub fn main(init: std.process.Init) !void {
 
     for (results) |r| {
         switch (r.status) {
-            .fail, .crash, .timeout => std.process.exit(1),
+            .build_failed, .run_failed, .crash, .timeout, .infra_error => std.process.exit(1),
             else => {},
         }
     }

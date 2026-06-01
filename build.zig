@@ -2215,6 +2215,7 @@ pub fn build(b: *std.Build) void {
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
     const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
+    const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse true;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     if (shared_memory_size) |size| {
@@ -2520,6 +2521,9 @@ pub fn build(b: *std.Build) void {
 
         const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
         run_parallel_cli.addArg("zig-out/bin/roc");
+        if (cli_test_llvm) {
+            run_parallel_cli.addArg("--include-llvm");
+        }
         for (test_filters) |f| {
             run_parallel_cli.addArg("--filter");
             run_parallel_cli.addArg(f);
