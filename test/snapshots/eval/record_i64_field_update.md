@@ -18,35 +18,9 @@ expect retreat({ x: 7, y: 3 }) == { x: 7, y: 2 }
 expect advance(retreat({ x: 0, y: 0 })) == { x: 0, y: 0 }
 ~~~
 # EXPECTED
-INFINITE TYPE - record_i64_field_update.md:4:1:4:46
-INFINITE TYPE - record_i64_field_update.md:7:1:7:46
+NIL
 # PROBLEMS
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**record_i64_field_update.md:4:1:4:46:**
-```roc
-advance = |robot| { ..robot, y: robot.y + 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**record_i64_field_update.md:7:1:7:46:**
-```roc
-retreat = |robot| { ..robot, y: robot.y - 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -217,7 +191,8 @@ NO CHANGE
 		(e-structural-eq (negated "false")
 			(lhs
 				(e-call (constraint-fn-var 473)
-					(e-runtime-error (tag "erroneous_value_use"))
+					(e-lookup-local
+						(p-assign (ident "advance")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -234,8 +209,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 890)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 889)
+					(e-lookup-local
+						(p-assign (ident "retreat")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -250,12 +226,14 @@ NO CHANGE
 						(field (name "y")
 							(e-num (value "2"))))))))
 	(s-expect
-		(e-method-eq (negated "false")
+		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1308)
-					(e-runtime-error (tag "erroneous_value_use"))
-					(e-call (constraint-fn-var 1307)
-						(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 1446)
+					(e-lookup-local
+						(p-assign (ident "advance")))
+					(e-call (constraint-fn-var 1305)
+						(e-lookup-local
+							(p-assign (ident "retreat")))
 						(e-record
 							(fields
 								(field (name "x")
@@ -274,12 +252,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Robot -> Robot"))
+		(patt (type "Robot -> Robot")))
 	(type_decls
 		(alias (type "Robot")
 			(ty-header (name "Robot"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "Robot -> Robot"))
+		(expr (type "Robot -> Robot"))))
 ~~~

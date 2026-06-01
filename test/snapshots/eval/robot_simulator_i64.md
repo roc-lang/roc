@@ -26,63 +26,9 @@ expect retreat_x({ x: 0, y: 0 }) == { x: -1, y: 0 }
 expect advance_y(retreat_y({ x: 5, y: 5 })) == { x: 5, y: 5 }
 ~~~
 # EXPECTED
-INFINITE TYPE - robot_simulator_i64.md:4:1:4:48
-INFINITE TYPE - robot_simulator_i64.md:7:1:7:48
-INFINITE TYPE - robot_simulator_i64.md:10:1:10:48
-INFINITE TYPE - robot_simulator_i64.md:13:1:13:48
+NIL
 # PROBLEMS
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**robot_simulator_i64.md:4:1:4:48:**
-```roc
-advance_y = |robot| { ..robot, y: robot.y + 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**robot_simulator_i64.md:7:1:7:48:**
-```roc
-retreat_y = |robot| { ..robot, y: robot.y - 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**robot_simulator_i64.md:10:1:10:48:**
-```roc
-advance_x = |robot| { ..robot, x: robot.x + 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**robot_simulator_i64.md:13:1:13:48:**
-```roc
-retreat_x = |robot| { ..robot, x: robot.x - 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -369,7 +315,8 @@ NO CHANGE
 		(e-structural-eq (negated "false")
 			(lhs
 				(e-call (constraint-fn-var 845)
-					(e-runtime-error (tag "erroneous_value_use"))
+					(e-lookup-local
+						(p-assign (ident "advance_y")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -386,8 +333,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1262)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 1261)
+					(e-lookup-local
+						(p-assign (ident "retreat_y")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -404,8 +352,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1679)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 1677)
+					(e-lookup-local
+						(p-assign (ident "advance_x")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -422,8 +371,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2096)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 2093)
+					(e-lookup-local
+						(p-assign (ident "retreat_x")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -438,12 +388,14 @@ NO CHANGE
 						(field (name "y")
 							(e-num (value "0"))))))))
 	(s-expect
-		(e-method-eq (negated "false")
+		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 2514)
-					(e-runtime-error (tag "erroneous_value_use"))
-					(e-call (constraint-fn-var 2513)
-						(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 2650)
+					(e-lookup-local
+						(p-assign (ident "advance_y")))
+					(e-call (constraint-fn-var 2509)
+						(e-lookup-local
+							(p-assign (ident "retreat_y")))
 						(e-record
 							(fields
 								(field (name "x")
@@ -462,16 +414,16 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Robot -> Robot"))
+		(patt (type "Robot -> Robot"))
+		(patt (type "Robot -> Robot"))
+		(patt (type "Robot -> Robot")))
 	(type_decls
 		(alias (type "Robot")
 			(ty-header (name "Robot"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "Robot -> Robot"))
+		(expr (type "Robot -> Robot"))
+		(expr (type "Robot -> Robot"))
+		(expr (type "Robot -> Robot"))))
 ~~~

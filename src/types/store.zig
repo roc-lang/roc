@@ -355,6 +355,17 @@ pub const Store = struct {
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
         // Self-redirects cause infinite loops in resolveVar
         std.debug.assert(target_var != redirect_to);
+        if (std.debug.runtime_safety) {
+            // Redirecting a root var into a transparent alias whose backing resolves
+            // back to that same root creates a self-referential (infinite) alias.
+            // Recursive transparent aliases are illegal, so this is always a bug;
+            // catch it loudly rather than silently producing an INFINITE TYPE later.
+            const redirect_resolved = self.resolveVar(redirect_to);
+            if (redirect_resolved.desc.content == .alias) {
+                const backing_root = self.resolveVar(self.getAliasBackingVar(redirect_resolved.desc.content.alias)).var_;
+                std.debug.assert(backing_root != target_var);
+            }
+        }
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
     }

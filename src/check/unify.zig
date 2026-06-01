@@ -541,6 +541,14 @@ const Unifier = struct {
                 // want to preserve the alias for display while ensuring the
                 // types are compatible.
 
+                // If the concrete structure var IS the alias's own backing var, the
+                // two are already transparently equal. Running the redirect dance below
+                // would point the backing var at a fresh alias whose backing is that
+                // same var, producing a self-referential (infinite) type. Since
+                // recursive transparent aliases are illegal, this only ever arises as
+                // an artifact, so there is nothing to unify.
+                if (self.types_store.checkVarsEquiv(vars.b.var_, backing_var) == .equiv) return;
+
                 // First, we unify the concrete var with the alias backing var
                 // IMPORTANT: The arg order here is important! Unifying
                 // updates the second var to hold the type, and the first
@@ -639,6 +647,14 @@ const Unifier = struct {
                 // types are compatible.
 
                 const backing_var = self.types_store.getAliasBackingVar(b_alias);
+
+                // If the concrete structure var IS the alias's own backing var, the
+                // two are already transparently equal. Running the redirect dance below
+                // would point the backing var at a fresh alias whose backing is that
+                // same var, producing a self-referential (infinite) type. Since
+                // recursive transparent aliases are illegal, this only ever arises as
+                // an artifact, so there is nothing to unify.
+                if (self.types_store.checkVarsEquiv(vars.a.var_, backing_var) == .equiv) return;
 
                 // First, we unify the concrete var with the alias backing var
                 // IMPORTANT: The arg order here is important! Unifying
