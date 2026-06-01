@@ -300,13 +300,6 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 var roc_binary_path: []const u8 = "";
 var project_root_path: []const u8 = "";
 
-fn currentProcessIdForFilename() u64 {
-    if (comptime builtin.os.tag == .windows) {
-        return std.os.windows.GetCurrentProcessId();
-    }
-    return @intCast(std.c.getpid());
-}
-
 fn deleteIfExists(path: []const u8) !void {
     std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch |err| switch (err) {
         error.FileNotFound => {},
@@ -326,10 +319,6 @@ fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) !void {
         defer allocator.free(pdb_name);
         try deleteIfExists(pdb_name);
     }
-}
-
-fn cleanupOutputArtifacts(allocator: Allocator, output_name: []const u8) void {
-    deleteOutputArtifacts(allocator, output_name) catch {};
 }
 
 fn absoluteFromProjectRoot(allocator: Allocator, path: []const u8) ![]u8 {
