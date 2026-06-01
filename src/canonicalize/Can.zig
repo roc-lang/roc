@@ -5182,7 +5182,15 @@ pub fn canonicalizeExpr(
                         const module_name = if (module_info) |info| info.module_name else {
                             // Not a module alias and not an auto-imported module
                             // Check if the qualifier is a type - if so, try to lookup associated items
-                            const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
+                            const local_type_binding = self.scopeLookupTypeBinding(module_alias);
+                            const local_associated_owner_scope_idx: ?usize = if (local_type_binding) |binding_location|
+                                switch (binding_location.binding.*) {
+                                    .local_nominal, .local_alias, .associated_nominal => binding_location.scope_index,
+                                    .external_nominal => null,
+                                }
+                            else
+                                null;
+                            const is_type_in_scope = local_type_binding != null;
                             const is_auto_imported_type = self.hasAvailableModuleEnv(module_alias);
 
                             if (is_type_in_scope or is_auto_imported_type) {
@@ -5251,8 +5259,9 @@ pub fn canonicalizeExpr(
                                         // sibling's def picks up this same pattern when it
                                         // arrives. The enclosing scope reports any
                                         // forward reference that never gets filled.
-                                        if (self.scopes.items.len > 0) {
-                                            const owner_scope = &self.scopes.items[0];
+                                        if (local_associated_owner_scope_idx) |owner_scope_idx| {
+                                            std.debug.assert(owner_scope_idx < self.scopes.items.len);
+                                            const owner_scope = &self.scopes.items[owner_scope_idx];
                                             const gop = try owner_scope.forward_references.getOrPut(self.env.gpa, type_qualified_idx);
                                             const ref_pattern_idx = if (gop.found_existing) blk_fr: {
                                                 try gop.value_ptr.reference_regions.append(self.env.gpa, region);
