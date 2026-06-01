@@ -15,6 +15,7 @@ const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
 
+const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("Builder.zig");
 
 const Allocator = std.mem.Allocator;
@@ -453,7 +454,13 @@ pub const MonoLlvmCodeGen = struct {
         };
         if (environ.getAlloc(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.Options.debug_io, std.Io.Dir.cwd(), keep_path) catch return error.CompilationFailed;
+            // Render the IR into a buffer and write it through the CoreCtx
+            // filesystem abstraction rather than reaching into the cwd directory
+            // handle directly, keeping compiler-core decoupled from the OS I/O layer.
+            var ir_text: std.Io.Writer.Allocating = .init(self.allocator);
+            defer ir_text.deinit();
+            builder.print(&ir_text.writer) catch return error.CompilationFailed;
+            CoreCtx.writeFileCwd(std.Options.debug_io, keep_path, ir_text.written()) catch return error.CompilationFailed;
         } else |_| {}
         return builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
     }

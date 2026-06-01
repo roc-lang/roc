@@ -15,7 +15,6 @@ const ValueAbbrev = AbbrevOp{ .vbr = 6 };
 const ValueArrayAbbrev = AbbrevOp{ .array_vbr = 6 };
 
 const ConstantAbbrev = AbbrevOp{ .vbr = 6 };
-const ConstantArrayAbbrev = AbbrevOp{ .array_vbr = 6 };
 
 const MetadataAbbrev = AbbrevOp{ .vbr = 16 };
 const MetadataArrayAbbrev = AbbrevOp{ .array_vbr = 16 };

@@ -494,6 +494,14 @@ const CheckTypeCheckerPatternsStep = struct {
     }
 };
 
+/// Header marker present in files vendored from the Zig compiler. Such files
+/// are exempt from Roc's architecture-style checks (the @enumFromInt(0) and
+/// unused-suppression bans below): their idioms — e.g. zero-valued enum
+/// constants like `AddrSpace = @enumFromInt(0)` and `_ =` suppressions in
+/// upstream TODO stubs — are correct at the source and rewriting them would
+/// only diverge from upstream. This mirrors how ci/tidy.zig skips crates/.
+const vendored_zig_marker = "Adapted from the Zig compiler";
+
 /// Build step that checks for @enumFromInt(0) usage in all .zig files.
 ///
 /// We forbid @enumFromInt(0) because it hides bugs and makes them harder to debug.
@@ -610,6 +618,11 @@ const CheckEnumFromIntZeroStep = struct {
 
             const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
+
+            // Vendored Zig-compiler files use upstream idioms this check would
+            // flag (e.g. zero-valued enum constants like `AddrSpace = @enumFromInt(0)`);
+            // exempt them, mirroring how ci/tidy.zig skips crates/.
+            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;
             var line_start: usize = 0;
@@ -739,6 +752,11 @@ const CheckUnusedSuppressionStep = struct {
 
             const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
+
+            // Vendored Zig-compiler files carry upstream idioms this check would
+            // flag (e.g. `_ =` suppressions in unimplemented TODO stubs whose
+            // signatures are fixed by their callers); exempt them.
+            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;
             var line_start: usize = 0;

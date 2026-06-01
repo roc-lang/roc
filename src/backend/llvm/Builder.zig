@@ -1760,13 +1760,6 @@ pub const FunctionAttributes = enum(u32) {
         fn getMap(self: *Wip, index: usize) ?*Map {
             return if (index >= self.maps.items.len) null else &self.maps.items[index];
         }
-
-        fn ensureTotalLength(self: *Wip, new_len: usize) Allocator.Error!void {
-            try self.maps.appendNTimes(
-                .{},
-                std.math.sub(usize, new_len, self.maps.items.len) catch return,
-            );
-        }
     };
 
     pub fn func(self: FunctionAttributes, builder: *const Builder) Attributes {
@@ -9135,7 +9128,7 @@ pub fn attrs(self: *Builder, attributes: []Attribute.Index) Allocator.Error!Attr
 pub fn fnAttrs(self: *Builder, fn_attributes: []const Attributes) Allocator.Error!FunctionAttributes {
     try self.function_attributes_set.ensureUnusedCapacity(self.gpa, 1);
     const function_attributes: FunctionAttributes = @enumFromInt(try self.attrGeneric(@ptrCast(
-        fn_attributes[0..if (std.mem.lastIndexOfNone(Attributes, fn_attributes, &.{.none})) |last|
+        fn_attributes[0..if (std.mem.findLastNone(Attributes, fn_attributes, &.{.none})) |last|
             last + 1
         else
             0],

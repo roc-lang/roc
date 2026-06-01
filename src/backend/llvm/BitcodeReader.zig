@@ -507,11 +507,6 @@ const Abbrev = struct {
             store.* = undefined;
         }
 
-        fn addAbbrev(store: *Store, allocator: std.mem.Allocator, abbrev: Abbrev) !void {
-            try store.ensureUnusedCapacity(allocator, 1);
-            store.addAbbrevAssumeCapacity(abbrev);
-        }
-
         fn addAbbrevAssumeCapacity(store: *Store, allocator: std.mem.Allocator, abbrev: Abbrev) !void {
             store.abbrevs.appendAssumeCapacity(.{
                 .operands = try allocator.dupe(Abbrev.Operand, abbrev.operands),
