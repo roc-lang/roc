@@ -57,7 +57,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-module-bundle" },
     .{ .name = "run-test-zig-module-unbundle" },
     .{ .name = "run-test-zig-module-base58" },
-    .{ .name = "run-test-zig-module-lsp", .skip_reason = "Skipped until #9514 is resolved" },
+    .{ .name = "run-test-zig-module-lsp" },
     .{ .name = "run-test-zig-module-backend" },
     .{ .name = "run-test-zig-module-lir_core" },
     .{ .name = "run-test-zig-module-postcheck" },
@@ -131,9 +131,8 @@ fn printRerunHint(result: CommandResult) void {
     std.debug.print("  Log: `{s}`\n", .{result.log_path});
 }
 
-fn heartbeatIntervalMs() u64 {
-    const raw_z = std.c.getenv(heartbeat_env) orelse return default_heartbeat_interval_ms;
-    const raw = std.mem.span(raw_z);
+fn heartbeatIntervalMs(env: *const std.process.Environ.Map) u64 {
+    const raw = env.get(heartbeat_env) orelse return default_heartbeat_interval_ms;
     if (raw.len == 0) return default_heartbeat_interval_ms;
     return std.fmt.parseInt(u64, raw, 10) catch |err| {
         std.debug.print("invalid {s}='{s}': {s}; using default {d}ms\n", .{ heartbeat_env, raw, @errorName(err), default_heartbeat_interval_ms });
@@ -218,13 +217,14 @@ fn runCommand(
     io: std.Io,
     argv: []const []const u8,
     log_path: []const u8,
+    heartbeat_interval_ms: u64,
 ) !CommandResult {
     const started = nowNs(io);
     var heartbeat = Heartbeat{
         .io = io,
         .argv = argv,
         .started = started,
-        .interval_ms = heartbeatIntervalMs(),
+        .interval_ms = heartbeat_interval_ms,
         .done = std.atomic.Value(bool).init(false),
         .printed = std.atomic.Value(bool).init(false),
     };
@@ -656,6 +656,7 @@ pub fn main(init: std.process.Init) !void {
     const raw_args = try init.minimal.args.toSlice(allocator);
     const args: []const []const u8 = @ptrCast(raw_args);
     const zig_exe = if (args.len >= 2) args[1] else "zig";
+    const heartbeat_interval_ms = heartbeatIntervalMs(init.environ_map);
 
     std.Io.Dir.cwd().deleteTree(io, out_dir) catch {};
     try std.Io.Dir.cwd().createDirPath(io, raw_dir);
@@ -666,7 +667,7 @@ pub fn main(init: std.process.Init) !void {
     const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null);
     const build_log = logs_dir ++ "/build-ci.txt";
     std.debug.print("Building CI steps ... ", .{});
-    const build_result = try runCommand(allocator, io, build_argv, build_log);
+    const build_result = try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms);
     if (build_result.heartbeat_printed) std.debug.print("Building CI steps ... ", .{});
     std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
 
@@ -691,7 +692,7 @@ pub fn main(init: std.process.Init) !void {
         var result = if (job.skip_reason) |reason|
             try skipCommand(io, argv, log_path, reason)
         else
-            try runCommand(allocator, io, argv, log_path);
+            try runCommand(allocator, io, argv, log_path, heartbeat_interval_ms);
         result.stats_path = if (job.skip_reason == null) stats_path else null;
         try results.append(allocator, result);
         if (result.heartbeat_printed) std.debug.print("Running `{s}` ... ", .{job.name});
