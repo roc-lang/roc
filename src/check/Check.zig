@@ -1904,10 +1904,11 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         //    on an expression whose OWN type is the bare-flex receiver.
         //
         // What remains — and is reported — is a real method dispatch
-        // (`method_call`/`where_clause`/`desugared_unaryop`, or a non-equality
+        // (`method_call`/`desugared_unaryop`, or a non-equality
         // `desugared_binop`) that requires a nominal owner the instantiation never
-        // supplied. `where_clause` is NOT excluded (unlike the def-site sweep), so a
-        // `where`-annotated helper called at an unpinnable type is caught.
+        // supplied. `where_clause` records an explicit polymorphic signature
+        // contract; if the instantiated body actually uses that contract, the use
+        // contributes a normal dispatch constraint that is reported here.
         const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
         var first_constraint: ?StaticDispatchConstraint = null;
         var skip_receiver = false;
@@ -1915,6 +1916,8 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             if (c.origin == .from_numeral) {
                 skip_receiver = true;
             } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
+                continue;
+            } else if (c.origin == .where_clause) {
                 continue;
             } else if (first_constraint == null) {
                 first_constraint = c;
