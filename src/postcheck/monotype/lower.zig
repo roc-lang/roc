@@ -348,6 +348,11 @@ const Builder = struct {
             if (moduleViewNameMatches(imported_view, origin_name)) return moduleDigestFromId(imported_view.key);
         }
 
+        for (self.modules.root.relation_modules) |relation| {
+            const relation_view = moduleView(relation);
+            if (moduleViewNameMatches(relation_view, origin_name)) return moduleDigestFromId(relation_view.key);
+        }
+
         Common.invariant("checked named type origin module was not available to Monotype lowering");
     }
 

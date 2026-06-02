@@ -51,6 +51,8 @@ cir: *ModuleEnv,
 regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
+/// Module envs whose public APIs are semantically visible through imported checked data.
+owner_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through direct imports.
 /// These are not lexically importable, and CIR import indexes never refer to
 /// this set. It exists only for owner lookups on copied imported types.
@@ -331,7 +333,7 @@ fn initAssumePrepared(
     regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
-    var owner_module_envs = try buildOwnerModuleEnvMap(gpa, imported_modules, owner_modules, builtin_ctx);
+    var owner_module_envs = try buildOwnerModuleEnvMap(gpa, imported_modules, owner_modules);
     errdefer owner_module_envs.deinit();
 
     var import_mapping = try createImportMapping(
@@ -348,6 +350,7 @@ fn initAssumePrepared(
         .types = types,
         .cir = cir,
         .imported_modules = imported_modules,
+        .owner_modules = owner_modules,
         .owner_module_envs = owner_module_envs,
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
@@ -402,19 +405,16 @@ fn buildOwnerModuleEnvMap(
     gpa: std.mem.Allocator,
     imported_modules: []const *const ModuleEnv,
     owner_modules: []const *const ModuleEnv,
-    builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!std.StringHashMap(*const ModuleEnv) {
     var map = std.StringHashMap(*const ModuleEnv).init(gpa);
     errdefer map.deinit();
 
-    if (builtin_ctx.builtin_module) |builtin_env| {
-        try putOwnerModuleEnvNames(&map, builtin_env);
-    }
-
     for (imported_modules) |imported_env| {
+        if (imported_env.module_role == .builtin) continue;
         try putOwnerModuleEnvNames(&map, imported_env);
     }
     for (owner_modules) |owner_env| {
+        if (owner_env.module_role == .builtin) continue;
         try putOwnerModuleEnvNames(&map, owner_env);
     }
 
@@ -1142,13 +1142,14 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominalWithSourceDecl(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         list_ident,
         backing_var,
         &type_args,
         self.builtinOriginModule(),
         self.sourceDeclForBuiltinNominal(.list),
         false, // List is nominal (not opaque)
+        true,
     );
 }
 
@@ -1263,13 +1264,14 @@ fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind, env: *Env) Allocator.
     // Number types have no type arguments
     const no_type_args: []const Var = &.{};
 
-    return try self.types.mkNominalWithSourceDecl(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         type_ident,
         backing_var,
         no_type_args,
         self.builtinOriginModule(),
         self.sourceDeclForBuiltinNominal(.{ .num = num_kind }),
         true, // Number types are opaque (defined with ::)
+        true,
     );
 }
 
@@ -1288,6 +1290,83 @@ fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumK
     if (type_name.eql(self.cir.idents.f64) or type_name.eql(self.cir.idents.f64_type)) return .f64;
     if (type_name.eql(self.cir.idents.dec) or type_name.eql(self.cir.idents.dec_type)) return .dec;
     return null;
+}
+
+fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u32) ?BuiltinNominalDecl {
+    if (source_env.module_role != .builtin) return null;
+    const raw_decl = source_decl orelse return null;
+    if (raw_decl >= source_env.store.nodes.len()) return null;
+
+    const node: CIR.Node.Idx = @enumFromInt(raw_decl);
+    switch (source_env.store.nodes.get(node).tag) {
+        .statement_alias_decl, .statement_nominal_decl => {},
+        else => return null,
+    }
+    const statement_idx: CIR.Statement.Idx = @enumFromInt(raw_decl);
+    const header_idx = switch (source_env.store.getStatement(statement_idx)) {
+        .s_alias_decl => |alias| alias.header,
+        .s_nominal_decl => |nominal| nominal.header,
+        else => return null,
+    };
+    const header = source_env.store.getTypeHeader(header_idx);
+    return builtinNominalDeclForIdentInEnv(source_env, header.name);
+}
+
+fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ident.Idx) ?BuiltinNominalDecl {
+    const common = source_env.idents;
+    if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
+    if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
+    if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
+    if (type_ident.eql(common.builtin_numeral)) return .numeral;
+    if (type_ident.eql(common.u8) or type_ident.eql(common.u8_type)) return .{ .num = .u8 };
+    if (type_ident.eql(common.i8) or type_ident.eql(common.i8_type)) return .{ .num = .i8 };
+    if (type_ident.eql(common.u16) or type_ident.eql(common.u16_type)) return .{ .num = .u16 };
+    if (type_ident.eql(common.i16) or type_ident.eql(common.i16_type)) return .{ .num = .i16 };
+    if (type_ident.eql(common.u32) or type_ident.eql(common.u32_type)) return .{ .num = .u32 };
+    if (type_ident.eql(common.i32) or type_ident.eql(common.i32_type)) return .{ .num = .i32 };
+    if (type_ident.eql(common.u64) or type_ident.eql(common.u64_type)) return .{ .num = .u64 };
+    if (type_ident.eql(common.i64) or type_ident.eql(common.i64_type)) return .{ .num = .i64 };
+    if (type_ident.eql(common.u128) or type_ident.eql(common.u128_type)) return .{ .num = .u128 };
+    if (type_ident.eql(common.i128) or type_ident.eql(common.i128_type)) return .{ .num = .i128 };
+    if (type_ident.eql(common.f32) or type_ident.eql(common.f32_type)) return .{ .num = .f32 };
+    if (type_ident.eql(common.f64) or type_ident.eql(common.f64_type)) return .{ .num = .f64 };
+    if (type_ident.eql(common.dec) or type_ident.eql(common.dec_type)) return .{ .num = .dec };
+    return null;
+}
+
+fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) ?BuiltinNominalDecl {
+    const raw_decl = source_decl orelse return null;
+
+    if (self.cir.module_role == .builtin) {
+        return builtinNominalDeclForSourceDecl(self.cir, raw_decl);
+    }
+
+    const indices = self.builtin_ctx.builtin_indices orelse return null;
+    if (raw_decl == @intFromEnum(indices.list_type)) return .list;
+    if (raw_decl == @intFromEnum(indices.box_type)) return .box;
+    if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
+    if (raw_decl == @intFromEnum(indices.numeral_type)) return .numeral;
+    if (raw_decl == @intFromEnum(indices.u8_type)) return .{ .num = .u8 };
+    if (raw_decl == @intFromEnum(indices.i8_type)) return .{ .num = .i8 };
+    if (raw_decl == @intFromEnum(indices.u16_type)) return .{ .num = .u16 };
+    if (raw_decl == @intFromEnum(indices.i16_type)) return .{ .num = .i16 };
+    if (raw_decl == @intFromEnum(indices.u32_type)) return .{ .num = .u32 };
+    if (raw_decl == @intFromEnum(indices.i32_type)) return .{ .num = .i32 };
+    if (raw_decl == @intFromEnum(indices.u64_type)) return .{ .num = .u64 };
+    if (raw_decl == @intFromEnum(indices.i64_type)) return .{ .num = .i64 };
+    if (raw_decl == @intFromEnum(indices.u128_type)) return .{ .num = .u128 };
+    if (raw_decl == @intFromEnum(indices.i128_type)) return .{ .num = .i128 };
+    if (raw_decl == @intFromEnum(indices.f32_type)) return .{ .num = .f32 };
+    if (raw_decl == @intFromEnum(indices.f64_type)) return .{ .num = .f64 };
+    if (raw_decl == @intFromEnum(indices.dec_type)) return .{ .num = .dec };
+    return null;
+}
+
+fn builtinNumKindFromBuiltinSourceDecl(self: *const Self, source_decl: ?u32) ?CIR.NumKind {
+    return switch (self.builtinNominalDeclForBuiltinSourceDecl(source_decl) orelse return null) {
+        .num => |num_kind| num_kind,
+        else => null,
+    };
 }
 
 fn mkBuiltinNumberTypeContentFromKind(
@@ -1577,13 +1656,14 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const backing_var = elem_var;
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominalWithSourceDecl(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         box_ident,
         backing_var,
         &type_args,
         self.builtinOriginModule(),
         self.sourceDeclForBuiltinNominal(.box),
         false, // Box is nominal (not opaque)
+        true,
     );
 }
 
@@ -1610,13 +1690,14 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
 
     const type_args = [_]Var{ ok_var, err_var };
 
-    return try self.types.mkNominalWithSourceDecl(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         try_ident,
         backing_var,
         &type_args,
         self.builtinOriginModule(),
         self.sourceDeclForBuiltinNominal(.try_type),
         false, // Try is nominal (not opaque)
+        true,
     );
 }
 
@@ -1655,13 +1736,14 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const backing_content = try self.types.mkTagUnion(&.{literal_tag}, union_ext);
     const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
 
-    return try self.types.mkNominalWithSourceDecl(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         numeral_ident,
         backing_var,
         &.{}, // No type args
         self.builtinOriginModule(),
         self.sourceDeclForBuiltinNominal(.numeral),
         false, // Numeral is transparent so custom from_numeral methods can inspect it.
+        true,
     );
 }
 
@@ -3032,10 +3114,7 @@ fn generateStmtTypeDeclType(
 }
 
 fn aliasOriginModule(self: *const Self) Ident.Idx {
-    return if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name;
+    return self.builtin_ctx.module_name;
 }
 
 fn predeclareAliasDecl(
@@ -3051,12 +3130,13 @@ fn predeclareAliasDecl(
 
     try self.unifyWithTargetRank(
         decl_var,
-        try self.types.mkAliasWithSourceDecl(
+        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
             self.aliasOriginModule(),
             @intFromEnum(decl_var),
+            self.cir.module_role == .builtin,
         ),
         env,
     );
@@ -3075,13 +3155,14 @@ fn predeclareNominalDecl(
 
     try self.unifyWithTargetRank(
         decl_var,
-        try self.types.mkNominalWithSourceDecl(
+        try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
             self.builtin_ctx.module_name,
             @intFromEnum(decl_var),
             nominal.is_opaque,
+            self.cir.module_role == .builtin,
         ),
         env,
     );
@@ -3120,12 +3201,13 @@ fn generateAliasDecl(
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
-            try self.types.mkAliasWithSourceDecl(
+            try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
                 .{ .ident_idx = header.relative_name },
                 ModuleEnv.varFrom(alias.anno),
                 header_vars,
                 self.aliasOriginModule(),
                 @intFromEnum(decl_idx),
+                self.cir.module_role == .builtin,
             ),
             env,
         );
@@ -3180,13 +3262,14 @@ fn generateNominalDecl(
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
-            try self.types.mkNominalWithSourceDecl(
+            try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
                 .{ .ident_idx = header.relative_name },
                 ModuleEnv.varFrom(nominal.anno),
                 header_vars,
                 self.builtin_ctx.module_name,
                 @intFromEnum(decl_idx),
                 nominal.is_opaque,
+                self.cir.module_role == .builtin,
             ),
             env,
         );
@@ -3503,13 +3586,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     },
                                     .nominal => {
                                         // Nominal types can be recursive
-                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDecl(
+                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             &.{},
                                             self.builtin_ctx.module_name,
                                             @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
+                                            self.cir.module_role == .builtin,
                                         ), env);
                                     },
                                 }
@@ -3604,13 +3688,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     },
                                     .nominal => {
                                         // Nominal types can be recursive
-                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDecl(
+                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             anno_arg_vars,
                                             self.builtin_ctx.module_name,
                                             @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
+                                            self.cir.module_role == .builtin,
                                         ), env);
                                     },
                                 }
@@ -6627,7 +6712,11 @@ fn toInspectMethodVarForNominal(
     env: *Env,
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
-    const original_env, const is_this_module = try self.methodOwnerEnv(nominal.origin_module);
+    const original_env, const is_this_module = try self.methodOwnerEnv(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+    );
     const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
         nominal.sourceDeclOptional(),
@@ -6642,7 +6731,11 @@ fn toInspectMethodVarForAlias(
     env: *Env,
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
-    const original_env, const is_this_module = try self.methodOwnerEnv(alias.origin_module);
+    const original_env, const is_this_module = try self.methodOwnerEnv(
+        alias.origin_module,
+        alias.source_decl.toOptional(),
+        alias.source_decl.originIsBuiltin(),
+    );
     const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
         alias.source_decl.toOptional(),
         self.cir,
@@ -6651,26 +6744,178 @@ fn toInspectMethodVarForAlias(
     return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, alias.ident.ident_idx, env, region);
 }
 
-fn methodOwnerEnv(self: *Self, origin_module: Ident.Idx) Allocator.Error!struct { *const ModuleEnv, bool } {
-    return self.ownerEnvForOriginModule(origin_module, "to_inspect");
+fn methodOwnerEnv(
+    self: *Self,
+    origin_module: Ident.Idx,
+    source_decl: ?u32,
+    origin_is_builtin: bool,
+) Allocator.Error!struct { *const ModuleEnv, bool } {
+    return self.ownerEnvForOriginModule(origin_module, source_decl, origin_is_builtin, "to_inspect");
 }
 
-fn ownerEnvForOriginModule(self: *Self, origin_module: Ident.Idx, context: []const u8) struct { *const ModuleEnv, bool } {
-    if (origin_module.eql(self.builtin_ctx.module_name)) return .{ self.cir, true };
-    if (origin_module.eql(self.cir.idents.builtin_module)) {
-        return .{ self.builtin_ctx.builtin_module orelse self.cir, self.builtin_ctx.builtin_module == null };
+const OwnerEnvCandidate = struct {
+    env: *const ModuleEnv,
+    is_this_module: bool,
+};
+
+fn ownerEnvForOriginModule(
+    self: *const Self,
+    origin_module: Ident.Idx,
+    source_decl: ?u32,
+    origin_is_builtin: bool,
+    context: []const u8,
+) struct { *const ModuleEnv, bool } {
+    if (origin_is_builtin) {
+        return self.builtinOwnerEnvForSourceDecl(source_decl, context);
     }
-    if (self.owner_module_envs.get(self.cir.getIdent(origin_module))) |owner_env| {
+
+    const origin_text = self.cir.getIdent(origin_module);
+    const owner_source_decl = nonBuiltinOwnerSourceDecl(source_decl, context, origin_text);
+
+    var found: ?OwnerEnvCandidate = null;
+    considerOwnerEnvCandidate(&found, self.cir, true, origin_text, owner_source_decl, context);
+    for (self.imported_modules) |imported_env| {
+        if (imported_env.module_role == .builtin) continue;
+        considerOwnerEnvCandidate(&found, imported_env, false, origin_text, owner_source_decl, context);
+    }
+    for (self.owner_modules) |owner_env| {
+        if (owner_env.module_role == .builtin) continue;
+        considerOwnerEnvCandidate(&found, owner_env, false, origin_text, owner_source_decl, context);
+    }
+
+    if (found) |owner| return .{ owner.env, owner.is_this_module };
+
+    if (self.owner_module_envs.get(origin_text)) |owner_env| {
+        if (!ownerModuleEnvSourceDeclMatches(owner_env, owner_source_decl)) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "type checker invariant violated: {s} owner {s} resolved by name to an environment without source_decl={d}",
+                    .{ context, origin_text, owner_source_decl },
+                );
+            }
+            unreachable;
+        }
         return .{ owner_env, false };
     }
 
     if (builtin.mode == .Debug) {
         std.debug.panic(
-            "type checker invariant violated: unable to find module environment for {s} owner from module {s}",
-            .{ context, self.cir.getIdent(origin_module) },
+            "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
+            .{ context, origin_text, owner_source_decl, origin_is_builtin },
         );
     }
     unreachable;
+}
+
+fn nonBuiltinOwnerSourceDecl(source_decl: ?u32, context: []const u8, origin_text: []const u8) u32 {
+    if (source_decl) |raw_decl| return raw_decl;
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "type checker invariant violated: {s} owner {s} has no source declaration",
+            .{ context, origin_text },
+        );
+    }
+    unreachable;
+}
+
+fn builtinOwnerEnvForSourceDecl(
+    self: *const Self,
+    source_decl: ?u32,
+    context: []const u8,
+) struct { *const ModuleEnv, bool } {
+    if (source_decl == null) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "type checker invariant violated: {s} compiler-builtin owner has no source declaration",
+                .{context},
+            );
+        }
+        unreachable;
+    }
+
+    if (self.maybeBuiltinOwnerEnvForSourceDecl(source_decl.?)) |owner| return .{ owner.env, owner.is_this_module };
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "type checker invariant violated: unable to find compiler-builtin module environment for {s} owner",
+            .{context},
+        );
+    }
+    unreachable;
+}
+
+fn maybeBuiltinOwnerEnvForSourceDecl(
+    self: *const Self,
+    source_decl: u32,
+) ?OwnerEnvCandidate {
+    if (self.cir.module_role == .builtin and ownerModuleEnvSourceDeclMatches(self.cir, source_decl)) {
+        return .{ .env = self.cir, .is_this_module = true };
+    }
+
+    if (self.builtin_ctx.builtin_module) |builtin_env| {
+        if (ownerModuleEnvSourceDeclMatches(builtin_env, source_decl)) return .{ .env = builtin_env, .is_this_module = false };
+    }
+
+    for (self.imported_modules) |imported_env| {
+        if (imported_env.module_role != .builtin) continue;
+        if (ownerModuleEnvSourceDeclMatches(imported_env, source_decl)) return .{ .env = imported_env, .is_this_module = false };
+    }
+    for (self.owner_modules) |owner_env| {
+        if (owner_env.module_role != .builtin) continue;
+        if (ownerModuleEnvSourceDeclMatches(owner_env, source_decl)) return .{ .env = owner_env, .is_this_module = false };
+    }
+
+    return null;
+}
+
+fn considerOwnerEnvCandidate(
+    found: *?OwnerEnvCandidate,
+    candidate: *const ModuleEnv,
+    is_this_module: bool,
+    origin_text: []const u8,
+    source_decl: u32,
+    context: []const u8,
+) void {
+    if (!ownerModuleEnvNameMatches(candidate, origin_text)) return;
+    if (!ownerModuleEnvSourceDeclMatches(candidate, source_decl)) return;
+
+    if (found.*) |existing| {
+        if (existing.env == candidate) return;
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "type checker invariant violated: {s} owner {s} resolves to multiple module environments",
+                .{ context, origin_text },
+            );
+        }
+        unreachable;
+    }
+
+    found.* = .{ .env = candidate, .is_this_module = is_this_module };
+}
+
+fn ownerModuleEnvNameMatches(candidate: *const ModuleEnv, origin_text: []const u8) bool {
+    if (!candidate.qualified_module_ident.isNone() and
+        Ident.textEql(candidate.getIdent(candidate.qualified_module_ident), origin_text))
+    {
+        return true;
+    }
+    if (!candidate.display_module_name_idx.isNone() and
+        Ident.textEql(candidate.getIdent(candidate.display_module_name_idx), origin_text))
+    {
+        return true;
+    }
+    return candidate.module_name.len > 0 and Ident.textEql(candidate.module_name, origin_text);
+}
+
+fn ownerModuleEnvSourceDeclMatches(candidate: *const ModuleEnv, source_decl: u32) bool {
+    if (source_decl >= candidate.store.nodes.len()) return false;
+
+    const node: CIR.Node.Idx = @enumFromInt(source_decl);
+    switch (candidate.store.nodes.get(node).tag) {
+        .statement_alias_decl, .statement_nominal_decl => {},
+        else => return false,
+    }
+    return true;
 }
 
 fn methodVarFromOriginalEnv(
@@ -7902,7 +8147,12 @@ fn reportMissingNominalMethodForBinopConstraint(
 }
 
 fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const ModuleEnv {
-    const original_env, _ = self.ownerEnvForOriginModule(nominal_type.origin_module, "nominal type");
+    const original_env, _ = self.ownerEnvForOriginModule(
+        nominal_type.origin_module,
+        nominal_type.sourceDeclOptional(),
+        nominal_type.originIsBuiltin(),
+        "nominal type",
+    );
     return original_env;
 }
 
@@ -8746,7 +8996,12 @@ fn staticDispatchConstraintAcceptsCandidate(
 ) Allocator.Error!bool {
     const candidate_resolved = self.types.resolveVar(candidate_var);
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
-    const original_env = self.getNominalOriginEnv(nominal_type);
+    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal_type.origin_module,
+        nominal_type.sourceDeclOptional(),
+        nominal_type.originIsBuiltin(),
+        "static dispatch candidate",
+    );
 
     const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
@@ -8755,7 +9010,7 @@ fn staticDispatchConstraintAcceptsCandidate(
     ) orelse return false;
     const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
 
-    const method_var = if (nominal_type.origin_module.eql(self.builtin_ctx.module_name)) blk: {
+    const method_var = if (is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
         }
@@ -9056,7 +9311,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const original_module_ident = nominal_type.origin_module;
 
                 // Check if the nominal type in question is defined in this module
-                const original_env, const is_this_module = self.ownerEnvForOriginModule(original_module_ident, "static dispatch nominal");
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                    original_module_ident,
+                    nominal_type.sourceDeclOptional(),
+                    nominal_type.originIsBuiltin(),
+                    "static dispatch nominal",
+                );
 
                 // Get some data about the nominal type
                 const region = self.getRegionAt(deferred_constraint.var_);
@@ -9262,7 +9522,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                 // Get the module ident that this alias type was defined in
                 const original_module_ident = alias.origin_module;
-                const original_env, const is_this_module = self.ownerEnvForOriginModule(original_module_ident, "static dispatch alias");
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                    original_module_ident,
+                    alias.source_decl.toOptional(),
+                    alias.source_decl.originIsBuiltin(),
+                    "static dispatch alias",
+                );
 
                 const region = self.getRegionAt(deferred_constraint.var_);
                 const constraints_range = deferred_constraint.constraints;
@@ -9606,8 +9871,11 @@ fn typeSupportsIsEqInternal(
 }
 
 fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
-    return nominal_type.origin_module.eql(self.cir.idents.builtin_module) and
-        nominal_type.ident.ident_idx.eql(self.cir.idents.box);
+    if (!nominal_type.originIsBuiltin()) return false;
+    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
+        .box => true,
+        else => false,
+    };
 }
 
 fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
@@ -9694,8 +9962,8 @@ fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType)
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
-    if (!nominal_type.origin_module.eql(self.cir.idents.builtin_module)) return null;
-    return self.builtinNumKindFromTypeName(nominal_type.ident.ident_idx);
+    if (!nominal_type.originIsBuiltin()) return null;
+    return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
 }
 
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -9848,50 +10116,23 @@ fn validateFromNumeralLiteralForBuiltinNominal(
     env: *Env,
     is_numeric_default_pass: bool,
 ) Allocator.Error!bool {
-    return self.validateFromNumeralLiteralForBuiltinType(
-        dispatcher_var,
-        constraint,
-        nominal_type.origin_module,
-        nominal_type.ident.ident_idx,
-        env,
-        is_numeric_default_pass,
-    );
-}
-
-fn validateFromNumeralLiteralForBuiltinAlias(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    alias: types_mod.Alias,
-    env: *Env,
-    is_numeric_default_pass: bool,
-) Allocator.Error!bool {
-    return self.validateFromNumeralLiteralForBuiltinType(
-        dispatcher_var,
-        constraint,
-        alias.origin_module,
-        alias.ident.ident_idx,
-        env,
-        is_numeric_default_pass,
-    );
-}
-
-fn validateFromNumeralLiteralForBuiltinType(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    origin_module: Ident.Idx,
-    type_ident: Ident.Idx,
-    env: *Env,
-    is_numeric_default_pass: bool,
-) Allocator.Error!bool {
     if (constraint.origin != .from_numeral) return true;
-    if (!origin_module.eql(self.cir.idents.builtin_module)) return true;
-    const num_kind = self.builtinNumKindFromTypeName(type_ident) orelse return true;
+    const num_kind = self.builtinNumKindFromNominalType(nominal_type) orelse return true;
 
     if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) return true;
 
     return !try self.reportInvalidBuiltinFromNumeralLiteral(dispatcher_var, constraint, num_kind, env);
+}
+
+fn validateFromNumeralLiteralForBuiltinAlias(
+    _: *Self,
+    _: Var,
+    _: StaticDispatchConstraint,
+    _: types_mod.Alias,
+    _: *Env,
+    _: bool,
+) Allocator.Error!bool {
+    return true;
 }
 
 fn satisfyImplicitEqualityConstraint(

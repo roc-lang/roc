@@ -52,7 +52,6 @@ pub const ScopeKind = enum {
 pub const ForwardPolicy = enum {
     whole_scope,
     source_order,
-    function_only,
 };
 
 /// AST entity that owns a parser declaration scope.

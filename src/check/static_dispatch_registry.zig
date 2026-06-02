@@ -107,8 +107,16 @@ pub const MethodRegistry = struct {
     entries: []MethodRegistryEntry = &.{},
 
     pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
-        for (self.entries) |entry| {
-            if (methodKeyEql(entry.key, key)) return entry.target;
+        var low: usize = 0;
+        var high: usize = self.entries.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const entry = self.entries[mid];
+            switch (methodKeyOrder(entry.key, key)) {
+                .eq => return entry.target,
+                .lt => low = mid + 1,
+                .gt => high = mid,
+            }
         }
         return null;
     }
@@ -191,6 +199,8 @@ pub const MethodRegistry = struct {
                 },
             });
         }
+
+        finalizeMethodRegistryEntries(entries.items);
 
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
@@ -290,10 +300,7 @@ fn builtinOwnerForRegistryEntry(
 ) ?BuiltinOwner {
     const module_env = module.moduleEnvConst();
     const common = module_env.idents;
-    const module_ident = module.qualifiedModuleIdent();
-    const is_builtin_module = module_ident.eql(common.builtin_module) or
-        module.identStoreConst().idxTextEql(module_ident, common.builtin_module);
-    if (!is_builtin_module) return null;
+    if (module_env.module_role != .builtin) return null;
 
     const stmt = module_env.store.getStatement(owner_stmt);
     const type_ident = switch (stmt) {
@@ -323,27 +330,86 @@ fn builtinOwnerForRegistryEntry(
     return null;
 }
 
-fn methodKeyEql(a: MethodKey, b: MethodKey) bool {
-    return methodOwnerEql(a.owner, b.owner) and a.method == b.method;
+fn methodRegistryEntryLessThan(_: void, a: MethodRegistryEntry, b: MethodRegistryEntry) bool {
+    return methodKeyOrder(a.key, b.key) == .lt;
 }
 
-fn methodOwnerEql(a: MethodOwner, b: MethodOwner) bool {
+fn finalizeMethodRegistryEntries(entries: []MethodRegistryEntry) void {
+    std.mem.sort(MethodRegistryEntry, entries, {}, methodRegistryEntryLessThan);
+    assertMethodRegistryKeysUnique(entries);
+}
+
+fn assertMethodRegistryKeysUnique(entries: []const MethodRegistryEntry) void {
+    if (entries.len < 2) return;
+    var i: usize = 1;
+    while (i < entries.len) : (i += 1) {
+        if (methodKeyOrder(entries[i - 1].key, entries[i].key) != .eq) continue;
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch registry invariant violated: duplicate method registry key", .{});
+        }
+        unreachable;
+    }
+}
+
+fn methodKeyOrder(a: MethodKey, b: MethodKey) std.math.Order {
+    const owner_order = methodOwnerOrder(a.owner, b.owner);
+    if (owner_order != .eq) return owner_order;
+    return orderEnum(canonical.MethodNameId, a.method, b.method);
+}
+
+fn methodOwnerOrder(a: MethodOwner, b: MethodOwner) std.math.Order {
+    const a_tag = methodOwnerTagRank(a);
+    const b_tag = methodOwnerTagRank(b);
+    if (a_tag != b_tag) return orderU32(a_tag, b_tag);
+
     return switch (a) {
         .nominal => |a_nominal| switch (b) {
-            .nominal => |b_nominal| a_nominal.module_name == b_nominal.module_name and
-                a_nominal.type_name == b_nominal.type_name and
-                a_nominal.source_decl == b_nominal.source_decl,
-            else => false,
+            .nominal => |b_nominal| blk: {
+                const module_order = orderEnum(canonical.ModuleNameId, a_nominal.module_name, b_nominal.module_name);
+                if (module_order != .eq) break :blk module_order;
+                const type_order = orderEnum(canonical.TypeNameId, a_nominal.type_name, b_nominal.type_name);
+                if (type_order != .eq) break :blk type_order;
+                break :blk orderOptionalU32(a_nominal.source_decl, b_nominal.source_decl);
+            },
+            else => unreachable,
         },
         .source_decl => |a_decl| switch (b) {
-            .source_decl => |b_decl| a_decl.module_name == b_decl.module_name and a_decl.statement == b_decl.statement,
-            else => false,
+            .source_decl => |b_decl| blk: {
+                const module_order = orderEnum(canonical.ModuleNameId, a_decl.module_name, b_decl.module_name);
+                if (module_order != .eq) break :blk module_order;
+                break :blk orderU32(a_decl.statement, b_decl.statement);
+            },
+            else => unreachable,
         },
         .builtin => |a_builtin| switch (b) {
-            .builtin => |b_builtin| a_builtin == b_builtin,
-            else => false,
+            .builtin => |b_builtin| orderEnum(BuiltinOwner, a_builtin, b_builtin),
+            else => unreachable,
         },
     };
+}
+
+fn methodOwnerTagRank(owner: MethodOwner) u32 {
+    return switch (owner) {
+        .nominal => 0,
+        .source_decl => 1,
+        .builtin => 2,
+    };
+}
+
+fn orderOptionalU32(a: ?u32, b: ?u32) std.math.Order {
+    if (a) |a_value| {
+        return if (b) |b_value| orderU32(a_value, b_value) else .gt;
+    }
+    return if (b == null) .eq else .lt;
+}
+
+fn orderEnum(comptime T: type, a: T, b: T) std.math.Order {
+    return orderU32(@intFromEnum(a), @intFromEnum(b));
+}
+
+fn orderU32(a: u32, b: u32) std.math.Order {
+    if (a == b) return .eq;
+    return if (a < b) .lt else .gt;
 }
 
 /// Public `StaticDispatchResultMode` declaration.
@@ -445,6 +511,9 @@ pub const StaticDispatchPlanTable = struct {
         var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
         errdefer iterator_for_by_node.deinit(allocator);
 
+        var constraint_index = try StaticDispatchConstraintIndex.fromStore(allocator, module.typeStoreConst());
+        defer constraint_index.deinit(allocator);
+
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const tag = module.nodeTag(@enumFromInt(node_idx));
@@ -477,7 +546,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(dispatch_call.receiver)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
-                        .result_mode = staticDispatchResultModeForCheckedValueCall(module, dispatch_call.method_name, dispatch_call.constraint_fn_var),
+                        .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                 },
                 .e_type_dispatch_call => |dispatch_call| {
@@ -491,7 +560,7 @@ pub const StaticDispatchPlanTable = struct {
                         .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(alias_stmt.s_type_var_alias.type_var_anno)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
-                        .result_mode = staticDispatchResultModeForCheckedValueCall(module, dispatch_call.method_name, dispatch_call.constraint_fn_var),
+                        .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                 },
                 .e_method_eq => |eq| {
@@ -667,15 +736,51 @@ pub const StaticDispatchPlanTable = struct {
     }
 };
 
+const StaticDispatchConstraintIndex = struct {
+    constraints: []const types.StaticDispatchConstraint = &.{},
+    by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .{},
+
+    fn fromStore(allocator: Allocator, store: *const types.Store) Allocator.Error!StaticDispatchConstraintIndex {
+        var index = StaticDispatchConstraintIndex{
+            .constraints = store.static_dispatch_constraints.items.items,
+        };
+        errdefer index.deinit(allocator);
+
+        try index.by_fn_var.ensureTotalCapacity(allocator, @intCast(index.constraints.len));
+        for (index.constraints, 0..) |constraint, i| {
+            const entry = try index.by_fn_var.getOrPut(allocator, constraint.fn_var);
+            if (entry.found_existing) {
+                continue;
+            }
+            entry.value_ptr.* = @intCast(i);
+        }
+
+        return index;
+    }
+
+    fn lookup(self: *const StaticDispatchConstraintIndex, fn_var: Var) ?types.StaticDispatchConstraint {
+        const constraint_idx = self.by_fn_var.get(fn_var) orelse return null;
+        return self.constraints[constraint_idx];
+    }
+
+    fn deinit(self: *StaticDispatchConstraintIndex, allocator: Allocator) void {
+        self.by_fn_var.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 fn staticDispatchResultModeForCheckedValueCall(
+    allocator: Allocator,
     module: TypedCIR.Module,
+    checked_types: anytype,
+    constraint_index: *const StaticDispatchConstraintIndex,
     method_name: Ident.Idx,
     constraint_fn_var: Var,
-) StaticDispatchResultMode {
+) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
     if (!method_name.eql(common.is_eq)) return .value;
 
-    if (staticDispatchConstraintForFnVar(module, constraint_fn_var)) |constraint| {
+    if (constraint_index.lookup(constraint_fn_var)) |constraint| {
         if (constraint.origin == .desugared_binop) {
             return .{ .equality = .{
                 .structural_allowed = true,
@@ -684,7 +789,7 @@ fn staticDispatchResultModeForCheckedValueCall(
         }
     }
 
-    if (sourceCallableHasEqualityShape(module, constraint_fn_var)) {
+    if (try sourceCallableHasEqualityShape(allocator, module, checked_types, constraint_fn_var)) {
         return .{ .equality = .{
             .structural_allowed = true,
             .negated = false,
@@ -694,53 +799,34 @@ fn staticDispatchResultModeForCheckedValueCall(
     return .value;
 }
 
-fn staticDispatchConstraintForFnVar(
-    module: TypedCIR.Module,
-    fn_var: Var,
-) ?types.StaticDispatchConstraint {
-    const store = module.typeStoreConst();
-    for (store.static_dispatch_constraints.items.items) |constraint| {
-        if (constraint.fn_var == fn_var) return constraint;
-    }
-    return null;
-}
-
 fn sourceCallableHasEqualityShape(
+    allocator: Allocator,
     module: TypedCIR.Module,
+    checked_types: anytype,
     fn_var: Var,
-) bool {
+) Allocator.Error!bool {
     const store = module.typeStoreConst();
     const resolved = store.resolveVar(fn_var);
     const func = resolved.desc.content.unwrapFunc() orelse return false;
     const args = store.sliceVars(func.args);
     if (args.len != 2) return false;
     if (store.resolveVar(args[0]).var_ != store.resolveVar(args[1]).var_) return false;
-    return sourceVarIsBool(module, func.ret);
+    const ret_ty = try checkedTypeIdForVar(allocator, module, checked_types, func.ret);
+    return checkedTypeIsBuiltinBool(checked_types, ret_ty);
 }
 
-fn sourceVarIsBool(module: TypedCIR.Module, var_: Var) bool {
-    const store = module.typeStoreConst();
-    var current = var_;
-    while (true) {
-        const resolved = store.resolveVar(current);
-        switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| {
-                    const common = module.commonIdents();
-                    const builtin_origin = nominal.origin_module.eql(common.builtin_module) or
-                        module.identStoreConst().idxTextEql(nominal.origin_module, common.builtin_module);
-                    return builtin_origin and (nominal.ident.ident_idx.eql(common.bool) or
-                        nominal.ident.ident_idx.eql(common.bool_type));
-                },
-                else => return false,
-            },
-            .alias => |alias| current = store.getAliasBackingVar(alias),
-            .flex,
-            .rigid,
-            .err,
-            => return false,
+fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
+    const raw = @intFromEnum(ty);
+    if (raw >= checked_types.store.payloads.len) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
         }
+        unreachable;
     }
+    return switch (checked_types.store.payloads[raw]) {
+        .nominal => |nominal| if (nominal.builtin) |builtin_owner| builtin_owner == .bool else false,
+        else => false,
+    };
 }
 
 fn checkedTypeIdForVar(
@@ -805,4 +891,45 @@ fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedEx
 test "method registry can be empty" {
     var registry: MethodRegistry = .{};
     registry.deinit(std.testing.allocator);
+}
+
+test "method registry finalization sorts entries for binary lookup" {
+    const allocator = std.testing.allocator;
+
+    const entries = try allocator.alloc(MethodRegistryEntry, 3);
+    defer allocator.free(entries);
+
+    entries[0] = .{
+        .key = .{ .owner = .{ .builtin = .box }, .method = @enumFromInt(2) },
+        .target = testMethodTarget(@enumFromInt(20)),
+    };
+    entries[1] = .{
+        .key = .{ .owner = .{ .builtin = .list }, .method = @enumFromInt(1) },
+        .target = testMethodTarget(@enumFromInt(10)),
+    };
+    entries[2] = .{
+        .key = .{ .owner = .{ .builtin = .box }, .method = @enumFromInt(1) },
+        .target = testMethodTarget(@enumFromInt(15)),
+    };
+
+    finalizeMethodRegistryEntries(entries);
+
+    var registry = MethodRegistry{ .entries = entries };
+    const found = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @enumFromInt(1) }) orelse return error.MissingSortedMethodTarget;
+    try std.testing.expectEqual(@as(CIR.Def.Idx, @enumFromInt(15)), found.def_idx);
+    try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .list }, .method = @enumFromInt(2) }) == null);
+}
+
+fn testMethodTarget(def_idx: CIR.Def.Idx) MethodTarget {
+    return .{
+        .module_idx = 0,
+        .def_idx = def_idx,
+        .kind = .{
+            .local_proc = .{
+                .binder = undefined, // The lookup test only asserts def_idx; target kind is never read.
+                .expr = undefined, // The lookup test only asserts def_idx; target kind is never read.
+            },
+        },
+        .callable_ty = undefined, // The lookup test only asserts def_idx; callable type is never read.
+    };
 }

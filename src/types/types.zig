@@ -40,6 +40,31 @@ test {
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
+test "source declaration checked constructors enforce packed statement capacity" {
+    const max_alias_statement = SourceDecl.max_statement;
+    const max_alias_decl = try SourceDecl.fromStatementWithBuiltinOriginChecked(max_alias_statement, true);
+    try std.testing.expectEqual(@as(?u32, max_alias_statement), max_alias_decl.toOptional());
+    try std.testing.expect(max_alias_decl.originIsBuiltin());
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        SourceDecl.fromStatementWithBuiltinOriginChecked(max_alias_statement + 1, false),
+    );
+
+    const max_nominal_statement = NominalType.Source.max_statement;
+    const max_nominal_decl = try SourceDecl.fromStatementWithBuiltinOriginChecked(max_nominal_statement, true);
+    const max_nominal_source = try NominalType.Source.initChecked(max_nominal_decl, true, true);
+    try std.testing.expect(max_nominal_source.sourceDecl().eql(max_nominal_decl));
+    try std.testing.expect(max_nominal_source.isOpaque());
+    try std.testing.expect(max_nominal_source.originIsBuiltin());
+
+    const too_large_for_nominal = try SourceDecl.fromStatementChecked(max_nominal_statement + 1);
+    try std.testing.expectError(
+        error.OutOfMemory,
+        NominalType.Source.initChecked(too_large_for_nominal, false, false),
+    );
+}
+
 /// A type variable
 pub const Var = enum(u32) {
     _,
@@ -305,46 +330,87 @@ pub const TypeIdent = struct {
 
 /// Source statement identity for a local nominal/alias declaration.
 ///
-/// This is stored in hot type payloads, so it deliberately uses one u32 slot
-/// instead of Zig's larger `?u32` representation on 0.16.
+/// This is stored in hot type payloads, so it deliberately uses one u32 slot.
+/// Alias source identity stores a u30 statement plus presence and builtin-origin
+/// bits. Nominal source identity stores a u29 statement plus presence, opacity,
+/// and builtin-origin bits. Producer paths must use the checked constructors so
+/// oversized CIR statement ids return `error.OutOfMemory` before release builds
+/// can truncate packed fields.
 pub const SourceDecl = packed struct(u32) {
-    statement: u31,
+    statement: u30,
     present: bool,
+    builtin_origin: bool,
 
-    pub const none: SourceDecl = .{ .statement = 0, .present = false };
+    pub const max_statement: u32 = std.math.maxInt(u30);
+
+    pub const none: SourceDecl = .{ .statement = 0, .present = false, .builtin_origin = false };
 
     pub fn fromOptional(source_decl: ?u32) SourceDecl {
+        return fromOptionalWithBuiltinOrigin(source_decl, false);
+    }
+
+    pub fn fromOptionalChecked(source_decl: ?u32) std.mem.Allocator.Error!SourceDecl {
+        return fromOptionalWithBuiltinOriginChecked(source_decl, false);
+    }
+
+    pub fn fromOptionalWithBuiltinOrigin(source_decl: ?u32, builtin_origin: bool) SourceDecl {
         const statement = source_decl orelse return .none;
-        return fromStatement(statement);
+        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
+    }
+
+    pub fn fromOptionalWithBuiltinOriginChecked(source_decl: ?u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
+        const statement = source_decl orelse return .none;
+        return fromStatementWithBuiltinOriginChecked(statement, builtin_origin);
     }
 
     pub fn fromStatement(statement: u32) SourceDecl {
-        std.debug.assert(statement <= std.math.maxInt(u31));
-        return .{ .statement = @intCast(statement), .present = true };
+        return fromStatementWithBuiltinOrigin(statement, false);
+    }
+
+    pub fn fromStatementChecked(statement: u32) std.mem.Allocator.Error!SourceDecl {
+        return fromStatementWithBuiltinOriginChecked(statement, false);
+    }
+
+    pub fn fromStatementWithBuiltinOrigin(statement: u32, builtin_origin: bool) SourceDecl {
+        std.debug.assert(statement <= max_statement);
+        return .{ .statement = @intCast(statement), .present = true, .builtin_origin = builtin_origin };
+    }
+
+    pub fn fromStatementWithBuiltinOriginChecked(statement: u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
+        if (statement > max_statement) return error.OutOfMemory;
+        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
     }
 
     pub fn toOptional(self: SourceDecl) ?u32 {
         return if (self.present) self.statement else null;
     }
 
+    pub fn originIsBuiltin(self: SourceDecl) bool {
+        return self.present and self.builtin_origin;
+    }
+
     pub fn eql(self: SourceDecl, other: SourceDecl) bool {
         if (self.present != other.present) return false;
-        return !self.present or self.statement == other.statement;
+        return !self.present or (self.statement == other.statement and self.builtin_origin == other.builtin_origin);
     }
 };
 
 const NominalSource = packed struct(u32) {
-    statement: u30,
+    statement: u29,
     present: bool,
     is_opaque: bool,
+    builtin_origin: bool,
 
-    pub fn init(source_decl: SourceDecl, is_opaque: bool) NominalSource {
+    pub const max_statement: u32 = std.math.maxInt(u29);
+
+    pub fn init(source_decl: SourceDecl, is_opaque: bool, builtin_origin: bool) NominalSource {
         if (source_decl.toOptional()) |statement| {
-            std.debug.assert(statement <= std.math.maxInt(u30));
+            std.debug.assert(statement <= max_statement);
             return .{
                 .statement = @intCast(statement),
                 .present = true,
                 .is_opaque = is_opaque,
+                .builtin_origin = builtin_origin,
             };
         }
 
@@ -352,15 +418,28 @@ const NominalSource = packed struct(u32) {
             .statement = 0,
             .present = false,
             .is_opaque = is_opaque,
+            .builtin_origin = builtin_origin,
         };
     }
 
+    pub fn initChecked(source_decl: SourceDecl, is_opaque: bool, builtin_origin: bool) std.mem.Allocator.Error!NominalSource {
+        if (source_decl.toOptional()) |statement| {
+            if (statement > max_statement) return error.OutOfMemory;
+        }
+
+        return init(source_decl, is_opaque, builtin_origin);
+    }
+
     pub fn sourceDecl(self: NominalSource) SourceDecl {
-        return if (self.present) SourceDecl.fromStatement(self.statement) else .none;
+        return if (self.present) SourceDecl.fromStatementWithBuiltinOrigin(self.statement, self.builtin_origin) else .none;
     }
 
     pub fn isOpaque(self: NominalSource) bool {
         return self.is_opaque;
+    }
+
+    pub fn originIsBuiltin(self: NominalSource) bool {
+        return self.builtin_origin;
     }
 };
 
@@ -613,6 +692,10 @@ pub const NominalType = struct {
 
     pub fn isOpaque(self: NominalType) bool {
         return self.source.isOpaque();
+    }
+
+    pub fn originIsBuiltin(self: NominalType) bool {
+        return self.source.originIsBuiltin();
     }
 
     /// Checks if backing types can unify directly with this nominal type

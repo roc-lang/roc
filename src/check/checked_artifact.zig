@@ -1526,6 +1526,7 @@ pub const CheckedAliasType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
     source_decl: ?u32 = null,
+    builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: []const CheckedTypeId = &.{},
 };
@@ -2379,6 +2380,7 @@ pub const CheckedTypeStore = struct {
                 .name = alias.name,
                 .origin_module = alias.origin_module,
                 .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, alias.backing, formals, actuals, active),
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, alias.args, formals, actuals, active),
             } },
@@ -4086,6 +4088,7 @@ fn copyCheckedTypePayload(
             .name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx),
             .origin_module = try names.internModuleIdent(module.identStoreConst(), alias.origin_module),
             .source_decl = alias.source_decl.toOptional(),
+            .builtin_origin = alias.source_decl.originIsBuiltin(),
             .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getAliasBackingVar(alias)),
             .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceAliasArgs(alias)),
         } },
@@ -4153,7 +4156,7 @@ fn copyCheckedFlatType(
             .tuple = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceVars(tuple.elems)),
         },
         .nominal_type => |nominal| blk: {
-            const builtin_nominal = categorizeBuiltinNominal(module, nominal);
+            const builtin_nominal = categorizeBuiltinNominal(module, imports, nominal);
             break :blk .{ .nominal = .{
                 .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
                 .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
@@ -4296,34 +4299,237 @@ fn copyCheckedStaticDispatchConstraints(
     return out;
 }
 
-fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
-    const common = module.moduleEnvConst().idents;
-    const is_builtin_origin = checkedIdentTextEql(module, nominal.origin_module, common.builtin_module);
-    if (!is_builtin_origin) return null;
+fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews, nominal: types.NominalType) ?CheckedBuiltinNominal {
+    if (!nominal.originIsBuiltin()) return null;
 
-    const ident = nominal.ident.ident_idx;
-    if (checkedIdentTextEql(module, ident, common.bool) or checkedIdentTextEql(module, ident, common.bool_type)) return .bool;
-    if (checkedIdentTextEql(module, ident, common.str) or checkedIdentTextEql(module, ident, common.builtin_str)) return .str;
-    if (checkedIdentTextEql(module, ident, common.u8) or checkedIdentTextEql(module, ident, common.u8_type)) return .u8;
-    if (checkedIdentTextEql(module, ident, common.i8) or checkedIdentTextEql(module, ident, common.i8_type)) return .i8;
-    if (checkedIdentTextEql(module, ident, common.u16) or checkedIdentTextEql(module, ident, common.u16_type)) return .u16;
-    if (checkedIdentTextEql(module, ident, common.i16) or checkedIdentTextEql(module, ident, common.i16_type)) return .i16;
-    if (checkedIdentTextEql(module, ident, common.u32) or checkedIdentTextEql(module, ident, common.u32_type)) return .u32;
-    if (checkedIdentTextEql(module, ident, common.i32) or checkedIdentTextEql(module, ident, common.i32_type)) return .i32;
-    if (checkedIdentTextEql(module, ident, common.u64) or checkedIdentTextEql(module, ident, common.u64_type)) return .u64;
-    if (checkedIdentTextEql(module, ident, common.i64) or checkedIdentTextEql(module, ident, common.i64_type)) return .i64;
-    if (checkedIdentTextEql(module, ident, common.u128) or checkedIdentTextEql(module, ident, common.u128_type)) return .u128;
-    if (checkedIdentTextEql(module, ident, common.i128) or checkedIdentTextEql(module, ident, common.i128_type)) return .i128;
-    if (checkedIdentTextEql(module, ident, common.f32) or checkedIdentTextEql(module, ident, common.f32_type)) return .f32;
-    if (checkedIdentTextEql(module, ident, common.f64) or checkedIdentTextEql(module, ident, common.f64_type)) return .f64;
-    if (checkedIdentTextEql(module, ident, common.dec) or checkedIdentTextEql(module, ident, common.dec_type)) return .dec;
-    if (checkedIdentTextEql(module, ident, common.list)) return .list;
-    if (checkedIdentTextEql(module, ident, common.box)) return .box;
+    const source_decl = nominal.sourceDeclOptional() orelse return null;
+    const origin_text = module.getIdent(nominal.origin_module);
+    const module_env = module.moduleEnvConst();
+
+    if (module_env.module_role == .builtin and moduleEnvNameMatches(module_env, origin_text)) {
+        return checkedBuiltinNominalForSourceDecl(module_env, source_decl);
+    }
+    if (checkedBuiltinNominalForImportedSource(imports.direct, origin_text, source_decl)) |builtin_nominal| return builtin_nominal;
+    if (checkedBuiltinNominalForAvailableSource(imports.available, origin_text, source_decl)) |builtin_nominal| return builtin_nominal;
     return null;
 }
 
-fn checkedIdentTextEql(module: TypedCIR.Module, a: base.Ident.Idx, b: base.Ident.Idx) bool {
-    return a.eql(b) or module.identStoreConst().idxTextEql(a, b);
+fn checkedBuiltinNominalForImportedSource(
+    imports: []const PublishImportArtifact,
+    origin_text: []const u8,
+    source_decl: u32,
+) ?CheckedBuiltinNominal {
+    var found: ?CheckedBuiltinNominal = null;
+    for (imports) |import| {
+        if (checkedBuiltinNominalForView(import.view, origin_text, source_decl)) |builtin_nominal| {
+            if (found) |existing| {
+                if (existing != builtin_nominal) {
+                    checkedArtifactInvariant("checked builtin nominal source resolved to multiple builtin declarations", .{});
+                }
+            } else {
+                found = builtin_nominal;
+            }
+        }
+    }
+    return found;
+}
+
+fn checkedBuiltinNominalForAvailableSource(
+    views: []const ImportedModuleView,
+    origin_text: []const u8,
+    source_decl: u32,
+) ?CheckedBuiltinNominal {
+    var found: ?CheckedBuiltinNominal = null;
+    for (views) |view| {
+        if (checkedBuiltinNominalForView(view, origin_text, source_decl)) |builtin_nominal| {
+            if (found) |existing| {
+                if (existing != builtin_nominal) {
+                    checkedArtifactInvariant("checked builtin nominal source resolved to multiple builtin declarations", .{});
+                }
+            } else {
+                found = builtin_nominal;
+            }
+        }
+    }
+    return found;
+}
+
+fn checkedBuiltinNominalForView(view: ImportedModuleView, origin_text: []const u8, source_decl: u32) ?CheckedBuiltinNominal {
+    if (!importedViewModuleNameMatches(view, origin_text)) return null;
+    if (sourceDeclTypeIdent(view.module_env, source_decl) == null) return null;
+    if (view.module_env.module_role != .builtin) return null;
+    return checkedBuiltinNominalForSourceDecl(view.module_env, source_decl);
+}
+
+fn checkedBuiltinNominalForSourceDecl(module_env: *const ModuleEnv, source_decl: u32) ?CheckedBuiltinNominal {
+    if (module_env.module_role != .builtin) return null;
+    const type_ident = sourceDeclTypeIdent(module_env, source_decl) orelse return null;
+    return checkedBuiltinNominalForIdent(module_env, type_ident);
+}
+
+fn sourceDeclTypeIdent(module_env: *const ModuleEnv, source_decl: u32) ?base.Ident.Idx {
+    if (source_decl >= module_env.store.nodes.len()) return null;
+    const node: CIR.Node.Idx = @enumFromInt(source_decl);
+    switch (module_env.store.nodes.get(node).tag) {
+        .statement_alias_decl, .statement_nominal_decl => {},
+        else => return null,
+    }
+    const statement_idx: CIR.Statement.Idx = @enumFromInt(source_decl);
+    const header_idx = switch (module_env.store.getStatement(statement_idx)) {
+        .s_nominal_decl => |nominal| nominal.header,
+        .s_alias_decl => |alias| alias.header,
+        else => return null,
+    };
+    return module_env.store.getTypeHeader(header_idx).name;
+}
+
+fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident.Idx) ?CheckedBuiltinNominal {
+    const common = module_env.idents;
+    if (ident.eql(common.bool) or ident.eql(common.bool_type)) return .bool;
+    if (ident.eql(common.str) or ident.eql(common.builtin_str)) return .str;
+    if (ident.eql(common.u8) or ident.eql(common.u8_type)) return .u8;
+    if (ident.eql(common.i8) or ident.eql(common.i8_type)) return .i8;
+    if (ident.eql(common.u16) or ident.eql(common.u16_type)) return .u16;
+    if (ident.eql(common.i16) or ident.eql(common.i16_type)) return .i16;
+    if (ident.eql(common.u32) or ident.eql(common.u32_type)) return .u32;
+    if (ident.eql(common.i32) or ident.eql(common.i32_type)) return .i32;
+    if (ident.eql(common.u64) or ident.eql(common.u64_type)) return .u64;
+    if (ident.eql(common.i64) or ident.eql(common.i64_type)) return .i64;
+    if (ident.eql(common.u128) or ident.eql(common.u128_type)) return .u128;
+    if (ident.eql(common.i128) or ident.eql(common.i128_type)) return .i128;
+    if (ident.eql(common.f32) or ident.eql(common.f32_type)) return .f32;
+    if (ident.eql(common.f64) or ident.eql(common.f64_type)) return .f64;
+    if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
+    if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
+    if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
+    return null;
+}
+
+fn testTypeDeclSourceDeclForIdent(module_env: *const ModuleEnv, type_ident: base.Ident.Idx) !u32 {
+    for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        const source_decl = @intFromEnum(statement_idx);
+        const candidate = sourceDeclTypeIdent(module_env, source_decl) orelse continue;
+        if (candidate.eql(type_ident)) return source_decl;
+    }
+    return error.MissingTestTypeDecl;
+}
+
+test "checked artifact builtin nominal categorization requires explicit builtin origin" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", "x = 1");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+
+    const module = modules.module(0);
+    const builtin_env = test_env.builtin_module.env;
+    var builtin_names = canonical.CanonicalNameStore.init(allocator);
+    defer builtin_names.deinit();
+    try internLoweringVisibleNames(builtin_env, &builtin_names);
+
+    const builtin_module_name = try builtin_names.internModuleName(builtin_env.module_name);
+    const builtin_identity = ModuleIdentity{
+        .stable_hash = [_]u8{0} ** 32,
+        .module_idx = 1,
+        .module_name = builtin_module_name,
+        .display_module_name = builtin_module_name,
+        .qualified_module_name = builtin_module_name,
+        .kind = builtin_env.module_kind,
+    };
+
+    const empty_checked_const_bodies = CheckedConstBodyTable{};
+    const empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
+    const empty_compile_time_roots = CompileTimeRootTable{};
+    const empty_entry_wrappers = EntryWrapperTable{};
+    const empty_intrinsic_wrappers = IntrinsicWrapperTable{};
+    const empty_resolved_value_refs = ResolvedValueRefTable{};
+    const empty_nested_proc_sites = NestedProcSiteTable{};
+    const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
+    const empty_hosted_procs = HostedProcTable{};
+    const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
+    const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
+    const empty_exported_const_templates = ExportedConstTemplateTable{};
+    const empty_provided_exports = ProvidedExportTable{};
+    const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_bindings = PlatformRequiredBindingTable{};
+    const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_const_templates = ConstTemplateTable{};
+    const empty_method_registry = static_dispatch.MethodRegistry{};
+    const empty_interface_capabilities = ModuleInterfaceCapabilities{};
+    var empty_const_store = ConstStore.init(allocator);
+    defer empty_const_store.deinit();
+
+    const builtin_view = ImportedModuleView{
+        .key = .{},
+        .module_env = builtin_env,
+        .canonical_names = &builtin_names,
+        .module_identity = builtin_identity,
+        .exports = .{},
+        .checked_types = .{},
+        .checked_bodies = .{},
+        .checked_const_bodies = &empty_checked_const_bodies,
+        .checked_procedure_templates = &empty_checked_procedure_templates,
+        .compile_time_roots = &empty_compile_time_roots,
+        .entry_wrappers = &empty_entry_wrappers,
+        .intrinsic_wrappers = &empty_intrinsic_wrappers,
+        .resolved_value_refs = &empty_resolved_value_refs,
+        .nested_proc_sites = &empty_nested_proc_sites,
+        .static_dispatch_plans = &empty_static_dispatch_plans,
+        .hosted_procs = &empty_hosted_procs,
+        .exported_procedure_templates = empty_exported_procedure_templates.view(),
+        .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
+        .exported_const_templates = empty_exported_const_templates.view(),
+        .provided_exports = &empty_provided_exports,
+        .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_bindings = &empty_platform_required_bindings,
+        .callable_eval_templates = empty_callable_eval_templates.view(),
+        .const_templates = &empty_const_templates,
+        .method_registry = &empty_method_registry,
+        .interface_capabilities = &empty_interface_capabilities,
+        .const_store = &empty_const_store,
+    };
+    const imports = [_]PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = .{},
+        .view = builtin_view,
+    }};
+
+    const bool_source_decl = try testTypeDeclSourceDeclForIdent(builtin_env, builtin_env.idents.bool_type);
+    const nominal = types.NominalType{
+        .ident = .{ .ident_idx = module.commonIdents().bool_type },
+        .vars = undefined,
+        .origin_module = module.commonIdents().builtin_module,
+        .source = try types.NominalType.Source.initChecked(try types.types.SourceDecl.fromStatementChecked(bool_source_decl), false, false),
+    };
+
+    try testing.expect(categorizeBuiltinNominal(module, .{ .direct = &imports }, nominal) == null);
+}
+
+fn moduleEnvNameMatches(module_env: *const ModuleEnv, origin_text: []const u8) bool {
+    if (module_env.module_role == .builtin and
+        Ident.textEql(module_env.getIdent(module_env.idents.builtin_module), origin_text))
+    {
+        return true;
+    }
+    if (!module_env.qualified_module_ident.isNone() and
+        Ident.textEql(module_env.getIdent(module_env.qualified_module_ident), origin_text))
+    {
+        return true;
+    }
+    if (!module_env.display_module_name_idx.isNone() and
+        Ident.textEql(module_env.getIdent(module_env.display_module_name_idx), origin_text))
+    {
+        return true;
+    }
+    return module_env.module_name.len > 0 and Ident.textEql(module_env.module_name, origin_text);
 }
 
 fn checkedNominalRepresentationForSourceNominal(
@@ -10503,6 +10709,7 @@ const PlatformAppRelationTypeResolver = struct {
                     .name = alias.name,
                     .origin_module = alias.origin_module,
                     .source_decl = alias.source_decl,
+                    .builtin_origin = alias.builtin_origin,
                     .backing = backing,
                     .args = args,
                 } });
@@ -10568,6 +10775,7 @@ const PlatformAppRelationTypeResolver = struct {
             .name = platform_alias.name,
             .origin_module = platform_alias.origin_module,
             .source_decl = platform_alias.source_decl,
+            .builtin_origin = platform_alias.builtin_origin,
             .backing = backing,
             .args = args,
         } });
@@ -12604,11 +12812,11 @@ fn appendPublicApiModuleDependency(
 ) Allocator.Error!void {
     const origin_name = names.moduleNameText(origin_module);
     if (isSelfPublicApiModuleName(names, module_identity, origin_name)) return;
-    if (Ident.textEql(origin_name, "Builtin")) return;
 
     const view = publicApiDependencyViewByModuleName(origin_name, imports, available_artifacts) orelse {
         checkedArtifactInvariant("public API dependency scan could not find checked artifact for module {s}", .{origin_name});
     };
+    if (view.module_env.module_role == .builtin) return;
     try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
 }
 
@@ -14892,6 +15100,7 @@ pub const CheckedTypeProjector = struct {
                 .name = try self.remapViewTypeName(source_names, alias.name),
                 .origin_module = try self.remapViewModuleName(source_names, alias.origin_module),
                 .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, alias.backing, active),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, alias.args, active),
             } },
@@ -15235,6 +15444,7 @@ pub const CheckedTypeProjector = struct {
             .name = try self.remapTypeName(imported, alias.name),
             .origin_module = try self.remapModuleName(imported, alias.origin_module),
             .source_decl = alias.source_decl,
+            .builtin_origin = alias.builtin_origin,
             .backing = try self.projectImportedCheckedType(imported, alias.backing),
             .args = args,
         } };
@@ -15454,6 +15664,7 @@ const CheckedTypeStoreImportProjector = struct {
                 .name = try self.remapTypeName(alias.name),
                 .origin_module = try self.remapModuleName(alias.origin_module),
                 .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
                 .backing = try self.project(alias.backing),
                 .args = try self.projectIds(alias.args),
             } },

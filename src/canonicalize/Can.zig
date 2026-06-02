@@ -1032,38 +1032,13 @@ fn valueBucketHasImplementation(self: *const Self, bucket: AST.DeclIndex.NameBuc
     return false;
 }
 
-fn blockValueBucketHasLambdaImplementation(self: *const Self, bucket: AST.DeclIndex.NameBucket) bool {
-    var iter = bucket.iter();
-    while (iter.next()) |decl_idx| {
-        const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
-        switch (decl.kind) {
-            .value => return decl.value_form == .lambda,
-            .var_decl => return false,
-            .value_anno,
-            .var_anno,
-            => continue,
-            .type_alias,
-            .nominal,
-            .@"opaque",
-            .import,
-            .file_import,
-            => continue,
-        }
-    }
-    return false;
-}
-
 fn valueBucketIsForwardVisible(
     self: *const Self,
     parser_scope: AST.DeclIndex.Scope,
     bucket: AST.DeclIndex.NameBucket,
 ) bool {
-    return switch (parser_scope.forward_policy) {
-        .whole_scope => self.valueBucketHasImplementation(bucket),
-        .source_order,
-        .function_only,
-        => blockValueBucketHasLambdaImplementation(self, bucket),
-    };
+    if (parser_scope.forward_policy != .whole_scope) return false;
+    return self.valueBucketHasImplementation(bucket);
 }
 
 fn activeDeclScopeDeclaresType(self: *Self, ident: Ident.Idx) ?ActiveDeclTypeEntry {
@@ -6728,7 +6703,15 @@ pub fn canonicalizeExpr(
                         const owner_scope_idx: usize = switch (parser_decl_scope.kind) {
                             .module => 0,
                             .associated => active_decl_scope.canonical_scope,
-                            .block => active_decl_scope.canonical_scope,
+                            .block => {
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                        .ident = ident,
+                                        .region = region,
+                                    } }),
+                                    .free_vars = DataSpan.empty(),
+                                };
+                            },
                         };
                         std.debug.assert(owner_scope_idx < self.scopes.items.len);
 
@@ -6763,10 +6746,6 @@ pub fn canonicalizeExpr(
                                 try owner_scope.idents.put(self.env.gpa, ident, new_pattern_idx);
                                 break :blk new_pattern_idx;
                             };
-
-                            if (parser_decl_scope.kind == .block and !self.scratch_local_function_patterns.contains(ref_pattern_idx)) {
-                                try self.scratch_local_function_patterns.append(ref_pattern_idx);
-                            }
 
                             // Mark the placeholder as used — the unused-variable
                             // diagnostic iterates scope.idents and skips anything
@@ -12165,34 +12144,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
-
-    // Pre-pass: Create forward references for lambda declaration patterns.
-    // This enables mutual recursion between closures in the same block by
-    // making all lambda-bound names visible before any bodies are canonicalized.
-    for (ast_stmt_idxs) |ast_stmt_idx| {
-        const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
-        if (ast_stmt != .decl) continue;
-        const d = ast_stmt.decl;
-        const ast_body_expr = self.parse_ir.store.getExpr(d.body);
-        if (ast_body_expr != .lambda) continue;
-        const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
-        if (ast_pattern != .ident) continue;
-        const ident_idx = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse continue;
-        // Skip if already in scope (from outer scope or duplicate)
-        if (self.scopeLookup(.ident, ident_idx) == .found) continue;
-        const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region);
-        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-            .ident = ident_idx,
-        } }, region);
-        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-        try current_scope.forward_references.put(self.env.gpa, ident_idx, .{
-            .pattern_idx = pattern_idx,
-            .reference_regions = .empty,
-        });
-        try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
-        try self.scratch_local_function_patterns.append(pattern_idx);
-        try self.scratch_bound_vars.append(pattern_idx);
-    }
 
     var last_expr: ?CanonicalizedExpr = null;
 

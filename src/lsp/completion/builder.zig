@@ -29,6 +29,12 @@ const DebugFlags = @import("../syntax.zig").DebugFlags;
 const CompletionItem = completion_handler.CompletionItem;
 const CompletionItemKind = completion_handler.CompletionItemKind;
 
+const MethodOwnerLookup = struct {
+    owner: CIR.Statement.Idx,
+    type_name: []const u8,
+    builtin_origin: bool,
+};
+
 /// Builder for constructing completion item lists.
 /// Handles deduplication and provides methods for adding different types of completions.
 pub const CompletionBuilder = struct {
@@ -1058,29 +1064,36 @@ pub const CompletionBuilder = struct {
                 break;
             }
 
-            const type_ident_opt: ?base.Ident.Idx = switch (content) {
-                .alias => |alias| alias.ident.ident_idx,
+            const method_owner_opt: ?MethodOwnerLookup = switch (content) {
+                .alias => |alias| if (alias.source_decl.toOptional()) |source_decl| .{
+                    .owner = @enumFromInt(source_decl),
+                    .type_name = module_env.getIdentText(alias.ident.ident_idx),
+                    .builtin_origin = alias.source_decl.originIsBuiltin(),
+                } else null,
                 .structure => |flat_type| switch (flat_type) {
-                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    .nominal_type => |nominal| if (nominal.sourceDeclOptional()) |source_decl| .{
+                        .owner = @enumFromInt(source_decl),
+                        .type_name = module_env.getIdentText(nominal.ident.ident_idx),
+                        .builtin_origin = nominal.originIsBuiltin(),
+                    } else null,
                     else => null,
                 },
                 else => null,
             };
 
-            if (type_ident_opt) |type_ident| {
-                const type_name = module_env.getIdentText(type_ident);
-                self.logDebug("addMethodsFromTypeVar: type_ident={any} name={s}", .{ type_ident, type_name });
+            if (method_owner_opt) |method_owner| {
+                self.logDebug("addMethodsFromTypeVar: owner={} name={s}", .{ method_owner.owner, method_owner.type_name });
 
                 // Route builtin type methods through the builtin module env to ensure
                 // completions include real Builtin.roc backing data.
                 if (self.builtin_module_env) |builtin_env| {
-                    if (builtin_completion.isBuiltinType(type_name)) {
-                        try self.addMethodsForTypeNameInEnv(builtin_env, type_name);
+                    if (method_owner.builtin_origin) {
+                        try self.addMethodsForOwnerInEnv(builtin_env, method_owner);
                     } else {
-                        try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+                        try self.addMethodsForOwnerInEnv(module_env, method_owner);
                     }
                 } else {
-                    try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+                    try self.addMethodsForOwnerInEnv(module_env, method_owner);
                 }
             }
 
@@ -1180,22 +1193,20 @@ pub const CompletionBuilder = struct {
         return null;
     }
 
-    /// Add methods for a specific type identifier by searching method_idents.
-    fn addMethodsForTypeIdentInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, type_ident: base.Ident.Idx) !void {
+    /// Add methods for a specific source declaration owner by searching method_idents.
+    fn addMethodsForOwnerInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) !void {
         // Initialize type writer for formatting method signatures
         var type_writer = module_env.initTypeWriter() catch null;
         defer if (type_writer) |*tw| tw.deinit();
 
         // Get the type name for display purposes
-        const type_name = module_env.getIdentText(type_ident);
-
-        const owner = module_env.methodOwnerForTypeIdentConst(type_ident) orelse return;
+        const type_name = method_owner.type_name;
 
         // Iterate through method_idents to find all methods for this owner.
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
             // Check if this method is for our type owner.
-            if (entry.key.owner == owner) {
+            if (entry.key.owner == method_owner.owner) {
                 const method_ident = entry.key.methodIdent();
                 const method_name = module_env.getIdentText(method_ident);
 
@@ -1235,26 +1246,6 @@ pub const CompletionBuilder = struct {
                 });
                 if (added) {} else {}
             }
-        }
-    }
-
-    /// Add methods for a type name within the provided module environment.
-    ///
-    /// This is used to bridge from local types to builtin module methods by
-    /// resolving the type name in the builtin module ident table.
-    fn addMethodsForTypeNameInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, type_name: []const u8) !void {
-        // Try direct lookup first (e.g., "Str")
-        if (module_env.common.findIdent(type_name)) |type_ident| {
-            try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
-            return;
-        }
-
-        // Fall back to fully-qualified lookup (e.g., "Builtin.Str")
-        const qualified = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ module_env.module_name, type_name }) catch return;
-        defer self.allocator.free(qualified);
-
-        if (module_env.common.findIdent(qualified)) |type_ident| {
-            try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
         }
     }
 

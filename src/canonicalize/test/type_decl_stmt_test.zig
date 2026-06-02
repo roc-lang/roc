@@ -77,6 +77,19 @@ fn countUndeclaredTypeDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
     return count;
 }
 
+fn countIdentNotInScopeDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .ident_not_in_scope => |d| {
+                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
 fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
@@ -143,6 +156,16 @@ fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) !void {
         std.debug.print("Source still contains forbidden canonicalization structure: {s}\n", .{needle});
         return error.TestUnexpectedResult;
     }
+}
+
+fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) !void {
+    const block_start = std.mem.find(u8, can_source, "fn canonicalizeBlock(") orelse return error.MissingCanonicalizeBlock;
+    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "var last_expr") orelse return error.MissingCanonicalizeBlockWalk;
+    const block_setup = can_source[block_start .. block_start + walk_start_rel];
+
+    try expectSourceDoesNotContain(block_setup, "while (");
+    try expectSourceDoesNotContain(block_setup, "for (");
+    try expectSourceDoesNotContain(block_setup, "getStatement(");
 }
 
 test "canonicalization records explicit type declaration tables" {
@@ -354,6 +377,62 @@ test "block-local type use before declaration does not forward resolve" {
     }.check);
 }
 
+test "block-local lambda use before declaration does not forward resolve" {
+    const source =
+        \\module []
+        \\
+        \\value = {
+        \\    before = later(1)
+        \\    later = |n| n
+        \\    before
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 1), countIdentNotInScopeDiagnostics(env, diagnostics, "later"));
+        }
+    }.check);
+}
+
+test "block-local lambdas cannot be mutually recursive through forward declaration" {
+    const source =
+        \\module []
+        \\
+        \\value = {
+        \\    first = |n| second(n)
+        \\    second = |n| first(n)
+        \\    first(0)
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 1), countIdentNotInScopeDiagnostics(env, diagnostics, "second"));
+        }
+    }.check);
+}
+
+test "block-local lambda declaration does not capture earlier use of same-named outer lambda" {
+    const source =
+        \\module []
+        \\
+        \\later = |n| n + 10
+        \\
+        \\value = {
+        \\    before = later(1)
+        \\    later = |n| n + 100
+        \\    before
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 0), countIdentNotInScopeDiagnostics(env, diagnostics, "later"));
+        }
+    }.check);
+}
+
 test "malformed associated type header does not suppress later associated value" {
     const source =
         \\module [use]
@@ -408,6 +487,12 @@ test "canonicalization has no separate nested associated item alias traversal" {
 
     try expectSourceDoesNotContain(can_source, "fn introduceNestedItemAliases");
     try expectSourceDoesNotContain(can_source, "statementSlice(assoc_statements)");
+}
+
+test "canonicalization block setup does not pre-scan block statements" {
+    const can_source = @embedFile("../Can.zig");
+
+    try expectBlockSetupDoesNotScanStatements(can_source);
 }
 
 test "package header auto imports consume parser inventory instead of scanning statements" {

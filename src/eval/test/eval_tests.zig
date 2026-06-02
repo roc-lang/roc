@@ -1245,7 +1245,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "120.0" },
     },
     .{
-        .name = "inspect: mutual recursion in local lambdas",
+        .name = "problem: mutual recursion in local lambdas",
         .source =
         \\{
         \\    is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
@@ -1253,10 +1253,10 @@ const core_tests = [_]TestCase{
         \\    is_even(6.I64)
         \\}
         ,
-        .expected = .{ .inspect_str = "True" },
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "inspect: mutual recursion in untyped closures",
+        .name = "problem: mutual recursion in untyped closures",
         .source =
         \\{
         \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
@@ -1264,7 +1264,7 @@ const core_tests = [_]TestCase{
         \\    if (is_even(4)) 1 else 0
         \\}
         ,
-        .expected = .{ .inspect_str = "1.0" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "inspect: triple nested closure factory",

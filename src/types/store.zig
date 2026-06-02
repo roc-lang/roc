@@ -433,6 +433,26 @@ pub const Store = struct {
         origin_module: base.Ident.Idx,
         source_decl: ?u32,
     ) std.mem.Allocator.Error!Content {
+        return self.mkAliasWithSourceDeclAndBuiltinOrigin(
+            ident,
+            backing_var,
+            args,
+            origin_module,
+            source_decl,
+            false,
+        );
+    }
+
+    pub fn mkAliasWithSourceDeclAndBuiltinOrigin(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+        builtin_origin: bool,
+    ) std.mem.Allocator.Error!Content {
+        const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -445,7 +465,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
-                .source_decl = SourceDecl.fromOptional(source_decl),
+                .source_decl = packed_source_decl,
             },
         };
     }
@@ -472,6 +492,32 @@ pub const Store = struct {
         source_decl: ?u32,
         is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
+        return self.mkNominalWithSourceDeclAndBuiltinOrigin(
+            ident,
+            backing_var,
+            args,
+            origin_module,
+            source_decl,
+            is_opaque,
+            false,
+        );
+    }
+
+    pub fn mkNominalWithSourceDeclAndBuiltinOrigin(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+        is_opaque: bool,
+        builtin_origin: bool,
+    ) std.mem.Allocator.Error!Content {
+        const source = try NominalType.Source.initChecked(
+            try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin),
+            is_opaque,
+            builtin_origin,
+        );
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -484,7 +530,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
-                .source = NominalType.Source.init(SourceDecl.fromOptional(source_decl), is_opaque),
+                .source = source,
             },
         } };
     }
@@ -1987,6 +2033,47 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     const resolved_redirect2 = deserialized.resolveVar(redirect2);
     try std.testing.expectEqual(resolved2.desc_idx, resolved_redirect2.desc_idx);
+}
+
+test "source declaration overflow is rejected before mutating type store" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.initCapacity(gpa, 1, 1);
+    defer store.deinit();
+
+    const before_slots = store.len();
+    const before_descs = store.descs.backing.len();
+    const before_vars = store.vars.len();
+    const unread_backing_var: Var = undefined; // source declaration validation returns before reading this value
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        store.mkAliasWithSourceDecl(
+            .{ .ident_idx = base.Ident.Idx.NONE },
+            unread_backing_var,
+            &.{},
+            base.Ident.Idx.NONE,
+            SourceDecl.max_statement + 1,
+        ),
+    );
+    try std.testing.expectEqual(before_slots, store.len());
+    try std.testing.expectEqual(before_descs, store.descs.backing.len());
+    try std.testing.expectEqual(before_vars, store.vars.len());
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        store.mkNominalWithSourceDecl(
+            .{ .ident_idx = base.Ident.Idx.NONE },
+            unread_backing_var,
+            &.{},
+            base.Ident.Idx.NONE,
+            NominalType.Source.max_statement + 1,
+            false,
+        ),
+    );
+    try std.testing.expectEqual(before_slots, store.len());
+    try std.testing.expectEqual(before_descs, store.descs.backing.len());
+    try std.testing.expectEqual(before_vars, store.vars.len());
 }
 
 test "Store with path compression CompactWriter roundtrip" {
