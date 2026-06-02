@@ -3027,7 +3027,6 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
 }
 
 fn runSingleTest(io: std.Io, gpa: Allocator, spec: CliBugSpec, timeout_ms: u64) TestResult {
-    _ = timeout_ms;
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
     const repo_root = std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa) catch
@@ -3071,6 +3070,7 @@ fn runSingleTest(io: std.Io, gpa: Allocator, spec: CliBugSpec, timeout_ms: u64) 
         .cwd = repo_root,
         .env_map = &env_map,
         .max_output_bytes = 2 * 1024 * 1024,
+        .timeout_ms = timeout_ms,
     }) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "spawn error: {}", .{err}) catch "spawn error";
         const duration_ns = timer.read();

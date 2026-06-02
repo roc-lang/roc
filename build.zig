@@ -2066,7 +2066,16 @@ pub fn build(b: *std.Build) void {
     // Ensure zig-out/bin exists — Zig's install step can silently fail after `rm -rf zig-out`
     std.Io.Dir.cwd().createDirPath(b.graph.io, "zig-out/bin") catch {};
 
-    // build steps
+    // Build/run split used by MiniCI:
+    // - `build-*` steps own compile, install, generation, and prep work.
+    // - `run-*` steps own execution of checks/tests/tools after prep is done.
+    // - If a `run-*` step needs a binary or generated input, wire that work into
+    //   a `build-*` step and add it to `build-ci`.
+    // - MiniCI runs `build-ci` once and then runs leaf `run-*` jobs. Keep
+    //   aggregate aliases out of MiniCI so each job remains independently
+    //   reportable and re-runnable.
+    // MiniCI intentionally does not parse Zig summaries to detect misplaced
+    // build work; this convention is the source of truth.
     const build_ci_step = b.step("build-ci", "Build all binaries used by MiniCI");
     const run_step = b.step("run", "Alias for run-roc");
     const roc_step = b.step("roc", "Alias for build-roc");

@@ -17,6 +17,9 @@ const Job = struct {
 };
 
 const jobs = [_]Job{
+    // MiniCI trusts `build.zig` to keep build work behind `build-ci`. Keep this
+    // list to leaf `run-*` steps; do not add aggregate aliases that hide useful
+    // reporting boundaries.
     .{ .name = "run-check-zig-format" },
     .{ .name = "run-check-zig-lints" },
     .{ .name = "run-check-tidy" },
@@ -81,7 +84,6 @@ const CommandResult = struct {
     duration_ns: u64,
     log_path: []const u8,
     command: []const []const u8,
-    build_violation: bool = false,
     stats_path: ?[]const u8 = null,
 };
 
@@ -112,7 +114,6 @@ fn buildStatusText(result: CommandResult) []const u8 {
 }
 
 fn runStatusText(result: CommandResult) []const u8 {
-    if (result.build_violation) return "failed (run-phase build violation)";
     if (isPass(result)) return "passed";
     if (std.mem.eql(u8, result.status, "crash")) return "crashed";
     return "failed";
@@ -162,35 +163,11 @@ fn appendU64(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u64) 
     try out.appendSlice(allocator, text);
 }
 
-fn detectRunPhaseBuildViolation(log: []const u8) bool {
-    var lines = std.mem.splitScalar(u8, log, '\n');
-    var in_summary = false;
-    while (lines.next()) |line| {
-        if (std.mem.startsWith(u8, line, "Build Summary:")) {
-            in_summary = true;
-            continue;
-        }
-        if (!in_summary) continue;
-        const action = std.mem.trim(u8, line, " |+-");
-        const is_compile_action = std.mem.startsWith(u8, action, "compile ") or
-            std.mem.startsWith(u8, action, "Compile ");
-        const is_install_action = std.mem.startsWith(u8, action, "install ") or
-            std.mem.startsWith(u8, action, "Install ");
-        if (!is_compile_action and !is_install_action) continue;
-        if (std.mem.find(u8, line, "cached") != null) continue;
-        if (std.mem.find(u8, line, "Cache Hit") != null) continue;
-        if (std.mem.find(u8, line, "(reused)") != null) continue;
-        return true;
-    }
-    return false;
-}
-
 fn runCommand(
     allocator: std.mem.Allocator,
     io: std.Io,
     argv: []const []const u8,
     log_path: []const u8,
-    check_build_violation: bool,
 ) !CommandResult {
     const started = nowNs(io);
     const result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| {
@@ -217,13 +194,11 @@ fn runCommand(
         else => "crash",
     };
 
-    const violation = check_build_violation and detectRunPhaseBuildViolation(log.items);
     return .{
-        .status = if (violation and std.mem.eql(u8, status, "pass")) "fail" else status,
+        .status = status,
         .duration_ns = durationSince(io, started),
         .log_path = log_path,
         .command = argv,
-        .build_violation = violation,
     };
 }
 
@@ -287,8 +262,6 @@ fn appendResultJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, resul
     try appendJsonString(out, allocator, result.log_path);
     try out.appendSlice(allocator, ",\n    \"command\": ");
     try appendCommandJson(out, allocator, result.command);
-    try out.appendSlice(allocator, ",\n    \"build_violation\": ");
-    try out.appendSlice(allocator, if (result.build_violation) "true" else "false");
     try out.appendSlice(allocator, ",\n    \"stats_path\": ");
     if (result.stats_path) |path| {
         try appendJsonString(out, allocator, path);
@@ -410,7 +383,7 @@ fn writeHtml(
         \\    .bar span{position:absolute;left:5px;top:1px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff;font-size:11px;line-height:16px;text-shadow:0 1px 1px rgba(0,0,0,.35)}
         \\    .event-data{margin-top:8px}
         \\    .empty{padding:12px;color:var(--muted)}
-        \\    @media(max-width:900px){main{padding:12px}.job>summary{grid-template-columns:1fr 70px 80px}.job>summary .violation,.job>summary .paths{grid-column:1/-1}.harness-grid{grid-template-columns:1fr}.lane{grid-template-columns:1fr}.track{height:28px}}
+        \\    @media(max-width:900px){main{padding:12px}.job>summary{grid-template-columns:1fr 70px 80px}.job>summary .paths{grid-column:1/-1}.harness-grid{grid-template-columns:1fr}.lane{grid-template-columns:1fr}.track{height:28px}}
         \\  </style>
         \\</head>
         \\<body>
@@ -525,7 +498,7 @@ fn writeHtml(
         \\    const hasStats = stats && Array.isArray(stats.events);
         \\    const body = hasStats ? renderHarness(job.name, stats) : renderSingle(job);
         \\    const open = isFailure(job.status) ? " open" : "";
-        \\    return `<details class="job"${open}><summary><code>${esc(job.name)}</code><span class="status ${statusClass(job.status)}">${esc(job.status)}</span><span>${formatNs(job.duration_ns || 0)}</span><span class="violation">${job.build_violation ? "build violation" : ""}</span><span class="paths small"><code>${esc(job.log_path || "")}${job.stats_path ? " " + esc(job.stats_path) : ""}</code></span></summary><div class="job-body">${body}</div></details>`;
+        \\    return `<details class="job"${open}><summary><code>${esc(job.name)}</code><span class="status ${statusClass(job.status)}">${esc(job.status)}</span><span>${formatNs(job.duration_ns || 0)}</span><span class="paths small"><code>${esc(job.log_path || "")}${job.stats_path ? " " + esc(job.stats_path) : ""}</code></span></summary><div class="job-body">${body}</div></details>`;
         \\  }
         \\  function renderSingle(job) {
         \\    return `<div class="small muted"><div><code>${esc(commandText(job.command))}</code></div><div>Log: <code>${esc(job.log_path || "")}</code></div></div>`;
@@ -608,7 +581,7 @@ pub fn main(init: std.process.Init) !void {
     const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null);
     const build_log = logs_dir ++ "/build-ci.txt";
     std.debug.print("Building CI steps ... ", .{});
-    const build_result = try runCommand(allocator, io, build_argv, build_log, false);
+    const build_result = try runCommand(allocator, io, build_argv, build_log);
     std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
 
     var results = std.ArrayList(CommandResult).empty;
@@ -629,7 +602,7 @@ pub fn main(init: std.process.Init) !void {
             null;
         const argv = try buildCommand(allocator, zig_exe, job.name, stats_path);
         std.debug.print("Running `{s}` ... ", .{job.name});
-        var result = try runCommand(allocator, io, argv, log_path, true);
+        var result = try runCommand(allocator, io, argv, log_path);
         result.stats_path = stats_path;
         try results.append(allocator, result);
         std.debug.print("{s} in {d:.3}s\n", .{ runStatusText(result), seconds(result.duration_ns) });

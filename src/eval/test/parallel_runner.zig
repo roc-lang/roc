@@ -2428,8 +2428,10 @@ pub fn main(init: std.process.Init) !void {
         if (r.message) |msg| {
             gpa.free(msg);
         }
-        for (r.backends) |bd| {
-            if (bd.value) |v| gpa.free(v);
+        if (r.has_backend_details) {
+            for (r.backends) |bd| {
+                if (bd.value) |v| gpa.free(v);
+            }
         }
         if (r.expected_str) |es| gpa.free(es);
     }
