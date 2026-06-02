@@ -62,7 +62,7 @@
           export -f buildcmd
 
           testcmd() {
-            zig build snapshot && zig build test
+            zig build run-check-snapshots && zig build run-test-zig
           }
           export -f testcmd
 
@@ -72,12 +72,12 @@
           export -f fmtcmd
 
           covcmd() {
-            zig build coverage
+            zig build run-coverage-parser
           }
           export -f covcmd
 
           cicmd() {
-            zig build fmt && ./ci/zig_lints.sh && zig build && zig build snapshot && zig build test && zig build test-playground && zig build coverage
+            zig build fmt && zig build run-check-zig-lints && zig build build-roc && zig build run-check-snapshots && zig build run-test-zig && zig build run-test-playground && zig build run-coverage-parser
           }
           export -f cicmd
         '';

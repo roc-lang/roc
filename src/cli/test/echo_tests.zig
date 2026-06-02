@@ -7,7 +7,7 @@ const util = @import("util.zig");
 
 fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expected_stdout: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result = try util.runRoc(gpa, opt_args, roc_file);
+    const result = try util.runRoc(std.testing.io, gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     if (result.term != .exited or result.term.exited != 0) {
@@ -21,7 +21,7 @@ fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expec
 
 fn runEchoExpectExitCode(opt_args: []const []const u8, roc_file: []const u8, expected_code: u32) !void {
     const gpa = std.testing.allocator;
-    const result = try util.runRoc(gpa, opt_args, roc_file);
+    const result = try util.runRoc(std.testing.io, gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     if (result.term != .exited or result.term.exited != expected_code) {
@@ -64,7 +64,7 @@ test "echo platform: custom error issue 9255 repro (dev backend)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--opt=dev"}, "test/echo/exit_custom_error.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"--opt=dev"}, "test/echo/exit_custom_error.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -76,7 +76,7 @@ test "echo platform: custom error issue 9255 repro (dev backend)" {
 
 fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) !void {
     const gpa = std.testing.allocator;
-    const result = try util.runRoc(gpa, opt_args, roc_file);
+    const result = try util.runRoc(std.testing.io, gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     try std.testing.expect(result.term == .exited and result.term.exited != 0);
@@ -157,7 +157,7 @@ const all_syntax_expected_stderr = "[dbg] 42.0\n";
 test "echo platform: all_syntax_test.roc prints expected output (interpreter)" {
     const allocator = std.testing.allocator;
 
-    const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/echo/all_syntax_test.roc");
+    const run_result = try util.runRoc(std.testing.io, allocator, &.{"--opt=interpreter"}, "test/echo/all_syntax_test.roc");
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -170,7 +170,7 @@ test "echo platform: all_syntax_test.roc prints expected output (interpreter)" {
 test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
     const allocator = std.testing.allocator;
 
-    const run_result = try util.runRoc(allocator, &.{"--opt=dev"}, "test/echo/all_syntax_test.roc");
+    const run_result = try util.runRoc(std.testing.io, allocator, &.{"--opt=dev"}, "test/echo/all_syntax_test.roc");
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
@@ -183,7 +183,7 @@ test "echo platform: all_syntax_test.roc prints expected output (dev backend)" {
 test "echo platform: roc test all_syntax_test.roc passes" {
     const allocator = std.testing.allocator;
 
-    const result = try util.runRoc(allocator, &.{ "test", "--no-cache" }, "test/echo/all_syntax_test.roc");
+    const result = try util.runRoc(std.testing.io, allocator, &.{ "test", "--no-cache" }, "test/echo/all_syntax_test.roc");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

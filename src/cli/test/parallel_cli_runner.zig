@@ -22,12 +22,6 @@ const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 
-var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
-/// Override the default debug IO so that `std.Options.debug_io` uses a properly
-/// initialized Threaded instance with a real allocator. Without this, the default
-/// `global_single_threaded` has `.allocator = .failing` and IO operations fail.
-pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
-
 // Test spec types
 
 const OptMode = enum(u8) {
@@ -300,24 +294,24 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 var roc_binary_path: []const u8 = "";
 var project_root_path: []const u8 = "";
 
-fn deleteIfExists(path: []const u8) !void {
-    std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch |err| switch (err) {
+fn deleteIfExists(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
 }
 
-fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) !void {
-    try deleteIfExists(output_name);
+fn deleteOutputArtifacts(io: std.Io, allocator: Allocator, output_name: []const u8) !void {
+    try deleteIfExists(io, output_name);
 
     if (comptime builtin.os.tag == .windows) {
         const exe_name = try std.fmt.allocPrint(allocator, "{s}.exe", .{output_name});
         defer allocator.free(exe_name);
-        try deleteIfExists(exe_name);
+        try deleteIfExists(io, exe_name);
 
         const pdb_name = try std.fmt.allocPrint(allocator, "{s}.pdb", .{output_name});
         defer allocator.free(pdb_name);
-        try deleteIfExists(pdb_name);
+        try deleteIfExists(io, pdb_name);
     }
 }
 
@@ -328,10 +322,10 @@ fn absoluteFromProjectRoot(allocator: Allocator, path: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ project_root_path, path });
 }
 
-fn runSingleTest(allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestResult {
+fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .setup, .message = "no clock" };
 
-    const dirs = util.createIsolatedTestDirs(allocator) catch
+    const dirs = util.createIsolatedTestDirs(io, allocator) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test directories" };
     defer dirs.deinit(allocator);
 
@@ -341,7 +335,7 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestR
     const output_name = std.fs.path.join(allocator, &.{ dirs.work_dir, "app" }) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate output path" };
 
-    deleteOutputArtifacts(allocator, output_name) catch |err| {
+    deleteOutputArtifacts(io, allocator, output_name) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "failed to remove stale output file: {}", .{err}) catch "failed to remove stale output file";
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = msg };
     };
@@ -363,18 +357,19 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, timeout_ms: u64) TestR
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ZIG_LOCAL_CACHE_DIR" };
 
     const result = switch (spec.opt) {
-        .interpreter => runInterpreterTest(allocator, spec, roc_file, &env_map, dirs.work_dir, &timer, timeout_ms),
-        .dev, .size, .speed => runCompiledTest(allocator, spec, roc_file, output_name, &env_map, dirs.work_dir, &timer, timeout_ms),
+        .interpreter => runInterpreterTest(io, allocator, spec, roc_file, &env_map, dirs.work_dir, &timer, timeout_ms),
+        .dev, .size, .speed => runCompiledTest(io, allocator, spec, roc_file, output_name, &env_map, dirs.work_dir, &timer, timeout_ms),
     };
 
     if (result.status == .pass) {
-        util.cleanupTestWorkDir(dirs.work_dir);
+        util.cleanupTestWorkDir(io, dirs.work_dir);
         return result;
     }
     return addPreservedWorkDirMessage(allocator, result, dirs.work_dir);
 }
 
 fn runInterpreterTest(
+    io: std.Io,
     allocator: Allocator,
     spec: CliTestSpec,
     roc_file: []const u8,
@@ -407,7 +402,7 @@ fn runInterpreterTest(
     argc += 1;
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
-    const run_result = util.runChildWithTimeout(allocator, argv_buf[0..argc], .{
+    const run_result = util.runChildWithTimeout(io, allocator, argv_buf[0..argc], .{
         .cwd = work_dir,
         .env_map = env_map,
         .max_output_bytes = 10 * 1024 * 1024,
@@ -421,6 +416,7 @@ fn runInterpreterTest(
 }
 
 fn runCompiledTest(
+    io: std.Io,
     allocator: Allocator,
     spec: CliTestSpec,
     roc_file: []const u8,
@@ -438,7 +434,7 @@ fn runCompiledTest(
     const build_argv = &[_][]const u8{ roc_binary_path, "build", output_arg, opt_arg, roc_file };
 
     var build_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .message = "no clock" };
-    const build_result = util.runChildWithTimeout(allocator, build_argv, .{
+    const build_result = util.runChildWithTimeout(io, allocator, build_argv, .{
         .cwd = work_dir,
         .env_map = env_map,
         .max_output_bytes = 10 * 1024 * 1024,
@@ -452,7 +448,7 @@ fn runCompiledTest(
         return resultFromProcess(build_result, timer, .build, build_ns, 0, "build failed");
     }
 
-    if (!builtOutputExists(allocator, output_name)) {
+    if (!builtOutputExists(io, allocator, output_name)) {
         return .{ .status = .build_failed, .phase = .build, .duration_ns = timer.read(), .build_ns = build_ns, .message = "build succeeded but output file was not created" };
     }
 
@@ -471,7 +467,7 @@ fn runCompiledTest(
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .build_ns = build_ns, .message = "no clock" };
-    const run_result = util.runChildWithTimeout(allocator, run_argv_buf[0..argc], .{
+    const run_result = util.runChildWithTimeout(io, allocator, run_argv_buf[0..argc], .{
         .cwd = work_dir,
         .max_output_bytes = 10 * 1024 * 1024,
         .timeout_ms = timeout_ms,
@@ -483,12 +479,12 @@ fn runCompiledTest(
     return resultFromProcess(run_result, timer, .run, build_ns, run_ns, "run failed");
 }
 
-fn builtOutputExists(allocator: Allocator, output_name: []const u8) bool {
-    std.Io.Dir.cwd().access(std.Options.debug_io, output_name, .{}) catch {
+fn builtOutputExists(io: std.Io, allocator: Allocator, output_name: []const u8) bool {
+    std.Io.Dir.cwd().access(io, output_name, .{}) catch {
         if (builtin.os.tag == .windows) {
             const exe_name = std.fmt.allocPrint(allocator, "{s}.exe", .{output_name}) catch return false;
             defer allocator.free(exe_name);
-            std.Io.Dir.cwd().access(std.Options.debug_io, exe_name, .{}) catch return false;
+            std.Io.Dir.cwd().access(io, exe_name, .{}) catch return false;
         } else {
             return false;
         }
@@ -634,9 +630,9 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
 /// duplication when the harness appends `--worker <idx>` per spawn).
-fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildCliWorkerArgvTemplate(io: std.Io, arena: Allocator, process_args: std.process.Args) ![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path_len = try std.process.executablePath(std.Options.debug_io, &self_path_buf);
+    const self_path_len = try std.process.executablePath(io, &self_path_buf);
     const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
 
     const raw = try process_args.toSlice(arena);
@@ -648,8 +644,11 @@ fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) 
     var i: usize = 1;
     while (i < original_args.len) : (i += 1) {
         const arg = original_args[i];
-        if (std.mem.eql(u8, arg, "--worker") or std.mem.eql(u8, arg, "--worker-backend")) {
+        if (harness.workerTemplateArgConsumesValue(arg)) {
             i += 1;
+            continue;
+        }
+        if (harness.workerTemplateDropsFlag(arg)) {
             continue;
         }
         try argv.append(arena, arg);
@@ -819,7 +818,137 @@ fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
 }
 
 fn printRepro(test_name: []const u8) void {
-    std.debug.print("        Repro: zig build test-platforms -- --test-filter \"{s}\"\n\n", .{test_name});
+    std.debug.print("        Repro: zig build run-test-cli-platforms -- --test-filter \"{s}\"\n\n", .{test_name});
+}
+
+fn statsStatus(status: TestStatus) []const u8 {
+    return switch (status) {
+        .pass => "pass",
+        .build_failed, .run_failed, .infra_error => "fail",
+        .timeout => "timeout",
+        .crash => "crash",
+        .skip => "skip",
+    };
+}
+
+fn statsSummary(results: []const TestResult) harness.StatsSummary {
+    var summary: harness.StatsSummary = .{ .total = results.len };
+    for (results) |result| {
+        switch (result.status) {
+            .pass => summary.passed += 1,
+            .build_failed, .run_failed, .infra_error => summary.failed += 1,
+            .timeout => summary.timed_out += 1,
+            .crash => summary.crashed += 1,
+            .skip => summary.skipped += 1,
+        }
+    }
+    return summary;
+}
+
+fn maybeStatsData(
+    gpa: Allocator,
+    result: TestResult,
+) []const harness.StatsData {
+    if (result.status == .pass) return &.{};
+
+    var count: usize = 0;
+    if (result.message != null) count += 1;
+    if (result.stderr_capture != null) count += 1;
+    if (result.stdout_capture != null) count += 1;
+    if (result.exit_code != 0) count += 1;
+    if (count == 0) return &.{};
+
+    const data = gpa.alloc(harness.StatsData, count) catch return &.{};
+    var next: usize = 0;
+    if (result.message) |message| {
+        data[next] = .{ .key = "message", .value = message };
+        next += 1;
+    }
+    if (result.stderr_capture) |stderr| {
+        data[next] = .{ .key = "stderr", .value = stderr };
+        next += 1;
+    }
+    if (result.stdout_capture) |stdout| {
+        data[next] = .{ .key = "stdout", .value = stdout };
+        next += 1;
+    }
+    if (result.exit_code != 0) {
+        const exit_text = std.fmt.allocPrint(gpa, "{d}", .{result.exit_code}) catch "unknown";
+        data[next] = .{ .key = "exit_code", .value = exit_text };
+    }
+    return data;
+}
+
+fn appendStatsEvent(
+    gpa: Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    parent_id: ?[]const u8,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    data: []const harness.StatsData,
+) void {
+    events.append(gpa, .{
+        .id = id,
+        .parent_id = parent_id,
+        .kind = kind,
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .data = data,
+    }) catch {};
+}
+
+fn writeStatsJson(
+    gpa: Allocator,
+    io: std.Io,
+    path: []const u8,
+    tests: []const CliTestSpec,
+    results: []const TestResult,
+) !void {
+    var stats_arena = std.heap.ArenaAllocator.init(gpa);
+    defer stats_arena.deinit();
+    const stats_allocator = stats_arena.allocator();
+
+    var events: std.ArrayListUnmanaged(harness.StatsEvent) = .empty;
+
+    for (tests, results, 0..) |tc, result, i| {
+        const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
+        const status = statsStatus(result.status);
+        const total_ns = result.duration_ns;
+        const build_ns = result.build_ns;
+        const run_ns = result.run_ns;
+        const setup_ns = total_ns -| (build_ns +| run_ns);
+
+        appendStatsEvent(stats_allocator, &events, case_id, null, "case", tc.name, status, 0, total_ns, maybeStatsData(stats_allocator, result));
+
+        if (setup_ns > 0) {
+            const id = try std.fmt.allocPrint(stats_allocator, "case-{d}-setup", .{i});
+            appendStatsEvent(stats_allocator, &events, id, case_id, "setup", "setup", "pass", 0, setup_ns, &.{});
+        }
+
+        if (build_ns > 0) {
+            const id = try std.fmt.allocPrint(stats_allocator, "case-{d}-build", .{i});
+            const build_status = if (result.phase == .build) status else "pass";
+            appendStatsEvent(stats_allocator, &events, id, case_id, "roc build", "roc build", build_status, setup_ns, setup_ns + build_ns, &.{});
+        }
+
+        if (run_ns > 0) {
+            const id = try std.fmt.allocPrint(stats_allocator, "case-{d}-run", .{i});
+            const run_status = if (result.phase == .run) status else "pass";
+            appendStatsEvent(stats_allocator, &events, id, case_id, "run", "run", run_status, setup_ns + build_ns, setup_ns + build_ns + run_ns, &.{});
+        }
+    }
+
+    try harness.writeRunnerStatsJson(stats_allocator, io, path, .{
+        .runner = "cli-platforms",
+        .summary = statsSummary(results),
+        .events = events.items,
+    });
 }
 
 // Main
@@ -840,14 +969,6 @@ fn printUsage() void {
 
 /// Entry point for the parallel CLI test runner.
 pub fn main(init: std.process.Init) !void {
-    // Initialize the debug IO with a real allocator so std.Options.debug_io
-    // can spawn processes, create directories, delete files, etc.
-    debug_threaded_io_instance = .init(init.gpa, .{
-        .argv0 = .init(init.minimal.args),
-        .environ = init.minimal.environ,
-    });
-    defer debug_threaded_io_instance.deinit();
-
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
@@ -867,7 +988,7 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    project_root_path = try std.Io.Dir.cwd().realPathFileAlloc(std.Options.debug_io, ".", spec_arena.allocator());
+    project_root_path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, ".", spec_arena.allocator());
     roc_binary_path = if (std.fs.path.isAbsolute(args.positional[0]))
         args.positional[0]
     else
@@ -883,7 +1004,7 @@ pub fn main(init: std.process.Init) !void {
         if (idx >= tests.len) std.process.exit(2);
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
+        const result = runSingleTest(init.io, arena.allocator(), tests[idx], args.timeout_ms);
         serializeResult(std.Io.File.stdout().handle, result);
         return;
     }
@@ -915,7 +1036,7 @@ pub fn main(init: std.process.Init) !void {
             if (idx >= tests.len) continue;
 
             _ = arena.reset(.retain_capacity);
-            const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
+            const result = runSingleTest(init.io, arena.allocator(), tests[idx], args.timeout_ms);
             serializeResultStreamed(stdout_handle, result);
         }
         return;
@@ -940,13 +1061,17 @@ pub fn main(init: std.process.Init) !void {
     // single-test Child worker. On POSIX it's unused (fork path doesn't
     // re-exec). Always pass the positional `roc_binary` path through so the
     // child uses the same binary.
-    const worker_argv_template = try buildCliWorkerArgvTemplate(spec_arena.allocator(), init.minimal.args);
+    const worker_argv_template = try buildCliWorkerArgvTemplate(init.io, spec_arena.allocator(), init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
     Pool.run(init.io, tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
     const wall_ns = wall_timer.read();
 
     printResults(tests, results, args.verbose, gpa, wall_ns, max_children);
+
+    if (args.stats_json_path) |path| {
+        try writeStatsJson(gpa, init.io, path, tests, results);
+    }
 
     for (results) |r| {
         if (r.stderr_capture) |s| gpa.free(s);

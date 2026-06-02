@@ -89,7 +89,7 @@ Make sure to check the logs if you aren't getting type failures.
 Sadly, this is not nearly as fast due to building binaries.
 One day, we will get dev zig backends, and it should be fast.
 
-Try it with `zig build test -fincremental --watch`
+Try it with `zig build run-test-zig -fincremental --watch`
 
 ## Overview
 

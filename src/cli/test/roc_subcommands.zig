@@ -4,16 +4,16 @@ const std = @import("std");
 const util = @import("util.zig");
 
 fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    return util.buildIsolatedTestEnvMap(allocator, null);
+    return util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
 }
 
 test "CLI test cache roots are distinct" {
     const allocator = std.testing.allocator;
 
-    const first = try util.createIsolatedTestCacheDirs(allocator);
+    const first = try util.createIsolatedTestCacheDirs(std.testing.io, allocator);
     defer first.deinit(allocator);
 
-    const second = try util.createIsolatedTestCacheDirs(allocator);
+    const second = try util.createIsolatedTestCacheDirs(std.testing.io, allocator);
     defer second.deinit(allocator);
 
     try std.testing.expect(!std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir));
@@ -160,11 +160,11 @@ fn runGeneratedModuleGraphCheck(
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
+    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
 
-    const result = try util.runChildWithTimeout(allocator, &.{ roc_path, "check", main_path }, .{
+    const result = try util.runChildWithTimeout(std.testing.io, allocator, &.{ roc_path, "check", main_path }, .{
         .cwd = cwd_path,
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
@@ -243,7 +243,7 @@ test "roc check writes parse errors to stderr" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_parse_error.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/has_parse_error.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -265,7 +265,7 @@ test "roc check displays correct file path in parse error messages" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_parse_error.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/has_parse_error.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -292,7 +292,7 @@ test "roc check succeeds on valid file" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/simple_success.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/simple_success.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -339,7 +339,7 @@ test "roc version outputs at least 5 chars to stdout" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRocCommand(gpa, &.{"version"});
+    const result = try util.runRocCommand(std.testing.io, gpa, &.{"version"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -356,7 +356,7 @@ test "roc repl shows welcome banner" {
     const gpa = testing.allocator;
 
     // Send empty input (just EOF) to exit the REPL
-    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "");
+    const result = try util.runRocWithStdin(std.testing.io, gpa, &.{"repl"}, "");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -377,7 +377,7 @@ test "roc repl evaluates simple expression" {
     const gpa = testing.allocator;
 
     // Evaluate a simple expression
-    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "1 + 1\n");
+    const result = try util.runRocWithStdin(std.testing.io, gpa, &.{"repl"}, "1 + 1\n");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -394,7 +394,7 @@ test "roc repl :help command works" {
     const gpa = testing.allocator;
 
     // Send :help command
-    const result = try util.runRocWithStdin(gpa, &.{"repl"}, ":help\n");
+    const result = try util.runRocWithStdin(std.testing.io, gpa, &.{"repl"}, ":help\n");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -412,7 +412,7 @@ test "roc repl :exit command exits cleanly" {
     const gpa = testing.allocator;
 
     // Send :exit command
-    const result = try util.runRocWithStdin(gpa, &.{"repl"}, ":exit\n");
+    const result = try util.runRocWithStdin(std.testing.io, gpa, &.{"repl"}, ":exit\n");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -429,7 +429,7 @@ test "roc repl variable definition and usage" {
     const gpa = testing.allocator;
 
     // Define a variable and use it
-    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "x = 5\nx + 3\n");
+    const result = try util.runRocWithStdin(std.testing.io, gpa, &.{"repl"}, "x = 5\nx + 3\n");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -446,7 +446,7 @@ test "roc repl string expression" {
     const gpa = testing.allocator;
 
     // Evaluate a string expression
-    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "\"hello\"\n");
+    const result = try util.runRocWithStdin(std.testing.io, gpa, &.{"repl"}, "\"hello\"\n");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -462,7 +462,7 @@ test "roc help contains Usage:" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRocCommand(gpa, &.{"help"});
+    const result = try util.runRocCommand(std.testing.io, gpa, &.{"help"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -479,7 +479,7 @@ test "roc licenses contains =====" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRocCommand(gpa, &.{"licenses"});
+    const result = try util.runRocCommand(std.testing.io, gpa, &.{"licenses"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -496,7 +496,7 @@ test "roc fmt --check fails on unformatted file" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "fmt", "--check" }, "test/cli/needs_formatting.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "fmt", "--check" }, "test/cli/needs_formatting.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -516,7 +516,7 @@ test "roc fmt --check succeeds on well-formatted file" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "fmt", "--check" }, "test/cli/well_formatted.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "fmt", "--check" }, "test/cli/well_formatted.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -589,7 +589,7 @@ test "roc fmt does not change well-formatted file" {
     defer gpa.free(before_content);
 
     // Run roc fmt on the well-formatted file
-    const result = try util.runRoc(gpa, &.{"fmt"}, "test/cli/well_formatted.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"fmt"}, "test/cli/well_formatted.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -736,7 +736,7 @@ test "roc check reports type error - annotation mismatch" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -758,7 +758,7 @@ test "roc check reports type error - plus operator with incompatible types" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_plus_operator.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_plus_operator.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -784,7 +784,7 @@ test "roc check test/int/app.roc does not panic" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/int/app.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -805,7 +805,7 @@ test "roc check test/int/app.roc does not panic" {
 fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) !void {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    const result = try util.runRoc(gpa, &.{ opt, "--no-cache" }, roc_file);
+    const result = try util.runRoc(std.testing.io, gpa, &.{ opt, "--no-cache" }, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     try std.testing.expect(result.term == .exited and result.term.exited == 0);
@@ -836,7 +836,7 @@ test "roc run test/str/app_static_24_byte_string.roc does not panic" {
 
     // The minimized app makes the host fail its string assertion after codegen,
     // but direct `roc file.roc` must not panic before the host runs.
-    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/str/app_static_24_byte_string.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"--no-cache"}, "test/str/app_static_24_byte_string.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -878,7 +878,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
     const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
     defer gpa.free(output_arg);
 
-    const result = try util.runRoc(gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/int/app.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -929,7 +929,7 @@ test "roc build executable runs correctly (interpreter)" {
     defer gpa.free(output_arg);
 
     // Build the app
-    const build_result = try util.runRoc(gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/int/app.roc");
+    const build_result = try util.runRoc(std.testing.io, gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/int/app.roc");
     defer gpa.free(build_result.stdout);
     defer gpa.free(build_result.stderr);
 
@@ -992,6 +992,7 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     try env_map.put("ROC_CACHE_DIR", cache_path);
 
     const build_result = try util.runRocWithEnv(
+        std.testing.io,
         gpa,
         &.{ "build", "--opt=dev", "--no-cache", output_arg },
         "test/int/app.roc",
@@ -1031,7 +1032,7 @@ test "roc build fails with file not found error" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"build"}, "nonexistent_file.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"build"}, "nonexistent_file.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1051,7 +1052,7 @@ test "roc build fails with invalid target error" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "build", "--target=invalid_target_name" }, "test/int/app.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "build", "--target=invalid_target_name" }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1075,7 +1076,7 @@ test "roc build glibc target gives helpful error on non-Linux" {
         return; // Skip on Linux where glibc cross-compilation is supported
     }
 
-    const result = try util.runRoc(gpa, &.{ "build", "--target=x64glibc" }, "test/int/app.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "build", "--target=x64glibc" }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1097,12 +1098,12 @@ fn testCachesPassingResults(opt: []const u8) !void {
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 0);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
@@ -1121,12 +1122,12 @@ fn testCachesFailingResults(opt: []const u8) !void {
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
@@ -1220,7 +1221,7 @@ test "roc test cache invalidated by source change (dev)" {
     const file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
     defer gpa.free(file_path);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try testing.expect(result1.term == .exited and result1.term.exited == 0);
@@ -1228,7 +1229,7 @@ test "roc test cache invalidated by source change (dev)" {
     const updated_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
     try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = updated_content });
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -1241,12 +1242,12 @@ fn testVerboseWorksFromCache(opt: []const u8) !void {
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 0);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
@@ -1266,12 +1267,12 @@ fn testVerboseCachesFailureReports(opt: []const u8) !void {
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
@@ -1292,13 +1293,13 @@ fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
     try std.testing.expect(std.mem.find(u8, result1.stderr, "expect failed") == null);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
@@ -1321,7 +1322,7 @@ test "roc test with nested list chunks does not panic on layout upgrade (interpr
     // This test verifies that nested list operations with layout upgrades
     // (from list_of_zst to concrete list types) don't cause integer overflow panics.
     // The expect in the test file is designed to fail, but execution should not panic.
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/issue8699.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--opt=interpreter" }, "test/cli/issue8699.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1348,7 +1349,7 @@ fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1371,7 +1372,7 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", opt }, "test/cli/FailWithDocComment.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", opt }, "test/cli/FailWithDocComment.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1399,11 +1400,11 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
     var env_map2 = try createPerTestCacheEnv(gpa);
     defer env_map2.deinit();
 
-    const non_verbose = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map1);
+    const non_verbose = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map1);
     defer gpa.free(non_verbose.stdout);
     defer gpa.free(non_verbose.stderr);
 
-    const verbose = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map2);
+    const verbose = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map2);
     defer gpa.free(verbose.stdout);
     defer gpa.free(verbose.stderr);
 
@@ -1430,7 +1431,7 @@ test "roc check returns exit code 2 for warnings" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1452,7 +1453,7 @@ test "roc check returns exit code 0 for no warnings or errors" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/simple_success.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/simple_success.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1478,7 +1479,7 @@ test "roc check returns exit code 1 for errors" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1490,7 +1491,7 @@ test "roc check reports comptime division by zero without panicking" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_div_zero.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_div_zero.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1504,7 +1505,7 @@ test "roc check reports comptime modulo by zero without panicking" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_mod_zero.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/comptime_mod_zero.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1518,7 +1519,7 @@ test "roc check reports large default Dec scientific literal without panicking" 
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_default_dec.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_default_dec.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1532,7 +1533,7 @@ test "roc check preserves numeric literal constraints before reporting large def
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_list_default_dec.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/large_scientific_list_default_dec.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1546,7 +1547,7 @@ test "roc check treats integral scientific notation as integer syntax sugar" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/scientific_integer_u8.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/scientific_integer_u8.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1560,7 +1561,7 @@ test "roc run returns exit code 2 for warnings (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1578,7 +1579,7 @@ test "roc run --opt=dev returns exit code 2 for warnings" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--opt=dev", "--no-cache" }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "--opt=dev", "--no-cache" }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1593,7 +1594,7 @@ test "roc run returns exit code 1 for old platform download" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/cli/old_hello_world.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"--no-cache"}, "test/cli/old_hello_world.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1606,7 +1607,7 @@ test "roc run --opt=dev rejects non executable targets" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--opt=dev", "--target=wasm32" }, "test/wasm/app.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "--opt=dev", "--target=wasm32" }, "test/wasm/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1635,7 +1636,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
     defer gpa.free(output_arg);
 
-    const result = try util.runRoc(gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/fx/run_warning_only.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "build", "--opt=interpreter", output_arg }, "test/fx/run_warning_only.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1669,7 +1670,7 @@ test "roc check with -j1 succeeds on valid file" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "-j1" }, "test/cli/simple_success.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache", "-j1" }, "test/cli/simple_success.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1681,7 +1682,7 @@ test "roc check with --jobs=1 succeeds on valid file" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "--jobs=1" }, "test/cli/simple_success.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache", "--jobs=1" }, "test/cli/simple_success.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1693,7 +1694,7 @@ test "roc check with --jobs=2 succeeds on valid file" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "--jobs=2" }, "test/cli/simple_success.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache", "--jobs=2" }, "test/cli/simple_success.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1705,7 +1706,7 @@ test "roc check with invalid --jobs value returns error" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--jobs=abc" }, "test/cli/simple_success.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--jobs=abc" }, "test/cli/simple_success.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1724,7 +1725,7 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     // This test verifies that importing from a non-existent package shorthand
     // (e.g., "import f.S" where "f" is not defined) produces an error message
     // instead of causing the coordinator to panic with "Coordinator stuck in infinite loop".
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/invalid_package_shorthand.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/invalid_package_shorthand.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1753,7 +1754,7 @@ test "roc check does not hang on tag union type alias inside List (issue 9481)" 
     // and then compared with `==` against a list literal, caused the type checker to
     // build a self-referential alias: the alias backing var redirected back to the
     // alias var.
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/tag_union_alias_hang.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/cli/tag_union_alias_hang.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1775,7 +1776,7 @@ test "roc check succeeds on Parser type module" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "check", "--no-cache" }, "test/package_simple_parser/Parser.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1792,7 +1793,7 @@ test "roc test runs expects in Parser type module (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/package_simple_parser/Parser.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1817,7 +1818,7 @@ test "roc test runs expects in Parser type module (dev)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=dev", "--no-cache" }, "test/package_simple_parser/Parser.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--opt=dev", "--no-cache" }, "test/package_simple_parser/Parser.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1845,7 +1846,7 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     // Calling a polymorphic function (List(a) -> List(a)) from another module
     // with a numeric literal argument caused an integer overflow in
     // from_numeral_flex_count during runtime unification.
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter" }, "test/cli/polymorphic_list_reverse.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--opt=interpreter" }, "test/cli/polymorphic_list_reverse.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1869,7 +1870,7 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     // Calling a polymorphic function (List(a) -> List(a)) from another module
     // with a numeric literal argument caused an integer overflow in
     // from_numeral_flex_count during runtime unification.
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=dev" }, "test/cli/polymorphic_list_reverse.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--opt=dev" }, "test/cli/polymorphic_list_reverse.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1893,7 +1894,7 @@ test "roc test polymorphic list reverse within same module" {
     // A polymorphic function with a nested lambda (e.g. fold_rev callback)
     // must also type-check correctly when tested from within the same module,
     // not only from an external importer.
-    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/PolymorphicListReverseMod.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"test"}, "test/cli/PolymorphicListReverseMod.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1907,7 +1908,7 @@ test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9388SortWithTopLevelExpect.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9388SortWithTopLevelExpect.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1931,12 +1932,12 @@ test "roc test issue 9392 numeric utility expects are deterministic with no cach
 
     const path = "test/cli/Issue9392NumUtilsDeterministic.roc";
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    const result1 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try expectRocTestAllPassed(result1, "All (11) tests passed");
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    const result2 = try util.runRocWithEnv(std.testing.io, gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try expectRocTestAllPassed(result2, "All (11) tests passed");
@@ -1945,7 +1946,7 @@ test "roc test issue 9392 numeric utility expects are deterministic with no cach
 test "roc run issue 9208 open union tag before Exit matches wildcard" {
     const gpa = std.testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx-open/test_bar_error.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "--opt=interpreter", "--no-cache" }, "test/fx-open/test_bar_error.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1978,6 +1979,7 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     defer gpa.free(output_arg);
 
     const result = try util.runRoc(
+        std.testing.io,
         gpa,
         &.{ "build", "--opt=dev", "--no-cache", output_arg },
         "test/hosted_nominal_return/repro.roc",
@@ -2010,7 +2012,7 @@ test "roc docs Builtin.roc succeeds" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "docs", "--no-cache" }, "src/build/roc/Builtin.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "docs", "--no-cache" }, "src/build/roc/Builtin.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -2024,7 +2026,7 @@ test "roc test complex_package --verbose passes all tests" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{ "test", "--no-cache", "--verbose" }, "test/complex_package/main.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{ "test", "--no-cache", "--verbose" }, "test/complex_package/main.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -2050,6 +2052,7 @@ test "roc bundle complex_package includes all transitively imported modules" {
     // bundle command stores paths verbatim in the archive and rejects
     // absolute paths.
     const result = try util.runRocCommand(
+        std.testing.io,
         gpa,
         &.{ "bundle", "--output-dir", out_dir_rel, "test/complex_package/main.roc" },
     );
@@ -2070,7 +2073,7 @@ test "failed inline expect exits with code 1 and continues program (dev)" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{}, "test/cli/failed_inline_expect.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{}, "test/cli/failed_inline_expect.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -2083,7 +2086,7 @@ test "failed inline expect exits with code 1 and continues program (interpreter)
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRoc(gpa, &.{"--opt=interpreter"}, "test/cli/failed_inline_expect.roc");
+    const result = try util.runRoc(std.testing.io, gpa, &.{"--opt=interpreter"}, "test/cli/failed_inline_expect.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 

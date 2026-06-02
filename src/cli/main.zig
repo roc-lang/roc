@@ -374,7 +374,7 @@ const legalDetailsFileContent = @embedFile("legal_details");
 ///
 /// On Windows, SEC_RESERVE on CreateFileMapping reserves address space without
 /// page file backing, but MapViewOfFile still appears to charge against the
-/// system commit limit. Under parallel test load (`zig build test` with several
+/// system commit limit. Under parallel test load (`zig build run-test-zig` with several
 /// workers each spawning `roc.exe`), four concurrent 2 TB reservations trip
 /// ERROR_COMMITMENT_LIMIT on CI runners (7 GB RAM + limited page file). 8 GB
 /// matches the macOS bound and leaves plenty of headroom for real programs.

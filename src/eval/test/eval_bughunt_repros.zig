@@ -1,9 +1,9 @@
 //! Opt-in compiler-bug repros found during bug hunting.
 //!
 //! These are intentionally marked `known_bug = true` and excluded from ordinary
-//! `zig build test-eval`. Run them explicitly with:
+//! `zig build run-test-eval`. Run them explicitly with:
 //!
-//!   zig build test-eval -- known-bugs --filter bughunt
+//!   zig build run-test-eval -- known-bugs --filter bughunt
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 

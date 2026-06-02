@@ -140,10 +140,6 @@ const TestsSummaryStep = struct {
         return self;
     }
 
-    fn setRunPrerequisite(self: *TestsSummaryStep, prerequisite: *Step) void {
-        self.run_prerequisite = prerequisite;
-    }
-
     fn setRunSerialization(self: *TestsSummaryStep) void {
         self.serialize_runs = true;
     }
@@ -242,19 +238,6 @@ const TestsSummaryStep = struct {
         }
     }
 };
-
-fn createNoopStep(b: *std.Build, name: []const u8) *Step {
-    const step = b.allocator.create(Step) catch @panic("OOM");
-    step.* = Step.init(.{
-        .id = Step.Id.custom,
-        .name = name,
-        .owner = b,
-        .makeFn = struct {
-            fn make(_: *Step, _: Step.MakeOptions) !void {}
-        }.make,
-    });
-    return step;
-}
 
 /// Build step that checks for forbidden patterns in the type checker code.
 ///
@@ -1560,103 +1543,6 @@ const CheckFxStep = struct {
     }
 };
 
-const TidyStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *TidyStep {
-        const self = b.allocator.create(TidyStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "tidy-inner",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-        std.debug.print("---- tidy: running code tidiness checks ----\n", .{});
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, b.graph.zig_exe);
-        try child_argv.append(b.allocator, "run");
-        try child_argv.append(b.allocator, "ci/tidy.zig");
-
-        var child = try std.process.spawn(b.graph.io, .{
-            .argv = child_argv.items,
-            .environ_map = &b.graph.environ_map,
-        });
-        const term = try child.wait(b.graph.io);
-
-        switch (term) {
-            .exited => |code| {
-                if (code != 0) {
-                    return step.fail("Tidy checks failed. Run 'zig run ci/tidy.zig' to see details.", .{});
-                }
-            },
-            else => {
-                return step.fail("zig run ci/tidy.zig terminated abnormally", .{});
-            },
-        }
-    }
-};
-
-const GitLintsStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *GitLintsStep {
-        const self = b.allocator.create(GitLintsStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "git-lints-inner",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-        std.debug.print("---- git-lints: running Git-backed code checks ----\n", .{});
-
-        var child_argv = std.ArrayList([]const u8).empty;
-        defer child_argv.deinit(b.allocator);
-
-        try child_argv.append(b.allocator, b.graph.zig_exe);
-        try child_argv.append(b.allocator, "run");
-        try child_argv.append(b.allocator, "ci/tidy.zig");
-        try child_argv.append(b.allocator, "--");
-        try child_argv.append(b.allocator, "--git-lints");
-
-        var child = try std.process.spawn(b.graph.io, .{
-            .argv = child_argv.items,
-            .environ_map = &b.graph.environ_map,
-        });
-        const term = try child.wait(b.graph.io);
-
-        switch (term) {
-            .exited => |code| {
-                if (code != 0) {
-                    return step.fail(
-                        "Git lints failed. Run 'zig run ci/tidy.zig -- --git-lints' to see details.",
-                        .{},
-                    );
-                }
-            },
-            else => {
-                return step.fail("zig run ci/tidy.zig -- --git-lints terminated abnormally", .{});
-            },
-        }
-    }
-};
-
 const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
@@ -2181,34 +2067,74 @@ pub fn build(b: *std.Build) void {
     std.Io.Dir.cwd().createDirPath(b.graph.io, "zig-out/bin") catch {};
 
     // build steps
-    const run_step = b.step("run", "Build and run the roc cli");
-    const roc_step = b.step("roc", "Build the roc compiler without running it");
-    const test_step = b.step("test", "Run all Zig tests");
+    const build_ci_step = b.step("build-ci", "Build all binaries used by MiniCI");
+    const run_step = b.step("run", "Alias for run-roc");
+    const roc_step = b.step("roc", "Alias for build-roc");
+    const build_roc_step = b.step("build-roc", "Build the roc compiler without running it");
+    const run_roc_step = b.step("run-roc", "Build and run the roc cli");
+    const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
+    const run_check_zig_format_step = b.step("run-check-zig-format", "Check formatting of all zig code");
+    const run_check_zig_lints_step = b.step("run-check-zig-lints", "Run Zig lints");
+    const run_check_tidy_step = b.step("run-check-tidy", "Run code tidiness checks");
+    const run_check_git_lints_step = b.step("run-check-git-lints", "Run Git-backed code checks");
+    const run_check_fx_platform_test_coverage_step = b.step("run-check-fx-platform-test-coverage", "Check that every .roc file in test/fx has a corresponding test");
+    const run_check_type_checker_patterns_step = b.step("run-check-type-checker-patterns", "Check forbidden type-checker patterns");
+    const run_check_enum_from_int_zero_step = b.step("run-check-enum-from-int-zero", "Check forbidden @enumFromInt(0) usage");
+    const run_check_unused_suppression_step = b.step("run-check-unused-suppression", "Check unused-variable suppression patterns");
+    const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
+    const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
+    const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
+    const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
+    const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
+    const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
+    const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
+    const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
+    const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
+    const run_test_zig_step = b.step("run-test-zig", "Run Zig unit tests");
+    const build_test_eval_runner_step = b.step("build-test-eval-runner", "Build eval test runner");
+    const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
+    const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
+    const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
+    const build_playground_step = b.step("build-playground", "Build the WASM playground");
+    const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
+    const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
+    const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
+    const run_test_cli_step = b.step("run-test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
+    const run_test_cli_platforms_step = b.step("run-test-cli-platforms", "Run CLI platform integration tests");
+    const run_test_cli_subcommands_step = b.step("run-test-cli-subcommands", "Run roc CLI subcommand tests");
+    const run_test_cli_echo_step = b.step("run-test-cli-echo", "Run echo platform integration tests");
+    const run_test_cli_glue_step = b.step("run-test-cli-glue", "Run roc glue command tests");
+    const build_test_cli_bughunt_runner_step = b.step("build-test-cli-bughunt-runner", "Build opt-in CLI compiler-bug repro runner");
+    const run_test_cli_bughunt_step = b.step("run-test-cli-bughunt", "Run opt-in CLI compiler-bug repros");
+    const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
+    const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
+    const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
-    const tidy_step = b.step("tidy", "Run code tidiness checks (control chars, line length, etc.)");
-    const git_lints_step = b.step("git-lints", "Run Git-backed code checks");
-    const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
+    const tidy_step = b.step("tidy", "Alias for run-check-tidy");
+    const git_lints_step = b.step("git-lints", "Alias for run-check-git-lints");
+    const checkfx_step = b.step("checkfx", "Alias for run-check-fx-platform-test-coverage");
     const fmt_step = b.step("fmt", "Format all zig code");
-    const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
-    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
-    const check_semantic_audit_step = b.step("check-semantic-audit", "Check that semantic reconstruction/fallback paths stay gone");
+    const check_fmt_step = b.step("check-fmt", "Alias for run-check-zig-format");
+    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Alias for run-check-postcheck-architecture");
+    const check_semantic_audit_step = b.step("check-semantic-audit", "Alias for run-check-semantic-audit");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    const eval_test_step = b.step("test-eval", "Run eval tests in parallel across enabled backends");
-    const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
-    const playground_step = b.step("playground", "Build the WASM playground");
-    const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const eval_test_step = b.step("test-eval", "Alias for run-test-eval");
+    const eval_host_effects_step = b.step("test-eval-host-effects", "Alias for run-test-eval-host-effects");
+    const playground_step = b.step("playground", "Alias for build-playground");
+    const playground_test_step = b.step("test-playground", "Alias for run-test-playground");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
-    const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const serialization_size_step = b.step("test-serialization-sizes", "Alias for run-test-serialization-sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
-    const test_cli_step = b.step("test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
-    const test_platforms_step = b.step("test-platforms", "Test platform integration (int/str/fx build and run)");
-    const test_subcommands_step = b.step("test-subcommands", "Test roc CLI subcommands (check, build, run, fmt, etc.)");
-    const test_echo_step = b.step("test-echo", "Test the echo platform (headerless app) integration");
-    const test_glue_step = b.step("test-glue", "Test the roc glue command");
-    const test_bughunt_cli_step = b.step("test-bughunt-cli", "Run opt-in CLI compiler-bug repros");
+    const test_cli_step = b.step("test-cli", "Alias for run-test-cli");
+    const test_platforms_step = b.step("test-platforms", "Alias for run-test-cli-platforms");
+    const test_subcommands_step = b.step("test-subcommands", "Alias for run-test-cli-subcommands");
+    const test_echo_step = b.step("test-echo", "Alias for run-test-cli-echo");
+    const test_glue_step = b.step("test-glue", "Alias for run-test-cli-glue");
+    const test_bughunt_cli_step = b.step("test-bughunt-cli", "Alias for run-test-cli-bughunt");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
-    const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
+    const coverage_step = b.step("coverage", "Alias for run-coverage-parser");
     const release_step = b.step("release", "Build optimized release binary for distribution");
 
     // general configuration
@@ -2403,6 +2329,72 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zig_lints_exe = b.addExecutable(.{
+        .name = "zig_lints",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/zig_lints.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const tidy_exe = b.addExecutable(.{
+        .name = "tidy",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/tidy.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const test_wiring_exe = b.addExecutable(.{
+        .name = "check_test_wiring",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/check_test_wiring.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const minici_exe = b.addExecutable(.{
+        .name = "minici",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/minici.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+
+    const install_zig_lints = b.addInstallArtifact(zig_lints_exe, .{});
+    const install_tidy = b.addInstallArtifact(tidy_exe, .{});
+    const install_test_wiring = b.addInstallArtifact(test_wiring_exe, .{});
+    const install_minici = b.addInstallArtifact(minici_exe, .{});
+    build_check_tools_step.dependOn(&install_zig_lints.step);
+    build_check_tools_step.dependOn(&install_tidy.step);
+    build_check_tools_step.dependOn(&install_test_wiring.step);
+    build_check_tools_step.dependOn(&install_minici.step);
+
+    const run_zig_lints = b.addRunArtifact(zig_lints_exe);
+    run_zig_lints.step.dependOn(&install_zig_lints.step);
+    run_check_zig_lints_step.dependOn(&run_zig_lints.step);
+
+    const run_tidy = b.addRunArtifact(tidy_exe);
+    run_tidy.step.dependOn(&install_tidy.step);
+    run_check_tidy_step.dependOn(&run_tidy.step);
+    tidy_step.dependOn(run_check_tidy_step);
+
+    const run_git_lints = b.addRunArtifact(tidy_exe);
+    run_git_lints.addArg("--git-lints");
+    run_git_lints.step.dependOn(&install_tidy.step);
+    run_check_git_lints_step.dependOn(&run_git_lints.step);
+    git_lints_step.dependOn(run_check_git_lints_step);
+
+    const run_test_wiring = b.addRunArtifact(test_wiring_exe);
+    run_test_wiring.step.dependOn(&install_test_wiring.step);
+    run_check_test_wiring_step.dependOn(&run_test_wiring.step);
+
+    const run_minici = b.addRunArtifact(minici_exe);
+    run_minici.addArg(b.graph.zig_exe);
+    run_minici.step.dependOn(&install_minici.step);
+    minici_step.dependOn(&run_minici.step);
+
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("bytebox", bytebox.module("bytebox"));
@@ -2471,12 +2463,19 @@ pub fn build(b: *std.Build) void {
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
-    _ = install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+    _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
+    roc_step.dependOn(build_roc_step);
+    run_step.dependOn(run_roc_step);
 
     // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
     const clear_cache_step = createClearCacheStep(b);
-    roc_step.dependOn(clear_cache_step);
+    build_roc_step.dependOn(clear_cache_step);
     b.getInstallStep().dependOn(clear_cache_step);
+
+    const run_builtin_format = b.addRunArtifact(roc_exe);
+    run_builtin_format.addArgs(&.{ "fmt", "--check", "src/build/roc/Builtin.roc" });
+    run_builtin_format.step.dependOn(build_roc_step);
+    run_check_builtin_format_step.dependOn(&run_builtin_format.step);
 
     // Release build with platform-optimal settings
     {
@@ -2533,10 +2532,10 @@ pub fn build(b: *std.Build) void {
     // test_runner invocations with a single fork-based parallel runner.
     //
     // Each sub-step is independently runnable:
-    //   zig build test-platforms    — platform integration tests (int/str/fx)
-    //   zig build test-subcommands  — roc CLI subcommand tests
-    //   zig build test-glue         — glue command tests
-    //   zig build test-cli          — umbrella: runs all three
+    //   zig build run-test-cli-platforms    — platform integration tests (int/str/fx)
+    //   zig build run-test-cli-subcommands  — roc CLI subcommand tests
+    //   zig build run-test-cli-glue         — glue command tests
+    //   zig build run-test-cli              — umbrella: runs all CLI integration tests
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
 
@@ -2555,6 +2554,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         parallel_cli_runner_exe.root_module.link_libc = true;
+        build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
         const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
         run_parallel_cli.addArg("zig-out/bin/roc");
@@ -2565,16 +2565,20 @@ pub fn build(b: *std.Build) void {
             run_parallel_cli.addArg("--filter");
             run_parallel_cli.addArg(f);
         }
+        if (run_args.len != 0) {
+            run_parallel_cli.addArgs(run_args);
+        }
         run_parallel_cli.step.dependOn(&install.step);
         run_parallel_cli.step.dependOn(build_test_hosts_step);
         // When -Dplatform=<name> filters to a single platform, only build the
         // host libraries for that platform — skip the runner, which expects all
         // platforms to be available.
         if (platform_filter == null) {
-            test_platforms_step.dependOn(&run_parallel_cli.step);
+            run_test_cli_platforms_step.dependOn(&run_parallel_cli.step);
         } else {
-            test_platforms_step.dependOn(build_test_hosts_step);
+            run_test_cli_platforms_step.dependOn(build_test_hosts_step);
         }
+        test_platforms_step.dependOn(run_test_cli_platforms_step);
 
         // test-subcommands: roc CLI subcommand integration tests
         const roc_subcommands_test = b.addTest(.{
@@ -2592,7 +2596,9 @@ pub fn build(b: *std.Build) void {
         const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
         run_roc_subcommands_test.step.dependOn(&install.step);
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
-        test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
+        build_test_cli_runners_step.dependOn(&roc_subcommands_test.step);
+        run_test_cli_subcommands_step.dependOn(&run_roc_subcommands_test.step);
+        test_subcommands_step.dependOn(run_test_cli_subcommands_step);
 
         // test-echo: echo platform (headerless app) tests
         const echo_tests = b.addTest(.{
@@ -2610,11 +2616,13 @@ pub fn build(b: *std.Build) void {
         const run_echo_tests = b.addRunArtifact(echo_tests);
         run_echo_tests.step.dependOn(&install.step);
         run_echo_tests.step.dependOn(build_test_hosts_step);
+        build_test_cli_runners_step.dependOn(&echo_tests.step);
 
         // Print "All N tests passed" via the same summary step the rest of the suite uses.
         const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
         echo_tests_summary.addRun(&run_echo_tests.step);
-        test_echo_step.dependOn(&echo_tests_summary.step);
+        run_test_cli_echo_step.dependOn(&echo_tests_summary.step);
+        test_echo_step.dependOn(run_test_cli_echo_step);
 
         // test-glue: glue command integration tests
         const glue_test = b.addTest(.{
@@ -2632,7 +2640,9 @@ pub fn build(b: *std.Build) void {
         const run_glue_test = b.addRunArtifact(glue_test);
         run_glue_test.step.dependOn(&install.step);
         run_glue_test_step = &run_glue_test.step;
-        test_glue_step.dependOn(&run_glue_test.step);
+        build_test_cli_runners_step.dependOn(&glue_test.step);
+        run_test_cli_glue_step.dependOn(&run_glue_test.step);
+        test_glue_step.dependOn(run_test_cli_glue_step);
 
         // test-cli: umbrella depending on all four. On Windows, use separate
         // aggregate run steps so focused steps like `test-echo` stay focused,
@@ -2666,13 +2676,14 @@ pub fn build(b: *std.Build) void {
             run_glue_test_for_cli.step.dependOn(&run_echo_tests_for_cli.step);
             run_glue_test_cli_step = &run_glue_test_for_cli.step;
 
-            test_cli_step.dependOn(&run_glue_test_for_cli.step);
+            run_test_cli_step.dependOn(&run_glue_test_for_cli.step);
         } else {
-            test_cli_step.dependOn(test_platforms_step);
-            test_cli_step.dependOn(test_subcommands_step);
-            test_cli_step.dependOn(test_echo_step);
-            test_cli_step.dependOn(test_glue_step);
+            run_test_cli_step.dependOn(run_test_cli_platforms_step);
+            run_test_cli_step.dependOn(run_test_cli_subcommands_step);
+            run_test_cli_step.dependOn(run_test_cli_echo_step);
+            run_test_cli_step.dependOn(run_test_cli_glue_step);
         }
+        test_cli_step.dependOn(run_test_cli_step);
 
         // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
         // stays out of test-cli because these tests document currently failing
@@ -2691,6 +2702,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         bughunt_cli_runner_exe.root_module.link_libc = true;
+        build_test_cli_bughunt_runner_step.dependOn(&bughunt_cli_runner_exe.step);
 
         const run_bughunt_cli = b.addRunArtifact(bughunt_cli_runner_exe);
         run_bughunt_cli.addArg("zig-out/bin/roc");
@@ -2703,7 +2715,8 @@ pub fn build(b: *std.Build) void {
         }
         run_bughunt_cli.step.dependOn(&install.step);
         run_bughunt_cli.step.dependOn(build_test_hosts_step);
-        test_bughunt_cli_step.dependOn(&run_bughunt_cli.step);
+        run_test_cli_bughunt_step.dependOn(&run_bughunt_cli.step);
+        test_bughunt_cli_step.dependOn(run_test_cli_bughunt_step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
@@ -2838,7 +2851,17 @@ pub fn build(b: *std.Build) void {
     }
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
-    const snapshot_exe_install = install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
+    const snapshot_exe_install = install_and_run(
+        b,
+        no_bin,
+        snapshot_exe,
+        build_snapshot_tool_step,
+        snapshot_step,
+        run_args,
+    );
+    const check_snapshot_diff = b.addSystemCommand(&.{ "git", "diff", "--exit-code", "test/snapshots" });
+    check_snapshot_diff.step.dependOn(snapshot_step);
+    run_check_snapshots_step.dependOn(&check_snapshot_diff.step);
 
     // Add parallel eval test runner
     const eval_test_exe = b.addExecutable(.{
@@ -2895,7 +2918,15 @@ pub fn build(b: *std.Build) void {
         }
         break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
     } else run_args;
-    _ = install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
+    _ = install_and_run(
+        b,
+        no_bin,
+        eval_test_exe,
+        build_test_eval_runner_step,
+        run_test_eval_step,
+        eval_run_args,
+    );
+    eval_test_step.dependOn(run_test_eval_step);
 
     const eval_host_effects_exe = b.addExecutable(.{
         .name = "eval-host-effects-runner",
@@ -2945,10 +2976,11 @@ pub fn build(b: *std.Build) void {
         b,
         no_bin,
         eval_host_effects_exe,
-        eval_host_effects_step,
-        eval_host_effects_step,
+        build_test_eval_host_effects_runner_step,
+        run_test_eval_host_effects_step,
         eval_host_effects_run_args,
     );
+    eval_host_effects_step.dependOn(run_test_eval_host_effects_step);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -2979,7 +3011,8 @@ pub fn build(b: *std.Build) void {
     }), false, null);
 
     const playground_install = b.addInstallArtifact(playground_exe, .{});
-    playground_step.dependOn(&playground_install.step);
+    build_playground_step.dependOn(&playground_install.step);
+    playground_step.dependOn(build_playground_step);
 
     // Build echo.wasm — echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.
@@ -3017,13 +3050,13 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_install = b.addInstallArtifact(echo_wasm, .{
             .dest_dir = .{ .override = .lib },
         });
-        playground_step.dependOn(&echo_wasm_install.step);
+        build_playground_step.dependOn(&echo_wasm_install.step);
         echo_wasm_step.dependOn(&echo_wasm_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
-            playground_step.dependOn(&install_file.step);
+            build_playground_step.dependOn(&install_file.step);
             echo_wasm_step.dependOn(&install_file.step);
         }
 
@@ -3098,19 +3131,23 @@ pub fn build(b: *std.Build) void {
         configureBackend(playground_integration_test_exe, target);
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
+        playground_integration_test_exe.root_module.addImport("test_harness", b.createModule(.{
+            .root_source_file = b.path("src/build/test_harness.zig"),
+        }));
         roc_modules.addAll(playground_integration_test_exe);
 
         const install = b.addInstallArtifact(playground_integration_test_exe, .{});
         // Ensure playground WASM is built before running the integration test
         install.step.dependOn(&playground_install.step);
-        playground_test_step.dependOn(&install.step);
+        build_test_playground_runner_step.dependOn(&install.step);
 
         const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
         if (run_args.len != 0) {
             run_playground_test.addArgs(run_args);
         }
         run_playground_test.step.dependOn(&install.step);
-        playground_test_step.dependOn(&run_playground_test.step);
+        run_test_playground_step.dependOn(&run_playground_test.step);
+        playground_test_step.dependOn(run_test_playground_step);
 
         break :blk install;
     };
@@ -3156,9 +3193,11 @@ pub fn build(b: *std.Build) void {
 
         // The test passes if both executables build successfully (compile-time checks pass)
         // and the native one runs without error
-        serialization_size_step.dependOn(&size_check_native.step);
-        serialization_size_step.dependOn(&size_check_wasm32.step);
-        serialization_size_step.dependOn(&run_native.step);
+        build_test_serialization_sizes_step.dependOn(&size_check_native.step);
+        build_test_serialization_sizes_step.dependOn(&size_check_wasm32.step);
+        run_test_serialization_sizes_step.dependOn(build_test_serialization_sizes_step);
+        run_test_serialization_sizes_step.dependOn(&run_native.step);
+        serialization_size_step.dependOn(run_test_serialization_sizes_step);
     }
 
     // Build WASM static library test runner with bytebox
@@ -3188,19 +3227,8 @@ pub fn build(b: *std.Build) void {
 
     // Check fx platform test coverage convenience step
     const checkfx_inner = CheckFxStep.create(b);
-    checkfx_step.dependOn(&checkfx_inner.step);
-
-    // Mini CI convenience step: runs a sequence of common build and test commands in order.
-    const minici_inner = ci_steps.MiniCiStep.create(b, checkFxPlatformTestCoverage);
-    minici_step.dependOn(&minici_inner.step);
-
-    // Tidy step: run code tidiness checks
-    const tidy_inner = TidyStep.create(b);
-    tidy_step.dependOn(&tidy_inner.step);
-
-    // Git lints step: run checks that require Git metadata
-    const git_lints_inner = GitLintsStep.create(b);
-    git_lints_step.dependOn(&git_lints_inner.step);
+    run_check_fx_platform_test_coverage_step.dependOn(&checkfx_inner.step);
+    checkfx_step.dependOn(run_check_fx_platform_test_coverage_step);
 
     const stack_overflow_test_helper_exe = b.addExecutable(.{
         .name = "stack_overflow_test_helper",
@@ -3216,19 +3244,15 @@ pub fn build(b: *std.Build) void {
     roc_modules.addModuleDependencies(stack_overflow_test_helper_exe, .base);
     const install_stack_overflow_test_helper = b.addInstallArtifact(stack_overflow_test_helper_exe, .{});
     const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);
+    build_test_zig_step.dependOn(&install_stack_overflow_test_helper.step);
 
     // Create and add module tests
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
-    const eval_tests_complete = createNoopStep(b, "eval-tests-complete");
-    eval_tests_complete.dependOn(eval_test_step);
-    eval_tests_complete.dependOn(eval_host_effects_step);
-    tests_summary.setRunPrerequisite(eval_tests_complete);
-    tests_summary.step.dependOn(eval_tests_complete);
     if (builtin.os.tag == .windows) {
         // Zig 0.16's Windows test runner IPC can time out while many Roc test
         // binaries are starting at once. Keep the same tests, but start them
-        // in a deterministic order after the eval suite completes.
+        // in a deterministic order.
         tests_summary.setRunSerialization();
     }
 
@@ -3328,6 +3352,7 @@ pub fn build(b: *std.Build) void {
         individual_test_step.dependOn(&individual_run.step);
 
         b.default_step.dependOn(&module_test.test_step.step);
+        build_test_zig_step.dependOn(&module_test.test_step.step);
         tests_summary.addRun(&module_test.run_step.step);
     }
 
@@ -3365,6 +3390,7 @@ pub fn build(b: *std.Build) void {
         }
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
+        build_test_zig_step.dependOn(&snapshot_test.step);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);
         if (snapshot_exe_install) |install| {
@@ -3413,6 +3439,7 @@ pub fn build(b: *std.Build) void {
             builtin_doc_test.root_module.link_libcpp = true;
         }
         add_tracy(b, roc_modules.build_options, builtin_doc_test, target, true, flag_enable_tracy);
+        build_test_zig_step.dependOn(&builtin_doc_test.step);
 
         const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
         if (run_args.len != 0) {
@@ -3464,6 +3491,7 @@ pub fn build(b: *std.Build) void {
         add_tracy(b, roc_modules.build_options, cli_test, target, true, flag_enable_tracy);
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cli_test.step.dependOn(&write_compiled_builtins.step);
+        build_test_zig_step.dependOn(&cli_test.step);
 
         const run_cli_test = b.addRunArtifact(cli_test);
         if (run_args.len != 0) {
@@ -3496,6 +3524,8 @@ pub fn build(b: *std.Build) void {
             watch_test.root_module.linkSystemLibrary("kernel32", .{});
         }
 
+        build_test_zig_step.dependOn(&watch_test.step);
+
         const run_watch_test = b.addRunArtifact(watch_test);
         if (run_args.len != 0) {
             run_watch_test.addArgs(run_args);
@@ -3505,41 +3535,35 @@ pub fn build(b: *std.Build) void {
 
     // Add check for forbidden patterns in type checker code
     const check_patterns = CheckTypeCheckerPatternsStep.create(b);
-    test_step.dependOn(&check_patterns.step);
+    run_check_type_checker_patterns_step.dependOn(&check_patterns.step);
 
     // Add check for @enumFromInt(0) usage
     const check_enum_from_int = CheckEnumFromIntZeroStep.create(b);
-    test_step.dependOn(&check_enum_from_int.step);
+    run_check_enum_from_int_zero_step.dependOn(&check_enum_from_int.step);
 
     // Add check for unused variable suppression patterns
     const check_unused = CheckUnusedSuppressionStep.create(b);
-    test_step.dependOn(&check_unused.step);
+    run_check_unused_suppression_step.dependOn(&check_unused.step);
 
     // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
-    test_step.dependOn(&check_postcheck_architecture.step);
-    check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
+    run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
+    check_postcheck_architecture_step.dependOn(run_check_postcheck_architecture_step);
 
     // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = ci_steps.SemanticAuditStep.create(b);
-    check_semantic_audit_step.dependOn(&run_semantic_audit.step);
-    test_step.dependOn(&run_semantic_audit.step);
-    eval_test_step.dependOn(&run_semantic_audit.step);
-    test_glue_step.dependOn(&run_semantic_audit.step);
+    run_check_semantic_audit_step.dependOn(&run_semantic_audit.step);
+    check_semantic_audit_step.dependOn(run_check_semantic_audit_step);
 
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);
-    test_step.dependOn(&check_panic.step);
+    run_check_panic_step.dependOn(&check_panic.step);
 
     // Add check for global stdio usage in CLI code
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
-    test_step.dependOn(&check_cli_stdio.step);
+    run_check_cli_global_stdio_step.dependOn(&check_cli_stdio.step);
 
-    // Run eval tests before the other test suites to avoid resource contention.
-    // The dev backend's forked children allocate heavily (code generation + mmap PROT_EXEC)
-    // and get SIGKILL'd by macOS jetsam under memory pressure when running in parallel
-    // with fx_platform_test and other test suites.
-    test_step.dependOn(&tests_summary.step);
+    run_test_zig_step.dependOn(&tests_summary.step);
 
     b.default_step.dependOn(playground_step);
     {
@@ -3553,7 +3577,8 @@ pub fn build(b: *std.Build) void {
     fmt_step.dependOn(&fmt.step);
 
     const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
-    check_fmt_step.dependOn(&check_fmt.step);
+    run_check_zig_format_step.dependOn(&check_fmt.step);
+    check_fmt_step.dependOn(run_check_zig_format_step);
 
     // Parser code coverage with kcov
     // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
@@ -3595,8 +3620,7 @@ pub fn build(b: *std.Build) void {
             build_cov_tests.dependOn(&install_parse_test.step);
             build_cov_tests.dependOn(&install_kcov.step);
 
-            // Make coverage step depend on the build step
-            coverage_step.dependOn(build_cov_tests);
+            build_coverage_tools_step.dependOn(build_cov_tests);
 
             // Create output directories before running kcov
             const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser" });
@@ -3733,16 +3757,16 @@ pub fn build(b: *std.Build) void {
             });
             roc_modules.addModuleDependencies(windows_parse_build, .parse);
             // Just compile, don't run - verifies Windows comptime branches
-            coverage_step.dependOn(&windows_parse_build.step);
+            build_coverage_tools_step.dependOn(&windows_parse_build.step);
 
-            // Add explicit dependencies on install steps to coverage_step itself
+            // Add explicit dependencies on install steps to the build step itself
             // TODO ZIG 16: re-check if lazy dependency issues are fixed
             // to work around Zig 0.15.2 lazy dependency issues
-            coverage_step.dependOn(&install_parse_test.step);
-            coverage_step.dependOn(&install_kcov.step);
+            build_coverage_tools_step.dependOn(&install_parse_test.step);
+            build_coverage_tools_step.dependOn(&install_kcov.step);
 
-            // Hook up coverage_step to the summary step
-            coverage_step.dependOn(&summary_step.step);
+            run_coverage_parser_step.dependOn(build_coverage_tools_step);
+            run_coverage_parser_step.dependOn(&summary_step.step);
         }
     } else if (!is_coverage_supported) {
         // On unsupported platforms, print a message
@@ -3763,8 +3787,22 @@ pub fn build(b: *std.Build) void {
                 }
             }.make,
         });
-        coverage_step.dependOn(unsupported_step);
+        run_coverage_parser_step.dependOn(unsupported_step);
     }
+    coverage_step.dependOn(run_coverage_parser_step);
+
+    build_ci_step.dependOn(build_roc_step);
+    build_ci_step.dependOn(build_check_tools_step);
+    build_ci_step.dependOn(build_snapshot_tool_step);
+    build_ci_step.dependOn(build_test_zig_step);
+    build_ci_step.dependOn(build_test_eval_runner_step);
+    build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
+    build_ci_step.dependOn(build_playground_step);
+    build_ci_step.dependOn(build_test_playground_runner_step);
+    build_ci_step.dependOn(build_test_cli_runners_step);
+    build_ci_step.dependOn(build_test_hosts_step);
+    build_ci_step.dependOn(build_test_serialization_sizes_step);
+    build_ci_step.dependOn(build_coverage_tools_step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
     const is_windows = target.result.os.tag == .windows;
@@ -3882,6 +3920,7 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_fx_platform_test.addArgs(run_args);
         }
+        build_test_zig_step.dependOn(&fx_platform_test.step);
         // Ensure host library is copied AND fixed before running the test
         run_fx_platform_test.step.dependOn(final_fx_host_step);
         run_fx_platform_test.step.dependOn(final_static_data_platform_step);

@@ -37,7 +37,7 @@ pub const TestStats = struct {
     }
 };
 
-fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
+fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
     // and PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -52,12 +52,12 @@ fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []c
     // Give every child build/run its own Roc and Zig local cache roots so test
     // runner processes cannot share module/build artifacts or observe one
     // another's cache state.
-    const cache_dirs = try util.createIsolatedTestCacheDirs(allocator);
+    const cache_dirs = try util.createIsolatedTestCacheDirs(std_io, allocator);
     defer cache_dirs.deinit(allocator);
     try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
-    return util.runChildWithTimeout(allocator, argv, .{
+    return util.runChildWithTimeout(std_io, allocator, argv, .{
         .env_map = &env_map,
         .max_output_bytes = max_output_bytes,
     });
@@ -159,10 +159,10 @@ pub fn buildNative(
 /// Run a native executable and check for successful execution.
 pub fn runNative(
     allocator: Allocator,
-    _: std.Io,
+    std_io: std.Io,
     exe_path: []const u8,
 ) !TestResult {
-    const result = util.runChildWithTimeout(allocator, &[_][]const u8{exe_path}, .{
+    const result = util.runChildWithTimeout(std_io, allocator, &[_][]const u8{exe_path}, .{
         .max_output_bytes = 50 * 1024,
     }) catch |err| {
         std.debug.print("FAIL (spawn error: {})\n", .{err});
@@ -297,7 +297,7 @@ fn runWithIoSpecBuildAndExec(
     const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
     defer allocator.free(exe_path);
 
-    const result = util.runChildWithTimeout(allocator, &[_][]const u8{
+    const result = util.runChildWithTimeout(std_io, allocator, &[_][]const u8{
         exe_path,
         "--test",
         io_spec,

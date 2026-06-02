@@ -29,7 +29,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 const Allocator = std.mem.Allocator;
 
 /// Path to the Builtin.roc file, relative to the project root (the directory
-/// where `zig build test` is invoked from).
+/// where `zig build run-test-zig` is invoked from).
 const builtin_roc_path = "src/build/roc/Builtin.roc";
 /// Where to write debug files when a block fails.
 const debug_dir = "test/echo";

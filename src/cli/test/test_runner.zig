@@ -43,11 +43,6 @@ const runner_core = @import("runner_core.zig");
 const PlatformConfig = platform_config.PlatformConfig;
 const TestStats = runner_core.TestStats;
 
-var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
-/// Override the default debug IO so that `std.Options.debug_io` uses a properly
-/// initialized Threaded instance with a real allocator for process spawning.
-pub const std_options_debug_threaded_io: *std.Io.Threaded = &debug_threaded_io_instance;
-
 /// Test mode
 const TestMode = enum {
     cross,
@@ -69,13 +64,6 @@ const Args = struct {
 
 /// Entry point for the unified test platform runner.
 pub fn main(init: std.process.Init) !void {
-    // Initialize the debug IO with a real allocator for process spawning
-    debug_threaded_io_instance = .init(init.gpa, .{
-        .argv0 = .init(init.minimal.args),
-        .environ = init.minimal.environ,
-    });
-    defer debug_threaded_io_instance.deinit();
-
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -128,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
     }
     std.debug.print("\n", .{});
 
-    const std_io = debug_threaded_io_instance.io();
+    const std_io = init.io;
     var stats = TestStats{};
 
     // Run tests based on mode
@@ -195,7 +183,7 @@ fn runCrossCompileTests(
 
     if (verify_failed) {
         std.debug.print("\nPlatform verification failed. Aborting.\n" ++
-            "To regenerate host libraries, run: zig build test-platforms\n", .{});
+            "To regenerate host libraries, run: zig build run-test-cli-platforms\n", .{});
         std.process.exit(1);
     }
 

@@ -510,6 +510,7 @@ pub const StandardArgs = struct {
     verbose: bool = false,
     include_llvm: bool = false,
     help_requested: bool = false,
+    stats_json_path: ?[]const u8 = null,
     /// When set, the runner runs a single test (by index after filters) and
     /// serializes its result to stdout. Used by the Windows Child-based
     /// parallel executor in `ProcessPool.runChildPool` for Phase-2 retry.
@@ -525,6 +526,180 @@ pub const StandardArgs = struct {
     /// Remaining positional args (runner-specific)
     positional: []const []const u8 = &.{},
 };
+
+/// Aggregate status counts for one harness run.
+pub const StatsSummary = struct {
+    total: usize = 0,
+    passed: usize = 0,
+    failed: usize = 0,
+    skipped: usize = 0,
+    crashed: usize = 0,
+    timed_out: usize = 0,
+};
+
+/// Extra key/value detail attached to one stats event.
+pub const StatsData = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+/// Completed timing span emitted by a runner.
+pub const StatsEvent = struct {
+    id: []const u8,
+    parent_id: ?[]const u8 = null,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    data: []const StatsData = &.{},
+
+    /// Returns the non-negative event duration in nanoseconds.
+    pub fn durationNs(self: StatsEvent) u64 {
+        return self.end_ns -| self.start_ns;
+    }
+};
+
+/// Top-level stats payload written by one runner.
+pub const RunnerStats = struct {
+    runner: []const u8,
+    summary: StatsSummary,
+    events: []const StatsEvent,
+};
+
+/// Returns true when a stats status should be treated as failure detail.
+pub fn statusIsFailure(status: []const u8) bool {
+    return !std.mem.eql(u8, status, "pass") and
+        !std.mem.eql(u8, status, "passed") and
+        !std.mem.eql(u8, status, "skip") and
+        !std.mem.eql(u8, status, "skipped");
+}
+
+/// Returns true when a worker argv flag consumes the following value.
+pub fn workerTemplateArgConsumesValue(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--worker") or
+        std.mem.eql(u8, arg, "--worker-backend") or
+        std.mem.eql(u8, arg, "--stats-json");
+}
+
+/// Returns true when a worker argv flag should be removed by itself.
+pub fn workerTemplateDropsFlag(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--worker-stream");
+}
+
+/// Writes a self-contained runner stats JSON file.
+pub fn writeRunnerStatsJson(
+    allocator: Allocator,
+    io: std.Io,
+    path: []const u8,
+    stats: RunnerStats,
+) !void {
+    if (std.fs.path.dirname(path)) |dir| {
+        std.Io.Dir.cwd().access(io, dir, .{}) catch |err| switch (err) {
+            error.FileNotFound => try std.Io.Dir.cwd().createDirPath(io, dir),
+            else => return err,
+        };
+    }
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"runner\": ");
+    try appendJsonString(&out, allocator, stats.runner);
+    try out.appendSlice(allocator, ",\n  \"summary\": {");
+    try appendSummaryField(&out, allocator, "total", stats.summary.total, true);
+    try appendSummaryField(&out, allocator, "passed", stats.summary.passed, false);
+    try appendSummaryField(&out, allocator, "failed", stats.summary.failed, false);
+    try appendSummaryField(&out, allocator, "skipped", stats.summary.skipped, false);
+    try appendSummaryField(&out, allocator, "crashed", stats.summary.crashed, false);
+    try appendSummaryField(&out, allocator, "timed_out", stats.summary.timed_out, false);
+    try out.appendSlice(allocator, "\n  },\n  \"events\": [\n");
+
+    for (stats.events, 0..) |event, i| {
+        if (i > 0) try out.appendSlice(allocator, ",\n");
+        try out.appendSlice(allocator, "    {\n      \"id\": ");
+        try appendJsonString(&out, allocator, event.id);
+        try out.appendSlice(allocator, ",\n      \"parent_id\": ");
+        if (event.parent_id) |parent_id| {
+            try appendJsonString(&out, allocator, parent_id);
+        } else {
+            try out.appendSlice(allocator, "null");
+        }
+        try out.appendSlice(allocator, ",\n      \"kind\": ");
+        try appendJsonString(&out, allocator, event.kind);
+        try out.appendSlice(allocator, ",\n      \"name\": ");
+        try appendJsonString(&out, allocator, event.name);
+        try out.appendSlice(allocator, ",\n      \"status\": ");
+        try appendJsonString(&out, allocator, event.status);
+        try appendNumberField(&out, allocator, "start_ns", event.start_ns);
+        try appendNumberField(&out, allocator, "end_ns", event.end_ns);
+        try appendNumberField(&out, allocator, "duration_ns", event.durationNs());
+        if (event.data.len > 0) {
+            try out.appendSlice(allocator, ",\n      \"data\": {");
+            for (event.data, 0..) |data, data_i| {
+                if (data_i > 0) try out.appendSlice(allocator, ",");
+                try out.appendSlice(allocator, "\n        ");
+                try appendJsonString(&out, allocator, data.key);
+                try out.appendSlice(allocator, ": ");
+                try appendJsonString(&out, allocator, data.value);
+            }
+            try out.appendSlice(allocator, "\n      }");
+        }
+        try out.appendSlice(allocator, "\n    }");
+    }
+
+    try out.appendSlice(allocator, "\n  ]\n}\n");
+
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, out.items);
+}
+
+fn appendSummaryField(out: *std.ArrayList(u8), allocator: Allocator, name: []const u8, value: usize, first: bool) !void {
+    if (!first) try out.appendSlice(allocator, ",");
+    try out.appendSlice(allocator, "\n    ");
+    try appendJsonString(out, allocator, name);
+    try out.appendSlice(allocator, ": ");
+    try appendU64(out, allocator, @intCast(value));
+}
+
+fn appendNumberField(out: *std.ArrayList(u8), allocator: Allocator, name: []const u8, value: u64) !void {
+    try out.appendSlice(allocator, ",\n      ");
+    try appendJsonString(out, allocator, name);
+    try out.appendSlice(allocator, ": ");
+    try appendU64(out, allocator, value);
+}
+
+fn appendU64(out: *std.ArrayList(u8), allocator: Allocator, value: u64) !void {
+    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
+}
+
+fn appendJsonString(out: *std.ArrayList(u8), allocator: Allocator, value: []const u8) !void {
+    try out.append(allocator, '"');
+    for (value) |byte| {
+        switch (byte) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            0x08 => try out.appendSlice(allocator, "\\b"),
+            0x0c => try out.appendSlice(allocator, "\\f"),
+            else => {
+                if (byte < 0x20) {
+                    const escaped = try std.fmt.allocPrint(allocator, "\\u{x:0>4}", .{byte});
+                    defer allocator.free(escaped);
+                    try out.appendSlice(allocator, escaped);
+                } else {
+                    try out.append(allocator, byte);
+                }
+            },
+        }
+    }
+    try out.append(allocator, '"');
+}
 
 fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
     var filters: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -569,6 +744,11 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             }
         } else if (std.mem.eql(u8, arg, "--worker-stream")) {
             args.worker_stream = true;
+        } else if (std.mem.eql(u8, arg, "--stats-json")) {
+            i += 1;
+            if (i < raw_args.len) {
+                args.stats_json_path = raw_args[i];
+            }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             args.help_requested = true;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
@@ -662,6 +842,31 @@ test "parseStandardArgsFromSlice parses --worker and --worker-backend without po
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }
 
+test "parseStandardArgsFromSlice parses stats flags without polluting positional" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "roc-binary",
+        "--stats-json",
+        "zig-out/minici/raw/eval.json",
+    }, arena.allocator());
+
+    try std.testing.expect(args.stats_json_path != null);
+    try std.testing.expectEqualStrings("zig-out/minici/raw/eval.json", args.stats_json_path.?);
+    try std.testing.expectEqual(@as(usize, 1), args.positional.len);
+    try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
+}
+
+test "worker template strips stats and worker flags" {
+    try std.testing.expect(workerTemplateArgConsumesValue("--worker"));
+    try std.testing.expect(workerTemplateArgConsumesValue("--worker-backend"));
+    try std.testing.expect(workerTemplateArgConsumesValue("--stats-json"));
+    try std.testing.expect(workerTemplateDropsFlag("--worker-stream"));
+    try std.testing.expect(!workerTemplateArgConsumesValue("--filter"));
+}
+
 // Process pool (comptime-generic)
 
 /// Configuration for the process pool. The runner provides type-specific
@@ -670,7 +875,7 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
     return struct {
         /// Run one test in the forked child. Called with an arena allocator
         /// and the same timeout budget enforced by the parent watchdog.
-        runTest: *const fn (Allocator, Spec, u64) Result,
+        runTest: *const fn (std.Io, Allocator, Spec, u64) Result,
         /// Serialize a result to the pipe fd.
         serialize: *const fn (posix.fd_t, Result) void,
         /// Deserialize a result from the accumulated pipe buffer.
@@ -734,7 +939,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             _ = std.c.raise(posix.SIG.INT);
         }
 
-        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64) bool {
+        fn launchChild(io: std.Io, slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64) bool {
             if (comptime !has_fork) return false;
 
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
@@ -758,7 +963,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
                 const allocator = arena.allocator();
 
-                const result = cfg.runTest(allocator, specs[test_idx], timeout_ms);
+                const result = cfg.runTest(io, allocator, specs[test_idx], timeout_ms);
                 cfg.serialize(pipe_fds[1], result);
                 closeFd(pipe_fds[1]);
                 std.c._exit(0);
@@ -826,7 +1031,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 if (worker_argv_template) |tmpl| {
                     runChildPool(io, specs, results, max_children, timeout_ms, gpa, tmpl);
                 } else {
-                    runSequential(specs, results, gpa, timeout_ms);
+                    runSequential(io, specs, results, gpa, timeout_ms);
                 }
                 return;
             }
@@ -867,7 +1072,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             // Fill initial slots
             for (slots) |*slot| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(slot, specs, next_test, timeout_ms)) {
+                if (!launchChild(io, slot, specs, next_test, timeout_ms)) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -908,7 +1113,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms)) {
+                            if (!launchChild(io, &slots[slot_idx], specs, next_test, timeout_ms)) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -955,13 +1160,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Sequential fallback for platforms without fork (Windows).
         /// Effectively unused under the Child-based path; kept as defense in
         /// depth for callers that don't build a `worker_argv_template`.
-        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
+        fn runSequential(io: std.Io, specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);
                 if (cfg.onTestStarted) |cb| cb(spec);
-                const unstable_result = cfg.runTest(arena.allocator(), spec, timeout_ms);
+                const unstable_result = cfg.runTest(io, arena.allocator(), spec, timeout_ms);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }
         }

@@ -29,13 +29,13 @@ Most contributors execute the following commands before pushing their code:
 
 ```sh
 # This actually runs the tests, it doesn't just build them.
-zig build test
-zig build fmt
+zig build run-test-zig
+zig build run-check-zig-format
 ```
 
 To run a specific test:
 ```sh
-zig build test -- --test-filter "name of test"
+zig build run-test-zig -- --test-filter "name of test"
 ```
 
 ## Contribution Tips

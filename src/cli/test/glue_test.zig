@@ -12,7 +12,7 @@ fn runGlueCommand(
     glue_spec: []const u8,
     tmp_path: []const u8,
 ) !util.RocResult {
-    const result = try util.runRocCommand(allocator, &.{
+    const result = try util.runRocCommand(std.testing.io, allocator, &.{
         "glue",
         opt,
         glue_spec,
@@ -254,7 +254,7 @@ test "glue command with ZigGlue succeeds (dev backend)" {
 test "CGlue.roc expect tests pass (interpreter)" {
     const allocator = std.testing.allocator;
 
-    const result = try util.runRocCommand(allocator, &.{
+    const result = try util.runRocCommand(std.testing.io, allocator, &.{
         "test",
         "--opt=interpreter",
         "src/glue/src/CGlue.roc",

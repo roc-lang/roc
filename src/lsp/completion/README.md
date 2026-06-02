@@ -432,19 +432,19 @@ These tests call `getCompletionsAtPosition()` directly on a `SyntaxChecker`:
 
 ```bash
 # All completion-related tests
-zig build test -- --test-filter "completion"
+zig build run-test-zig -- --test-filter "completion"
 
 # Just context detection unit tests
-zig build test -- --test-filter "detectCompletionContext"
+zig build run-test-zig -- --test-filter "detectCompletionContext"
 
 # Just builder helper tests
-zig build test -- --test-filter "stripModulePrefix"
+zig build run-test-zig -- --test-filter "stripModulePrefix"
 
 # Just builtin type tests
-zig build test -- --test-filter "isBuiltinType"
+zig build run-test-zig -- --test-filter "isBuiltinType"
 
 # Full test suite
-zig build test
+zig build run-test-zig
 ```
 
 ### Writing a new completion test
