@@ -261,7 +261,19 @@ const ScratchStaticDispatchConstraint = struct {
 /// In most cases, we don't defer constraint checking and unify things
 /// immediately. However, there are some cases where it's necessary.
 const Constraint = union(enum) {
-    eql: struct { expected: Var, actual: Var, ctx: problem.Context },
+    eql: struct {
+        expected: Var,
+        actual: Var,
+        ctx: problem.Context,
+        /// True when this is a `recursive_def` cross-reference to a *different*,
+        /// annotated member of a recursive group (mutual recursion). Such a
+        /// reference is instantiated per use-site at validation time so each
+        /// member keeps its own rigid type parameters; a self-reference (or an
+        /// unannotated target) stays monomorphic. Drives resolution, not the
+        /// error message — kept here rather than in `ctx` (which is purely
+        /// diagnostic) so it doesn't have to ride inside the problem context.
+        is_cross_reference: bool = false,
+    },
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -5333,14 +5345,34 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Cycle detected: store env for merge at cycle root.
                             _ = try self.deferred_cycle_envs.append(self.gpa, sub_env);
 
-                            // Use the def's closure/expr var directly. After
-                            // checkDef, e_closure rank elevation has already run,
-                            // so the closure var is at rank 2 — safe for
-                            // unification without pulling body vars below the
-                            // generalization rank.
                             const def = self.cir.store.getDef(processing_def.def_idx);
                             const def_expr_var = ModuleEnv.varFrom(def.expr);
-                            _ = try self.unify(expr_var, def_expr_var, env);
+                            if (def.annotation != null) {
+                                // Forward reference to an ANNOTATED member of the
+                                // recursive group (mutual recursion). Decouple the
+                                // reference with a flex var and defer a
+                                // cross-reference constraint to the cycle root,
+                                // where the target is generalized and instantiated
+                                // per use-site. Unifying directly with the target's
+                                // (not-yet-generalized) type would force the two
+                                // members' rigid type parameters to coincide,
+                                // producing a spurious `T(k)` != `T(k)`.
+                                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                    .expected = def_expr_var,
+                                    .actual = expr_var,
+                                    .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                                    .is_cross_reference = true,
+                                } });
+                            } else {
+                                // Unannotated member: the group is inferred together
+                                // and shares type variables, so link monomorphically.
+                                // After checkDef, e_closure rank elevation has run,
+                                // so the closure var is at rank 2 — safe to unify
+                                // without pulling body vars below the generalization
+                                // rank.
+                                _ = try self.unify(expr_var, def_expr_var, env);
+                            }
 
                             break :blk;
                         } else {
@@ -5364,11 +5396,36 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // Set the expr to be a flex
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
+                        // A reference to a *different*, ANNOTATED def in the cycle
+                        // (mutual recursion) is instantiated per use-site at
+                        // validation time, so the members' rigid type parameters
+                        // don't clash. A self-reference, or a reference to an
+                        // unannotated member, stays monomorphic: unannotated
+                        // mutually-recursive functions are inferred as a group and
+                        // must share their (not-yet-generalized) type variables.
+                        const is_cross_reference = (referenced_def.annotation != null) and
+                            if (self.current_processing_def) |current_def|
+                                current_def != processing_def.def_idx
+                            else
+                                false;
+
+                        // For a cross-reference, target the callee's expr var
+                        // rather than its pattern var: at the cycle root the
+                        // root's pattern var is not yet linked to its generalized
+                        // type (that def-level unification happens after the body
+                        // is checked), but every participant's expr var has been
+                        // generalized by then — so instantiation can find it.
+                        const constraint_expected = if (is_cross_reference)
+                            ModuleEnv.varFrom(referenced_def.expr)
+                        else
+                            pat_var;
+
                         // Write down this constraint for later validation
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
-                            .expected = pat_var,
+                            .expected = constraint_expected,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                            .is_cross_reference = is_cross_reference,
                         } });
 
                         // Detect mutual recursion through local lookups. If the
@@ -8822,6 +8879,21 @@ fn validateLocalRecursiveRefs(self: *Self, env: *Env, from: usize) std.mem.Alloc
     self.local_recursive_refs.shrinkRetainingCapacity(from);
 }
 
+/// Resolve one `eql` constraint. For a `recursive_def` cross-reference (mutual
+/// recursion) whose target has been generalized, instantiate the target so the
+/// reference gets fresh type parameters — otherwise the two members' rigid type
+/// variables would be forced to unify, producing a spurious `T(k)` != `T(k)`
+/// mismatch. Self-references (and any not-yet-generalized target) keep the
+/// monomorphic direct unification.
+fn resolveEqlConstraint(self: *Self, eql: anytype, env: *Env) std.mem.Allocator.Error!void {
+    if (eql.is_cross_reference and self.types.resolveVar(eql.expected).desc.rank == .generalized) {
+        const instantiated = try self.instantiateVar(eql.expected, env, .use_last_var);
+        _ = try self.unifyInContext(instantiated, eql.actual, env, eql.ctx);
+        return;
+    }
+    _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+}
+
 /// Check any accumulated constraints
 fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -8832,7 +8904,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+                try self.resolveEqlConstraint(eql, env);
             },
         }
     }

@@ -678,3 +678,32 @@ test "check - repro - self-recursive local fn recursive use still type-checked a
 
     try test_env.assertOneTypeError("TYPE MISMATCH");
 }
+
+test "check - repro - issue 9491 follow-up - top-level mutually recursive parametric fns" {
+    // Mutually recursive functions over a parametric recursive nominal type must
+    // type-check: each cross-call instantiates the callee, so the two members'
+    // rigid type parameters don't clash into a spurious `T(k)` != `T(k)`.
+    const src =
+        \\RBMut(k) := [
+        \\    Empty,
+        \\    Node(RBMut(k)),
+        \\]
+        \\
+        \\delA : RBMut(k) -> RBMut(k)
+        \\delA = |inner| match inner {
+        \\    RBMut.Node(x) => x->delB()
+        \\    Empty => Empty
+        \\}
+        \\
+        \\delB : RBMut(k) -> RBMut(k)
+        \\delB = |t| match t {
+        \\    RBMut.Node(inner) => inner->delA()
+        \\    _ => t
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
