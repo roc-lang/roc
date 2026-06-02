@@ -1758,7 +1758,7 @@ test "roc check does not hang on tag union type alias inside List (issue 9481)" 
     defer gpa.free(result.stderr);
 
     // The command must not abort/panic (exit code 134 / a signal indicates SIGABRT).
-    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    const did_panic = result.term == .signal or (result.term == .exited and result.term.exited == 134);
     try testing.expect(!did_panic);
 
     // Neither the infinite-loop guard nor the coordinator watchdog should have fired.
@@ -1768,7 +1768,7 @@ test "roc check does not hang on tag union type alias inside List (issue 9481)" 
         std.mem.find(u8, result.stderr, "INFINITE TYPE") != null;
     try testing.expect(!has_panic_text);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check succeeds on Parser type module" {
