@@ -171,18 +171,32 @@ fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
         .aarch64 => {
             // Linux aarch64 ucontext_t; uc_sigmask precedes uc_mcontext, which
             // holds fault_address, regs[31], then sp.
+            //
+            // uc_mcontext (the kernel's struct sigcontext) is 16-byte aligned:
+            // its trailing FP/SIMD __reserved area is __aligned__(16). That
+            // alignment inserts 8 bytes of padding after the 1024-bit uc_sigmask,
+            // so uc_mcontext must be modeled as a 16-aligned struct rather than
+            // flattened — otherwise every field shifts 8 bytes early and `sp`
+            // lands on regs[30] (the link register). The trailing 16-aligned
+            // reserved field reproduces that alignment (mirrors std's mcontext_t).
             const stack_t = extern struct { ss_sp: ?*anyopaque, ss_flags: i32, ss_size: usize };
+            const mcontext_t = extern struct {
+                fault_address: u64,
+                regs: [31]u64,
+                sp: u64,
+                pc: u64,
+                pstate: u64,
+                reserved: [256 * 16]u8 align(16),
+            };
             const ucontext_t = extern struct {
                 uc_flags: u64,
                 uc_link: ?*anyopaque,
                 uc_stack: stack_t,
                 uc_sigmask: [16]u64,
-                uc_mcontext_fault_address: u64,
-                uc_mcontext_regs: [31]u64,
-                uc_mcontext_sp: u64,
+                uc_mcontext: mcontext_t,
             };
             const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
-            return @intCast(uc.uc_mcontext_sp);
+            return @intCast(uc.uc_mcontext.sp);
         },
         else => return null,
     }

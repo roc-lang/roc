@@ -117,7 +117,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_aarch64_macos_none";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-macos-none.tar.xz";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-JV7oFi6aqcFS2bELnGbFSN6KfYBms2cc2QDsoJf/jQo=";
     };
   }
   {
@@ -125,7 +125,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_aarch64_linux_musl";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-linux-musl.tar.xz";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-ZWo6xy9XT6x+oAFH+NaIZ6ojMmKocIvlNCWosauogu8=";
     };
   }
   {
@@ -133,7 +133,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_aarch64_windows_gnu";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-windows-gnu.zip";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-yHGRlDHPyqV2OktDk16COZvk2rqWqOigQ5rQFGhSMIE=";
     };
   }
   {
@@ -141,7 +141,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_arm_linux_musleabihf";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/arm-linux-musleabihf.tar.xz";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-ZaNju/84hEYlTq3duLL4JoV4CvzWwnnDyBNHjlyiIIs=";
     };
   }
   {
@@ -149,7 +149,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_x86_linux_musl";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86-linux-musl.tar.xz";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-ve8bjmgpmhTT2eqwH0a00jokBxeXNJP2lY0KsUEfDP8=";
     };
   }
   {
@@ -157,7 +157,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_x86_64_linux_musl";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-linux-musl.tar.xz";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-zo/JIywJ5En7LS6aWJvvfLS2rE7gxChsGyxV4R6Osqw=";
     };
   }
   {
@@ -165,7 +165,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_x86_64_macos_none";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-macos-none.tar.xz";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-l3fin29pd7i8xscVfso2bmmcEvdtvjViESxcj9j5poE=";
     };
   }
   {
@@ -173,7 +173,7 @@ linkFarm name [
     path = fetchZigArtifact {
       name = "roc_deps_x86_64_windows_gnu";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-windows-gnu.zip";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+      hash = "sha256-Sz1xmgFsi4Keu4+abfcRcKfwZPVOsYda3+jST30m86E=";
     };
   }
   {

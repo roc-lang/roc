@@ -87,6 +87,23 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
     }
 }
 
+/// Resolves a canonical absolute path, allocating the result.
+///
+/// Equivalent to `std.Io.Dir.cwd().realPathFileAlloc(...)` except the working
+/// buffer is zero-initialized before the syscall. The stdlib helper passes an
+/// `undefined` stack buffer to libc's `realpath`, then locates the null
+/// terminator with `indexOfScalar`. Valgrind has no interceptor for musl's
+/// `realpath`, so under our musl Linux builds it never marks the written bytes
+/// as defined; the scan then taints the returned length and every downstream
+/// allocator/free that touches the resulting slice. Pre-zeroing the buffer
+/// keeps the search reading only defined bytes, eliminating the cascade of
+/// false-positive `uninitialised value` reports.
+fn realPathFileAllocSafe(io: std.Io, sub_path: []const u8, allocator: Allocator) std.Io.Dir.RealPathFileAllocError![:0]u8 {
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+    const n = try std.Io.Dir.cwd().realPathFile(io, sub_path, &buffer);
+    return allocator.dupeSentinel(u8, buffer[0..n], 0);
+}
+
 /// Always logs a warning message.
 fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
@@ -116,7 +133,7 @@ fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []
     const temp_root_abs = if (std.fs.path.isAbsolute(temp_root))
         try allocator.dupe(u8, temp_root)
     else
-        try std.Io.Dir.cwd().realPathFileAlloc(app_io, temp_root, allocator);
+        try realPathFileAllocSafe(app_io, temp_root, allocator);
     defer allocator.free(temp_root_abs);
 
     const counter = snapshot_temp_counter.fetchAdd(1, .monotonic);
@@ -1513,7 +1530,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 
 /// Stage 1: Walk directory tree and collect work items
 fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
-    const canonical_path = std.Io.Dir.cwd().realPathFileAlloc(app_io, path, gpa) catch |err| {
+    const canonical_path = realPathFileAllocSafe(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
     };

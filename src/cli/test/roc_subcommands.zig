@@ -351,7 +351,7 @@ test "roc version outputs at least 5 chars to stdout" {
     try testing.expect(result.stdout.len >= 5);
 }
 
-test "roc repl shows welcome banner" {
+test "roc repl batch mode suppresses welcome banner" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -363,13 +363,9 @@ test "roc repl shows welcome banner" {
     // Command exits successfully (EOF closes REPL gracefully)
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
-    // Stdout contains the welcome banner
-    const has_welcome = std.mem.find(u8, result.stdout, "Roc REPL") != null;
-    try testing.expect(has_welcome);
-
-    // Stdout mentions help
-    const has_help_hint = std.mem.find(u8, result.stdout, ":help") != null;
-    try testing.expect(has_help_hint);
+    // Non-TTY stdin/stdout is batch mode: no banner, prompt, or goodbye noise.
+    try testing.expectEqual(@as(usize, 0), result.stdout.len);
+    try testing.expectEqual(@as(usize, 0), result.stderr.len);
 }
 
 test "roc repl evaluates simple expression" {
@@ -387,6 +383,22 @@ test "roc repl evaluates simple expression" {
     // Output contains the result "2"
     const has_result = std.mem.find(u8, result.stdout, "2") != null;
     try testing.expect(has_result);
+    try testing.expect(std.mem.find(u8, result.stdout, "Roc REPL") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, ">") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Goodbye") == null);
+}
+
+test "roc repl evaluates final stdin line without trailing newline" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "1 + 1");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stdout, "2") != null);
+    try testing.expectEqual(@as(usize, 0), result.stderr.len);
 }
 
 test "roc repl :help command works" {
@@ -407,7 +419,7 @@ test "roc repl :help command works" {
     try testing.expect(has_help_output);
 }
 
-test "roc repl :exit command exits cleanly" {
+test "roc repl :exit command exits cleanly in batch mode" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -419,9 +431,43 @@ test "roc repl :exit command exits cleanly" {
     // Command exits successfully
     try testing.expect(result.term == .exited and result.term.exited == 0);
 
-    // Output contains goodbye message
-    const has_goodbye = std.mem.find(u8, result.stdout, "Goodbye") != null;
-    try testing.expect(has_goodbye);
+    // Batch mode suppresses the interactive goodbye message.
+    try testing.expectEqual(@as(usize, 0), result.stdout.len);
+    try testing.expectEqual(@as(usize, 0), result.stderr.len);
+}
+
+test "roc repl parse diagnostics go to stderr in batch mode" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "1+\\n\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term != .exited or result.term.exited != 0);
+    try testing.expectEqual(@as(usize, 0), result.stdout.len);
+    try testing.expect(std.mem.find(u8, result.stderr, "PARSE ERROR") != null or
+        std.mem.find(u8, result.stderr, "UNEXPECTED TOKEN") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Error: ParseError") == null);
+}
+
+test "roc repl type diagnostics go to stderr without ANSI in batch mode" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const input =
+        "x = 1\n" ++
+        "x + \"a\"\n" ++
+        "x + 1\n";
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, input);
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term != .exited or result.term.exited != 0);
+    try testing.expect(std.mem.find(u8, result.stdout, "assigned `x`") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "2") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "MISSING METHOD") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "\x1b") == null);
 }
 
 test "roc repl variable definition and usage" {
@@ -1756,6 +1802,32 @@ test "roc check succeeds with unused app package shorthand (issue 9488)" {
     try testing.expect(result.term == .exited and result.term.exited == 0);
     try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
     try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+}
+
+test "roc check does not hang on tag union type alias inside List (issue 9481)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // A type alias for a tag union (`Rle(a)`), used as the element type of a `List`,
+    // and then compared with `==` against a list literal, caused the type checker to
+    // build a self-referential alias: the alias backing var redirected back to the
+    // alias var.
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/tag_union_alias_hang.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The command must not abort/panic (exit code 134 / a signal indicates SIGABRT).
+    const did_panic = result.term == .signal or (result.term == .exited and result.term.exited == 134);
+    try testing.expect(!did_panic);
+
+    // Neither the infinite-loop guard nor the coordinator watchdog should have fired.
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "Coordinator stuck") != null or
+        std.mem.find(u8, result.stderr, "Infinite loop") != null or
+        std.mem.find(u8, result.stderr, "INFINITE TYPE") != null;
+    try testing.expect(!has_panic_text);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check succeeds on Parser type module" {

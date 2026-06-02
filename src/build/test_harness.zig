@@ -60,6 +60,44 @@ pub const Timer = struct {
         }
     }
 };
+
+const non_tty_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
+
+fn testProgressIntervalNs(is_tty: bool) u64 {
+    if (is_tty) return std.time.ns_per_s;
+
+    const raw_z = std.c.getenv(non_tty_progress_env) orelse return 0;
+    const raw = std.mem.span(raw_z);
+    if (raw.len == 0) {
+        std.debug.print("invalid {s}: value must be an integer number of milliseconds\n", .{non_tty_progress_env});
+        return 0;
+    }
+
+    const interval_ms = std.fmt.parseInt(u64, raw, 10) catch |err| {
+        std.debug.print("invalid {s}='{s}': {s}\n", .{ non_tty_progress_env, raw, @errorName(err) });
+        return 0;
+    };
+    if (interval_ms == 0) return 0;
+
+    return std.math.mul(u64, interval_ms, std.time.ns_per_ms) catch {
+        std.debug.print("invalid {s}='{s}': value is too large\n", .{ non_tty_progress_env, raw });
+        return 0;
+    };
+}
+
+fn printPoolProgress(is_tty: bool, completed: usize, total: usize, elapsed_ns: u64) void {
+    const wall_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+    if (is_tty) {
+        std.debug.print("\r  progress: {d}/{d} done, {d:.1}s elapsed", .{
+            completed, total, wall_s,
+        });
+    } else {
+        std.debug.print("  progress: {d}/{d} done, {d:.1}s elapsed\n", .{
+            completed, total, wall_s,
+        });
+    }
+}
+
 /// Whether the platform supports `fork` for child process spawning.
 pub const has_fork = (builtin.os.tag != .windows);
 
@@ -470,6 +508,7 @@ pub const StandardArgs = struct {
     timeout_ms: u64 = 120_000,
     timeout_provided: bool = false,
     verbose: bool = false,
+    include_llvm: bool = false,
     help_requested: bool = false,
     /// When set, the runner runs a single test (by index after filters) and
     /// serializes its result to stdout. Used by the Windows Child-based
@@ -501,6 +540,8 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             if (i < raw_args.len) try filters.append(allocator, raw_args[i]);
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
+        } else if (std.mem.eql(u8, arg, "--llvm") or std.mem.eql(u8, arg, "--include-llvm")) {
+            args.include_llvm = true;
         } else if (std.mem.eql(u8, arg, "--threads")) {
             i += 1;
             if (i < raw_args.len) {
@@ -586,6 +627,19 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
     try std.testing.expectEqualStrings("beta", args.filters[1]);
     try std.testing.expectEqual(@as(usize, 1), args.positional.len);
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
+}
+
+test "parseStandardArgsFromSlice parses llvm aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "--include-llvm",
+    }, arena.allocator());
+
+    try std.testing.expect(args.include_llvm);
+    try std.testing.expectEqual(@as(usize, 0), args.positional.len);
 }
 
 test "parseStandardArgsFromSlice parses --worker and --worker-backend without polluting positional" {
@@ -776,10 +830,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
                 return;
             }
-            // On POSIX, children are forked in-place — io and the runtime
-            // template are unused. They remain in the signature for a uniform
-            // API.
-            _ = &io;
+            // On POSIX, children are forked in-place; the runtime template is
+            // unused. It remains in the signature for a uniform API.
             _ = &worker_argv_template;
 
             const slots = gpa.alloc(?ChildSlot, max_children) catch {
@@ -804,8 +856,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             const poll_map = gpa.alloc(usize, max_children) catch return;
             defer gpa.free(poll_map);
 
-            // std.posix.isatty was removed in Zig 0.16; use std.c.isatty instead.
-            const is_tty = std.c.isatty(2) != 0;
+            const is_tty = std.Io.File.stderr().isTty(io) catch false;
+            const progress_interval_ns = testProgressIntervalNs(is_tty);
 
             var next_test: usize = 0;
             var completed: usize = 0;
@@ -886,16 +938,12 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     }
                 }
 
-                // Progress line every ~1s (tty only)
+                // TTY progress updates in-place. Non-TTY progress is opt-in via
+                // ROC_TEST_PROGRESS_INTERVAL_MS and prints one factual line per interval.
                 const progress_elapsed = progress_timer.read();
-                if (progress_elapsed - last_progress_ns >= 1_000_000_000) {
+                if (progress_interval_ns != 0 and progress_elapsed - last_progress_ns >= progress_interval_ns) {
                     last_progress_ns = progress_elapsed;
-                    if (is_tty) {
-                        const wall_s = @as(f64, @floatFromInt(progress_elapsed)) / 1_000_000_000.0;
-                        std.debug.print("\r  progress: {d}/{d} done, {d:.1}s elapsed", .{
-                            completed, specs.len, wall_s,
-                        });
-                    }
+                    printPoolProgress(is_tty, completed, specs.len, progress_elapsed);
                 }
             }
 

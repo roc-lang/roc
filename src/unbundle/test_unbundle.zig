@@ -357,26 +357,84 @@ test "ErrorContext population" {
 
 const download = @import("download.zig");
 
-test "downloadAndExtract with unreachable URL returns error without crash" {
+test "downloadAndExtract with bad archive returns error without crash" {
     const io = testing.io;
 
-    // Regression test: downloading from an unreachable URL should return an error,
-    // not crash due to double-close of file handle.
+    // Regression test: a bad downloaded archive should return an error, not
+    // crash due to double-close of the temporary file handle.
     var allocator: std.mem.Allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // Resolve the temp dir to an absolute path for the new path-based API
     const tmp_path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    // Port 1 on localhost will fail to connect, triggering error handling path
+    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const port = server.socket.address.getPort();
+
+    const ServerContext = struct {
+        server: *std.Io.net.Server,
+        response_sent: std.Io.Semaphore = .{},
+
+        fn run(ctx: *@This()) void {
+            const thread_io = testing.io;
+            ctx.runImpl() catch {
+                ctx.response_sent.post(thread_io);
+            };
+        }
+
+        fn runImpl(ctx: *@This()) !void {
+            const thread_io = testing.io;
+
+            const stream = ctx.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+
+            var request_buf: [1024]u8 = undefined;
+            var recv_buffer: [512]u8 = undefined;
+            var reader = stream.reader(thread_io, &recv_buffer);
+            var slices = [_][]u8{request_buf[0..]};
+            _ = std.Io.Reader.readVec(&reader.interface, &slices) catch |err| switch (err) {
+                error.EndOfStream => 0,
+                error.ReadFailed => return reader.err orelse error.Unexpected,
+            };
+
+            const body = "not a roc bundle";
+            var write_buf: [256]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buf);
+            try writer.interface.print(
+                "HTTP/1.1 200 OK\r\n" ++
+                    "Content-Length: {d}\r\n" ++
+                    "Connection: close\r\n" ++
+                    "\r\n" ++
+                    "{s}",
+                .{ body.len, body },
+            );
+            try writer.interface.flush();
+            ctx.response_sent.post(thread_io);
+        }
+    };
+
+    var server_ctx = ServerContext{ .server = &server };
+    const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
+    defer server_thread.join();
+
+    const url = try std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
+        .{port},
+    );
+    defer allocator.free(url);
+
     const result = download.downloadAndExtract(
         &allocator,
         io,
-        "https://127.0.0.1:1/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
+        url,
         tmp_path,
     );
 
-    try testing.expectError(download.DownloadError.HttpError, result);
+    try testing.expectError(download.DownloadError.InvalidTarHeader, result);
+    try server_ctx.response_sent.wait(io);
 }

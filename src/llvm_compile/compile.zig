@@ -12,6 +12,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const bindings = @import("bindings.zig");
+const embedded_lld = @import("embedded_lld");
 const llvm_embedded = @import("llvm_embedded");
 
 const Allocator = std.mem.Allocator;
@@ -337,7 +338,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
         ) catch {};
     }
 
-    try linkSharedLibrary(allocator, io, object_path, shared_lib_path);
+    try linkSharedLibrary(allocator, object_path, shared_lib_path);
 
     if (std.c.getenv("ROC_LLVM_KEEP_DYLIB")) |keep_path_z| {
         std.Io.Dir.cwd().copyFile(
@@ -354,14 +355,9 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
 
 fn linkSharedLibrary(
     allocator: Allocator,
-    io: std.Io,
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
-    if (builtin.os.tag == .macos) {
-        return linkSharedLibraryMacos(allocator, io, object_path, shared_lib_path);
-    }
-
     var arena_impl = std.heap.ArenaAllocator.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
@@ -370,7 +366,27 @@ fn linkSharedLibrary(
     defer args.deinit(allocator);
 
     switch (builtin.os.tag) {
-        .macos => unreachable,
+        .macos => {
+            try args.append(allocator, "ld64.lld");
+            try args.append(allocator, "-dylib");
+            try args.append(allocator, "-o");
+            try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
+            try args.append(allocator, "-w");
+            try args.append(allocator, "-arch");
+            try args.append(allocator, switch (builtin.cpu.arch) {
+                .aarch64 => "arm64",
+                .x86_64 => "x86_64",
+                else => return Error.LinkFailed,
+            });
+            try args.append(allocator, "-platform_version");
+            try args.append(allocator, "macos");
+            try args.append(allocator, "13.0");
+            try args.append(allocator, "13.0");
+            try args.append(allocator, "-syslibroot");
+            try args.append(allocator, build_options.darwin_sysroot);
+            try args.append(allocator, std.mem.sliceTo(object_path, 0));
+            try args.append(allocator, "-lSystem");
+        },
         .linux, .freebsd, .openbsd, .netbsd => {
             try args.append(allocator, "ld.lld");
             try args.append(allocator, "-shared");
@@ -406,54 +422,17 @@ fn linkSharedLibrary(
         else => return Error.LinkFailed,
     }
 
-    const c_args = arena.alloc([*:0]const u8, args.items.len) catch return Error.OutOfMemory;
-
-    for (args.items, 0..) |arg, i| {
-        c_args[i] = (arena.dupeZ(u8, arg) catch return Error.OutOfMemory).ptr;
-    }
-
-    const success = switch (builtin.os.tag) {
-        .macos => bindings.LinkMachO(@intCast(c_args.len), c_args.ptr, false, false),
-        .linux, .freebsd, .openbsd, .netbsd => bindings.LinkELF(@intCast(c_args.len), c_args.ptr, false, false),
-        .windows => bindings.LinkCOFF(@intCast(c_args.len), c_args.ptr, false, false),
-        else => false,
+    const format: embedded_lld.Format = switch (builtin.os.tag) {
+        .macos => .macho,
+        .linux, .freebsd, .openbsd, .netbsd => .elf,
+        .windows => .coff,
+        else => return Error.LinkFailed,
     };
 
-    if (!success) return Error.LinkFailed;
-}
-
-fn linkSharedLibraryMacos(
-    allocator: Allocator,
-    io: std.Io,
-    object_path: [:0]const u8,
-    shared_lib_path: [:0]const u8,
-) Error!void {
-    const result = std.process.run(allocator, io, .{
-        .argv = &.{
-            "cc",
-            "-dynamiclib",
-            "-isysroot",
-            build_options.darwin_sysroot,
-            "-o",
-            std.mem.sliceTo(shared_lib_path, 0),
-            std.mem.sliceTo(object_path, 0),
-        },
-    }) catch return Error.LinkFailed;
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    switch (result.term) {
-        .exited => |code| {
-            if (code == 0) return;
-        },
-        else => {},
-    }
-
-    if (result.stderr.len > 0) {
-        std.debug.print("{s}", .{result.stderr});
-    }
-
-    return Error.LinkFailed;
+    embedded_lld.link(allocator, format, args.items, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return Error.OutOfMemory,
+        error.LinkFailed => return Error.LinkFailed,
+    };
 }
 
 fn getTempDir(allocator: Allocator) ![]u8 {

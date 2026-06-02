@@ -198,6 +198,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
         try low_level_map.put(list_sublist_ident, .list_sublist);
     }
+    if (env.common.findIdent("Builtin.List.prepend")) |list_prepend_ident| {
+        try low_level_map.put(list_prepend_ident, .list_prepend);
+    }
+    if (env.common.findIdent("list_set_unsafe")) |list_set_unsafe_ident| {
+        try low_level_map.put(list_set_unsafe_ident, .list_set);
+    }
+    if (env.common.findIdent("list_replace_unsafe")) |list_replace_unsafe_ident| {
+        try low_level_map.put(list_replace_unsafe_ident, .list_replace_unsafe);
+    }
+    if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
+        try low_level_map.put(list_swap_unsafe_ident, .list_swap);
+    }
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.
@@ -426,6 +438,35 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         const shift_right_zf_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_zf_by", .{num_type});
         if (env.common.findIdent(shift_right_zf_by)) |ident| {
             try low_level_map.put(ident, .num_shift_right_zf_by);
+        }
+    }
+
+    // Bitwise logical operations (integer types only)
+    for (integer_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // bitwise_and
+        const bitwise_and = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_and", .{num_type});
+        if (env.common.findIdent(bitwise_and)) |ident| {
+            try low_level_map.put(ident, .num_bitwise_and);
+        }
+
+        // bitwise_or
+        const bitwise_or = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_or", .{num_type});
+        if (env.common.findIdent(bitwise_or)) |ident| {
+            try low_level_map.put(ident, .num_bitwise_or);
+        }
+
+        // bitwise_xor
+        const bitwise_xor = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_xor", .{num_type});
+        if (env.common.findIdent(bitwise_xor)) |ident| {
+            try low_level_map.put(ident, .num_bitwise_xor);
+        }
+
+        // bitwise_not
+        const bitwise_not = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_not", .{num_type});
+        if (env.common.findIdent(bitwise_not)) |ident| {
+            try low_level_map.put(ident, .num_bitwise_not);
         }
     }
 

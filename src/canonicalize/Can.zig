@@ -985,10 +985,15 @@ fn processTypeDeclFirstPass(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        var associated_type_scope_entered = false;
+        defer if (associated_type_scope_entered) {
+            self.scopeExit(self.env.gpa) catch unreachable;
+        };
+
         if (type_decl.associated) |assoc| {
             try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
             try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch unreachable;
+            associated_type_scope_entered = true;
             try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
         }
 
@@ -1105,10 +1110,15 @@ fn processTypeDeclFirstPassWithExisting(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        var associated_type_scope_entered = false;
+        defer if (associated_type_scope_entered) {
+            self.scopeExit(self.env.gpa) catch unreachable;
+        };
+
         if (type_decl.associated) |assoc| {
             try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
             try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch unreachable;
+            associated_type_scope_entered = true;
             try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
         }
 
@@ -3255,6 +3265,7 @@ pub fn canonicalizeFile(
 
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
+    try self.checkExposedTypeSurfaces();
 
     // Add local type declarations to all_statements
     for (self.scratch_local_type_decls.items) |stmt_idx| {
@@ -4174,6 +4185,368 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
             .ident = ident_idx,
             .region = region,
         } });
+    }
+}
+
+const TypeSurfaceFrame = struct {
+    anno: TypeAnno.Idx,
+    field_name: ?Ident.Idx,
+    surface_region: ?Region,
+};
+
+const TypeSurfaceAliasUse = struct {
+    decl_idx: Statement.Idx,
+    surface_start: u32,
+    surface_end: u32,
+};
+
+const PublicTypeRoot = struct {
+    stmt_idx: Statement.Idx,
+    relative_name: Ident.Idx,
+};
+
+fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    var public_type_decls: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
+    defer public_type_decls.deinit(gpa);
+
+    var public_roots = std.ArrayList(PublicTypeRoot).empty;
+    defer public_roots.deinit(gpa);
+
+    var exposed_type_iter = self.exposed_types.iterator();
+    while (exposed_type_iter.next()) |entry| {
+        try self.addPublicTypeRoot(entry.key_ptr.*, &public_roots, &public_type_decls);
+    }
+
+    switch (self.env.module_kind) {
+        .type_module => |main_type| try self.addPublicTypeRoot(main_type, &public_roots, &public_type_decls),
+        else => {},
+    }
+
+    if (public_roots.items.len == 0) return;
+
+    var exposed_iter = self.env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const stmt_idx = self.exposedTypeDeclStatementIdx(entry.node_idx) orelse continue;
+        const header = self.typeDeclHeader(stmt_idx) orelse continue;
+        if (!self.typeIsAtOrUnderPublicRoot(header.relative_name, public_roots.items)) continue;
+
+        try public_type_decls.put(gpa, stmt_idx, {});
+    }
+
+    var checked_public_nominals: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
+    defer checked_public_nominals.deinit(gpa);
+
+    exposed_iter = self.env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const stmt_idx = self.exposedTypeDeclStatementIdx(entry.node_idx) orelse continue;
+        if (!public_type_decls.contains(stmt_idx)) continue;
+
+        try self.checkPublicNominalStatementSurface(
+            stmt_idx,
+            &public_type_decls,
+            &checked_public_nominals,
+        );
+    }
+
+    for (public_roots.items) |root| {
+        try self.checkPublicNominalStatementSurface(
+            root.stmt_idx,
+            &public_type_decls,
+            &checked_public_nominals,
+        );
+    }
+}
+
+fn addPublicTypeRoot(
+    self: *Self,
+    type_name: Ident.Idx,
+    public_roots: *std.ArrayList(PublicTypeRoot),
+    public_type_decls: *std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    const stmt_idx = blk: {
+        if (self.env.getExposedNodeIndexById(type_name)) |node_idx| {
+            if (self.exposedTypeDeclStatementIdx(node_idx)) |stmt_idx| break :blk stmt_idx;
+        }
+        break :blk self.scopeLookupTypeDecl(type_name) orelse return;
+    };
+
+    const header = self.typeDeclHeader(stmt_idx) orelse return;
+    if (public_type_decls.contains(stmt_idx)) return;
+
+    try public_type_decls.put(self.env.gpa, stmt_idx, {});
+    try public_roots.append(self.env.gpa, .{
+        .stmt_idx = stmt_idx,
+        .relative_name = header.relative_name,
+    });
+}
+
+fn exposedTypeDeclStatementIdx(self: *Self, node_idx_u32: u32) ?Statement.Idx {
+    if (node_idx_u32 == 0 or node_idx_u32 >= self.env.store.nodes.len()) return null;
+
+    const node_idx: Node.Idx = @enumFromInt(node_idx_u32);
+    return switch (self.env.store.nodes.get(node_idx).tag) {
+        .statement_alias_decl, .statement_nominal_decl => @enumFromInt(node_idx_u32),
+        else => null,
+    };
+}
+
+fn typeDeclHeader(self: *Self, stmt_idx: Statement.Idx) ?CIR.TypeHeader {
+    return switch (self.env.store.getStatement(stmt_idx)) {
+        .s_alias_decl => |alias| self.env.store.getTypeHeader(alias.header),
+        .s_nominal_decl => |nominal| self.env.store.getTypeHeader(nominal.header),
+        else => null,
+    };
+}
+
+fn typeIsAtOrUnderPublicRoot(
+    self: *Self,
+    relative_name: Ident.Idx,
+    public_roots: []const PublicTypeRoot,
+) bool {
+    const relative_text = self.env.getIdent(relative_name);
+
+    for (public_roots) |root| {
+        if (relative_name.eql(root.relative_name)) return true;
+
+        const root_text = self.env.getIdent(root.relative_name);
+        if (relative_text.len > root_text.len and
+            relative_text[root_text.len] == '.' and
+            std.mem.startsWith(u8, relative_text, root_text))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn checkPublicNominalStatementSurface(
+    self: *Self,
+    stmt_idx: Statement.Idx,
+    public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    checked_public_nominals: *std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    if (checked_public_nominals.contains(stmt_idx)) return;
+    try checked_public_nominals.put(self.env.gpa, stmt_idx, {});
+
+    const nominal = switch (self.env.store.getStatement(stmt_idx)) {
+        .s_nominal_decl => |decl| decl,
+        else => return,
+    };
+    if (nominal.is_opaque) return;
+
+    const header = self.env.store.getTypeHeader(nominal.header);
+    try self.checkPublicNominalTypeSurface(header.name, nominal.anno, public_type_decls);
+}
+
+fn checkPublicNominalTypeSurface(
+    self: *Self,
+    exposed_type: Ident.Idx,
+    root_anno: TypeAnno.Idx,
+    exposed_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    var stack = std.ArrayList(TypeSurfaceFrame).empty;
+    defer stack.deinit(gpa);
+    try stack.append(gpa, .{
+        .anno = root_anno,
+        .field_name = null,
+        .surface_region = null,
+    });
+
+    var visited_alias_uses: std.AutoHashMapUnmanaged(TypeSurfaceAliasUse, void) = .{};
+    defer visited_alias_uses.deinit(gpa);
+
+    while (stack.pop()) |frame| {
+        switch (self.env.store.getTypeAnno(frame.anno)) {
+            .lookup => |lookup| {
+                const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
+                try self.checkPublicTypeSurfaceBase(
+                    exposed_type,
+                    lookup.base,
+                    frame.field_name,
+                    frame.surface_region,
+                    lookup_region,
+                    exposed_type_decls,
+                    &visited_alias_uses,
+                    &stack,
+                );
+            },
+            .apply => |apply| {
+                const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
+                const args = self.env.store.sliceTypeAnnos(apply.args);
+                var i = args.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = args[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+                try self.checkPublicTypeSurfaceBase(
+                    exposed_type,
+                    apply.base,
+                    frame.field_name,
+                    frame.surface_region,
+                    lookup_region,
+                    exposed_type_decls,
+                    &visited_alias_uses,
+                    &stack,
+                );
+            },
+            .record => |record| {
+                if (record.ext) |ext| {
+                    try stack.append(gpa, .{
+                        .anno = ext,
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+
+                const fields = self.env.store.sliceAnnoRecordFields(record.fields);
+                var i = fields.len;
+                while (i > 0) {
+                    i -= 1;
+                    const field = self.env.store.getAnnoRecordField(fields[i]);
+                    try stack.append(gpa, .{
+                        .anno = field.ty,
+                        .field_name = field.name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.ext) |ext| {
+                    try stack.append(gpa, .{
+                        .anno = ext,
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+
+                const tags = self.env.store.sliceTypeAnnos(tag_union.tags);
+                var i = tags.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = tags[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .tag => |tag| {
+                const args = self.env.store.sliceTypeAnnos(tag.args);
+                var i = args.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = args[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .tuple => |tuple| {
+                const elems = self.env.store.sliceTypeAnnos(tuple.elems);
+                var i = elems.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = elems[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .@"fn" => |func| {
+                try stack.append(gpa, .{
+                    .anno = func.ret,
+                    .field_name = frame.field_name,
+                    .surface_region = frame.surface_region,
+                });
+
+                const args = self.env.store.sliceTypeAnnos(func.args);
+                var i = args.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = args[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .parens => |parens| {
+                try stack.append(gpa, .{
+                    .anno = parens.anno,
+                    .field_name = frame.field_name,
+                    .surface_region = frame.surface_region,
+                });
+            },
+            .rigid_var, .rigid_var_lookup, .underscore, .malformed => {},
+        }
+    }
+}
+
+fn checkPublicTypeSurfaceBase(
+    self: *Self,
+    exposed_type: Ident.Idx,
+    type_base: TypeAnno.LocalOrExternal,
+    field_name: ?Ident.Idx,
+    surface_region: ?Region,
+    lookup_region: Region,
+    exposed_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    visited_alias_uses: *std.AutoHashMapUnmanaged(TypeSurfaceAliasUse, void),
+    stack: *std.ArrayList(TypeSurfaceFrame),
+) std.mem.Allocator.Error!void {
+    const local = switch (type_base) {
+        .local => |local| local,
+        .builtin, .external, .pending => return,
+    };
+
+    const stmt = self.env.store.getStatement(local.decl_idx);
+    switch (stmt) {
+        .s_nominal_decl => |nominal| {
+            if (exposed_type_decls.contains(local.decl_idx)) return;
+
+            const private_header = self.env.store.getTypeHeader(nominal.header);
+            const diagnostic_region = surface_region orelse lookup_region;
+            if (field_name) |field| {
+                try self.env.pushDiagnostic(.{ .private_type_in_exposed_field = .{
+                    .exposed_type = exposed_type,
+                    .field_name = field,
+                    .private_type = private_header.name,
+                    .region = diagnostic_region,
+                } });
+            } else {
+                try self.env.pushDiagnostic(.{ .private_type_in_exposed_type = .{
+                    .exposed_type = exposed_type,
+                    .private_type = private_header.name,
+                    .region = diagnostic_region,
+                } });
+            }
+        },
+        .s_alias_decl => |alias| {
+            const alias_surface_region = surface_region orelse lookup_region;
+            const alias_use = TypeSurfaceAliasUse{
+                .decl_idx = local.decl_idx,
+                .surface_start = alias_surface_region.start.offset,
+                .surface_end = alias_surface_region.end.offset,
+            };
+            if (visited_alias_uses.contains(alias_use)) return;
+            try visited_alias_uses.put(self.env.gpa, alias_use, {});
+            try stack.append(self.env.gpa, .{
+                .anno = alias.anno,
+                .field_name = field_name,
+                .surface_region = alias_surface_region,
+            });
+        },
+        else => {},
     }
 }
 

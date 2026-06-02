@@ -1011,6 +1011,15 @@ fn interpreterExeCacheName(
     };
 }
 
+fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) !void {
+    const native_target = RocTarget.detectNative();
+    try ctx.io.stderr().print(
+        "Error: unsupported target for roc run: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
+        .{ @tagName(target), @tagName(native_target), @tagName(target) },
+    );
+    return error.UnsupportedTarget;
+}
+
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1099,6 +1108,9 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
                 };
 
                 if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
+                    if (!parsed_target.isExecutableOnHost()) {
+                        return rejectRunTargetNotExecutable(ctx, parsed_target);
+                    }
                     link_spec = spec;
                 } else {
                     const result = platform_validation.createUnsupportedTargetResult(
@@ -1111,8 +1123,8 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
                     return error.UnsupportedTarget;
                 }
             } else {
-                // No --target provided: use the first compatible exe target from the platform
-                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
+                // No --target provided: use the first exe target that can run on this host.
+                if (validation.config.getDefaultHostExecutableTarget(.exe)) |compatible_target| {
                     link_spec = validation.config.getLinkSpec(compatible_target, .exe);
                 } else {
                     // No compatible exe target found
@@ -3121,6 +3133,220 @@ fn nativeEntrypointSymbolName(
     return try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entrypoint_name});
 }
 
+const PlatformLinkInputs = struct {
+    target_name: []const u8,
+    platform_files_dir: []const u8,
+    platform_files_pre: []const []const u8,
+    platform_files_post: []const []const u8,
+};
+
+fn collectPlatformLinkInputs(
+    ctx: *CliCtx,
+    platform_dir: []const u8,
+    targets_config: roc_target.TargetsConfig,
+    target: RocTarget,
+    link_type: roc_target.LinkType,
+) !PlatformLinkInputs {
+    const target_name = @tagName(target);
+    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = error.UnsupportedTarget,
+            .target = target_name,
+        } });
+    };
+    const files_dir = targets_config.files_dir orelse "targets";
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+    var hit_app = false;
+
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |path| {
+                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
+                std.Io.Dir.cwd().access(ctx.io.std_io, full_path, .{}) catch {
+                    renderValidationError(ctx.gpa, .{ .missing_target_file = .{
+                        .target = target,
+                        .link_type = link_type,
+                        .file_path = path,
+                        .expected_full_path = full_path,
+                    } }, ctx.io.stderr());
+                    return error.MissingTargetFile;
+                };
+                if (!hit_app) {
+                    try platform_files_pre.append(full_path);
+                } else {
+                    try platform_files_post.append(full_path);
+                }
+            },
+            .app => hit_app = true,
+            .win_gui => {},
+        }
+    }
+
+    return .{
+        .target_name = target_name,
+        .platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }),
+        .platform_files_pre = platform_files_pre.items,
+        .platform_files_post = platform_files_post.items,
+    };
+}
+
+fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) ![]const u8 {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .unlimited);
+    errdefer ctx.gpa.free(bytes);
+    try owned_inputs.append(ctx.gpa, bytes);
+    return bytes;
+}
+
+fn freeOwnedWasmInputs(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8)) void {
+    for (owned_inputs.items) |bytes| {
+        ctx.gpa.free(bytes);
+    }
+    owned_inputs.deinit(ctx.gpa);
+}
+
+fn preloadWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) !backend.wasm.WasmModule {
+    const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
+    return backend.wasm.WasmModule.preload(ctx.gpa, bytes, true) catch |err| {
+        std.log.err("Failed to preload wasm input {s}: {}", .{ path, err });
+        return err;
+    };
+}
+
+fn mergeWasmInput(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    owned_inputs: *std.ArrayList([]u8),
+    path: []const u8,
+) !void {
+    var next_module = try preloadWasmInput(ctx, owned_inputs, path);
+    defer next_module.deinit();
+
+    var merge_result = try module.mergeModule(&next_module);
+    merge_result.deinit();
+}
+
+fn rocBuildWasmSurgical(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    link_type: roc_target.LinkType,
+    final_output_path: []const u8,
+    platform_dir: []const u8,
+    targets_config: roc_target.TargetsConfig,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    entrypoints: []const backend.Entrypoint,
+) !void {
+    if (args.no_link) {
+        try ctx.io.stderr().writeAll("Error: --no-link is not supported for wasm32 surgical builds.\n");
+        return error.UnsupportedTarget;
+    }
+
+    if (entrypoints.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("wasm build invariant violated: no exported platform entrypoints", .{});
+        }
+        unreachable;
+    }
+
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    if (link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
+        try ctx.io.stderr().writeAll("Error: wasm32 builds require a relocatable wasm platform file.\n");
+        return error.UnsupportedTarget;
+    }
+
+    var owned_inputs: std.ArrayList([]u8) = .empty;
+    defer freeOwnedWasmInputs(ctx, &owned_inputs);
+
+    var loaded_module = false;
+    var wasm_module: backend.wasm.WasmModule = undefined;
+    errdefer if (loaded_module) wasm_module.deinit();
+
+    for (link_inputs.platform_files_pre) |path| {
+        if (!loaded_module) {
+            wasm_module = try preloadWasmInput(ctx, &owned_inputs, path);
+            loaded_module = true;
+        } else {
+            try mergeWasmInput(ctx, &wasm_module, &owned_inputs, path);
+        }
+    }
+    for (link_inputs.platform_files_post) |path| {
+        if (!loaded_module) {
+            wasm_module = try preloadWasmInput(ctx, &owned_inputs, path);
+            loaded_module = true;
+        } else {
+            try mergeWasmInput(ctx, &wasm_module, &owned_inputs, path);
+        }
+    }
+
+    wasm_module.exportGlobalSymbols();
+    wasm_module.removeMemoryAndTableImports();
+
+    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
+    if (builtins_bytes.len > 0) {
+        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
+            std.log.err("Failed to preload wasm builtins: {}", .{err});
+            return err;
+        };
+        defer builtins_module.deinit();
+
+        var merge_result = try wasm_module.mergeModule(&builtins_module);
+        merge_result.deinit();
+    }
+
+    var codegen = backend.wasm.WasmCodeGen.initWithModule(
+        ctx.gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        wasm_module,
+    );
+    defer codegen.deinit();
+    loaded_module = false;
+
+    try codegen.registerIndirectCallTypes();
+    try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+
+    var host_to_app_map: std.ArrayList(backend.wasm.WasmModule.HostToAppEntry) = .empty;
+    defer host_to_app_map.deinit(ctx.gpa);
+    try host_to_app_map.ensureTotalCapacity(ctx.gpa, entrypoints.len);
+
+    for (entrypoints) |entry| {
+        const fn_index = try codegen.generateEntrypointWrapper(
+            entry.symbol_name,
+            entry.proc,
+            entry.arg_layouts,
+            entry.ret_layout,
+        );
+        host_to_app_map.appendAssumeCapacity(.{
+            .name = entry.symbol_name,
+            .fn_index = fn_index,
+        });
+    }
+
+    try codegen.flushPendingBodies();
+    try codegen.module.linkHostToAppCalls(host_to_app_map.items);
+
+    const stack_bytes = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE;
+    try codegen.module.finalizeMemoryAndTable(@intCast(stack_bytes));
+    codegen.module.ensureMemoryMinBytes(args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY);
+    codegen.module.resolveRelocations();
+
+    const called_fns = try ctx.gpa.alloc(bool, codegen.module.liveFunctionCount());
+    defer ctx.gpa.free(called_fns);
+    @memset(called_fns, false);
+    try codegen.module.eliminateDeadCode(called_fns);
+
+    try codegen.module.verifyNoBuiltinImports();
+    try codegen.module.materializeFuncBodies();
+
+    const wasm_bytes = try codegen.module.encode(ctx.gpa);
+    defer ctx.gpa.free(wasm_bytes);
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, final_output_path, wasm_bytes) catch |err| {
+        std.log.err("Failed to write wasm output: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+}
+
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
 
@@ -3246,13 +3472,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     switch (target_arch) {
-        .x86_64, .aarch64 => {},
-        .wasm32 => {
-            try ctx.io.stderr().writeAll(
-                "Error: `roc build` for wasm32 is not yet supported by the native object backend.\n",
-            );
-            return error.UnsupportedTarget;
-        },
+        .x86_64, .aarch64, .wasm32 => {},
         else => {
             try ctx.io.stderr().print(
                 "Error: The native object backend does not support the '{s}' architecture.\n",
@@ -3329,6 +3549,49 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
+
+    if (target_arch == .wasm32) {
+        try rocBuildWasmSurgical(
+            ctx,
+            args,
+            target,
+            link_type,
+            final_output_path,
+            platform_dir,
+            targets_config,
+            &lowered,
+            entrypoints,
+        );
+
+        const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
+        const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+        const cache_stats = build_env.getBuildStats();
+        const cache_percent = if (cache_stats.modules_total > 0)
+            @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+        else
+            0;
+
+        if (!args.suppress_build_status) {
+            const stdout = ctx.io.stdout();
+            try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
+            try stdout.writeAll(" (checked-artifact wasm backend)\n");
+
+            if (args.verbose) {
+                try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+                    cache_stats.modules_total,
+                    cache_stats.cache_hits,
+                    cache_stats.modules_compiled,
+                });
+                try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+            }
+
+            if (total_warning_count > 0) {
+                try stdout.print("  {} warning(s)\n", .{total_warning_count});
+            }
+        }
+        return;
+    }
+
     const static_data_exports = try compile.static_data_exports.buildProvidedDataExports(
         ctx.gpa,
         .{
@@ -3377,44 +3640,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         return;
     }
 
-    const target_name = @tagName(target);
-    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = error.UnsupportedTarget,
-            .target = target_name,
-        } });
-    };
-    const files_dir = targets_config.files_dir orelse "targets";
-    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    var hit_app = false;
-
-    for (link_spec.items) |item| {
-        switch (item) {
-            .file_path => |path| {
-                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-                std.Io.Dir.cwd().access(ctx.io.std_io, full_path, .{}) catch {
-                    const result = platform_validation.targets_validator.ValidationResult{
-                        .missing_target_file = .{
-                            .target = target,
-                            .link_type = link_type,
-                            .file_path = path,
-                            .expected_full_path = full_path,
-                        },
-                    };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.MissingTargetFile;
-                };
-                if (!hit_app) {
-                    try platform_files_pre.append(full_path);
-                } else {
-                    try platform_files_post.append(full_path);
-                }
-            },
-            .app => hit_app = true,
-            .win_gui => {},
-        }
-    }
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
@@ -3425,7 +3651,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
 
-    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
     const link_config = linker.LinkConfig{
         .target_format = linker.TargetFormat.detectFromOs(target_os),
         .target_abi = linker.TargetAbi.fromRocTarget(target),
@@ -3433,12 +3658,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         .target_arch = target_arch,
         .output_path = final_output_path,
         .object_files = object_files.items,
-        .platform_files_pre = platform_files_pre.items,
-        .platform_files_post = platform_files_post.items,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
         .extra_args = &.{},
         .can_exit_early = false,
         .disable_output = false,
-        .platform_files_dir = platform_files_dir,
+        .platform_files_dir = link_inputs.platform_files_dir,
         .scratch_dir = build_cache_dir,
     };
 
@@ -3449,7 +3674,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     linker.link(ctx, link_config) catch |err| {
         return ctx.fail(.{ .linker_failed = .{
             .err = err,
-            .target = target_name,
+            .target = link_inputs.target_name,
         } });
     };
 
@@ -3695,45 +3920,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         unreachable;
     }
 
-    const target_name = @tagName(target);
-    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = error.UnsupportedTarget,
-            .target = target_name,
-        } });
-    };
-    const files_dir = targets_config.files_dir orelse "targets";
-    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    var hit_app = false;
-
-    for (link_spec.items) |item| {
-        switch (item) {
-            .file_path => |path| {
-                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
-                // Validate the file exists
-                std.Io.Dir.cwd().access(ctx.io.std_io, full_path, .{}) catch {
-                    const result = platform_validation.targets_validator.ValidationResult{
-                        .missing_target_file = .{
-                            .target = target,
-                            .link_type = link_type,
-                            .file_path = path,
-                            .expected_full_path = full_path,
-                        },
-                    };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.MissingTargetFile;
-                };
-                if (!hit_app) {
-                    try platform_files_pre.append(full_path);
-                } else {
-                    try platform_files_post.append(full_path);
-                }
-            },
-            .app => hit_app = true,
-            .win_gui => {},
-        }
-    }
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
     const shim_filename = try interpreterShimCacheFilename(ctx, target);
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
@@ -3764,7 +3951,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         try extra_args.append("-lSystem");
     }
 
-    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
     const link_config = linker.LinkConfig{
         .target_format = linker.TargetFormat.detectFromOs(target_os),
         .target_abi = linker.TargetAbi.fromRocTarget(target),
@@ -3772,14 +3958,14 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         .target_arch = target_arch,
         .output_path = final_output_path,
         .object_files = object_files.items,
-        .platform_files_pre = platform_files_pre.items,
-        .platform_files_post = platform_files_post.items,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
         .extra_args = extra_args.items,
         .can_exit_early = false,
         .disable_output = false,
         .wasm_initial_memory = args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY,
         .wasm_stack_size = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE,
-        .platform_files_dir = platform_files_dir,
+        .platform_files_dir = link_inputs.platform_files_dir,
         .scratch_dir = build_cache_dir,
     };
 
@@ -3790,7 +3976,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     linker.link(ctx, link_config) catch |err| {
         return ctx.fail(.{ .linker_failed = .{
             .err = err,
-            .target = target_name,
+            .target = link_inputs.target_name,
         } });
     };
 
@@ -4577,13 +4763,24 @@ fn printTestFailure(
     try stderr.print("\x1b[0m\n", .{});
 }
 
+const ReplMode = enum {
+    interactive,
+    batch,
+};
+
 fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     const stdout = ctx.io.stdout();
-    const stderr = ctx.io.stderr();
     const backend_kind = repl_args.opt.toBackend();
+    const stdin = std.Io.File.stdin();
+    const stdin_is_tty = stdin.isTty(ctx.io.std_io) catch false;
+    const stdout_is_tty = std.Io.File.stdout().isTty(ctx.io.std_io) catch false;
+    const mode: ReplMode = if (stdin_is_tty and stdout_is_tty) .interactive else .batch;
+    const report_config = try replReportingConfig(ctx, repl_args, mode);
 
-    try stdout.writeAll("Roc REPL\nType :help for commands.\n");
-    ctx.io.flush();
+    if (mode == .interactive) {
+        try stdout.writeAll("Roc REPL\nType :help for commands.\n");
+        ctx.io.flush();
+    }
 
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
@@ -4591,38 +4788,130 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     var session = try ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
     defer session.deinit();
 
+    var pending = std.ArrayList(u8).empty;
+    defer pending.deinit(ctx.gpa);
+
     var should_exit = false;
-    const stdin = std.Io.File.stdin();
+    var had_diagnostics = false;
     while (!should_exit) {
-        const raw_line = reader.readLine(ctx.gpa, ctx.io.std_io, "> ", stdin) catch |err| switch (err) {
-            error.ExitRepl => break,
-            else => return err,
-        };
-        defer ctx.gpa.free(raw_line);
+        const prompt: []const u8 = if (mode == .interactive)
+            if (pending.items.len == 0) "> " else "| "
+        else
+            "";
 
-        const statements = try session.splitInputIntoStatements(raw_line);
-        defer session.freeStatementSlices(statements);
-
-        for (statements) |statement| {
-            const output = session.step(statement) catch |err| {
-                try stderr.print("Error: {s}\n", .{@errorName(err)});
-                ctx.io.flush();
-                continue;
-            };
-            defer ctx.gpa.free(output);
-
-            if (std.mem.eql(u8, output, "Goodbye!")) {
-                try stdout.writeAll("Goodbye!\n");
-                should_exit = true;
+        const read_result = try reader.readLine(ctx.gpa, ctx.io.std_io, prompt, stdin);
+        switch (read_result) {
+            .eof => {
+                if (pending.items.len > 0) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, mode, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                } else if (mode == .interactive) {
+                    try stdout.writeAll("Goodbye!\n");
+                }
                 break;
-            }
+            },
+            .line => |raw_line| {
+                defer ctx.gpa.free(raw_line);
 
-            if (output.len > 0) {
-                try stdout.print("{s}\n", .{output});
-            }
+                if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
+                    continue;
+                }
+
+                if (pending.items.len == 0 and std.mem.findAny(u8, raw_line, "\n\r") != null) {
+                    should_exit = try processReplInput(ctx, &session, raw_line, report_config, mode, &had_diagnostics);
+                    continue;
+                }
+
+                if (pending.items.len > 0) try pending.append(ctx.gpa, '\n');
+                try pending.appendSlice(ctx.gpa, raw_line);
+
+                switch (try session.inputStatus(pending.items)) {
+                    .incomplete => {},
+                    .complete, .invalid => {
+                        should_exit = try processReplInput(ctx, &session, pending.items, report_config, mode, &had_diagnostics);
+                        pending.clearRetainingCapacity();
+                    },
+                }
+            },
         }
         ctx.io.flush();
     }
+
+    if (mode == .batch and had_diagnostics) {
+        return error.CliError;
+    }
+}
+
+fn processReplInput(
+    ctx: *CliCtx,
+    session: *ReplSession,
+    input: []const u8,
+    report_config: reporting.ReportingConfig,
+    mode: ReplMode,
+    had_diagnostics: *bool,
+) !bool {
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    const statements = try session.splitInputIntoStatements(input);
+    defer session.freeStatementSlices(statements);
+
+    for (statements) |statement| {
+        const result = try session.stepWithConfig(statement, report_config);
+        defer result.deinit(ctx.gpa);
+
+        switch (result) {
+            .output => |output| {
+                if (output.len > 0) {
+                    try stdout.print("{s}\n", .{output});
+                }
+            },
+            .diagnostic => |diagnostic| {
+                had_diagnostics.* = true;
+                if (diagnostic.len > 0) {
+                    try stderr.print("{s}\n", .{diagnostic});
+                }
+            },
+            .none => {},
+            .exit => {
+                if (mode == .interactive) {
+                    try stdout.writeAll("Goodbye!\n");
+                }
+                return true;
+            },
+        }
+    }
+
+    return false;
+}
+
+fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMode) !reporting.ReportingConfig {
+    const stderr_is_tty = std.Io.File.stderr().isTty(ctx.io.std_io) catch false;
+    const no_color_env = try envVarNonEmpty(ctx.gpa, "NO_COLOR");
+    const force_color = try envVarNonEmpty(ctx.gpa, "FORCE_COLOR");
+    const high_contrast = try envVarEquals(ctx.gpa, "ROC_HIGH_CONTRAST", "1");
+    const color_disabled = repl_args.no_color or no_color_env;
+    const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
+
+    var config = if (should_color)
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
+    else
+        reporting.ReportingConfig.initMarkdown();
+
+    config.is_tty = stderr_is_tty;
+    return config;
+}
+
+fn envVarNonEmpty(allocator: Allocator, name: []const u8) !bool {
+    const value = getEnvVar(allocator, name) orelse return false;
+    defer allocator.free(value);
+    return value.len > 0;
+}
+
+fn envVarEquals(allocator: Allocator, name: []const u8, expected: []const u8) !bool {
+    const value = getEnvVar(allocator, name) orelse return false;
+    defer allocator.free(value);
+    return std.mem.eql(u8, value, expected);
 }
 
 const glue = @import("glue");
@@ -5600,6 +5889,10 @@ fn generateDocs(
         }
         return error.BrokenDocLinks;
     }
+}
+
+test {
+    _ = @import("linker.zig");
 }
 
 test "appendWindowsQuotedArg" {
