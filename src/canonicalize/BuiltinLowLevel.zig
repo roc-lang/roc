@@ -229,6 +229,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
         try low_level_map.put(list_sublist_ident, .list_sublist);
     }
+    if (env.common.findIdent("Builtin.List.prepend")) |list_prepend_ident| {
+        try low_level_map.put(list_prepend_ident, .list_prepend);
+    }
+    if (env.common.findIdent("list_set_unsafe")) |list_set_unsafe_ident| {
+        try low_level_map.put(list_set_unsafe_ident, .list_set);
+    }
+    if (env.common.findIdent("list_replace_unsafe")) |list_replace_unsafe_ident| {
+        try low_level_map.put(list_replace_unsafe_ident, .list_replace_unsafe);
+    }
+    if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
+        try low_level_map.put(list_swap_unsafe_ident, .list_swap);
+    }
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.

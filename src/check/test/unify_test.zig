@@ -309,7 +309,7 @@ test "rigid_var - unifies with flex_var (other way)" {
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
 }
 
-test "rigid_var - cannot unify with alias (fail)" {
+test "rigid_var - cannot unify with structure (fail)" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -474,6 +474,64 @@ test "unify - own backing structure with alias" {
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
     try std.testing.expectEqual(.not_recursive, occurs_result);
+}
+
+test "unify - alias (flex backing) with rigid" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Alias whose backing is a flex var - aliases are transparent, so this
+    // should unify with a rigid by expanding to the backing.
+    const backing = try env.module_env.types.fresh();
+    const a = try env.module_env.types.freshFromContent(try env.mkAlias("Id", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(a, rigid);
+    try std.testing.expectEqual(true, result.isOk());
+}
+
+test "unify - alias (flex backing) with rigid (other way)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Same as above but with the rigid as `a` - the result must match the
+    // other order (unification is commutative).
+    const backing = try env.module_env.types.fresh();
+    const alias = try env.module_env.types.freshFromContent(try env.mkAlias("Id", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(rigid, alias);
+    try std.testing.expectEqual(true, result.isOk());
+}
+
+test "unify - alias (concrete backing) with rigid (fail)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Alias whose backing is a concrete structure - expanding to the backing
+    // gives structure-vs-rigid, which is a mismatch.
+    const backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const a = try env.module_env.types.freshFromContent(try env.mkAlias("Alias", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(a, rigid);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - alias (concrete backing) with rigid (fail, other way)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const alias = try env.module_env.types.freshFromContent(try env.mkAlias("Alias", backing, &[_]Var{}));
+    const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unify(rigid, alias);
+    try std.testing.expectEqual(false, result.isOk());
 }
 
 // unification - structure/flex_vars //

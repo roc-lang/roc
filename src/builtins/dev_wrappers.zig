@@ -62,6 +62,7 @@ const listPrepend = list.listPrepend;
 const listSublist = list.listSublist;
 const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
+const listSwap = list.listSwap;
 const listReserve = list.listReserve;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
 const listWithCapacity = list.listWithCapacity;
@@ -473,9 +474,9 @@ pub fn roc_builtins_list_prepend(out: *RocList, list_bytes: ?[*]u8, list_len: us
             .callback = element_incref orelse unreachable,
             .roc_ops = roc_ops,
         };
-        out.* = listPrepend(l, alignment, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&copy_fallback), roc_ops);
+        out.* = listPrepend(l, alignment, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, &copy_fallback, roc_ops);
     } else {
-        out.* = listPrepend(l, alignment, element, element_width, false, null, @ptrCast(&rcNone), @ptrCast(&copy_fallback), roc_ops);
+        out.* = listPrepend(l, alignment, element, element_width, false, null, @ptrCast(&rcNone), &copy_fallback, roc_ops);
     }
 }
 
@@ -523,9 +524,27 @@ pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: us
             .callback = element_decref orelse unreachable,
             .roc_ops = roc_ops,
         };
-        out.* = listReplace(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, out_element, @ptrCast(&copy_fallback), roc_ops);
+        out.* = listReplace(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, out_element, &copy_fallback, roc_ops);
     } else {
-        out.* = listReplace(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, @ptrCast(&copy_fallback), roc_ops);
+        out.* = listReplace(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, &copy_fallback, roc_ops);
+    }
+}
+
+/// Wrapper: listSwap for list_swap
+pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index_1: u64, index_2: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listSwap(l, alignment, element_width, index_1, index_2, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, .Immutable, &copy_fallback, roc_ops);
+    } else {
+        out.* = listSwap(l, alignment, element_width, index_1, index_2, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, &copy_fallback, roc_ops);
     }
 }
 
