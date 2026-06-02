@@ -26,14 +26,11 @@ fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) !void {
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env.common);
+    const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -165,14 +162,11 @@ test "canonicalization records explicit type declaration tables" {
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env.common);
+    const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
 
     try czer.canonicalizeFile();
@@ -211,14 +205,11 @@ test "nested type redeclarations are detected after previous associated scope ex
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = try parse.parse(&allocators, &env.common);
+    const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
 
-    var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
     defer czer.deinit();
 
     try czer.canonicalizeFile();

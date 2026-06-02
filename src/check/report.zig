@@ -3505,13 +3505,17 @@ pub const ReportBuilder = struct {
 
     fn addAnnotatedFmt(self: *Self, report: *Report, comptime fmt: []const u8, args: anytype, annotation: reporting.Annotation) !void {
         self.bytes_buf.clearRetainingCapacity();
-        try self.bytes_buf.writer().print(fmt, args);
+        const len = std.fmt.count(fmt, args);
+        try self.bytes_buf.resize(len);
+        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable;
         try report.document.addAnnotated(self.bytes_buf.items, annotation);
     }
 
     fn addReflowingTextFmt(self: *Self, report: *Report, comptime fmt: []const u8, args: anytype) !void {
         self.bytes_buf.clearRetainingCapacity();
-        try self.bytes_buf.writer().print(fmt, args);
+        const len = std.fmt.count(fmt, args);
+        try self.bytes_buf.resize(len);
+        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable;
         try report.document.addReflowingText(self.bytes_buf.items);
     }
 

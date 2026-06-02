@@ -251,14 +251,10 @@ test "parser records top-level type declaration dependencies" {
         \\D : {}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(&allocators, &env);
+    const ast = try parse(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -305,14 +301,10 @@ test "parser records nested associated owner paths" {
         \\}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(&allocators, &env);
+    const ast = try parse(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -359,14 +351,10 @@ test "parser keeps block-local type paths lexically distinct" {
         \\}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(&allocators, &env);
+    const ast = try parse(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -415,14 +403,10 @@ test "parser does not create a type path for malformed associated type headers" 
         \\}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(&allocators, &env);
+    const ast = try parse(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);

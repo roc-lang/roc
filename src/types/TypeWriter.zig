@@ -1182,8 +1182,9 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
             base_name
         else blk: {
             self.name_tmp.clearRetainingCapacity();
-            var name_writer = self.name_tmp.writer();
-            try name_writer.print("{s}{}", .{ base_name, counter + 1 });
+            const len = std.fmt.count("{s}{}", .{ base_name, counter + 1 });
+            try self.name_tmp.resize(len);
+            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable;
             break :blk self.name_tmp.items;
         };
 

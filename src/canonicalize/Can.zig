@@ -120,17 +120,17 @@ in_statement_position: bool = true,
 in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .empty,
 /// Parser declaration scopes corresponding to the active canonical scopes.
-decl_scope_stack: std.ArrayListUnmanaged(ActiveDeclScope) = .{},
+decl_scope_stack: std.ArrayListUnmanaged(ActiveDeclScope) = .empty,
 /// Top active declaration owner for each non-block value name.
 active_decl_values: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
 /// Change log backing active_decl_values so scope exit restores shadowed names.
-active_decl_value_entries: std.ArrayListUnmanaged(ActiveDeclValueEntry) = .{},
+active_decl_value_entries: std.ArrayListUnmanaged(ActiveDeclValueEntry) = .empty,
 /// Active parser declaration scopes keyed by parser scope index.
 active_decl_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, ActiveDeclBinding) = .{},
 /// Top active declaration owner for each whole-scope type name.
 active_decl_types: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
 /// Change log backing active_decl_types so scope exit restores shadowed names.
-active_decl_type_entries: std.ArrayListUnmanaged(ActiveDeclTypeEntry) = .{},
+active_decl_type_entries: std.ArrayListUnmanaged(ActiveDeclTypeEntry) = .empty,
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
 /// Set of identifiers exposed from this module header (values not used)
@@ -169,9 +169,9 @@ import_indices: std.StringHashMapUnmanaged(Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
 parser_type_decl_states: std.AutoHashMapUnmanaged(AST.Statement.Idx, ParserTypeDeclState) = .{},
 /// Type declarations whose CIR statements were prepared by a forward reference.
-forward_prepared_type_decls: std.ArrayListUnmanaged(Statement.Idx) = .{},
+forward_prepared_type_decls: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 /// All canonical type-declaration statements produced by this module.
-type_decl_statements: std.ArrayListUnmanaged(Statement.Idx) = .{},
+type_decl_statements: std.ArrayListUnmanaged(Statement.Idx) = .empty,
 /// Parser alias-cycle members keyed by the AST alias statement, with the member
 /// it directly references inside the cycle.
 alias_cycle_references: std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx) = .{},
@@ -364,8 +364,9 @@ fn scratchAppendByte(self: *Self, byte: u8) std.mem.Allocator.Error!void {
 
 fn scratchFmt(self: *Self, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error![]const u8 {
     const top = self.scratchBytesTop();
-    var writer = self.scratch_bytes.items.writer();
-    try writer.print(fmt, args);
+    const len = std.fmt.count(fmt, args);
+    try self.scratch_bytes.items.resize(@as(usize, top) + len);
+    _ = std.fmt.bufPrint(self.scratch_bytes.items.items[top..], fmt, args) catch unreachable;
     return self.scratchBytesFrom(top);
 }
 
@@ -1410,7 +1411,7 @@ const AliasCycleContext = struct {
     index_by_stmt: std.AutoHashMapUnmanaged(AST.Statement.Idx, u32) = .{},
     lowlink_by_stmt: std.AutoHashMapUnmanaged(AST.Statement.Idx, u32) = .{},
     on_stack: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{},
-    stack: std.ArrayListUnmanaged(AST.Statement.Idx) = .{},
+    stack: std.ArrayListUnmanaged(AST.Statement.Idx) = .empty,
     next_index: u32 = 0,
 
     fn deinit(self: *AliasCycleContext) void {
@@ -1449,7 +1450,7 @@ const AliasCycleContext = struct {
         }
 
         if (self.lowlink_by_stmt.get(stmt_idx).? == self.index_by_stmt.get(stmt_idx).?) {
-            var scc_members: std.ArrayListUnmanaged(AST.Statement.Idx) = .{};
+            var scc_members: std.ArrayListUnmanaged(AST.Statement.Idx) = .empty;
             defer scc_members.deinit(gpa);
 
             while (true) {
@@ -1740,18 +1741,6 @@ fn registerTypeDecl(
     else
         null;
     const anno_idx = maybe_cycle_anno orelse blk: {
-        var associated_type_scope_entered = false;
-        defer if (associated_type_scope_entered) {
-            self.scopeExit(self.env.gpa) catch unreachable;
-        };
-
-        if (type_decl.associated) |assoc| {
-            try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
-            try self.scopeEnter(self.env.gpa, false);
-            associated_type_scope_entered = true;
-            try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
-        }
-
         // Enter a new scope for type parameters
         const type_var_scope = self.scopeEnterTypeVar();
         defer self.scopeExitTypeVar(type_var_scope);
@@ -4689,7 +4678,7 @@ fn addPublicTypeRoot(
         if (self.env.getExposedNodeIndexById(type_name)) |node_idx| {
             if (self.exposedTypeDeclStatementIdx(node_idx)) |stmt_idx| break :blk stmt_idx;
         }
-        break :blk self.scopeLookupTypeDecl(type_name) orelse return;
+        break :blk (try self.scopeLookupTypeDecl(type_name)) orelse return;
     };
 
     const header = self.typeDeclHeader(stmt_idx) orelse return;

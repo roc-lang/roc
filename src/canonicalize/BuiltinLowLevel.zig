@@ -75,8 +75,9 @@ fn scratchFmt(
     args: anytype,
 ) std.mem.Allocator.Error![]const u8 {
     scratch.clearRetainingCapacity();
-    var writer = scratch.writer(gpa);
-    try writer.print(fmt, args);
+    const len = std.fmt.count(fmt, args);
+    try scratch.resize(gpa, len);
+    _ = std.fmt.bufPrint(scratch.items, fmt, args) catch unreachable;
     return scratch.items;
 }
 

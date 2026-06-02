@@ -529,6 +529,7 @@ test "imported multi-qualified tag rejects exposed alias target" {
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const imported_source =
         \\module [Alias]
@@ -536,18 +537,14 @@ test "imported multi-qualified tag rejects exposed alias target" {
         \\Alias : [Tag]
     ;
 
-    var imported_allocators: Allocators = undefined;
-    imported_allocators.initInPlace(allocator);
-    defer imported_allocators.deinit();
-
     var imported_env = try ModuleEnv.init(allocator, imported_source);
     defer imported_env.deinit();
     try imported_env.initCIRFields("Other");
 
-    const imported_ast = try parse.parse(&imported_allocators, &imported_env.common);
+    const imported_ast = try parse.parse(allocator, &imported_env.common);
     defer imported_ast.deinit();
 
-    var imported_can = try Can.initModule(&imported_allocators, &imported_env, imported_ast, builtin_ctx.canInitContext());
+    var imported_can = try Can.initModule(roc_ctx, &imported_env, imported_ast, builtin_ctx.canInitContext());
     defer imported_can.deinit();
     try imported_can.canonicalizeFile();
 
@@ -558,10 +555,6 @@ test "imported multi-qualified tag rejects exposed alias target" {
         \\
         \\bad = Other.Alias.Tag
     ;
-
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
 
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
@@ -577,10 +570,10 @@ test "imported multi-qualified tag rejects exposed alias target" {
         .qualified_type_ident = other_qualified_ident,
     });
 
-    const ast = try parse.parse(&allocators, &env.common);
+    const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, .{
+    var can = try Can.initModule(roc_ctx, &env, ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,
@@ -616,6 +609,7 @@ test "imported nested associated types resolve by qualified export key" {
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const imported_source =
         \\module [A, B]
@@ -629,18 +623,14 @@ test "imported nested associated types resolve by qualified export key" {
         \\}
     ;
 
-    var imported_allocators: Allocators = undefined;
-    imported_allocators.initInPlace(allocator);
-    defer imported_allocators.deinit();
-
     var imported_env = try ModuleEnv.init(allocator, imported_source);
     defer imported_env.deinit();
     try imported_env.initCIRFields("Types");
 
-    const imported_ast = try parse.parse(&imported_allocators, &imported_env.common);
+    const imported_ast = try parse.parse(allocator, &imported_env.common);
     defer imported_ast.deinit();
 
-    var imported_can = try Can.initModule(&imported_allocators, &imported_env, imported_ast, builtin_ctx.canInitContext());
+    var imported_can = try Can.initModule(roc_ctx, &imported_env, imported_ast, builtin_ctx.canInitContext());
     defer imported_can.deinit();
     try imported_can.canonicalizeFile();
 
@@ -656,10 +646,6 @@ test "imported nested associated types resolve by qualified export key" {
         \\b = Types.B.Inner.BInner
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
     try env.initCIRFields("Main");
@@ -674,10 +660,10 @@ test "imported nested associated types resolve by qualified export key" {
         .qualified_type_ident = types_qualified_ident,
     });
 
-    const ast = try parse.parse(&allocators, &env.common);
+    const ast = try parse.parse(allocator, &env.common);
     defer ast.deinit();
 
-    var can = try Can.initModule(&allocators, &env, ast, .{
+    var can = try Can.initModule(roc_ctx, &env, ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_ctx.builtin_module.env,
             .builtin_indices = builtin_ctx.builtin_indices,

@@ -79,7 +79,7 @@ pub const Scope = struct {
 /// All declarations sharing one source name in one parser scope.
 pub const NameBucket = struct {
     first: ?DeclIdx = null,
-    overflow: std.ArrayListUnmanaged(DeclIdx) = .{},
+    overflow: std.ArrayListUnmanaged(DeclIdx) = .empty,
 
     pub const Iterator = struct {
         bucket: NameBucket,
@@ -297,7 +297,7 @@ pub fn enterScope(
         .type_decls = .{},
         .region = region,
     });
-    try self.scope_decl_builders.append(self.gpa, .{});
+    try self.scope_decl_builders.append(self.gpa, .empty);
     try self.scope_stack.append(self.gpa, idx);
     return idx;
 }
