@@ -961,17 +961,129 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(self.str_var, env, .{ .explicit = new_region });
 }
 
+const BuiltinNominalDecl = union(enum) {
+    list,
+    box,
+    try_type,
+    numeral,
+    num: CIR.NumKind,
+};
+
+fn builtinOriginModule(self: *const Self) Ident.Idx {
+    return if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name;
+}
+
+fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
+    return switch (num_kind) {
+        .u8 => self.cir.idents.u8_type,
+        .i8 => self.cir.idents.i8_type,
+        .u16 => self.cir.idents.u16_type,
+        .i16 => self.cir.idents.i16_type,
+        .u32 => self.cir.idents.u32_type,
+        .i32 => self.cir.idents.i32_type,
+        .u64 => self.cir.idents.u64_type,
+        .i64 => self.cir.idents.i64_type,
+        .u128 => self.cir.idents.u128_type,
+        .i128 => self.cir.idents.i128_type,
+        .f32 => self.cir.idents.f32_type,
+        .f64 => self.cir.idents.f64_type,
+        .dec => self.cir.idents.dec_type,
+        else => unreachable,
+    };
+}
+
+fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind) CIR.Statement.Idx {
+    return switch (num_kind) {
+        .u8 => indices.u8_type,
+        .i8 => indices.i8_type,
+        .u16 => indices.u16_type,
+        .i16 => indices.i16_type,
+        .u32 => indices.u32_type,
+        .i32 => indices.i32_type,
+        .u64 => indices.u64_type,
+        .i64 => indices.i64_type,
+        .u128 => indices.u128_type,
+        .i128 => indices.i128_type,
+        .f32 => indices.f32_type,
+        .f64 => indices.f64_type,
+        .dec => indices.dec_type,
+        else => unreachable,
+    };
+}
+
+fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
+    return switch (decl) {
+        .list => self.cir.idents.list,
+        .box => self.cir.idents.box,
+        .try_type => self.cir.idents.builtin_try,
+        .numeral => self.cir.idents.builtin_numeral,
+        .num => |num_kind| self.builtinNumTypeIdent(num_kind),
+    };
+}
+
+fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
+    return switch (decl) {
+        .list => "List",
+        .box => "Box",
+        .try_type => "Try",
+        .numeral => "Num.Numeral",
+        .num => |num_kind| switch (num_kind) {
+            .u8 => "Num.U8",
+            .i8 => "Num.I8",
+            .u16 => "Num.U16",
+            .i16 => "Num.I16",
+            .u32 => "Num.U32",
+            .i32 => "Num.I32",
+            .u64 => "Num.U64",
+            .i64 => "Num.I64",
+            .u128 => "Num.U128",
+            .i128 => "Num.I128",
+            .f32 => "Num.F32",
+            .f64 => "Num.F64",
+            .dec => "Num.Dec",
+            else => unreachable,
+        },
+    };
+}
+
+fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 {
+    if (self.builtin_ctx.builtin_indices) |indices| {
+        const stmt_idx = switch (decl) {
+            .list => indices.list_type,
+            .box => indices.box_type,
+            .try_type => indices.try_type,
+            .numeral => indices.numeral_type,
+            .num => |num_kind| builtinNumStmtFromIndices(indices, num_kind),
+        };
+        return @intFromEnum(stmt_idx);
+    }
+
+    if (self.builtin_ctx.builtin_module != null) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+        }
+        unreachable;
+    }
+
+    const stmt_idx = switch (decl) {
+        .try_type => self.builtin_ctx.try_stmt,
+        else => self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
+            }
+            unreachable;
+        },
+    };
+    return @intFromEnum(stmt_idx);
+}
+
 /// Create a nominal List type with the given element type
 fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where List is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     const list_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.list,
@@ -995,11 +1107,12 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDecl(
         list_ident,
         backing_var,
         &type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.list),
         false, // List is nominal (not opaque)
     );
 }
@@ -1066,7 +1179,7 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
         .ext = record_ext,
     } } }, env, Region.zero());
 
-    const u64_var = try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, Region.zero());
+    const u64_var = try self.freshFromContent(try self.mkNumberTypeContent(.u64, env), env, Region.zero());
     const skip_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const skip_record_fields = [_]types_mod.RecordField{
         .{ .name = count_ident, .var_ = u64_var },
@@ -1094,21 +1207,12 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
 /// Create a nominal number type content (e.g., U8, I32, Dec)
 /// Number types are defined in Builtin.roc nested inside Num module: Num.U8 :: [].{...}
 /// They have no type parameters and their backing is the empty tag union []
-fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
+fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
-    // Use fully-qualified type name "Builtin.Num.U8" etc.
-    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
-    defer self.gpa.free(qualified_type_name);
-    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
     const type_ident = types_mod.TypeIdent{
-        .ident_idx = type_name_ident,
+        .ident_idx = self.builtinNumTypeIdent(num_kind),
     };
 
     // Number types backing is [] (empty tag union with closed extension)
@@ -1124,11 +1228,12 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     // Number types have no type arguments
     const no_type_args: []const Var = &.{};
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDecl(
         type_ident,
         backing_var,
         no_type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.{ .num = num_kind }),
         true, // Number types are opaque (defined with ::)
     );
 }
@@ -1156,27 +1261,26 @@ fn mkBuiltinNumberTypeContentFromKind(
     env: *Env,
 ) Allocator.Error!Content {
     return switch (num_kind) {
-        .u8 => try self.mkNumberTypeContent("U8", env),
-        .i8 => try self.mkNumberTypeContent("I8", env),
-        .u16 => try self.mkNumberTypeContent("U16", env),
-        .i16 => try self.mkNumberTypeContent("I16", env),
-        .u32 => try self.mkNumberTypeContent("U32", env),
-        .i32 => try self.mkNumberTypeContent("I32", env),
-        .u64 => try self.mkNumberTypeContent("U64", env),
-        .i64 => try self.mkNumberTypeContent("I64", env),
-        .u128 => try self.mkNumberTypeContent("U128", env),
-        .i128 => try self.mkNumberTypeContent("I128", env),
-        .f32 => try self.mkNumberTypeContent("F32", env),
-        .f64 => try self.mkNumberTypeContent("F64", env),
-        .dec => try self.mkNumberTypeContent("Dec", env),
-        else => unreachable,
+        .num_unbound, .int_unbound => unreachable,
+        else => try self.mkNumberTypeContent(num_kind, env),
     };
 }
 
 fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Statement.Idx {
-    const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.type_decls, type_name)) |stmt_idx| return stmt_idx;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.forward_type_decls, type_name)) |stmt_idx| return stmt_idx;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.all_statements, type_name)) |stmt_idx| return stmt_idx;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.builtin_statements, type_name)) |stmt_idx| return stmt_idx;
+    return null;
+}
 
-    for (all_stmts) |stmt_idx| {
+fn findLocalTypeDeclByNameInSpan(
+    self: *const Self,
+    span: CIR.Statement.Span,
+    type_name: Ident.Idx,
+) ?CIR.Statement.Idx {
+    const stmts = self.cir.store.sliceStatements(span);
+    for (stmts) |stmt_idx| {
         const stmt = self.cir.store.getStatement(stmt_idx);
         const header_idx = switch (stmt) {
             .s_alias_decl => |alias| alias.header,
@@ -1185,9 +1289,8 @@ fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Stateme
         };
 
         const header = self.cir.store.getTypeHeader(header_idx);
-        if (header.name.eql(type_name)) return stmt_idx;
+        if (header.name.eql(type_name) or header.relative_name.eql(type_name)) return stmt_idx;
     }
-
     return null;
 }
 
@@ -1431,13 +1534,6 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Box is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
     const box_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.box,
     };
@@ -1446,11 +1542,12 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const backing_var = elem_var;
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDecl(
         box_ident,
         backing_var,
         &type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.box),
         false, // Box is nominal (not opaque)
     );
 }
@@ -1460,11 +1557,6 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     const try_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_try,
@@ -1483,11 +1575,12 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
 
     const type_args = [_]Var{ ok_var, err_var };
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDecl(
         try_ident,
         backing_var,
         &type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.try_type),
         false, // Try is nominal (not opaque)
     );
 }
@@ -1497,24 +1590,16 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Numeral is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
-    // Use the relative name "Num.Numeral" with origin_module Builtin
-    // Use the pre-interned ident from builtin_module to avoid string comparison
+    // Use the pre-interned builtin ident instead of reconstructing the text.
     const numeral_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_numeral,
     };
 
-    const u8_before = try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, Region.zero());
-    const u8_after = try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, Region.zero());
+    const u8_before = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, Region.zero());
+    const u8_after = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, Region.zero());
     const digits_before = try self.freshFromContent(try self.mkListContent(u8_before, env), env, Region.zero());
     const digits_after = try self.freshFromContent(try self.mkListContent(u8_after, env), env, Region.zero());
-    const digit_count = try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, Region.zero());
+    const digit_count = try self.freshFromContent(try self.mkNumberTypeContent(.u64, env), env, Region.zero());
     const is_negative = try self.freshBool(env, Region.zero());
 
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
@@ -1535,11 +1620,12 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const backing_content = try self.types.mkTagUnion(&.{literal_tag}, union_ext);
     const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDecl(
         numeral_ident,
         backing_var,
         &.{}, // No type args
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.numeral),
         false, // Numeral is transparent so custom from_numeral methods can inspect it.
     );
 }
@@ -3366,11 +3452,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     },
                                     .nominal => {
                                         // Nominal types can be recursive
-                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDecl(
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             &.{},
                                             self.builtin_ctx.module_name,
+                                            @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
                                         ), env);
                                     },
@@ -3466,11 +3553,12 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     },
                                     .nominal => {
                                         // Nominal types can be recursive
-                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDecl(
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             anno_arg_vars,
                                             self.builtin_ctx.module_name,
+                                            @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
                                         ), env);
                                     },
@@ -4048,19 +4136,19 @@ fn setBuiltinTypeContent(
 
     switch (anno_builtin_type) {
         // Phase 5: Use nominal types from Builtin instead of special .num content
-        .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U8", env), env),
-        .u16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U16", env), env),
-        .u32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U32", env), env),
-        .u64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U64", env), env),
-        .u128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U128", env), env),
-        .i8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I8", env), env),
-        .i16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I16", env), env),
-        .i32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I32", env), env),
-        .i64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I64", env), env),
-        .i128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I128", env), env),
-        .f32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F32", env), env),
-        .f64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F64", env), env),
-        .dec => try self.unifyWith(anno_var, try self.mkNumberTypeContent("Dec", env), env),
+        .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u8, env), env),
+        .u16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u16, env), env),
+        .u32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u32, env), env),
+        .u64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u64, env), env),
+        .u128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u128, env), env),
+        .i8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i8, env), env),
+        .i16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i16, env), env),
+        .i32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i32, env), env),
+        .i64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i64, env), env),
+        .i128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i128, env), env),
+        .f32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.f32, env), env),
+        .f64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.f64, env), env),
+        .dec => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.dec, env), env),
         .list => {
             // Then check arity
             if (anno_args.len != 1) {
@@ -4468,33 +4556,33 @@ fn checkPatternHelp(
                     _ = try self.unify(pattern_var, flex_var, env);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
-                .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U8", env), env),
-                .i8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I8", env), env),
-                .u16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U16", env), env),
-                .i16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I16", env), env),
-                .u32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U32", env), env),
-                .i32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I32", env), env),
-                .u64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U64", env), env),
-                .i64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I64", env), env),
-                .u128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U128", env), env),
-                .i128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I128", env), env),
-                .f32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F32", env), env),
-                .f64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F64", env), env),
-                .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env),
+                .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u8, env), env),
+                .i8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i8, env), env),
+                .u16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u16, env), env),
+                .i16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i16, env), env),
+                .u32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u32, env), env),
+                .i32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i32, env), env),
+                .u64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u64, env), env),
+                .i64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i64, env), env),
+                .u128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u128, env), env),
+                .i128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i128, env), env),
+                .f32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f32, env), env),
+                .f64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f64, env), env),
+                .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec, env), env),
             }
         },
         .frac_f32_literal => {
             // Phase 5: Use nominal F32 type
-            try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F32", env), env);
+            try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f32, env), env);
         },
         .frac_f64_literal => {
             // Phase 5: Use nominal F64 type
-            try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F64", env), env);
+            try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f64, env), env);
         },
         .dec_literal => |dec| {
             if (dec.has_suffix) {
                 // Explicit suffix like `3.14dec` - use nominal Dec type
-                try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unannotated decimal literal - create flex var with from_numeral constraint
                 const num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4511,7 +4599,7 @@ fn checkPatternHelp(
         .small_dec_literal => |dec| {
             if (dec.has_suffix) {
                 // Explicit suffix - use nominal Dec type
-                try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unannotated decimal literal - create flex var with from_numeral constraint
                 const scaled_value = dec.value.toRocDec().num;
@@ -4831,7 +4919,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_bytes_literal => {
             // Create List(U8) type
-            const u8_content = try self.mkNumberTypeContent("U8", env);
+            const u8_content = try self.mkNumberTypeContent(.u8, env);
             const u8_var = try self.freshFromContent(u8_content, env, expr_region);
             const list_content = try self.mkListContent(u8_var, env);
             try self.unifyWith(expr_var, list_content, env);
@@ -4895,19 +4983,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                     _ = try self.unify(expr_var, flex_var, env);
                 },
-                .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U8", env), env),
-                .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I8", env), env),
-                .u16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U16", env), env),
-                .i16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I16", env), env),
-                .u32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U32", env), env),
-                .i32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I32", env), env),
-                .u64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U64", env), env),
-                .i64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I64", env), env),
-                .u128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U128", env), env),
-                .i128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I128", env), env),
-                .f32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env),
-                .f64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env),
-                .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env),
+                .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u8, env), env),
+                .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i8, env), env),
+                .u16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u16, env), env),
+                .i16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i16, env), env),
+                .u32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u32, env), env),
+                .i32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i32, env), env),
+                .u64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u64, env), env),
+                .i64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i64, env), env),
+                .u128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u128, env), env),
+                .i128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i128, env), env),
+                .f32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32, env), env),
+                .f64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64, env), env),
+                .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env),
             }
         },
         .e_num_from_numeral => {
@@ -4917,7 +5005,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32, env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4936,7 +5024,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64, env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4957,7 +5045,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unsuffixed Dec literal - create constrained flex var
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4978,7 +5066,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unsuffixed small Dec literal - create constrained flex var
                 const scaled_value = frac.value.toRocDec().num;
@@ -9853,7 +9941,13 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
             if (constraint.origin == .from_numeral) continue;
 
             // Check if Dec has this method
-            const method_binding = builtin_env.lookupMethodBindingFromEnvConst(self.cir, indices.dec_ident, constraint.fn_name);
+            const method_binding = builtin_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                builtin_env,
+                indices.dec_ident,
+                @intFromEnum(indices.dec_type),
+                self.cir,
+                constraint.fn_name,
+            );
             if (method_binding == null) {
                 // Dec doesn't have this method - report error
                 try self.reportConstraintError(

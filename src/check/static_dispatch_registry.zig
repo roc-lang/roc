@@ -126,11 +126,11 @@ pub const MethodRegistry = struct {
         const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
 
         for (module.methodDefEntries()) |entry| {
-            const method_ident = module_env.lookupMethodIdentForOwnerConst(entry.key.owner, entry.key.method_ident) orelse {
+            const method_ident = module_env.lookupMethodIdentForOwnerConst(entry.key.owner, entry.key.methodIdent()) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
                         "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
-                        .{ @intFromEnum(entry.key.owner), @as(u32, @bitCast(entry.key.method_ident)) },
+                        .{ @intFromEnum(entry.key.owner), entry.key.method_ident_bits },
                     );
                 }
                 unreachable;
@@ -155,7 +155,7 @@ pub const MethodRegistry = struct {
             try entries.append(allocator, .{
                 .key = .{
                     .owner = try methodOwnerForRegistryEntry(module, module_name, entry.key.owner),
-                    .method = try names.internMethodIdent(idents, entry.key.method_ident),
+                    .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
                 },
                 .target = .{
                     .module_idx = module_idx,
@@ -218,8 +218,10 @@ fn builtinOwnerForRegistryEntry(
     if (type_ident.eql(common.f32) or type_ident.eql(common.f32_type)) return .f32;
     if (type_ident.eql(common.f64) or type_ident.eql(common.f64_type)) return .f64;
     if (type_ident.eql(common.dec) or type_ident.eql(common.dec_type)) return .dec;
-    if (type_ident.eql(common.list)) return .list;
-    if (type_ident.eql(common.box)) return .box;
+
+    const type_text = module_env.getIdentText(type_ident);
+    if (type_ident.eql(common.list) or std.mem.eql(u8, type_text, "Builtin.List")) return .list;
+    if (type_ident.eql(common.box) or std.mem.eql(u8, type_text, "Builtin.Box")) return .box;
     return null;
 }
 

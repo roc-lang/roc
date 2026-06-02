@@ -523,7 +523,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
 }
 
 test "imported multi-qualified tag rejects exposed alias target" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 
@@ -603,7 +603,7 @@ test "imported multi-qualified tag rejects exposed alias target" {
 }
 
 test "imported nested associated types resolve by qualified export key" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
 

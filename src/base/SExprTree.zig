@@ -191,8 +191,7 @@ pub fn pushStringPair(self: *SExprTree, key: []const u8, value: []const u8) std.
 /// Push a formatted string (copied into data buffer) onto the stack.
 pub fn pushStringFmt(self: *SExprTree, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
     const begin: u32 = @intCast(self.data.items.len);
-    var writer = self.data.writer();
-    try writer.print(fmt, args);
+    try self.data.print(fmt, args);
     const end: u32 = @intCast(self.data.items.len);
     try self.stack.append(Node{ .String = .{ .begin = begin, .end = end } });
 }

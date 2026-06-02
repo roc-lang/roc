@@ -1374,12 +1374,14 @@ test "typed method definition entries expose finalized owner-method keys" {
 
     const type_ident = try env.insertIdent(Ident.for_text("Local"));
     const method_ident = try env.insertIdent(Ident.for_text("get"));
+    const owner: can.CIR.Statement.Idx = @enumFromInt(1);
 
-    try env.registerMethodDef(type_ident, method_ident, .{
+    try env.registerMethodOwnerAlias(type_ident, owner);
+    try env.registerMethodDefForOwner(owner, method_ident, .{
         .type_node_idx = @enumFromInt(1),
         .def_idx = @enumFromInt(1),
     });
-    try env.registerMethodDef(type_ident, method_ident, .{
+    try env.registerMethodDefForOwner(owner, method_ident, .{
         .type_node_idx = @enumFromInt(2),
         .def_idx = @enumFromInt(2),
     });

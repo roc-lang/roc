@@ -407,9 +407,33 @@ pub const CommonIdents = extern struct {
 };
 
 /// Key for method lookup: (owner type declaration, method_ident) pair.
-pub const MethodKey = packed struct(u64) {
+pub const MethodKey = extern struct {
     owner: CIR.Statement.Idx,
-    method_ident: Ident.Idx,
+    method_ident_bits: u32,
+
+    pub fn init(owner: CIR.Statement.Idx, method_ident: Ident.Idx) MethodKey {
+        return .{
+            .owner = owner,
+            .method_ident_bits = @bitCast(method_ident),
+        };
+    }
+
+    pub fn methodIdent(self: MethodKey) Ident.Idx {
+        return @bitCast(self.method_ident_bits);
+    }
+
+    pub fn order(a: MethodKey, b: MethodKey) std.math.Order {
+        const a_owner = @intFromEnum(a.owner);
+        const b_owner = @intFromEnum(b.owner);
+        if (a_owner != b_owner) {
+            return if (a_owner < b_owner) .lt else .gt;
+        }
+
+        const a_method = a.method_ident_bits;
+        const b_method = b.method_ident_bits;
+        if (a_method == b_method) return .eq;
+        return if (a_method < b_method) .lt else .gt;
+    }
 };
 
 /// Mapping from visible type spellings to their associated method owner
@@ -2947,18 +2971,17 @@ pub const Serialized = extern struct {
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
-        var method_owner_aliases = try env.method_owner_aliases.clone(allocator);
-        defer method_owner_aliases.deinit(allocator);
-        var method_idents = try env.method_idents.clone(allocator);
-        defer method_idents.deinit(allocator);
-        var method_defs = try env.method_defs.clone(allocator);
-        defer method_defs.deinit(allocator);
-        method_owner_aliases.ensureSorted(allocator);
-        method_idents.ensureSorted(allocator);
-        method_defs.ensureSorted(allocator);
-        try self.method_owner_aliases.serialize(&method_owner_aliases, allocator, writer);
-        try self.method_idents.serialize(&method_idents, allocator, writer);
-        try self.method_defs.serialize(&method_defs, allocator, writer);
+        if (builtin.mode == .Debug) {
+            std.debug.assert(env.method_owner_aliases.sorted);
+            std.debug.assert(env.method_owner_aliases.deduplicated);
+            std.debug.assert(env.method_idents.sorted);
+            std.debug.assert(env.method_idents.deduplicated);
+            std.debug.assert(env.method_defs.sorted);
+            std.debug.assert(env.method_defs.deduplicated);
+        }
+        try self.method_owner_aliases.serialize(&env.method_owner_aliases, allocator, writer);
+        try self.method_idents.serialize(&env.method_idents, allocator, writer);
+        try self.method_defs.serialize(&env.method_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
@@ -3857,6 +3880,7 @@ pub fn insertQualifiedIdent(
     return try self.insertIdent(Ident.for_text(qualified));
 }
 
+/// Registers a visible type spelling as an alias for a canonical method owner.
 pub fn registerMethodOwnerAlias(self: *Self, type_ident: Ident.Idx, owner: CIR.Statement.Idx) !void {
     try self.method_owner_aliases.put(self.gpa, type_ident, owner);
 }
@@ -3873,19 +3897,20 @@ fn methodOwnerForTypeIdent(self: *Self, type_ident: Ident.Idx) CIR.Statement.Idx
     };
 }
 
-fn methodOwnerForTypeIdentConst(self: *const Self, type_ident: Ident.Idx) ?CIR.Statement.Idx {
+/// Looks up the canonical method owner for a finalized visible type spelling.
+pub fn methodOwnerForTypeIdentConst(self: *const Self, type_ident: Ident.Idx) ?CIR.Statement.Idx {
     return self.method_owner_aliases.getFinalized(type_ident);
 }
 
 /// Registers a method identifier mapping for an explicit owner declaration.
 pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
-    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    const key = MethodKey.init(owner, method_ident);
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
 /// Registers a method definition mapping for an explicit owner declaration.
 pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
-    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    const key = MethodKey.init(owner, method_ident);
     try self.method_defs.put(self.gpa, key, binding);
 }
 
@@ -3895,138 +3920,74 @@ pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ide
     try self.registerMethodIdentForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident, qualified_ident);
 }
 
+/// Registers method type/check metadata by resolving a visible type spelling to its owner.
 pub fn registerMethodDef(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
     try self.registerMethodDefForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident, binding);
 }
 
+/// Registers both method identity and type/check metadata for a visible type spelling.
 pub fn registerMethod(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx, binding: MethodBinding) !void {
     const owner = self.methodOwnerForTypeIdent(type_ident);
     try self.registerMethodIdentForOwner(owner, method_ident, qualified_ident);
     try self.registerMethodDefForOwner(owner, method_ident, binding);
 }
 
+/// Looks up a qualified method ident for an explicit owner declaration.
 pub fn lookupMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    const key = MethodKey.init(owner, method_ident);
     return self.method_idents.get(self.gpa, key);
 }
 
+/// Looks up a qualified method ident in finalized tables for an explicit owner declaration.
 pub fn lookupMethodIdentForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    const key = MethodKey.init(owner, method_ident);
     return self.method_idents.getFinalized(key);
 }
 
+/// Looks up method type/check metadata in finalized tables for an explicit owner declaration.
 pub fn lookupMethodBindingForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?MethodBinding {
-    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    const key = MethodKey.init(owner, method_ident);
     return self.method_defs.getFinalized(key);
 }
 
+/// Looks up a qualified method ident by resolving a visible type spelling to its owner.
 pub fn lookupMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     return self.lookupMethodIdentForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident);
 }
 
+/// Looks up a qualified method ident in finalized tables from a visible type spelling.
 pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
     const owner = self.methodOwnerForTypeIdentConst(type_ident) orelse return null;
     return self.lookupMethodIdentForOwnerConst(owner, method_ident);
 }
 
+/// Looks up method type/check metadata in finalized tables from a visible type spelling.
 pub fn lookupMethodBindingConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
     const owner = self.methodOwnerForTypeIdentConst(type_ident) orelse return null;
     return self.lookupMethodBindingForOwnerConst(owner, method_ident);
 }
 
+/// Sorts and deduplicates method owner, ident, and definition tables.
 pub fn finalizeMethodTables(self: *Self) void {
     self.method_owner_aliases.ensureSorted(self.gpa);
     self.method_idents.ensureSorted(self.gpa);
     self.method_defs.ensureSorted(self.gpa);
 }
 
-/// Looks up a method identifier by translating idents from a source environment.
-/// This first finds the corresponding idents in this module, then does index-based lookup.
-///
-/// Parameters:
-/// - source_env: The module environment where type_ident and method_ident are from
-/// - type_ident: The type's identifier index in source_env
-/// - method_ident: The method's identifier index in source_env
-///
-/// Returns the qualified method's ident index if found, or null if the method doesn't exist.
-pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    // First, try to find the type and method idents in our own ident store
-    const type_name = source_env.getIdent(type_ident);
-    const method_name = source_env.getIdent(method_ident);
-
-    // Find corresponding idents in this module
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
-    const local_method_ident = self.common.findIdent(method_name) orelse return null;
-
-    return self.lookupMethodIdent(local_type_ident, local_method_ident);
-}
-
-/// Const version of lookupMethodIdentFromEnv for use with immutable module environments.
-/// Safe to use on deserialized modules since method_idents is already sorted.
-pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    // First, try to find the type and method idents in our own ident store
-    const type_name = source_env.getIdent(type_ident);
-    const method_name = source_env.getIdent(method_ident);
-
-    // Find corresponding idents in this module
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
-    const local_method_ident = self.common.findIdent(method_name) orelse return null;
-
-    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
-}
-
-/// Looks up a method binding by translating idents from a source environment.
-pub fn lookupMethodBindingFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
-    return self.lookupMethodBindingFromEnvAndDeclConst(source_env, type_ident, null, method_ident);
-}
-
+/// Looks up method metadata using a type declaration owner from one environment
+/// and a method ident from the same source environment.
 pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
-    const type_name = source_env.getIdent(type_ident);
+    _ = type_ident;
     const method_name = source_env.getIdent(method_ident);
 
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
-
-    const owner: CIR.Statement.Idx = if (source_decl) |decl|
-        @enumFromInt(decl)
-    else blk: {
-        const local_type_ident = self.common.findIdent(type_name) orelse return null;
-        break :blk self.methodOwnerForTypeIdentConst(local_type_ident) orelse return null;
-    };
+    const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
 
     return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
-/// Looks up a method identifier when the type and method idents come from different source environments.
-/// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
-pub fn lookupMethodIdentFromTwoEnvsConst(
-    self: *const Self,
-    type_source_env: *const Self,
-    type_ident: Ident.Idx,
-    method_source_env: *const Self,
-    method_ident: Ident.Idx,
-) ?Ident.Idx {
-    // Get strings from respective source environments
-    const type_name = type_source_env.getIdent(type_ident);
-    const method_name = method_source_env.getIdent(method_ident);
-
-    // Find corresponding idents in this module
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
-    const local_method_ident = self.common.findIdent(method_name) orelse return null;
-
-    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
-}
-
-/// Looks up a method binding when the type and method idents come from different source environments.
-pub fn lookupMethodBindingFromTwoEnvsConst(
-    self: *const Self,
-    type_source_env: *const Self,
-    type_ident: Ident.Idx,
-    method_source_env: *const Self,
-    method_ident: Ident.Idx,
-) ?MethodBinding {
-    return self.lookupMethodBindingFromTwoEnvsAndDeclConst(type_source_env, type_ident, null, method_source_env, method_ident);
-}
-
+/// Looks up method metadata using a type declaration owner and a method ident
+/// that come from different source environments.
 pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     self: *const Self,
     type_source_env: *const Self,
@@ -4035,17 +3996,12 @@ pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     method_source_env: *const Self,
     method_ident: Ident.Idx,
 ) ?MethodBinding {
-    const type_name = type_source_env.getIdent(type_ident);
+    _ = type_source_env;
+    _ = type_ident;
     const method_name = method_source_env.getIdent(method_ident);
 
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
-
-    const owner: CIR.Statement.Idx = if (source_decl) |decl|
-        @enumFromInt(decl)
-    else blk: {
-        const local_type_ident = self.common.findIdent(type_name) orelse return null;
-        break :blk self.methodOwnerForTypeIdentConst(local_type_ident) orelse return null;
-    };
+    const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
 
     return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }

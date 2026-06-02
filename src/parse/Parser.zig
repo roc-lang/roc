@@ -426,6 +426,22 @@ fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
 }
 
+fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) Error!void {
+    for (self.store.exposedItemSlice(exposes)) |exposed_idx| {
+        const exposed = self.store.getExposedItem(exposed_idx);
+        const name_token: Token.Idx, const region: AST.TokenizedRegion = switch (exposed) {
+            .upper_ident => |ui| .{ ui.ident, ui.region },
+            .upper_ident_star => |ui| .{ ui.ident, ui.region },
+            .lower_ident, .malformed => continue,
+        };
+        const module_name = self.tok_buf.resolveIdentifier(name_token) orelse continue;
+        try self.decl_index.addPackageHeaderModule(module_name, .{
+            .start = region.start,
+            .end = region.end,
+        });
+    }
+}
+
 fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) Error!?base.Ident.Idx {
     const type_name = suffix.newTypeName() orelse return null;
     return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(type_name));
@@ -498,7 +514,7 @@ fn recoverMalformedTypeDeclLine(self: *Parser, start: TokenIdx) void {
         const current_region = self.tok_buf.resolve(self.pos);
         const current_start: usize = @intCast(current_region.start.offset);
         if (current_start > statement_start_end and
-            std.mem.indexOfScalar(u8, source[statement_start_end..current_start], '\n') != null)
+            std.mem.findScalar(u8, source[statement_start_end..current_start], '\n') != null)
         {
             return;
         }
@@ -1016,6 +1032,7 @@ pub fn parsePackageHeader(self: *Parser) Error!AST.Header.Idx {
             .end = self.pos,
         },
     });
+    try self.recordPackageHeaderModules(exposes_span);
 
     // Get Packages
     const packages_start = self.pos;
@@ -1751,6 +1768,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .nested_import = nested_import,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+                if (qualifier == null and !nested_import) {
+                    if (self.tok_buf.resolveIdentifier(module_name_tok)) |module_ident| {
+                        try self.decl_index.addExplicitUnqualifiedImport(module_ident);
+                    }
+                }
                 return statement_idx;
             }
             return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);

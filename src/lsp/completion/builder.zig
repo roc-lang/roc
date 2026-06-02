@@ -1189,13 +1189,14 @@ pub const CompletionBuilder = struct {
         // Get the type name for display purposes
         const type_name = module_env.getIdentText(type_ident);
 
-        // Iterate through method_idents to find all methods for this type.
-        // The method_idents maps (type_ident, method_ident) -> qualified_ident.
+        const owner = module_env.methodOwnerForTypeIdentConst(type_ident) orelse return;
+
+        // Iterate through method_idents to find all methods for this owner.
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
-            // Check if this method is for our type
-            if (entry.key.type_ident.eql(type_ident)) {
-                const method_ident = entry.key.method_ident;
+            // Check if this method is for our type owner.
+            if (entry.key.owner == owner) {
+                const method_ident = entry.key.methodIdent();
                 const method_name = module_env.getIdentText(method_ident);
 
                 if (method_name.len == 0) continue;

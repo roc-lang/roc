@@ -152,6 +152,14 @@ pub const TypeDependency = struct {
     segments: Span,
 };
 
+/// Upper identifier exposed from a package header. These are syntactically
+/// module names that should be auto-imported unless shadowed by an explicit
+/// unqualified import in the same file.
+pub const PackageHeaderModule = struct {
+    module_name: Ident.Idx,
+    region: TokenRegion,
+};
+
 /// Side-table tops captured before parsing a declaration annotation.
 pub const TypeDependencyMark = struct {
     dependencies_top: u32,
@@ -217,6 +225,8 @@ type_path_by_statement: std.AutoHashMapUnmanaged(u32, TypePathIdx),
 type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
 assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
+package_header_modules: std.ArrayList(PackageHeaderModule),
+explicit_unqualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void),
 scope_stack: std.ArrayList(ScopeIdx),
 
 /// Create an empty declaration index.
@@ -236,6 +246,8 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .type_decls_by_path = .{},
         .assoc_value_decls = .{},
         .assoc_owner_value_decls = .{},
+        .package_header_modules = .empty,
+        .explicit_unqualified_imports = .{},
         .scope_stack = .empty,
     };
 }
@@ -262,6 +274,8 @@ pub fn deinit(self: *DeclIndex) void {
     self.type_path_intern.deinit(self.gpa);
     self.type_path_by_statement.deinit(self.gpa);
     deinitNameBuckets(TypePathIdx, self.gpa, &self.type_decls_by_path);
+    self.package_header_modules.deinit(self.gpa);
+    self.explicit_unqualified_imports.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
 }
 
@@ -437,6 +451,26 @@ pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.I
 /// Return all associated value declarations owned by one type path.
 pub fn assocOwnerValueDecls(self: *const DeclIndex, owner: TypePathIdx) NameBucket {
     return self.assoc_owner_value_decls.get(owner) orelse .{};
+}
+
+/// Record a package-header upper expose that canonicalization should consider
+/// for auto-import.
+pub fn addPackageHeaderModule(self: *DeclIndex, module_name: Ident.Idx, region: TokenRegion) std.mem.Allocator.Error!void {
+    try self.package_header_modules.append(self.gpa, .{
+        .module_name = module_name,
+        .region = region,
+    });
+}
+
+/// Record an explicit unqualified import. Package-header auto-imports with
+/// the same module name must not be applied.
+pub fn addExplicitUnqualifiedImport(self: *DeclIndex, module_name: Ident.Idx) std.mem.Allocator.Error!void {
+    try self.explicit_unqualified_imports.put(self.gpa, module_name, {});
+}
+
+/// Returns whether this module name was imported explicitly without a qualifier.
+pub fn hasExplicitUnqualifiedImport(self: *const DeclIndex, module_name: Ident.Idx) bool {
+    return self.explicit_unqualified_imports.contains(module_name);
 }
 
 /// Intern a parser-owned type path.

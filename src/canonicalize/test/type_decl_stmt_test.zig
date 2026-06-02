@@ -139,7 +139,7 @@ fn countValueLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnos
 }
 
 fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) !void {
-    if (std.mem.indexOf(u8, source, needle)) |_| {
+    if (std.mem.find(u8, source, needle)) |_| {
         std.debug.print("Source still contains forbidden canonicalization structure: {s}\n", .{needle});
         return error.TestUnexpectedResult;
     }

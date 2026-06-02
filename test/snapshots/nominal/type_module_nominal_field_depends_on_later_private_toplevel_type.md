@@ -68,24 +68,24 @@ InternalType := [Some, Other]
 ~~~clojure
 (can-ir
 	(s-nominal-decl
-		(ty-header (name "InternalType"))
-		(ty-tag-union
-			(ty-tag-name (name "Some"))
-			(ty-tag-name (name "Other"))))
-	(s-nominal-decl
 		(ty-header (name "ModuleType"))
 		(ty-record
 			(field (field "field")
-				(ty-lookup (name "InternalType") (local))))))
+				(ty-lookup (name "InternalType") (local)))))
+	(s-nominal-decl
+		(ty-header (name "InternalType"))
+		(ty-tag-union
+			(ty-tag-name (name "Some"))
+			(ty-tag-name (name "Other")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal (type "InternalType")
-			(ty-header (name "InternalType")))
 		(nominal (type "ModuleType")
-			(ty-header (name "ModuleType"))))
+			(ty-header (name "ModuleType")))
+		(nominal (type "InternalType")
+			(ty-header (name "InternalType"))))
 	(expressions))
 ~~~

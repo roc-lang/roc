@@ -6140,6 +6140,7 @@ const BodyContext = struct {
     fn typeHasBuiltinOwner(self: *BodyContext, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
         return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return false) {
             .builtin => |actual| actual == owner,
+            .source_decl => false,
             .nominal => false,
         };
     }

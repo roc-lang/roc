@@ -99,6 +99,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+        .method_owner_aliases = serialized_ptr.method_owner_aliases.deserializeInto(base_ptr),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
         .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),

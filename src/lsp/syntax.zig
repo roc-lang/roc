@@ -1025,14 +1025,7 @@ pub const SyntaxChecker = struct {
         type_ident: base.Ident.Idx,
         method_ident: base.Ident.Idx,
     ) ?base.Ident.Idx {
-        const entries = module_env.method_idents.entries.items;
-        for (entries) |entry| {
-            if (entry.key.type_ident.eql(type_ident) and entry.key.method_ident.eql(method_ident)) {
-                return entry.value;
-            }
-        }
-
-        return null;
+        return module_env.lookupMethodIdentConst(type_ident, method_ident);
     }
 
     fn findTypeForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
@@ -1083,11 +1076,12 @@ pub const SyntaxChecker = struct {
         type_ident: base.Ident.Idx,
         method_name: []const u8,
     ) ?[]const u8 {
+        const owner = module_env.methodOwnerForTypeIdentConst(type_ident) orelse return null;
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
-            if (!entry.key.type_ident.eql(type_ident)) continue;
+            if (entry.key.owner != owner) continue;
 
-            const entry_method_name = module_env.getIdentText(entry.key.method_ident);
+            const entry_method_name = module_env.getIdentText(entry.key.methodIdent());
             if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
 
             return findDocForQualifiedIdent(allocator, module_env, entry.value);
