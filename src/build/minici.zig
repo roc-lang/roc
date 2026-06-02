@@ -99,15 +99,6 @@ fn appendU64(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u64) 
     try out.appendSlice(allocator, text);
 }
 
-fn commandText(allocator: std.mem.Allocator, argv: []const []const u8) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    for (argv, 0..) |arg, i| {
-        if (i > 0) try out.append(allocator, ' ');
-        try out.appendSlice(allocator, arg);
-    }
-    return try out.toOwnedSlice(allocator);
-}
-
 fn detectRunPhaseBuildViolation(log: []const u8) bool {
     var lines = std.mem.splitScalar(u8, log, '\n');
     var in_summary = false;
@@ -117,13 +108,13 @@ fn detectRunPhaseBuildViolation(log: []const u8) bool {
             continue;
         }
         if (!in_summary) continue;
-        const lower_contains_compile = std.mem.indexOf(u8, line, "Compile") != null or
-            std.mem.indexOf(u8, line, "compile") != null;
-        const lower_contains_install = std.mem.indexOf(u8, line, "Install") != null or
-            std.mem.indexOf(u8, line, "install") != null;
+        const lower_contains_compile = std.mem.find(u8, line, "Compile") != null or
+            std.mem.find(u8, line, "compile") != null;
+        const lower_contains_install = std.mem.find(u8, line, "Install") != null or
+            std.mem.find(u8, line, "install") != null;
         if (!lower_contains_compile and !lower_contains_install) continue;
-        if (std.mem.indexOf(u8, line, "cached") != null) continue;
-        if (std.mem.indexOf(u8, line, "Cache Hit") != null) continue;
+        if (std.mem.find(u8, line, "cached") != null) continue;
+        if (std.mem.find(u8, line, "Cache Hit") != null) continue;
         return true;
     }
     return false;
@@ -242,6 +233,58 @@ fn appendResultJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, resul
     try out.appendSlice(allocator, "\n  }");
 }
 
+fn appendScriptJsonBytes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8) !void {
+    for (bytes) |byte| {
+        switch (byte) {
+            '<' => try out.appendSlice(allocator, "\\u003c"),
+            '>' => try out.appendSlice(allocator, "\\u003e"),
+            '&' => try out.appendSlice(allocator, "\\u0026"),
+            else => try out.append(allocator, byte),
+        }
+    }
+}
+
+fn appendReportJsonObject(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    build_result: CommandResult,
+    results: []const CommandResult,
+) !void {
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"build_ci\": ");
+    try appendResultJson(out, allocator, build_result);
+    try out.appendSlice(allocator, ",\n  \"jobs\": [\n");
+    for (results, 0..) |result, i| {
+        if (i > 0) try out.appendSlice(allocator, ",\n");
+        try appendResultJson(out, allocator, result);
+    }
+    try out.appendSlice(allocator, "\n  ]\n}");
+}
+
+fn appendStatsJsonObject(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    results: []const CommandResult,
+) !void {
+    try out.appendSlice(allocator, "{\n");
+    var first = true;
+    for (results) |result| {
+        const stats_path = result.stats_path orelse continue;
+        if (!first) try out.appendSlice(allocator, ",\n");
+        first = false;
+        try out.appendSlice(allocator, "  ");
+        try appendJsonString(out, allocator, result.command[2]);
+        try out.appendSlice(allocator, ": ");
+        const stats = std.Io.Dir.cwd().readFileAlloc(io, stats_path, allocator, .limited(256 * 1024 * 1024)) catch {
+            try out.appendSlice(allocator, "null");
+            continue;
+        };
+        defer allocator.free(stats);
+        try appendScriptJsonBytes(out, allocator, stats);
+    }
+    try out.appendSlice(allocator, "\n}");
+}
+
 fn writeHtml(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -253,63 +296,227 @@ fn writeHtml(
 
     try out.appendSlice(allocator,
         \\<!doctype html>
-        \\<meta charset="utf-8">
-        \\<title>MiniCI</title>
-        \\<style>
-        \\body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:24px;background:#f7f7f8;color:#18181b}
-        \\table{border-collapse:collapse;width:100%;background:white;border:1px solid #ddd}
-        \\th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left;font-size:14px}
-        \\th{background:#f0f0f2}
-        \\.pass{color:#167a35}.fail,.crash{color:#b42318}.skip{color:#6b7280}
-        \\code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-        \\</style>
-        \\<h1>MiniCI</h1>
-        \\<table>
-        \\<thead><tr><th>Job</th><th>Status</th><th>Duration</th><th>Build Violation</th><th>Outputs</th></tr></thead>
-        \\<tbody>
+        \\<html lang="en">
+        \\<head>
+        \\  <meta charset="utf-8">
+        \\  <meta name="viewport" content="width=device-width, initial-scale=1">
+        \\  <title>MiniCI</title>
+        \\  <style>
+        \\    :root{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--text:#171717;--muted:#636873;--line:#dfe3e8;--line-soft:#edf0f3;--pass:#147a3f;--fail:#b42318;--skip:#68707c;--bar:#3168b7;--bar-pass:#1f8a55;--bar-fail:#c43d2f;--bar-skip:#8992a0}
+        \\    *{box-sizing:border-box}
+        \\    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.4}
+        \\    header{padding:20px 24px 14px;border-bottom:1px solid var(--line);background:#fff}
+        \\    h1{margin:0;font-size:24px;font-weight:700}
+        \\    h2{margin:20px 0 10px;font-size:16px;font-weight:700}
+        \\    main{padding:18px 24px 32px;max-width:1600px;margin:0 auto}
+        \\    .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:14px}
+        \\    .metric{border:1px solid var(--line);background:#fafbfc;padding:10px 12px;border-radius:6px}
+        \\    .metric b{display:block;font-size:20px}
+        \\    .metric span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+        \\    .panel{border:1px solid var(--line);background:var(--panel);border-radius:6px;overflow:hidden}
+        \\    .job{border-top:1px solid var(--line-soft)}
+        \\    .job:first-child{border-top:0}
+        \\    .job>summary{display:grid;grid-template-columns:minmax(260px,1.7fr)90px 90px 120px minmax(280px,2fr);gap:12px;align-items:center;padding:10px 12px;cursor:pointer;list-style:none}
+        \\    .job>summary::-webkit-details-marker{display:none}
+        \\    .job>summary:hover{background:#fafbfc}
+        \\    .job-body{border-top:1px solid var(--line-soft);padding:12px;background:#fbfcfd}
+        \\    code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+        \\    .status{font-weight:700}.pass{color:var(--pass)}.fail,.crash,.timeout{color:var(--fail)}.skip{color:var(--skip)}
+        \\    .muted{color:var(--muted)}.small{font-size:12px}
+        \\    .paths{white-space:normal;overflow-wrap:anywhere}
+        \\    .failure-list{display:grid;gap:8px}
+        \\    .failure{border:1px solid var(--line);background:#fff;border-left:4px solid var(--fail);border-radius:4px;padding:10px}
+        \\    .failure pre,.event-data pre{white-space:pre-wrap;overflow:auto;max-height:220px;margin:8px 0 0;padding:8px;background:#111827;color:#f8fafc;border-radius:4px;font-size:12px}
+        \\    .harness-grid{display:grid;grid-template-columns:minmax(360px,1fr)minmax(460px,1.4fr);gap:14px;align-items:start}
+        \\    .cases{max-height:760px;overflow:auto;border:1px solid var(--line);background:#fff;border-radius:4px}
+        \\    .case{border-top:1px solid var(--line-soft)}
+        \\    .case:first-child{border-top:0}
+        \\    .case>summary{display:grid;grid-template-columns:1fr 70px 82px;gap:8px;padding:8px 10px;cursor:pointer;list-style:none}
+        \\    .case>summary::-webkit-details-marker{display:none}
+        \\    .case>summary:hover{background:#f7f8fa}
+        \\    .children{padding:0 10px 8px 24px}
+        \\    .child{display:grid;grid-template-columns:1fr 70px 82px;gap:8px;padding:5px 0;border-top:1px solid var(--line-soft)}
+        \\    .timeline{border:1px solid var(--line);background:#fff;border-radius:4px;overflow:hidden}
+        \\    .lane{display:grid;grid-template-columns:minmax(180px,320px)1fr;gap:10px;align-items:center;min-height:34px;border-top:1px solid var(--line-soft);padding:6px 8px}
+        \\    .lane:first-child{border-top:0}
+        \\    .track{position:relative;height:24px;background:#eef1f5;border-radius:3px;overflow:hidden}
+        \\    .bar{position:absolute;top:3px;height:18px;border-radius:3px;background:var(--bar);min-width:2px}
+        \\    .bar.pass{background:var(--bar-pass)}.bar.fail,.bar.crash,.bar.timeout{background:var(--bar-fail)}.bar.skip{background:var(--bar-skip)}
+        \\    .bar span{position:absolute;left:5px;top:1px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff;font-size:11px;line-height:16px;text-shadow:0 1px 1px rgba(0,0,0,.35)}
+        \\    .event-data{margin-top:8px}
+        \\    .empty{padding:12px;color:var(--muted)}
+        \\    @media(max-width:900px){main{padding:12px}.job>summary{grid-template-columns:1fr 70px 80px}.job>summary .violation,.job>summary .paths{grid-column:1/-1}.harness-grid{grid-template-columns:1fr}.lane{grid-template-columns:1fr}.track{height:28px}}
+        \\  </style>
+        \\</head>
+        \\<body>
+        \\  <header>
+        \\    <h1>MiniCI</h1>
+        \\    <div id="summary" class="summary"></div>
+        \\  </header>
+        \\  <main>
+        \\    <section id="failures"></section>
+        \\    <h2>Jobs</h2>
+        \\    <section id="jobs" class="panel"></section>
+        \\  </main>
+        \\  <script>
+        \\  const REPORT =
     );
-    try appendHtmlRow(&out, allocator, "build-ci", build_result);
-    for (results) |result| {
-        const name = result.command[2];
-        try appendHtmlRow(&out, allocator, name, result);
-    }
-    try out.appendSlice(allocator, "</tbody></table>\n");
+    var report_json = std.ArrayList(u8).empty;
+    defer report_json.deinit(allocator);
+    try appendReportJsonObject(&report_json, allocator, build_result, results);
+    try appendScriptJsonBytes(&out, allocator, report_json.items);
+    try out.appendSlice(allocator,
+        \\;
+        \\  const STATS =
+    );
+    try appendStatsJsonObject(&out, allocator, io, results);
+    try out.appendSlice(allocator,
+        \\;
+        \\  const STATUS_ORDER = ["fail","crash","timeout","pass","skip"];
+        \\  const statusClass = value => value === "passed" ? "pass" : value === "skipped" ? "skip" : value;
+        \\  function formatNs(ns) {
+        \\    if (!Number.isFinite(ns)) return "";
+        \\    if (ns >= 1e9) return `${(ns / 1e9).toFixed(1)}s`;
+        \\    if (ns >= 1e6) return `${(ns / 1e6).toFixed(1)}ms`;
+        \\    if (ns >= 1e3) return `${(ns / 1e3).toFixed(1)}us`;
+        \\    return `${ns}ns`;
+        \\  }
+        \\  function esc(value) {
+        \\    return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
+        \\  }
+        \\  function commandText(command) {
+        \\    return (command || []).map(part => /\s/.test(part) ? JSON.stringify(part) : part).join(" ");
+        \\  }
+        \\  function isFailure(status) {
+        \\    const normalized = statusClass(status);
+        \\    return normalized !== "pass" && normalized !== "skip";
+        \\  }
+        \\  function jobName(job) {
+        \\    return job.command && job.command.length > 2 ? job.command[2] : "unknown";
+        \\  }
+        \\  function sortedCases(events) {
+        \\    return events.filter(event => event.parent_id == null).sort((a, b) => {
+        \\      const af = isFailure(a.status) ? 0 : 1;
+        \\      const bf = isFailure(b.status) ? 0 : 1;
+        \\      if (af !== bf) return af - bf;
+        \\      return (b.duration_ns || 0) - (a.duration_ns || 0);
+        \\    });
+        \\  }
+        \\  function renderSummary() {
+        \\    const jobs = [REPORT.build_ci, ...REPORT.jobs];
+        \\    const counts = { pass:0, fail:0, crash:0, timeout:0, skip:0 };
+        \\    let totalNs = 0;
+        \\    for (const job of jobs) {
+        \\      const status = statusClass(job.status);
+        \\      counts[status] = (counts[status] || 0) + 1;
+        \\      totalNs += job.duration_ns || 0;
+        \\    }
+        \\    document.getElementById("summary").innerHTML = [
+        \\      ["Jobs", jobs.length],
+        \\      ["Passed", counts.pass || 0],
+        \\      ["Failed", (counts.fail || 0) + (counts.crash || 0) + (counts.timeout || 0)],
+        \\      ["Total Time", formatNs(totalNs)]
+        \\    ].map(([label, value]) => `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
+        \\  }
+        \\  function renderFailures() {
+        \\    const failures = [];
+        \\    for (const job of REPORT.jobs) {
+        \\      const name = jobName(job);
+        \\      const stats = STATS[name];
+        \\      if (!stats || !Array.isArray(stats.events)) {
+        \\        if (isFailure(job.status)) failures.push({ job: name, event: null, data: { log: job.log_path } });
+        \\        continue;
+        \\      }
+        \\      for (const event of stats.events) {
+        \\        if (event.parent_id == null && isFailure(event.status)) failures.push({ job: name, event, data: event.data || {} });
+        \\      }
+        \\    }
+        \\    const root = document.getElementById("failures");
+        \\    if (failures.length === 0) {
+        \\      root.innerHTML = "<h2>Failures</h2><div class=\"panel empty\">No failing jobs or harness cases.</div>";
+        \\      return;
+        \\    }
+        \\    root.innerHTML = `<h2>Failures</h2><div class="failure-list">${failures.map(item => renderFailure(item)).join("")}</div>`;
+        \\  }
+        \\  function reproFor(job, event) {
+        \\    if (!event) return `zig build ${job}`;
+        \\    if (job === "run-test-playground") return `zig build ${job}`;
+        \\    return `zig build ${job} -- --test-filter ${JSON.stringify(event.name)}`;
+        \\  }
+        \\  function renderFailure(item) {
+        \\    const event = item.event;
+        \\    const title = event ? event.name : item.job;
+        \\    const data = item.data || {};
+        \\    const entries = Object.entries(data).slice(0, 6);
+        \\    const details = entries.map(([key, value]) => `<div class="event-data"><b>${esc(key)}</b><pre>${esc(String(value).slice(0, 4000))}</pre></div>`).join("");
+        \\    return `<article class="failure"><div><b>${esc(item.job)}</b> <span class="${statusClass(event ? event.status : "fail")}">${esc(event ? event.status : "fail")}</span></div><div>${esc(title)}</div><div class="small muted"><code>${esc(reproFor(item.job, event))}</code></div>${details}</article>`;
+        \\  }
+        \\  function renderJobs() {
+        \\    const jobs = [Object.assign({ name: "build-ci" }, REPORT.build_ci), ...REPORT.jobs.map(job => Object.assign({ name: jobName(job) }, job))];
+        \\    document.getElementById("jobs").innerHTML = jobs.map(job => renderJob(job)).join("");
+        \\  }
+        \\  function renderJob(job) {
+        \\    const stats = STATS[job.name];
+        \\    const hasStats = stats && Array.isArray(stats.events);
+        \\    const body = hasStats ? renderHarness(job.name, stats) : renderSingle(job);
+        \\    const open = isFailure(job.status) ? " open" : "";
+        \\    return `<details class="job"${open}><summary><code>${esc(job.name)}</code><span class="status ${statusClass(job.status)}">${esc(job.status)}</span><span>${formatNs(job.duration_ns || 0)}</span><span class="violation">${job.build_violation ? "build violation" : ""}</span><span class="paths small"><code>${esc(job.log_path || "")}${job.stats_path ? " " + esc(job.stats_path) : ""}</code></span></summary><div class="job-body">${body}</div></details>`;
+        \\  }
+        \\  function renderSingle(job) {
+        \\    return `<div class="small muted"><div><code>${esc(commandText(job.command))}</code></div><div>Log: <code>${esc(job.log_path || "")}</code></div></div>`;
+        \\  }
+        \\  function renderHarness(jobNameValue, stats) {
+        \\    const events = stats.events || [];
+        \\    const byParent = new Map();
+        \\    for (const event of events) {
+        \\      const key = event.parent_id || "";
+        \\      if (!byParent.has(key)) byParent.set(key, []);
+        \\      byParent.get(key).push(event);
+        \\    }
+        \\    for (const list of byParent.values()) {
+        \\      list.sort((a, b) => (a.start_ns || 0) - (b.start_ns || 0));
+        \\    }
+        \\    const cases = sortedCases(events);
+        \\    const summary = stats.summary || {};
+        \\    return `<div class="small muted">Runner <b>${esc(stats.runner || jobNameValue)}</b>: ${esc(summary.passed || 0)} passed, ${esc(summary.failed || 0)} failed, ${esc(summary.crashed || 0)} crashed, ${esc(summary.timed_out || 0)} timed out, ${esc(summary.skipped || 0)} skipped</div><div class="harness-grid"><div class="cases">${cases.map(testCase => renderCase(testCase, byParent)).join("")}</div>${renderTimeline(cases, byParent)}</div>`;
+        \\  }
+        \\  function renderCase(testCase, byParent) {
+        \\    const children = byParent.get(testCase.id) || [];
+        \\    const open = isFailure(testCase.status) ? " open" : "";
+        \\    const data = renderData(testCase.data);
+        \\    return `<details class="case"${open}><summary><span>${esc(testCase.name)}</span><span class="status ${statusClass(testCase.status)}">${esc(testCase.status)}</span><span>${formatNs(testCase.duration_ns || 0)}</span></summary><div class="children">${children.map(renderChild).join("")}${data}</div></details>`;
+        \\  }
+        \\  function renderChild(event) {
+        \\    return `<div class="child"><span><code>${esc(event.kind)}</code> ${esc(event.name)}</span><span class="status ${statusClass(event.status)}">${esc(event.status)}</span><span>${formatNs(event.duration_ns || 0)}</span></div>${renderData(event.data)}`;
+        \\  }
+        \\  function renderData(data) {
+        \\    if (!data || Object.keys(data).length === 0) return "";
+        \\    return `<div class="event-data">${Object.entries(data).map(([key, value]) => `<b>${esc(key)}</b><pre>${esc(String(value).slice(0, 4000))}</pre>`).join("")}</div>`;
+        \\  }
+        \\  function renderTimeline(cases, byParent) {
+        \\    if (cases.length === 0) return `<div class="timeline empty">No events.</div>`;
+        \\    return `<div class="timeline">${cases.map(testCase => renderLane(testCase, byParent)).join("")}</div>`;
+        \\  }
+        \\  function renderLane(testCase, byParent) {
+        \\    const children = byParent.get(testCase.id) || [];
+        \\    const spans = children.length > 0 ? children : [testCase];
+        \\    const maxEnd = Math.max(testCase.end_ns || 0, ...spans.map(span => span.end_ns || 0), 1);
+        \\    const bars = spans.map(span => {
+        \\      const left = Math.max(0, ((span.start_ns || 0) / maxEnd) * 100);
+        \\      const width = Math.max(.25, ((span.duration_ns || 0) / maxEnd) * 100);
+        \\      return `<div class="bar ${statusClass(span.status)}" title="${esc(span.kind)} ${esc(span.name)} ${formatNs(span.duration_ns || 0)}" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"><span>${esc(span.kind)}</span></div>`;
+        \\    }).join("");
+        \\    return `<div class="lane"><div><div>${esc(testCase.name)}</div><div class="small muted">${formatNs(testCase.duration_ns || 0)} <span class="${statusClass(testCase.status)}">${esc(testCase.status)}</span></div></div><div class="track">${bars}</div></div>`;
+        \\  }
+        \\  renderSummary();
+        \\  renderFailures();
+        \\  renderJobs();
+        \\  </script>
+        \\</body>
+        \\</html>
+        \\
+    );
     try writeFile(io, out_dir ++ "/index.html", out.items);
-}
-
-fn appendHtmlEscaped(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: []const u8) !void {
-    for (value) |byte| {
-        switch (byte) {
-            '&' => try out.appendSlice(allocator, "&amp;"),
-            '<' => try out.appendSlice(allocator, "&lt;"),
-            '>' => try out.appendSlice(allocator, "&gt;"),
-            '"' => try out.appendSlice(allocator, "&quot;"),
-            else => try out.append(allocator, byte),
-        }
-    }
-}
-
-fn appendHtmlRow(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, result: CommandResult) !void {
-    try out.appendSlice(allocator, "<tr><td><code>");
-    try appendHtmlEscaped(out, allocator, name);
-    try out.appendSlice(allocator, "</code></td><td class=\"");
-    try appendHtmlEscaped(out, allocator, result.status);
-    try out.appendSlice(allocator, "\">");
-    try appendHtmlEscaped(out, allocator, result.status);
-    try out.appendSlice(allocator, "</td><td>");
-    const seconds = @as(f64, @floatFromInt(result.duration_ns)) / 1_000_000_000.0;
-    const duration = try std.fmt.allocPrint(allocator, "{d:.1}s", .{seconds});
-    defer allocator.free(duration);
-    try appendHtmlEscaped(out, allocator, duration);
-    try out.appendSlice(allocator, "</td><td>");
-    try out.appendSlice(allocator, if (result.build_violation) "yes" else "");
-    try out.appendSlice(allocator, "</td><td><code>");
-    try appendHtmlEscaped(out, allocator, result.log_path);
-    if (result.stats_path) |path| {
-        try out.appendSlice(allocator, " ");
-        try appendHtmlEscaped(out, allocator, path);
-    }
-    try out.appendSlice(allocator, "</code></td></tr>\n");
 }
 
 /// Runs build-ci followed by each named MiniCI run job and writes reports.
@@ -317,7 +524,11 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    const allocator = gpa_impl.allocator();
+    const gpa = gpa_impl.allocator();
+
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const allocator = arena_impl.allocator();
 
     const raw_args = try init.minimal.args.toSlice(allocator);
     const args: []const []const u8 = @ptrCast(raw_args);
