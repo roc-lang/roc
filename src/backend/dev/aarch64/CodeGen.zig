@@ -514,6 +514,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.orrRegRegReg(width, dst, a, b);
         }
 
+        /// Emit bitwise XOR: dst = a ^ b
+        pub fn emitXor(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            try self.emit.eorRegRegReg(width, dst, a, b);
+        }
+
+        /// Emit bitwise NOT: dst = ~src
+        pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+            // MVN <dst>, <src> is an alias for ORN <dst>, XZR, <src>.
+            try self.emit.ornRegRegReg(width, dst, .ZRSP, src);
+        }
+
         /// Emit bitwise XOR with immediate: dst = src ^ imm
         pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
             // Load immediate into scratch register and use EOR

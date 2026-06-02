@@ -204,6 +204,8 @@ TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_020.md:119:2:119:10
+MISSING METHOD - fuzz_crash_020.md:105:55:105:66
+MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -1120,6 +1122,26 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `od` on an unresolved type variable, but unresolved type variables have no methods.
+**fuzz_crash_020.md:105:55:105:66:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                     ^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `ned` on an unresolved type variable, but unresolved type variables have no methods.
+**fuzz_crash_020.md:105:55:105:72:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                     ^^^^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -2099,8 +2121,7 @@ expect {
 																										(p-nominal-external (builtin)
 																											(p-applied-tag))))
 																								(value
-																									(e-lookup-local
-																										(p-assign (ident "#ok")))))
+																									(e-runtime-error (tag "erroneous_value_expr"))))
 																							(branch
 																								(patterns
 																									(pattern (degenerate false)
@@ -2122,8 +2143,7 @@ expect {
 																					(p-nominal-external (builtin)
 																						(p-applied-tag))))
 																			(value
-																				(e-lookup-local
-																					(p-assign (ident "#ok")))))
+																				(e-runtime-error (tag "erroneous_value_expr"))))
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)

@@ -234,6 +234,8 @@ MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
+MISSING METHOD - fuzz_crash_027.md:142:10:142:24
+MISSING METHOD - fuzz_crash_027.md:142:10:142:34
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -1097,6 +1099,26 @@ tuple : Value((a, b, c))
 
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `statod` on an unresolved type variable, but unresolved type variables have no methods.
+**fuzz_crash_027.md:142:10:142:24:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	        ^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `ned` on an unresolved type variable, but unresolved type variables have no methods.
+**fuzz_crash_027.md:142:10:142:34:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -2342,8 +2364,7 @@ expect {
 																										(p-nominal-external (builtin)
 																											(p-applied-tag))))
 																								(value
-																									(e-lookup-local
-																										(p-assign (ident "#ok")))))
+																									(e-runtime-error (tag "erroneous_value_expr"))))
 																							(branch
 																								(patterns
 																									(pattern (degenerate false)
@@ -2365,8 +2386,7 @@ expect {
 																					(p-nominal-external (builtin)
 																						(p-applied-tag))))
 																			(value
-																				(e-lookup-local
-																					(p-assign (ident "#ok")))))
+																				(e-runtime-error (tag "erroneous_value_expr"))))
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)

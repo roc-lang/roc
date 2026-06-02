@@ -494,6 +494,14 @@ const CheckTypeCheckerPatternsStep = struct {
     }
 };
 
+/// Header marker present in files vendored from the Zig compiler. Such files
+/// are exempt from Roc's architecture-style checks (the @enumFromInt(0) and
+/// unused-suppression bans below): their idioms — e.g. zero-valued enum
+/// constants like `AddrSpace = @enumFromInt(0)` and `_ =` suppressions in
+/// upstream TODO stubs — are correct at the source and rewriting them would
+/// only diverge from upstream. This mirrors how ci/tidy.zig skips crates/.
+const vendored_zig_marker = "Adapted from the Zig compiler";
+
 /// Build step that checks for @enumFromInt(0) usage in all .zig files.
 ///
 /// We forbid @enumFromInt(0) because it hides bugs and makes them harder to debug.
@@ -610,6 +618,11 @@ const CheckEnumFromIntZeroStep = struct {
 
             const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
+
+            // Vendored Zig-compiler files use upstream idioms this check would
+            // flag (e.g. zero-valued enum constants like `AddrSpace = @enumFromInt(0)`);
+            // exempt them, mirroring how ci/tidy.zig skips crates/.
+            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;
             var line_start: usize = 0;
@@ -739,6 +752,11 @@ const CheckUnusedSuppressionStep = struct {
 
             const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
+
+            // Vendored Zig-compiler files carry upstream idioms this check would
+            // flag (e.g. `_ =` suppressions in unimplemented TODO stubs whose
+            // signatures are fixed by their callers); exempt them.
+            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;
             var line_start: usize = 0;
@@ -2260,9 +2278,27 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
-    const compiler_version = getCompilerVersion(b, optimize);
-    build_options.addOption([]const u8, "compiler_version", compiler_version);
-    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version));
+    const compiler_version_git = getCompilerVersionGit(b);
+    build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
+    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
+    // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
+    // build_options module so its build-mode prefix comes from @import("builtin").mode — the
+    // actual optimization level of each compiled binary. The prefix can't be baked here because
+    // build_options is shared between the dev `roc` exe (whose mode follows -Doptimize) and the
+    // `release` exe (always built ReleaseFast); a single build-time value can't be right for both.
+    build_options.contents.appendSlice(b.allocator,
+        \\
+        \\pub const compiler_version = @import("std").fmt.comptimePrint("{s}-{s}", .{
+        \\    switch (@import("builtin").mode) {
+        \\        .Debug => "debug",
+        \\        .ReleaseSafe => "release-safe",
+        \\        .ReleaseFast => "release-fast",
+        \\        .ReleaseSmall => "release-small",
+        \\    },
+        \\    compiler_version_git,
+        \\});
+        \\
+    ) catch @panic("OOM");
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
@@ -4772,38 +4808,31 @@ const llvm_libs = [_][]const u8{
     "LLVMDemangle",
 };
 
-/// Get the compiler version string for cache versioning.
-/// Returns a string like "debug-abc12345" where abc12345 is the git commit SHA.
-/// If git is not available, falls back to "debug-no-git" format.
-fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
-    const build_mode = switch (optimize) {
-        .Debug => "debug",
-        .ReleaseSafe => "release-safe",
-        .ReleaseFast => "release-fast",
-        .ReleaseSmall => "release-small",
-    };
-
-    // Try to get git commit SHA
+/// Get the git-commit component of the compiler version (e.g. "abc12345"), used for cache
+/// versioning. Falls back to "no-git" when git is unavailable. The human-readable build-mode
+/// prefix (e.g. "release-fast-") is prepended at the binary's compile time from
+/// @import("builtin").mode — see where `compiler_version` is assembled in build().
+fn getCompilerVersionGit(b: *std.Build) []const u8 {
+    // Try to get git commit SHA using std.process.run
     const result = std.process.run(b.allocator, b.graph.io, .{
         .argv = &[_][]const u8{ "git", "rev-parse", "--short=8", "HEAD" },
     }) catch {
         // Git command failed, use fallback
-        return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+        return "no-git";
     };
     defer b.allocator.free(result.stdout);
     defer b.allocator.free(result.stderr);
 
     if (result.term == .exited and result.term.exited == 0) {
-        // Git succeeded, use the commit SHA
+        // Git succeeded, use the commit SHA (dupe it since result.stdout is freed above)
         const commit_sha = std.mem.trim(u8, result.stdout, " \n\r\t");
         if (commit_sha.len > 0) {
-            return std.fmt.allocPrint(b.allocator, "{s}-{s}", .{ build_mode, commit_sha }) catch
-                std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+            return b.allocator.dupe(u8, commit_sha) catch "no-git";
         }
     }
 
     // Git not available or failed, use fallback
-    return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+    return "no-git";
 }
 
 /// Return the semantic checked-artifact compiler hash.

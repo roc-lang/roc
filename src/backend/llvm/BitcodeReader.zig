@@ -40,8 +40,8 @@ pub const Block = struct {
 
         const default: Info = .{
             .block_name = &.{},
-            .record_names = .{},
-            .abbrevs = .{ .abbrevs = .{} },
+            .record_names = .empty,
+            .abbrevs = .{ .abbrevs = .empty },
         };
 
         const set_bid_id: u32 = 1;
@@ -117,8 +117,8 @@ pub fn init(allocator: std.mem.Allocator, options: InitOptions) BitcodeReader {
         .keep_names = options.keep_names,
         .bit_buffer = 0,
         .bit_offset = 0,
-        .stack = .{},
-        .block_info = .{},
+        .stack = .empty,
+        .block_info = .empty,
     };
 }
 
@@ -207,7 +207,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
 
     var record_arena = bc.record_arena.promote(bc.allocator);
     defer bc.record_arena = record_arena.state;
-    record_arena.reset(.retain_capacity);
+    _ = record_arena.reset(.retain_capacity);
 
     var operands = try std.array_list.Managed(u64).initCapacity(record_arena.allocator(), abbrev.operands.len);
     var blob = std.array_list.Managed(u8).init(record_arena.allocator());
@@ -241,7 +241,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
                             switch (encoding) {
                                 .fixed, .vbr => try operands.append(try bc.readVbr(u7, 5)),
                                 .array, .char6, .blob => {},
-                                _ => return error.UnsupportedAbbrevEncoding,
+                                _ => return error.UnsuportedAbbrevEncoding,
                             }
                         },
                     },
@@ -289,7 +289,7 @@ fn startBlock(bc: *BitcodeReader, block_id: ?u32, new_abbrev_len: u6) !void {
     state.* = .{
         .block_id = block_id,
         .abbrev_id_width = new_abbrev_len,
-        .abbrevs = .{ .abbrevs = .{} },
+        .abbrevs = .{ .abbrevs = .empty },
     };
     try state.abbrevs.abbrevs.ensureTotalCapacity(
         bc.allocator,
@@ -525,5 +525,5 @@ const Abbrev = struct {
 };
 
 test {
-    std.testing.refAllDecls(@This());
+    _ = &skipBlock;
 }

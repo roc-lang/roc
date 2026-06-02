@@ -56,6 +56,8 @@ pub const LowLevel = enum {
     list_drop_at,
     list_sublist,
     list_set,
+    list_replace_unsafe,
+    list_swap,
     list_prepend,
     list_first,
     list_last,
@@ -102,6 +104,12 @@ pub const LowLevel = enum {
     num_shift_left_by,
     num_shift_right_by,
     num_shift_right_zf_by,
+
+    // Bitwise logical operations
+    num_bitwise_and,
+    num_bitwise_or,
+    num_bitwise_xor,
+    num_bitwise_not,
 
     // Numeric parsing operations
     num_from_numeral,
@@ -531,7 +539,10 @@ pub const LowLevel = enum {
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
-            .list_set => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            .list_set,
+            .list_replace_unsafe,
+            .list_swap,
+            => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 
@@ -602,6 +613,10 @@ pub const LowLevel = enum {
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
+            .num_bitwise_and,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
             .num_from_numeral,
             .u8_from_str,
             .i8_from_str,

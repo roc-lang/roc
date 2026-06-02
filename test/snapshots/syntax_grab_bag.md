@@ -273,6 +273,8 @@ MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
+MISSING METHOD - syntax_grab_bag.md:189:26:189:40
+MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -1027,6 +1029,26 @@ tuple : Value((a, b, c))
 
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `static_dispatch_method` on an unresolved type variable, but unresolved type variables have no methods.
+**syntax_grab_bag.md:189:26:189:40:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                        ^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `next_static_dispatch_method` on an unresolved type variable, but unresolved type variables have no methods.
+**syntax_grab_bag.md:189:26:189:66:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -2477,8 +2499,7 @@ expect {
 																										(p-nominal-external (builtin)
 																											(p-applied-tag))))
 																								(value
-																									(e-lookup-local
-																										(p-assign (ident "#ok")))))
+																									(e-runtime-error (tag "erroneous_value_expr"))))
 																							(branch
 																								(patterns
 																									(pattern (degenerate false)
@@ -2500,8 +2521,7 @@ expect {
 																					(p-nominal-external (builtin)
 																						(p-applied-tag))))
 																			(value
-																				(e-lookup-local
-																					(p-assign (ident "#ok")))))
+																				(e-runtime-error (tag "erroneous_value_expr"))))
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)
