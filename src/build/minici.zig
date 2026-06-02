@@ -71,10 +71,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-eval", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
-    .{ .name = "run-test-cli-platforms", .kind = .harness },
-    .{ .name = "run-test-cli-subcommands" },
-    .{ .name = "run-test-cli-echo" },
-    .{ .name = "run-test-cli-glue" },
+    .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-coverage-parser" },
 };

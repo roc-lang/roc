@@ -1977,7 +1977,7 @@ fn setupTestPlatforms(
         clear_cache_step.dependOn(copy_step);
     }
 
-    // Cross-compile for musl targets (glibc not needed for test-platforms step)
+    // Cross-compile for musl targets (glibc is not needed for native CLI platform tests)
     for (musl_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
@@ -2109,10 +2109,6 @@ pub fn build(b: *std.Build) void {
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
     const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
     const run_test_cli_step = b.step("run-test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
-    const run_test_cli_platforms_step = b.step("run-test-cli-platforms", "Run CLI platform integration tests");
-    const run_test_cli_subcommands_step = b.step("run-test-cli-subcommands", "Run roc CLI subcommand tests");
-    const run_test_cli_echo_step = b.step("run-test-cli-echo", "Run echo platform integration tests");
-    const run_test_cli_glue_step = b.step("run-test-cli-glue", "Run roc glue command tests");
     const build_test_cli_bughunt_runner_step = b.step("build-test-cli-bughunt-runner", "Build opt-in CLI compiler-bug repro runner");
     const run_test_cli_bughunt_step = b.step("run-test-cli-bughunt", "Run opt-in CLI compiler-bug repros");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
@@ -2136,10 +2132,6 @@ pub fn build(b: *std.Build) void {
     const serialization_size_step = b.step("test-serialization-sizes", "Alias for run-test-serialization-sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Alias for run-test-cli");
-    const test_platforms_step = b.step("test-platforms", "Alias for run-test-cli-platforms");
-    const test_subcommands_step = b.step("test-subcommands", "Alias for run-test-cli-subcommands");
-    const test_echo_step = b.step("test-echo", "Alias for run-test-cli-echo");
-    const test_glue_step = b.step("test-glue", "Alias for run-test-cli-glue");
     const test_bughunt_cli_step = b.step("test-bughunt-cli", "Alias for run-test-cli-bughunt");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -2533,22 +2525,15 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(test_runner_exe);
 
-    // Store glue test step references so we can add glue host dependency later.
-    var run_glue_test_step: ?*std.Build.Step = null;
-    var run_glue_test_cli_step: ?*std.Build.Step = null;
+    // Store CLI runner step reference so we can add glue host dependency later.
+    var run_cli_test_step: ?*std.Build.Step = null;
 
-    // CLI integration tests - parallel test runner replaces 5 sequential
-    // test_runner invocations with a single fork-based parallel runner.
-    //
-    // Each sub-step is independently runnable:
-    //   zig build run-test-cli-platforms    — platform integration tests (int/str/fx)
-    //   zig build run-test-cli-subcommands  — roc CLI subcommand tests
-    //   zig build run-test-cli-glue         — glue command tests
-    //   zig build run-test-cli              — umbrella: runs all CLI integration tests
+    // CLI integration tests: one harness-backed runner covers platforms,
+    // subcommands, echo, and glue. Focus locally with:
+    //   zig build run-test-cli -- --suite echo --filter "case name"
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
 
-        // test-platforms: parallel CLI test runner for platform integration
         const parallel_cli_runner_exe = b.addExecutable(.{
             .name = "parallel_cli_runner",
             .root_module = b.createModule(.{
@@ -2565,133 +2550,22 @@ pub fn build(b: *std.Build) void {
         parallel_cli_runner_exe.root_module.link_libc = true;
         build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
-        const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
-        run_parallel_cli.addArg("zig-out/bin/roc");
+        const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
+        run_cli.addArg("zig-out/bin/roc");
         if (cli_test_llvm) {
-            run_parallel_cli.addArg("--include-llvm");
+            run_cli.addArg("--include-llvm");
         }
         for (test_filters) |f| {
-            run_parallel_cli.addArg("--filter");
-            run_parallel_cli.addArg(f);
+            run_cli.addArg("--filter");
+            run_cli.addArg(f);
         }
         if (run_args.len != 0) {
-            run_parallel_cli.addArgs(run_args);
+            run_cli.addArgs(run_args);
         }
-        run_parallel_cli.step.dependOn(&install.step);
-        run_parallel_cli.step.dependOn(build_test_hosts_step);
-        // When -Dplatform=<name> filters to a single platform, only build the
-        // host libraries for that platform — skip the runner, which expects all
-        // platforms to be available.
-        if (platform_filter == null) {
-            run_test_cli_platforms_step.dependOn(&run_parallel_cli.step);
-        } else {
-            run_test_cli_platforms_step.dependOn(build_test_hosts_step);
-        }
-        test_platforms_step.dependOn(run_test_cli_platforms_step);
-
-        // test-subcommands: roc CLI subcommand integration tests
-        const roc_subcommands_test = b.addTest(.{
-            .name = "roc_subcommands_test",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/roc_subcommands.zig"),
-                .target = target,
-                .optimize = optimize,
-                // roc_subcommands.zig reads std.c.environ (Zig 0.16 requires explicit link_libc).
-                .link_libc = true,
-            }),
-            .filters = test_filters,
-        });
-
-        const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
-        run_roc_subcommands_test.step.dependOn(&install.step);
-        run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
-        build_test_cli_runners_step.dependOn(&roc_subcommands_test.step);
-        run_test_cli_subcommands_step.dependOn(&run_roc_subcommands_test.step);
-        test_subcommands_step.dependOn(run_test_cli_subcommands_step);
-
-        // test-echo: echo platform (headerless app) tests
-        const echo_tests = b.addTest(.{
-            .name = "echo_test",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/echo_tests.zig"),
-                .target = target,
-                .optimize = optimize,
-                // util.zig reads std.c.environ (Zig 0.16 requires explicit link_libc).
-                .link_libc = true,
-            }),
-            .filters = test_filters,
-        });
-
-        const run_echo_tests = b.addRunArtifact(echo_tests);
-        run_echo_tests.step.dependOn(&install.step);
-        run_echo_tests.step.dependOn(build_test_hosts_step);
-        build_test_cli_runners_step.dependOn(&echo_tests.step);
-
-        // Print "All N tests passed" via the same summary step the rest of the suite uses.
-        const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
-        echo_tests_summary.addRun(&run_echo_tests.step);
-        run_test_cli_echo_step.dependOn(&echo_tests_summary.step);
-        test_echo_step.dependOn(run_test_cli_echo_step);
-
-        // test-glue: glue command integration tests
-        const glue_test = b.addTest(.{
-            .name = "glue_test",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/glue_test.zig"),
-                .target = target,
-                .optimize = optimize,
-                // Imports util/roc_subcommands which touch std.c; Zig 0.16 requires link_libc.
-                .link_libc = true,
-            }),
-            .filters = test_filters,
-        });
-
-        const run_glue_test = b.addRunArtifact(glue_test);
-        run_glue_test.step.dependOn(&install.step);
-        run_glue_test_step = &run_glue_test.step;
-        build_test_cli_runners_step.dependOn(&glue_test.step);
-        run_test_cli_glue_step.dependOn(&run_glue_test.step);
-        test_glue_step.dependOn(run_test_cli_glue_step);
-
-        // test-cli: umbrella depending on all four. On Windows, use separate
-        // aggregate run steps so focused steps like `test-echo` stay focused,
-        // while the umbrella avoids Zig 0.16 test-runner IPC timeouts caused
-        // by starting the heavy platform runner and Zig test binaries together.
-        if (builtin.os.tag == .windows) {
-            const run_parallel_cli_for_cli = b.addRunArtifact(parallel_cli_runner_exe);
-            run_parallel_cli_for_cli.addArg("zig-out/bin/roc");
-            for (test_filters) |f| {
-                run_parallel_cli_for_cli.addArg("--filter");
-                run_parallel_cli_for_cli.addArg(f);
-            }
-            if (run_args.len != 0) {
-                run_parallel_cli_for_cli.addArgs(run_args);
-            }
-            run_parallel_cli_for_cli.step.dependOn(&install.step);
-            run_parallel_cli_for_cli.step.dependOn(build_test_hosts_step);
-
-            const run_roc_subcommands_test_for_cli = b.addRunArtifact(roc_subcommands_test);
-            run_roc_subcommands_test_for_cli.step.dependOn(&install.step);
-            run_roc_subcommands_test_for_cli.step.dependOn(build_test_hosts_step);
-            run_roc_subcommands_test_for_cli.step.dependOn(&run_parallel_cli_for_cli.step);
-
-            const run_echo_tests_for_cli = b.addRunArtifact(echo_tests);
-            run_echo_tests_for_cli.step.dependOn(&install.step);
-            run_echo_tests_for_cli.step.dependOn(build_test_hosts_step);
-            run_echo_tests_for_cli.step.dependOn(&run_roc_subcommands_test_for_cli.step);
-
-            const run_glue_test_for_cli = b.addRunArtifact(glue_test);
-            run_glue_test_for_cli.step.dependOn(&install.step);
-            run_glue_test_for_cli.step.dependOn(&run_echo_tests_for_cli.step);
-            run_glue_test_cli_step = &run_glue_test_for_cli.step;
-
-            run_test_cli_step.dependOn(&run_glue_test_for_cli.step);
-        } else {
-            run_test_cli_step.dependOn(run_test_cli_platforms_step);
-            run_test_cli_step.dependOn(run_test_cli_subcommands_step);
-            run_test_cli_step.dependOn(run_test_cli_echo_step);
-            run_test_cli_step.dependOn(run_test_cli_glue_step);
-        }
+        run_cli.step.dependOn(&install.step);
+        run_cli.step.dependOn(build_test_hosts_step);
+        run_cli_test_step = &run_cli.step;
+        run_test_cli_step.dependOn(&run_cli.step);
         test_cli_step.dependOn(run_test_cli_step);
 
         // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
@@ -3976,7 +3850,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Build glue platform host at runtime for the native platform.
-    if (run_glue_test_step != null or run_glue_test_cli_step != null) {
+    if (run_cli_test_step != null) {
         if (isNativeishOrMusl(target)) {
             // Determine the appropriate target for the glue platform host library.
             // On Linux, we need to use musl explicitly because the platform's
@@ -4038,11 +3912,8 @@ pub fn build(b: *std.Build) void {
                     break :blk &fix_target.step;
                 } else &copy_glue_host.step;
 
-                if (run_glue_test_step) |glue_test_step| {
-                    glue_test_step.dependOn(final_step);
-                }
-                if (run_glue_test_cli_step) |glue_test_cli_step| {
-                    glue_test_cli_step.dependOn(final_step);
+                if (run_cli_test_step) |cli_test_step| {
+                    cli_test_step.dependOn(final_step);
                 }
             }
         }
@@ -4210,7 +4081,7 @@ fn addMainExe(
     configureBackend(exe, target);
 
     // Build str and int test platform host libraries for native target
-    // (fx and fx-open are only built via test-platforms step)
+    // (fx and fx-open are only built by build-test-hosts for CLI platform tests)
     const main_build_platforms = [_][]const u8{ "str", "int" };
     const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
 

@@ -183,7 +183,7 @@ fn runCrossCompileTests(
 
     if (verify_failed) {
         std.debug.print("\nPlatform verification failed. Aborting.\n" ++
-            "To regenerate host libraries, run: zig build run-test-cli-platforms\n", .{});
+            "To regenerate host libraries, run: zig build run-test-cli -- --suite platforms\n", .{});
         std.process.exit(1);
     }
 

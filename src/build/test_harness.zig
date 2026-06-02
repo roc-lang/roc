@@ -275,6 +275,13 @@ pub fn closeFd(fd: posix.fd_t) void {
     _ = std.c.close(fd);
 }
 
+/// Mark a file descriptor as close-on-exec so subprocesses do not inherit it.
+pub fn setCloseOnExec(fd: posix.fd_t) void {
+    const flags = std.c.fcntl(fd, std.c.F.GETFD);
+    if (flags == -1) return;
+    _ = std.c.fcntl(fd, std.c.F.SETFD, flags | std.c.FD_CLOEXEC);
+}
+
 /// fork: wrapper around std.c.fork that returns pid_t or error.
 pub fn fork() error{ForkFailed}!posix.pid_t {
     const pid = std.c.fork();
@@ -701,7 +708,8 @@ fn appendJsonString(out: *std.ArrayList(u8), allocator: Allocator, value: []cons
     try out.append(allocator, '"');
 }
 
-fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
+/// Parse standard harness flags from an argv-style slice.
+pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
     var filters: std.ArrayListUnmanaged([]const u8) = .empty;
     var positional: std.ArrayListUnmanaged([]const u8) = .empty;
     var args = StandardArgs{};
@@ -955,6 +963,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             if (pid == 0) {
                 // === Child process ===
                 closeFd(pipe_fds[0]);
+                setCloseOnExec(pipe_fds[1]);
 
                 if (cfg.use_process_groups) {
                     _ = std.c.setsid();
