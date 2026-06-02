@@ -215,6 +215,37 @@ pub const StaticDispatch = union(enum) {
     dispatcher_not_nominal: DispatcherNotNominal,
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
+    unresolved_dispatcher: UnresolvedDispatcher,
+};
+
+/// Error when a static dispatch method is called on a receiver whose type is an
+/// unresolved type variable that no instantiation can ever pin down (an
+/// "ambiguous type variable"). Examples: `poly().to_i128()` or `poly() == poly()`
+/// where `poly` returns a free variable. Unresolved type variables have no
+/// methods, so the dispatch is genuinely ambiguous.
+pub const UnresolvedDispatcher = struct {
+    /// Region of the offending dispatch call expression (the primary underline
+    /// target).
+    region: base.Region,
+    /// Optional secondary region (the call/argument that left the receiver's type
+    /// undetermined) for the per-instantiation, helper-hidden case. When non-null
+    /// and distinct from `region`, the renderer shows a connecting note and a
+    /// second source region (mirroring `buildNumberUsedAsNonNumber`). When null —
+    /// or equal to `region`, i.e. the dispatch IS the call site — only the primary
+    /// region is shown, so the direct cases render identically to before.
+    secondary_region: ?base.Region,
+    /// Snapshot of the dispatcher (receiver) type for rendering.
+    dispatcher_snapshot: SnapshotContentIdx,
+    /// The dispatch method's name (e.g. `to_i128` for a method call, or `is_eq` /
+    /// `plus` / `is_lt` etc. for a desugared operator). When this is a desugared
+    /// operator the renderer maps it back to the source operator symbol.
+    method_name: Ident.Idx,
+    /// True when this constraint originated from a desugared operator (`==`, `+`,
+    /// `<`, etc.), in which case the renderer shows the operator symbol rather
+    /// than the desugared method name.
+    is_binop: bool,
+    /// For desugared equality (`==`/`!=`), whether the source operator was `!=`.
+    binop_negated: bool,
 };
 
 /// Error when you try to static dispatch on something that's not a nominal type

@@ -10,6 +10,20 @@ const eval = @import("eval");
 const ipc = @import("ipc");
 const layout = @import("layout");
 const lir = @import("lir");
+const shim_io = @import("shim_io");
+
+/// Route std.debug.print / std.debug.panic through the minimal shim_io vtable so
+/// the shim archive does not pull in `std.Io.Threaded` (which would drag in
+/// statx/clock_gettime/etc. and break roc-compiled program self-containment).
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
+
+/// Disables stack-trace capture in the shim; see `shim_io.std_options_no_stack_tracing`.
+/// Empty stack traces are fine for the shim since panics here go through the host's RocOps.
+pub const std_options = shim_io.std_options_no_stack_tracing;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
@@ -28,7 +42,17 @@ const ShimError = error{
 
 var runtime_state_initialized: bool = false;
 var runtime_state: RuntimeState = undefined;
-var runtime_state_mutex: std.Thread.Mutex = .{};
+var runtime_state_mutex: std.Io.Mutex = .init;
+
+/// IO used for the shim's coordination reads and mutex.
+///
+/// We use the minimal `shim_io` vtable instead of `std.Io.Threaded` to keep the
+/// shim libc- and compiler_rt-free (see [[feedback_roc_libc_independence]]):
+/// pulling in the threaded vtable would link in `statx`, `clock_gettime`, etc.,
+/// which roc-compiled user programs must not require.
+fn shimIo() std.Io {
+    return shim_io.io();
+}
 
 fn allocator() Allocator {
     return std.heap.smp_allocator;
@@ -36,7 +60,7 @@ fn allocator() Allocator {
 
 fn openRuntimeState(gpa: Allocator) !RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordination(gpa, page_size);
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
@@ -52,8 +76,8 @@ fn openRuntimeState(gpa: Allocator) !RuntimeState {
 fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
     if (runtime_state_initialized) return &runtime_state;
 
-    runtime_state_mutex.lock();
-    defer runtime_state_mutex.unlock();
+    runtime_state_mutex.lockUncancelable(shimIo());
+    defer runtime_state_mutex.unlock(shimIo());
 
     if (runtime_state_initialized) return &runtime_state;
 

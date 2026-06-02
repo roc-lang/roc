@@ -124,6 +124,25 @@ pub const TargetsConfig = struct {
         return null;
     }
 
+    /// Get the default target for commands that must execute the result on this host.
+    /// This excludes build-compatible targets such as wasm32 that are not native
+    /// process executables for `roc run`.
+    pub fn getDefaultHostExecutableTarget(self: TargetsConfig, link_type: LinkType) ?RocTarget {
+        const specs = switch (link_type) {
+            .exe => self.exe,
+            .static_lib => self.static_lib,
+            .shared_lib => self.shared_lib,
+        };
+
+        for (specs) |spec| {
+            if (spec.target.isExecutableOnHost()) {
+                return spec.target;
+            }
+        }
+
+        return null;
+    }
+
     /// Result of finding a compatible target.
     pub const CompatibleTarget = struct {
         target: RocTarget,
@@ -320,6 +339,20 @@ test "getDefaultTarget returns first compatible target" {
         try testing.expect(result != null);
         try testing.expectEqual(RocTarget.x64glibc, result.?);
     }
+}
+
+test "getDefaultHostExecutableTarget excludes wasm" {
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{
+            .{ .target = .wasm32, .items = &.{.app} },
+        },
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget(.exe).?);
+    try testing.expect(config.getDefaultHostExecutableTarget(.exe) == null);
 }
 
 test "getFirstCompatibleTarget finds exe target first" {

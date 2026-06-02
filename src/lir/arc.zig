@@ -1460,8 +1460,8 @@ const Inserter = struct {
             return;
         };
 
-        var joins = FinalJoinMap.init(self.store.allocator);
-        defer joins.deinit();
+        var joins: FinalJoinMap = .empty;
+        defer joins.deinit(self.store.allocator);
         var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
         defer visited.deinit();
         try self.collectFinalJoinPoints(body, &joins, &visited);
@@ -1516,7 +1516,7 @@ const Inserter = struct {
                     }
                 },
                 .join => |join_stmt| {
-                    const entry = try joins.getOrPut(join_stmt.id);
+                    const entry = try joins.getOrPut(self.store.allocator, join_stmt.id);
                     const join_point = LIR.JoinPoint{
                         .id = join_stmt.id,
                         .params = join_stmt.params,
@@ -1720,7 +1720,7 @@ const Inserter = struct {
     fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
         const layout_val = self.layouts.getLayout(layout_idx);
         return switch (layout_val.tag) {
-            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.data.closure.captures_layout_idx),
+            .closure => self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx),
             else => .{ .op = op, .layout_idx = layout_idx },
         };
     }
@@ -1740,7 +1740,7 @@ const Inserter = struct {
 };
 
 const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
-const FinalJoinMap = std.AutoArrayHashMap(LIR.JoinPointId, LIR.JoinPoint);
+const FinalJoinMap = std.AutoArrayHashMapUnmanaged(LIR.JoinPointId, LIR.JoinPoint);
 
 fn joinPointLessThan(_: void, a: LIR.JoinPoint, b: LIR.JoinPoint) bool {
     return @intFromEnum(a.id) < @intFromEnum(b.id);

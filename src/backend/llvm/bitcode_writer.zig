@@ -33,7 +33,7 @@ pub fn BitcodeWriter(comptime types: []const type) type {
         widths: [types.len]u16,
 
         pub fn getTypeWidth(self: BcWriter, comptime Type: type) u16 {
-            return self.widths[comptime std.mem.indexOfScalar(type, types, Type).?];
+            return self.widths[comptime std.mem.findScalar(type, types, Type).?];
         }
 
         pub fn init(allocator: std.mem.Allocator, widths: [types.len]u16) BcWriter {

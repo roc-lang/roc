@@ -6,22 +6,22 @@ const main = @import("main.zig");
 const base = @import("base");
 const eval = @import("eval");
 const lir = @import("lir");
-const Allocators = base.Allocators;
-const cli_context = @import("CliContext.zig");
-const CliContext = cli_context.CliContext;
-const Io = cli_context.Io;
 const test_helpers = eval.test_helpers;
+const cli_context = @import("CliCtx.zig");
+const CliCtx = cli_context.CliCtx;
+const Io = cli_context.Io;
 
 test "platform resolution - basic cli platform" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -38,12 +38,12 @@ test "platform resolution - basic cli platform" {
         \\main = "Hello, World!"
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
-    defer allocs.gpa.free(roc_path);
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
+    defer gpa.free(roc_path);
 
     // This should return CliError since we don't have the actual CLI platform installed
     const result = main.resolvePlatformPaths(&ctx, roc_path);
@@ -51,15 +51,16 @@ test "platform resolution - basic cli platform" {
 }
 
 test "platform resolution - no platform in file" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -72,27 +73,28 @@ test "platform resolution - no platform in file" {
         \\42 + 58
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
-    defer allocs.gpa.free(roc_path);
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
+    defer gpa.free(roc_path);
 
     const result = main.resolvePlatformPaths(&ctx, roc_path);
     try testing.expectError(error.CliError, result);
 }
 
 test "platform resolution - file not found" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -101,15 +103,16 @@ test "platform resolution - file not found" {
 }
 
 test "platform resolution - insecure HTTP URL rejected" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
     // Create a CLI context for error reporting
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 
@@ -124,12 +127,12 @@ test "platform resolution - insecure HTTP URL rejected" {
         \\main = "Hello, World!"
     ;
 
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
+    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
+    defer roc_file.close(std.testing.io);
+    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
 
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
-    defer allocs.gpa.free(roc_path);
+    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
+    defer gpa.free(roc_path);
 
     // Insecure HTTP URLs (not localhost) should fail validation
     const result = main.resolvePlatformPaths(&ctx, roc_path);
@@ -141,7 +144,7 @@ fn compileLirImageForSharedTest(
     source: []const u8,
     imports: []const test_helpers.ModuleSource,
 ) !test_helpers.CompiledTargetProgram {
-    return test_helpers.compileProgramForTarget(allocator, .module, source, imports, .native);
+    return test_helpers.compileProgramForTarget(allocator, std.testing.io, .module, source, imports, .native);
 }
 
 fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) !void {
@@ -174,6 +177,7 @@ test "integration - shared memory setup and parsing" {
 test "integration - compilation pipeline for different platforms" {
     var native = try test_helpers.compileProgramForTarget(
         testing.allocator,
+        std.testing.io,
         .module,
         "main : () -> List(I64)\nmain = || [1, 2, 3]",
         &.{},
@@ -183,6 +187,7 @@ test "integration - compilation pipeline for different platforms" {
 
     var wasm32 = try test_helpers.compileProgramForTarget(
         testing.allocator,
+        std.testing.io,
         .module,
         "main : () -> List(I64)\nmain = || [1, 2, 3]",
         &.{},
@@ -197,14 +202,15 @@ test "integration - compilation pipeline for different platforms" {
 }
 
 test "integration - error handling for non-existent file" {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(gpa_impl.allocator());
-    defer allocs.deinit();
+    const gpa = gpa_impl.allocator();
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
 
-    var io = Io.init();
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, .run);
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(gpa, arena, &io, .run);
     ctx.initIo();
     defer ctx.deinit();
 

@@ -332,6 +332,20 @@ pub fn divTrunc_u128(a: u128, b: u128) u128 {
     return udivmod(u128, a, b).quot;
 }
 
+/// Signed 128-bit multiply with overflow detection. Returns the wrapped
+/// product and sets `overflow.*` to 1 when the true product is not
+/// representable in i128. This is the implementation behind the compiler-rt
+/// `__muloti4` symbol that Zig codegen emits for `@mulWithOverflow` on i128.
+pub fn mulWithOverflow_i128(a: i128, b: i128, overflow: *c_int) i128 {
+    const result = mul_i128(a, b);
+    // The divide-back check `result / b != a` catches every overflow except
+    // minInt * -1, where the truncating division wraps back to minInt and so
+    // compares equal to `a`. Guard that one case explicitly.
+    const min = std.math.minInt(i128);
+    overflow.* = if (b != 0 and (divTrunc_i128(result, b) != a or (a == min and b == -1))) 1 else 0;
+    return result;
+}
+
 /// Signed 128-bit floor division.
 pub fn divFloor_i128(a: i128, b: i128) i128 {
     const q = divTrunc_i128(a, b);
@@ -816,8 +830,5 @@ fn wasm_multi3(a: i128, b: i128) callconv(.c) i128 {
 /// __muloti4: i128 multiply with overflow detection (compiler-rt symbol).
 /// Called by Zig codegen for `@mulWithOverflow(a, b)` on i128.
 fn wasm_muloti4(a: i128, b: i128, overflow: *c_int) callconv(.c) i128 {
-    const result = mul_i128(a, b);
-    // Check overflow: if b != 0 and result / b != a, overflow occurred
-    overflow.* = if (b != 0 and divTrunc_i128(result, b) != a) 1 else 0;
-    return result;
+    return mulWithOverflow_i128(a, b, overflow);
 }

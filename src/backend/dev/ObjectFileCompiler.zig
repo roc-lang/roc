@@ -17,6 +17,7 @@ const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
 const lir = @import("lir");
+const CoreCtx = @import("ctx").CoreCtx;
 const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
@@ -100,6 +101,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
         output_path: []const u8,
+        roc_ctx: CoreCtx,
     ) CompilationError!void {
         var result = try self.compileToObjectFile(
             lir_store,
@@ -111,7 +113,10 @@ pub const ObjectFileCompiler = struct {
         );
         defer result.deinit();
 
-        writeFileWindowsAvSafe(output_path, result.object_bytes) catch |err| {
+        // Write to file. Use the AV-safe wrapper so a transient AccessDenied
+        // from a Windows filter driver holding the just-created file open is
+        // retried rather than failing the build.
+        writeFileWindowsAvSafe(roc_ctx.std_io, output_path, result.object_bytes) catch |err| {
             std.log.err("failed to write object file {s}: {}", .{ output_path, err });
             return CompilationError.ObjectGenerationFailed;
         };
@@ -122,18 +127,18 @@ pub const ObjectFileCompiler = struct {
 /// just-created file open and return AccessDenied on a follow-up write from a
 /// sibling process. Retry a few times with exponential backoff. Other OSes
 /// pass through to a single writeFile call.
-pub fn writeFileWindowsAvSafe(sub_path: []const u8, data: []const u8) !void {
+pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8) !void {
     if (comptime builtin.os.tag != .windows) {
-        return std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data });
+        return CoreCtx.writeFileCwd(io, sub_path, data);
     }
     var attempt: u32 = 0;
     const max_attempts: u32 = 6;
     while (true) : (attempt += 1) {
-        std.fs.cwd().writeFile(.{ .sub_path = sub_path, .data = data }) catch |err| switch (err) {
+        CoreCtx.writeFileCwd(io, sub_path, data) catch |err| switch (err) {
             error.AccessDenied => {
                 if (attempt + 1 >= max_attempts) return err;
-                const delay_ns: u64 = @as(u64, 10) * std.time.ns_per_ms * (@as(u64, 1) << @intCast(attempt));
-                std.Thread.sleep(delay_ns);
+                const delay_ms: u32 = @intCast(@as(u64, 10) * (@as(u64, 1) << @intCast(attempt)));
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(@intCast(delay_ms)), .awake) catch {};
                 continue;
             },
             else => return err,

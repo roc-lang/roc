@@ -9,7 +9,7 @@ const completion_context = @import("../completion/context.zig");
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
-    const repo_root = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(repo_root);
     const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
@@ -30,14 +30,14 @@ const TestHarness = struct {
     checker: SyntaxChecker,
     tmp: std.testing.TmpDir,
     platform_path: []u8,
-    file_path: ?[]u8 = null,
+    file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
 
     fn init() !TestHarness {
         const allocator = std.testing.allocator;
         return .{
             .allocator = allocator,
-            .checker = SyntaxChecker.init(allocator, .{}, null),
+            .checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null),
             .tmp = std.testing.tmpDir(.{}),
             .platform_path = try platformPath(allocator),
         };
@@ -58,10 +58,10 @@ const TestHarness = struct {
 
     /// Write a file to the tmp directory and register its path and URI.
     fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) !void {
-        try self.tmp.dir.writeFile(.{ .sub_path = filename, .data = data });
+        try self.tmp.dir.writeFile(std.testing.io, .{ .sub_path = filename, .data = data });
         if (self.file_path) |f| self.allocator.free(f);
         if (self.uri) |u| self.allocator.free(u);
-        self.file_path = try self.tmp.dir.realpathAlloc(self.allocator, filename);
+        self.file_path = try self.tmp.dir.realPathFileAlloc(std.testing.io, filename, self.allocator);
         self.uri = try uri_util.pathToUri(self.allocator, self.file_path.?);
     }
 
@@ -670,7 +670,6 @@ test "static dispatch completion for chained call" {
 // Doc Comment Tests
 
 test "completion includes doc comments from source" {
-    std.debug.print("===== DOC COMMENTS TEST=====", .{});
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -716,8 +715,8 @@ test "completion includes doc comments from source" {
             found_add = true;
             // The documentation should contain our doc comment
             if (item.documentation) |doc| {
-                try std.testing.expect(std.mem.indexOf(u8, doc, "Adds two numbers together") != null);
-                try std.testing.expect(std.mem.indexOf(u8, doc, "Returns the sum") != null);
+                try std.testing.expect(std.mem.find(u8, doc, "Adds two numbers together") != null);
+                try std.testing.expect(std.mem.find(u8, doc, "Returns the sum") != null);
             } else {
                 // Documentation should be present
                 std.debug.print("Expected documentation for 'add' but got null\n", .{});
@@ -759,10 +758,10 @@ test "hover shows documentation for function definition" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment
-        try std.testing.expect(std.mem.indexOf(u8, text, "Adds two numbers together") != null);
-        try std.testing.expect(std.mem.indexOf(u8, text, "Returns the sum") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Adds two numbers together") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Returns the sum") != null);
         // Should also contain the type signature
-        try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
+        try std.testing.expect(std.mem.find(u8, text, "I64, I64 -> I64") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -791,11 +790,10 @@ test "hover shows documentation for local function call" {
     const hover = try h.getHover(source, 6, 10);
     if (hover) |text| {
         defer h.allocator.free(text);
-        std.debug.print("\n=== HOVER TEXT ===\n{s}\n=== END ===\n", .{text});
         // Should contain the doc comment from the definition
-        try std.testing.expect(std.mem.indexOf(u8, text, "Multiplies two numbers") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Multiplies two numbers") != null);
         // Should contain the type signature
-        try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
+        try std.testing.expect(std.mem.find(u8, text, "I64, I64 -> I64") != null);
     } else {
         std.debug.print("\n=== HOVER RETURNED NULL ===\n", .{});
         return error.TestUnexpectedResult;
@@ -823,7 +821,7 @@ test "hover shows documentation for external function call" {
         defer h.allocator.free(text);
         // Should at least contain a type signature (documentation may or may not be available)
         try std.testing.expect(text.len > 0);
-        try std.testing.expect(std.mem.indexOf(u8, text, "Str") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Str") != null);
         // Note: We don't strictly check for documentation here as builtin docs
         // may not always be available, but the type should always be present
     } else {
@@ -855,7 +853,7 @@ test "hover shows documentation for function without type annotation" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment
-        try std.testing.expect(std.mem.indexOf(u8, text, "A simple helper function") != null);
+        try std.testing.expect(std.mem.find(u8, text, "A simple helper function") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -885,7 +883,7 @@ test "hover shows documentation for local variable" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment
-        try std.testing.expect(std.mem.indexOf(u8, text, "The magic number") != null);
+        try std.testing.expect(std.mem.find(u8, text, "The magic number") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -919,7 +917,7 @@ test "hover shows documentation for method call via static dispatch" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the doc comment from the method definition
-        try std.testing.expect(std.mem.indexOf(u8, text, "Doubles the value") != null);
+        try std.testing.expect(std.mem.find(u8, text, "Doubles the value") != null);
     } else {
         return error.TestUnexpectedResult;
     }
@@ -948,9 +946,9 @@ test "hover without documentation shows only type" {
     if (hover) |text| {
         defer h.allocator.free(text);
         // Should contain the type but no doc text
-        try std.testing.expect(std.mem.indexOf(u8, text, "I64, I64 -> I64") != null);
+        try std.testing.expect(std.mem.find(u8, text, "I64, I64 -> I64") != null);
         // Should not have doc comment-specific text from a previous line
-        try std.testing.expect(std.mem.indexOf(u8, text, "##") == null);
+        try std.testing.expect(std.mem.find(u8, text, "##") == null);
     } else {
         return error.TestUnexpectedResult;
     }

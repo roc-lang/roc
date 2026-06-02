@@ -6,8 +6,18 @@
 //! - Dev backend wrapper functions (for roc build --opt=dev)
 
 const std = @import("std");
+const shim_io = @import("shim_io");
 
 pub const panic = std.debug.no_panic;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
+
+/// Disables stack-trace capture; see `shim_io.std_options_no_stack_tracing`.
+pub const std_options = shim_io.std_options_no_stack_tracing;
 
 // Export key functions that might need compiler-rt symbols
 comptime {
@@ -121,4 +131,18 @@ comptime {
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
     @export(&dw.roc_builtins_float_from_str, .{ .name = "roc_builtins_float_from_str" });
+    // List equality and reverse wrappers
+    @export(&dw.roc_builtins_list_eq, .{ .name = "roc_builtins_list_eq" });
+    @export(&dw.roc_builtins_list_str_eq, .{ .name = "roc_builtins_list_str_eq" });
+    @export(&dw.roc_builtins_list_list_eq, .{ .name = "roc_builtins_list_list_eq" });
+    @export(&dw.roc_builtins_list_reverse, .{ .name = "roc_builtins_list_reverse" });
+    // Integer modulo wrappers
+    @export(&dw.roc_builtins_i8_mod_by, .{ .name = "roc_builtins_i8_mod_by" });
+    @export(&dw.roc_builtins_u8_mod_by, .{ .name = "roc_builtins_u8_mod_by" });
+    @export(&dw.roc_builtins_i16_mod_by, .{ .name = "roc_builtins_i16_mod_by" });
+    @export(&dw.roc_builtins_u16_mod_by, .{ .name = "roc_builtins_u16_mod_by" });
+    @export(&dw.roc_builtins_i32_mod_by, .{ .name = "roc_builtins_i32_mod_by" });
+    @export(&dw.roc_builtins_u32_mod_by, .{ .name = "roc_builtins_u32_mod_by" });
+    @export(&dw.roc_builtins_i64_mod_by, .{ .name = "roc_builtins_i64_mod_by" });
+    @export(&dw.roc_builtins_u64_mod_by, .{ .name = "roc_builtins_u64_mod_by" });
 }

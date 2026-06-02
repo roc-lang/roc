@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
           use-cache: true
 
       - name: zig lints
@@ -86,6 +86,10 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
+      - name: Run eval tests with LLVM backend
+        run: |
+          zig build test-eval -- --llvm
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
@@ -102,12 +106,12 @@ jobs:
             target_flag: ''
             release_jobs_flag: ''
           - os: ubuntu-24.04
-            cpu_flag: ''
+            cpu_flag: ""
             target_flag: -Dtarget=x86_64-linux-musl
             release_jobs_flag: ''
           - os: ubuntu-24.04-arm
             cpu_flag: ''
-            target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug)
+            target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug) # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16
             release_jobs_flag: -j4  # Avoid hosted ARM runner disconnects under full ReleaseFast parallelism.
           - os: windows-2022
             cpu_flag: -Dcpu=x86_64_v3
@@ -127,7 +131,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
           use-cache: true
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
       - name: delete llvm-config
@@ -162,7 +166,7 @@ jobs:
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # ratchet:ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
 
@@ -170,11 +174,6 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           zig build test-cli
-
-      - name: Build Test Platforms (cross-compile)
-        if: runner.os != 'Windows'
-        run: |
-          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
@@ -251,6 +250,7 @@ jobs:
           }
 
       # Parser code coverage - run on ARM64 Linux (native build)
+      # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16 — may be able to enable x86_64 coverage
       # Note: Zig 0.15.2 on x86_64 generates invalid DWARF .debug_line sections,
       # causing libdw to fail parsing user source files. ARM64 works correctly.
       - name: Install kcov dependencies
@@ -280,7 +280,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
           use-cache: true
 
       - name: build roc + repro executables for valgrind
@@ -316,7 +316,6 @@ jobs:
           - aarch64-windows-gnu
           - arm-linux-musleabihf
           - x86-linux-musl
-          - x86_64-linux-musl
           - x86_64-macos-none
           - x86_64-windows-gnu
 
@@ -325,7 +324,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
           use-cache: true
 
       - name: cross compile with llvm

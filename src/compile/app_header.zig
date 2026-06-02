@@ -18,9 +18,8 @@ const parse = @import("parse");
 const can = @import("can");
 
 const Allocator = std.mem.Allocator;
-const Io = @import("io").Io;
+const Io = @import("ctx").CoreCtx;
 const ModuleEnv = can.ModuleEnv;
-const Allocators = base.Allocators;
 
 /// One non-platform package reference from an `app` header.
 pub const PackageEntry = struct {
@@ -74,11 +73,7 @@ pub fn parseAppHeader(
     defer env.deinit();
     env.common.source = source;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
-    const ast = parse.parse(&allocators, &env.common) catch return error.OutOfMemory;
+    const ast = parse.parse(gpa, &env.common) catch return error.OutOfMemory;
     defer ast.deinit();
 
     const file_node = ast.store.getFile();

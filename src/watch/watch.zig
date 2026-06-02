@@ -5,6 +5,34 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
+// win32.OVERLAPPED and FILE_NOTIFY_INFORMATION were removed in Zig 0.16.
+// Define the layouts we need locally; these are only referenced on Windows.
+const win32 = struct {
+    const DWORD = std.os.windows.DWORD;
+    const HANDLE = std.os.windows.HANDLE;
+    const ULONG_PTR = std.os.windows.ULONG_PTR;
+
+    const OVERLAPPED = extern struct {
+        Internal: ULONG_PTR,
+        InternalHigh: ULONG_PTR,
+        DUMMYUNIONNAME: extern union {
+            DUMMYSTRUCTNAME: extern struct {
+                Offset: DWORD,
+                OffsetHigh: DWORD,
+            },
+            Pointer: ?*anyopaque,
+        },
+        hEvent: ?HANDLE,
+    };
+
+    const FILE_NOTIFY_INFORMATION = extern struct {
+        NextEntryOffset: DWORD,
+        Action: DWORD,
+        FileNameLength: DWORD,
+        // Followed by FileName: [FileNameLength/2]WCHAR at offset @sizeOf(FILE_NOTIFY_INFORMATION)
+    };
+};
+
 // Use real FSEvents only when building natively for macOS
 // Cross-compilation detection: Use build system's isNative() check
 const target_is_macos = builtin.os.tag == .macos;
@@ -221,6 +249,7 @@ pub const WatchCallback = *const fn (event: WatchEvent) void;
 /// Monitors directories recursively and invokes callbacks on file changes
 pub const Watcher = struct {
     allocator: std.mem.Allocator,
+    std_io: std.Io,
     paths: [][]const u8,
     callback: WatchCallback,
     should_stop: std.atomic.Value(bool),
@@ -256,14 +285,14 @@ pub const Watcher = struct {
         stop_event: ?std.os.windows.HANDLE,
 
         const OverlappedData = struct {
-            overlapped: std.os.windows.OVERLAPPED,
-            buffer: []align(@alignOf(std.os.windows.FILE_NOTIFY_INFORMATION)) u8,
+            overlapped: win32.OVERLAPPED,
+            buffer: []align(@alignOf(win32.FILE_NOTIFY_INFORMATION)) u8,
             path: []const u8,
         };
     };
 
     /// Initialize a new file watcher
-    pub fn init(allocator: std.mem.Allocator, paths: []const []const u8, callback: WatchCallback) !*Watcher {
+    pub fn init(allocator: std.mem.Allocator, std_io: std.Io, paths: []const []const u8, callback: WatchCallback) !*Watcher {
         const watcher = try allocator.create(Watcher);
         errdefer allocator.destroy(watcher);
 
@@ -276,6 +305,7 @@ pub const Watcher = struct {
 
         watcher.* = .{
             .allocator = allocator,
+            .std_io = std_io,
             .paths = paths_copy,
             .callback = callback,
             .should_stop = std.atomic.Value(bool).init(false),
@@ -390,7 +420,7 @@ pub const Watcher = struct {
                 if (self.impl.inotify_fd >= 0) {
                     const fd = self.impl.inotify_fd;
                     self.impl.inotify_fd = -1;
-                    std.posix.close(fd);
+                    _ = std.os.linux.close(fd);
                 }
                 self.clearLinuxWatchData();
             },
@@ -579,10 +609,13 @@ pub const Watcher = struct {
     }
 
     fn watchLoopLinux(self: *Watcher) void {
-        self.impl.inotify_fd = std.posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC) catch |err| {
-            std.log.err("inotify_init1 failed: {}", .{err});
+        const init_result = std.os.linux.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC);
+        const init_errno = std.posix.errno(init_result);
+        if (init_errno != .SUCCESS) {
+            std.log.err("inotify_init1 failed: {}", .{init_errno});
             return;
-        };
+        }
+        self.impl.inotify_fd = @as(i32, @intCast(init_result));
 
         // Add watches
         for (self.paths) |path| {
@@ -666,10 +699,10 @@ pub const Watcher = struct {
 
                             // Check if there are already .roc files in the new directory
                             // This handles the case where files are created immediately after the directory
-                            var dir = std.fs.openDirAbsolute(new_dir, .{ .iterate = true }) catch break;
-                            defer dir.close();
+                            var dir = std.Io.Dir.openDirAbsolute(self.std_io, new_dir, .{ .iterate = true }) catch break;
+                            defer dir.close(self.std_io);
                             var it = dir.iterate();
-                            while (it.next() catch null) |entry| {
+                            while (it.next(self.std_io) catch null) |entry| {
                                 if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
                                     const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch continue;
                                     defer self.allocator.free(full_path);
@@ -694,7 +727,13 @@ pub const Watcher = struct {
         const path_z = try self.allocator.dupeZ(u8, path);
         defer self.allocator.free(path_z);
 
-        const wd = try std.posix.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
+        const add_result = std.os.linux.inotify_add_watch(self.impl.inotify_fd, path_z, flags);
+        const add_errno = std.posix.errno(add_result);
+        if (add_errno != .SUCCESS) {
+            std.log.err("inotify_add_watch failed: {}", .{add_errno});
+            return error.InotifyAddWatchFailed;
+        }
+        const wd = @as(i32, @intCast(add_result));
 
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
@@ -707,11 +746,11 @@ pub const Watcher = struct {
         const wd_key = try std.fmt.allocPrint(self.allocator, "{d}", .{wd});
         try self.impl.path_cache.put(wd_key, try self.allocator.dupe(u8, path));
 
-        var dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
-        defer dir.close();
+        var dir = try std.Io.Dir.openDirAbsolute(self.std_io, path, .{ .iterate = true });
+        defer dir.close(self.std_io);
 
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(self.std_io)) |entry| {
             if (entry.kind == .directory) {
                 const subdir_path = try std.fs.path.join(self.allocator, &.{ path, entry.name });
                 defer self.allocator.free(subdir_path);
@@ -731,7 +770,7 @@ pub const Watcher = struct {
             ) callconv(.winapi) ?std.os.windows.HANDLE;
         }.CreateEventW;
 
-        self.impl.stop_event = CreateEventW(null, std.os.windows.TRUE, std.os.windows.FALSE, null) orelse {
+        self.impl.stop_event = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
             std.log.err("Failed to create stop event", .{});
             return;
         };
@@ -783,7 +822,7 @@ pub const Watcher = struct {
             const result = WaitForMultipleObjects(
                 @intCast(handles.len),
                 handles.ptr,
-                std.os.windows.FALSE,
+                .FALSE,
                 100, // 100ms timeout
             );
 
@@ -861,18 +900,18 @@ pub const Watcher = struct {
             ) callconv(.winapi) ?std.os.windows.HANDLE;
         }.CreateEventW;
 
-        const event_handle = CreateEventW(null, std.os.windows.TRUE, std.os.windows.FALSE, null) orelse {
+        const event_handle = CreateEventW(null, std.os.windows.BOOL.TRUE, .FALSE, null) orelse {
             _ = std.os.windows.CloseHandle(dir_handle);
             return error.FailedToCreateEvent;
         };
 
         // Allocate buffer for ReadDirectoryChangesW
         const buffer_size = 4096;
-        const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(std.os.windows.FILE_NOTIFY_INFORMATION)), buffer_size);
+        const buffer = try self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(win32.FILE_NOTIFY_INFORMATION)), buffer_size);
 
         // Create overlapped data
         var overlapped_data = WindowsData.OverlappedData{
-            .overlapped = std.mem.zeroes(std.os.windows.OVERLAPPED),
+            .overlapped = std.mem.zeroes(win32.OVERLAPPED),
             .buffer = buffer,
             .path = try self.allocator.dupe(u8, path),
         };
@@ -895,7 +934,7 @@ pub const Watcher = struct {
                 bWatchSubtree: std.os.windows.BOOL,
                 dwNotifyFilter: std.os.windows.DWORD,
                 lpBytesReturned: ?*std.os.windows.DWORD,
-                lpOverlapped: *std.os.windows.OVERLAPPED,
+                lpOverlapped: *win32.OVERLAPPED,
                 lpCompletionRoutine: ?*anyopaque,
             ) callconv(.winapi) std.os.windows.BOOL;
         }.ReadDirectoryChangesW;
@@ -914,19 +953,15 @@ pub const Watcher = struct {
             self.impl.handles.items[index],
             self.impl.overlapped_data.items[index].buffer.ptr,
             @intCast(self.impl.overlapped_data.items[index].buffer.len),
-            std.os.windows.TRUE, // Watch subtree
+            std.os.windows.BOOL.TRUE, // Watch subtree
             notify_filter,
             null,
             &self.impl.overlapped_data.items[index].overlapped,
             null,
         );
 
-        if (result == 0) {
-            const GetLastError = struct {
-                extern "kernel32" fn GetLastError() callconv(.winapi) std.os.windows.DWORD;
-            }.GetLastError;
-
-            const err = GetLastError();
+        if (result == .FALSE) {
+            const err = std.os.windows.GetLastError();
             std.log.err("ReadDirectoryChangesW failed with error: {}", .{err});
             return error.ReadDirectoryChangesFailed;
         }
@@ -936,7 +971,7 @@ pub const Watcher = struct {
         const GetOverlappedResult = struct {
             extern "kernel32" fn GetOverlappedResult(
                 hFile: std.os.windows.HANDLE,
-                lpOverlapped: *std.os.windows.OVERLAPPED,
+                lpOverlapped: *win32.OVERLAPPED,
                 lpNumberOfBytesTransferred: *std.os.windows.DWORD,
                 bWait: std.os.windows.BOOL,
             ) callconv(.winapi) std.os.windows.BOOL;
@@ -951,10 +986,10 @@ pub const Watcher = struct {
             self.impl.handles.items[index],
             &self.impl.overlapped_data.items[index].overlapped,
             &bytes_transferred,
-            std.os.windows.FALSE,
+            .FALSE,
         );
 
-        if (result == 0) {
+        if (result == .FALSE) {
             std.log.err("GetOverlappedResult failed", .{});
             return;
         }
@@ -977,12 +1012,12 @@ pub const Watcher = struct {
 
         var offset: u32 = 0;
         while (offset < bytes_transferred) {
-            const info = @as(*const std.os.windows.FILE_NOTIFY_INFORMATION, @ptrCast(@alignCast(&buffer[offset])));
+            const info = @as(*const win32.FILE_NOTIFY_INFORMATION, @ptrCast(@alignCast(&buffer[offset])));
 
             // Convert filename from UTF-16 to UTF-8
-            const filename_utf16 = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(std.os.windows.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
+            const filename_utf16 = @as([*]const u16, @ptrCast(@alignCast(&buffer[offset + @sizeOf(win32.FILE_NOTIFY_INFORMATION)])))[0 .. info.FileNameLength / 2];
 
-            var filename_utf8_buf: [std.fs.max_path_bytes]u8 = undefined;
+            var filename_utf8_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const filename_utf8_len = std.unicode.utf16LeToUtf8(filename_utf8_buf[0..], filename_utf16) catch {
                 // Skip this file if we can't convert the name
                 if (info.NextEntryOffset == 0) break;
@@ -1015,15 +1050,15 @@ pub const Watcher = struct {
 
 // TESTS
 
-fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32) !void {
+fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32, io: std.Io) !void {
     // When using stubs, don't wait for events since they won't be generated
     if (use_stubs) {
         return;
     }
 
-    const start = std.time.milliTimestamp();
+    const start = std.Io.Clock.now(.awake, io);
     while (event_count.load(.seq_cst) < expected) {
-        const elapsed = std.time.milliTimestamp() - start;
+        const elapsed = start.durationTo(std.Io.Clock.now(.awake, io)).toMilliseconds();
         if (elapsed > max_wait_ms) {
             return error.EventsNotReceived;
         }
@@ -1044,41 +1079,44 @@ fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) !void 
 
 test "basic file watching" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var last_path: ?[]const u8 = null;
-        var mutex: std.Thread.Mutex = .{};
+        var mutex: std.Io.Mutex = std.Io.Mutex.init;
+        var io_handle: std.Io = undefined;
     };
+    global.io_handle = io;
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
             bumpEventCount(global);
-            global.mutex.lock();
-            defer global.mutex.unlock();
+            global.mutex.lockUncancelable(global.io_handle);
+            defer global.mutex.unlock(global.io_handle);
             global.last_path = event.path;
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
     // Create .roc files and wait for events (or skip if using stubs)
-    try temp_dir.dir.writeFile(.{ .sub_path = "test1.roc", .data = "content1" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "test1.roc", .data = "content1" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "test2.roc", .data = "content2" });
-    try waitForEvents(&global.event_count, 2, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "test2.roc", .data = "content2" });
+    try waitForEvents(&global.event_count, 2, 5000, io);
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "test3.txt", .data = "ignored" });
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "test3.txt", .data = "ignored" });
 
     watcher.stop();
 
@@ -1088,14 +1126,15 @@ test "basic file watching" {
 
 test "recursive directory watching" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    try temp_dir.dir.makeDir("subdir");
+    try temp_dir.dir.createDir(io, "subdir", .default_dir);
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
@@ -1107,13 +1146,13 @@ test "recursive directory watching" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "subdir/nested.roc", .data = "nested content" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "subdir/nested.roc", .data = "nested content" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
     watcher.stop();
 
@@ -1122,15 +1161,16 @@ test "recursive directory watching" {
 
 test "multiple directories watching" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir1 = std.testing.tmpDir(.{});
     defer temp_dir1.cleanup();
     var temp_dir2 = std.testing.tmpDir(.{});
     defer temp_dir2.cleanup();
 
-    const temp_path1 = try temp_dir1.dir.realpathAlloc(allocator, ".");
+    const temp_path1 = try temp_dir1.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path1);
-    const temp_path2 = try temp_dir2.dir.realpathAlloc(allocator, ".");
+    const temp_path2 = try temp_dir2.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path2);
 
     const global = struct {
@@ -1143,16 +1183,16 @@ test "multiple directories watching" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{ temp_path1, temp_path2 }, callback);
+    const watcher = try Watcher.init(allocator, io, &.{ temp_path1, temp_path2 }, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
-    try temp_dir1.dir.writeFile(.{ .sub_path = "file1.roc", .data = "content1" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir1.dir.writeFile(io, .{ .sub_path = "file1.roc", .data = "content1" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
-    try temp_dir2.dir.writeFile(.{ .sub_path = "file2.roc", .data = "content2" });
-    try waitForEvents(&global.event_count, 2, 5000);
+    try temp_dir2.dir.writeFile(io, .{ .sub_path = "file2.roc", .data = "content2" });
+    try waitForEvents(&global.event_count, 2, 5000, io);
 
     watcher.stop();
 
@@ -1161,14 +1201,15 @@ test "multiple directories watching" {
 
 test "file modification detection" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "initial" });
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "modify.roc", .data = "initial" });
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
@@ -1180,13 +1221,13 @@ test "file modification detection" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "modify.roc", .data = "modified content that is different" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "modify.roc", .data = "modified content that is different" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
     watcher.stop();
 
@@ -1195,11 +1236,12 @@ test "file modification detection" {
 
 test "rapid file creation" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
@@ -1212,24 +1254,24 @@ test "rapid file creation" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = std.Io.Clock.now(.awake, io);
 
     for (0..50) |i| {
         const filename = try std.fmt.allocPrint(allocator, "file{d}.roc", .{i});
         defer allocator.free(filename);
-        try temp_dir.dir.writeFile(.{ .sub_path = filename, .data = "content" });
+        try temp_dir.dir.writeFile(io, .{ .sub_path = filename, .data = "content" });
     }
 
     // FSEvents on macOS coalesces rapid events, so we might not get all 50 events
     const min_expected = if (builtin.os.tag == .macos) 10 else 50;
-    try waitForEvents(&global.event_count, min_expected, 10000);
+    try waitForEvents(&global.event_count, min_expected, 10000, io);
 
-    const elapsed = std.time.milliTimestamp() - start_time;
+    const elapsed = start_time.durationTo(std.Io.Clock.now(.awake, io)).toMilliseconds();
 
     watcher.stop();
 
@@ -1240,11 +1282,12 @@ test "rapid file creation" {
 
 test "directory creation and file addition" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
@@ -1257,18 +1300,18 @@ test "directory creation and file addition" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
-    try temp_dir.dir.makeDir("newdir");
+    try temp_dir.dir.createDir(io, "newdir", .default_dir);
     std.Thread.yield() catch {};
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "newdir/new.roc", .data = "new content" });
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "newdir/new.roc", .data = "new content" });
 
     if (builtin.os.tag == .linux) {
-        try waitForEvents(&global.event_count, 1, 5000);
+        try waitForEvents(&global.event_count, 1, 5000, io);
     }
 
     watcher.stop();
@@ -1280,11 +1323,12 @@ test "directory creation and file addition" {
 
 test "start stop restart" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
@@ -1297,24 +1341,24 @@ test "start stop restart" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
-    try temp_dir.dir.writeFile(.{ .sub_path = "first.roc", .data = "first" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "first.roc", .data = "first" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
     watcher.stop();
     const count_after_stop = global.event_count.load(.seq_cst);
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "while_stopped.roc", .data = "stopped" });
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "while_stopped.roc", .data = "stopped" });
     std.Thread.yield() catch {};
 
     try std.testing.expectEqual(count_after_stop, global.event_count.load(.seq_cst));
 
     try watcher.start();
-    try temp_dir.dir.writeFile(.{ .sub_path = "after_restart.roc", .data = "restarted" });
-    try waitForEvents(&global.event_count, count_after_stop + 1, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "after_restart.roc", .data = "restarted" });
+    try waitForEvents(&global.event_count, count_after_stop + 1, 5000, io);
 
     watcher.stop();
 
@@ -1324,31 +1368,34 @@ test "start stop restart" {
 
 test "thread safety" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
-        var mutex: std.Thread.Mutex = .{};
+        var mutex: std.Io.Mutex = std.Io.Mutex.init;
         var events: std.ArrayList([]const u8) = .empty;
+        var io_handle: std.Io = undefined;
     };
+    global.io_handle = io;
 
     defer global.events.deinit(allocator);
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
             bumpEventCount(global);
-            global.mutex.lock();
-            defer global.mutex.unlock();
+            global.mutex.lockUncancelable(global.io_handle);
+            defer global.mutex.unlock(global.io_handle);
             global.events.append(allocator, allocator.dupe(u8, event.path) catch return) catch return;
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
@@ -1356,21 +1403,21 @@ test "thread safety" {
     const thread_count = 4;
     var threads: [thread_count]std.Thread = undefined;
 
-    const WriterArgs = struct { dir: *std.testing.TmpDir, id: usize, alloc: std.mem.Allocator };
+    const WriterArgs = struct { dir: *std.testing.TmpDir, id: usize, alloc: std.mem.Allocator, io: std.Io };
 
     const writer = struct {
         fn write(args: WriterArgs) void {
             for (0..5) |i| {
                 const filename = std.fmt.allocPrint(args.alloc, "thread{d}_file{d}.roc", .{ args.id, i }) catch return;
                 defer args.alloc.free(filename);
-                args.dir.dir.writeFile(.{ .sub_path = filename, .data = "content" }) catch return;
+                args.dir.dir.writeFile(args.io, .{ .sub_path = filename, .data = "content" }) catch return;
                 std.Thread.yield() catch {};
             }
         }
     };
 
     for (0..thread_count) |i| {
-        const args = WriterArgs{ .dir = &temp_dir, .id = i, .alloc = allocator };
+        const args = WriterArgs{ .dir = &temp_dir, .id = i, .alloc = allocator, .io = io };
         threads[i] = std.Thread.spawn(.{}, writer.write, .{args}) catch continue;
     }
 
@@ -1381,14 +1428,14 @@ test "thread safety" {
     // FSEvents on macOS coalesces rapid events, so we might not get all 20 events
     // Just ensure we get at least some events from the concurrent writes
     const min_expected = if (builtin.os.tag == .macos) 4 else thread_count * 5;
-    try waitForEvents(&global.event_count, min_expected, 10000);
+    try waitForEvents(&global.event_count, min_expected, 10000, io);
 
     watcher.stop();
 
     try expectEventsOrSkip(&global.event_count, min_expected);
 
-    global.mutex.lock();
-    defer global.mutex.unlock();
+    global.mutex.lockUncancelable(io);
+    defer global.mutex.unlock(io);
     for (global.events.items) |path| {
         allocator.free(path);
     }
@@ -1396,11 +1443,12 @@ test "thread safety" {
 
 test "file rename detection" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
@@ -1413,15 +1461,15 @@ test "file rename detection" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
-    try temp_dir.dir.writeFile(.{ .sub_path = "original.roc", .data = "content" });
+    try temp_dir.dir.writeFile(io, .{ .sub_path = "original.roc", .data = "content" });
 
     try watcher.start();
 
-    try temp_dir.dir.rename("original.roc", "renamed.roc");
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir.dir.rename("original.roc", temp_dir.dir, "renamed.roc", io);
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
     watcher.stop();
 
@@ -1434,42 +1482,45 @@ test "windows unicode filename handling" {
     if (builtin.os.tag != .windows) return;
 
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
         var last_path: ?[]const u8 = null;
-        var mutex: std.Thread.Mutex = .{};
+        var mutex: std.Io.Mutex = std.Io.Mutex.init;
+        var io_handle: std.Io = undefined;
     };
+    global.io_handle = io;
 
     const callback = struct {
         fn cb(event: WatchEvent) void {
             bumpEventCount(global);
-            global.mutex.lock();
-            defer global.mutex.unlock();
+            global.mutex.lockUncancelable(global.io_handle);
+            defer global.mutex.unlock(global.io_handle);
             global.last_path = event.path;
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
     // Test with unicode filename (Chinese characters)
     const unicode_filename = "测试文件.roc";
-    try temp_dir.dir.writeFile(.{ .sub_path = unicode_filename, .data = "unicode content" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = unicode_filename, .data = "unicode content" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
     // Test with accented characters
     const accented_filename = "café.roc";
-    try temp_dir.dir.writeFile(.{ .sub_path = accented_filename, .data = "accented content" });
-    try waitForEvents(&global.event_count, 2, 5000);
+    try temp_dir.dir.writeFile(io, .{ .sub_path = accented_filename, .data = "accented content" });
+    try waitForEvents(&global.event_count, 2, 5000, io);
 
     watcher.stop();
 
@@ -1480,11 +1531,12 @@ test "windows long path handling" {
     if (builtin.os.tag != .windows) return;
 
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     var temp_dir = std.testing.tmpDir(.{});
     defer temp_dir.cleanup();
 
-    const temp_path = try temp_dir.dir.realpathAlloc(allocator, ".");
+    const temp_path = try temp_dir.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(temp_path);
 
     // Create a nested directory structure to test long paths
@@ -1513,12 +1565,12 @@ test "windows long path handling" {
             try current_path.append(allocator, std.fs.path.sep);
         }
         try current_path.appendSlice(allocator, component);
-        try temp_dir.dir.makePath(current_path.items);
+        try temp_dir.dir.createDirPath(io, current_path.items);
     }
 
     // Open the deepest directory
-    var current_dir = try temp_dir.dir.openDir(current_path.items, .{});
-    defer current_dir.close();
+    var current_dir = try temp_dir.dir.openDir(io, current_path.items, .{});
+    defer current_dir.close(io);
 
     const global = struct {
         var event_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
@@ -1530,14 +1582,14 @@ test "windows long path handling" {
         }
     }.cb;
 
-    const watcher = try Watcher.init(allocator, &.{temp_path}, callback);
+    const watcher = try Watcher.init(allocator, io, &.{temp_path}, callback);
     defer watcher.deinit();
 
     try watcher.start();
 
     // Create a file in the deeply nested directory
-    try current_dir.writeFile(.{ .sub_path = "deep_file.roc", .data = "deep content" });
-    try waitForEvents(&global.event_count, 1, 5000);
+    try current_dir.writeFile(io, .{ .sub_path = "deep_file.roc", .data = "deep content" });
+    try waitForEvents(&global.event_count, 1, 5000, io);
 
     watcher.stop();
 
