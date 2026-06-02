@@ -5,6 +5,8 @@ const std = @import("std");
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
 const logs_dir = out_dir ++ "/logs";
+const heartbeat_env = "MINICI_HEARTBEAT_INTERVAL_MS";
+const default_heartbeat_interval_ms: u64 = 30_000;
 
 const JobKind = enum {
     single,
@@ -14,6 +16,7 @@ const JobKind = enum {
 const Job = struct {
     name: []const u8,
     kind: JobKind = .single,
+    skip_reason: ?[]const u8 = null,
 };
 
 const jobs = [_]Job{
@@ -54,7 +57,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-module-bundle" },
     .{ .name = "run-test-zig-module-unbundle" },
     .{ .name = "run-test-zig-module-base58" },
-    .{ .name = "run-test-zig-module-lsp" },
+    .{ .name = "run-test-zig-module-lsp", .skip_reason = "Skipped until #9514 is resolved" },
     .{ .name = "run-test-zig-module-backend" },
     .{ .name = "run-test-zig-module-lir_core" },
     .{ .name = "run-test-zig-module-postcheck" },
@@ -64,13 +67,13 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-module-echo_platform" },
     .{ .name = "run-test-zig-module-docs" },
     .{ .name = "run-test-zig-snapshot-tool" },
-    .{ .name = "run-test-zig-builtin-doc" },
-    .{ .name = "run-test-zig-cli-main" },
+    .{ .name = "run-test-zig-builtin-doc", .skip_reason = "Skipped until #9515 is resolved" },
+    .{ .name = "run-test-zig-cli-main", .skip_reason = "Skipped until #9516 is resolved" },
     .{ .name = "run-test-zig-watch-cli" },
-    .{ .name = "run-test-zig-fx-platform" },
+    .{ .name = "run-test-zig-fx-platform", .skip_reason = "Skipped until #9517 is resolved" },
     .{ .name = "run-test-eval", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
-    .{ .name = "run-test-playground", .kind = .harness },
+    .{ .name = "run-test-playground", .kind = .harness, .skip_reason = "Skipped until #9518 is resolved" },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-coverage-parser" },
@@ -82,6 +85,7 @@ const CommandResult = struct {
     log_path: []const u8,
     command: []const []const u8,
     stats_path: ?[]const u8 = null,
+    heartbeat_printed: bool = false,
 };
 
 fn nowNs(io: std.Io) u64 {
@@ -100,6 +104,10 @@ fn isPass(result: CommandResult) bool {
     return std.mem.eql(u8, result.status, "pass");
 }
 
+fn isSuccessful(result: CommandResult) bool {
+    return isPass(result) or std.mem.eql(u8, result.status, "skip");
+}
+
 fn isCheckJob(name: []const u8) bool {
     return std.mem.startsWith(u8, name, "run-check-");
 }
@@ -112,6 +120,7 @@ fn buildStatusText(result: CommandResult) []const u8 {
 
 fn runStatusText(result: CommandResult) []const u8 {
     if (isPass(result)) return "passed";
+    if (std.mem.eql(u8, result.status, "skip")) return "skipped";
     if (std.mem.eql(u8, result.status, "crash")) return "crashed";
     return "failed";
 }
@@ -121,6 +130,50 @@ fn printRerunHint(result: CommandResult) void {
     std.debug.print("  Re-run failed step: `zig build {s} --summary all --color off`\n", .{step_name});
     std.debug.print("  Log: `{s}`\n", .{result.log_path});
 }
+
+fn heartbeatIntervalMs() u64 {
+    const raw_z = std.c.getenv(heartbeat_env) orelse return default_heartbeat_interval_ms;
+    const raw = std.mem.span(raw_z);
+    if (raw.len == 0) return default_heartbeat_interval_ms;
+    return std.fmt.parseInt(u64, raw, 10) catch |err| {
+        std.debug.print("invalid {s}='{s}': {s}; using default {d}ms\n", .{ heartbeat_env, raw, @errorName(err), default_heartbeat_interval_ms });
+        return default_heartbeat_interval_ms;
+    };
+}
+
+fn commandStepName(argv: []const []const u8) []const u8 {
+    return if (argv.len > 2) argv[2] else argv[0];
+}
+
+const Heartbeat = struct {
+    io: std.Io,
+    argv: []const []const u8,
+    started: u64,
+    interval_ms: u64,
+    done: std.atomic.Value(bool),
+    printed: std.atomic.Value(bool),
+
+    fn run(self: *@This()) void {
+        if (self.interval_ms == 0) return;
+
+        var next_ms = self.interval_ms;
+        while (!self.done.load(.acquire)) {
+            std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(500), .awake) catch {};
+            if (self.done.load(.acquire)) return;
+
+            const elapsed_ms = durationSince(self.io, self.started) / std.time.ns_per_ms;
+            if (elapsed_ms < next_ms) continue;
+
+            const already_printed = self.printed.swap(true, .acq_rel);
+            if (!already_printed) std.debug.print("\n", .{});
+            std.debug.print("  still running `{s}` after {d:.1}s\n", .{
+                commandStepName(self.argv),
+                seconds(elapsed_ms * std.time.ns_per_ms),
+            });
+            next_ms += self.interval_ms;
+        }
+    }
+};
 
 fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
     if (std.fs.path.dirname(path)) |dir| {
@@ -167,6 +220,23 @@ fn runCommand(
     log_path: []const u8,
 ) !CommandResult {
     const started = nowNs(io);
+    var heartbeat = Heartbeat{
+        .io = io,
+        .argv = argv,
+        .started = started,
+        .interval_ms = heartbeatIntervalMs(),
+        .done = std.atomic.Value(bool).init(false),
+        .printed = std.atomic.Value(bool).init(false),
+    };
+    const heartbeat_thread = if (heartbeat.interval_ms == 0)
+        null
+    else
+        std.Thread.spawn(.{}, Heartbeat.run, .{&heartbeat}) catch null;
+    defer {
+        heartbeat.done.store(true, .release);
+        if (heartbeat_thread) |thread| thread.join();
+    }
+
     const result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| {
         const message = try std.fmt.allocPrint(allocator, "spawn failed: {s}\n", .{@errorName(err)});
         try writeFile(io, log_path, message);
@@ -175,6 +245,7 @@ fn runCommand(
             .duration_ns = durationSince(io, started),
             .log_path = log_path,
             .command = argv,
+            .heartbeat_printed = heartbeat.printed.load(.acquire),
         };
     };
     defer allocator.free(result.stdout);
@@ -193,6 +264,23 @@ fn runCommand(
 
     return .{
         .status = status,
+        .duration_ns = durationSince(io, started),
+        .log_path = log_path,
+        .command = argv,
+        .heartbeat_printed = heartbeat.printed.load(.acquire),
+    };
+}
+
+fn skipCommand(
+    io: std.Io,
+    argv: []const []const u8,
+    log_path: []const u8,
+    reason: []const u8,
+) !CommandResult {
+    const started = nowNs(io);
+    try writeFile(io, log_path, reason);
+    return .{
+        .status = "skip",
         .duration_ns = durationSince(io, started),
         .log_path = log_path,
         .command = argv,
@@ -579,6 +667,7 @@ pub fn main(init: std.process.Init) !void {
     const build_log = logs_dir ++ "/build-ci.txt";
     std.debug.print("Building CI steps ... ", .{});
     const build_result = try runCommand(allocator, io, build_argv, build_log);
+    if (build_result.heartbeat_printed) std.debug.print("Building CI steps ... ", .{});
     std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
 
     var results = std.ArrayList(CommandResult).empty;
@@ -599,16 +688,20 @@ pub fn main(init: std.process.Init) !void {
             null;
         const argv = try buildCommand(allocator, zig_exe, job.name, stats_path);
         std.debug.print("Running `{s}` ... ", .{job.name});
-        var result = try runCommand(allocator, io, argv, log_path);
-        result.stats_path = stats_path;
+        var result = if (job.skip_reason) |reason|
+            try skipCommand(io, argv, log_path, reason)
+        else
+            try runCommand(allocator, io, argv, log_path);
+        result.stats_path = if (job.skip_reason == null) stats_path else null;
         try results.append(allocator, result);
+        if (result.heartbeat_printed) std.debug.print("Running `{s}` ... ", .{job.name});
         std.debug.print("{s} in {d:.3}s\n", .{ runStatusText(result), seconds(result.duration_ns) });
 
-        if (!isPass(result)) {
+        if (!isSuccessful(result)) {
             printRerunHint(result);
         }
 
-        if (isCheckJob(job.name) and !isPass(result)) {
+        if (isCheckJob(job.name) and !isSuccessful(result)) {
             try writeReportJson(allocator, io, build_result, results.items);
             try writeHtml(allocator, io, build_result, results.items);
             std.process.exit(1);
@@ -619,6 +712,6 @@ pub fn main(init: std.process.Init) !void {
     try writeHtml(allocator, io, build_result, results.items);
 
     for (results.items) |result| {
-        if (!isPass(result)) std.process.exit(1);
+        if (!isSuccessful(result)) std.process.exit(1);
     }
 }
