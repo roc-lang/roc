@@ -23,6 +23,7 @@ backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
 builtin_modules: eval.BuiltinModules,
 
+/// Outcome of evaluating a single REPL input line.
 pub const StepResult = union(enum) {
     output: []u8,
     diagnostic: []u8,
@@ -411,12 +412,14 @@ const InputInfo = struct {
     name: ?[]const u8 = null,
 };
 
+/// Whether a REPL input line forms a complete, parseable statement.
 pub const InputStatus = union(enum) {
     complete: InputInfo,
     incomplete,
     invalid,
 };
 
+/// Parses a line to determine whether it is a complete, incomplete, or invalid REPL input.
 pub fn inputStatus(self: *ReplSession, line: []const u8) !InputStatus {
     var env = try ModuleEnv.init(self.allocator, line);
     defer env.deinit();

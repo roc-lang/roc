@@ -1305,6 +1305,7 @@ pub fn renderProblems(
     return try renderProblemsWithConfig(allocator, source_kind, source, reporting.ReportingConfig.initColorTerminal());
 }
 
+/// Renders diagnostics for the given source using the provided reporting configuration.
 pub fn renderProblemsWithConfig(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -1315,14 +1316,6 @@ pub fn renderProblemsWithConfig(
     defer resources.deinit(allocator);
 
     return try renderCheckedModuleProblemsWithConfig(allocator, &resources.main, "repl", config);
-}
-
-fn renderCheckedModuleProblems(
-    allocator: Allocator,
-    main: *const CheckedModule,
-    filename: []const u8,
-) ![]u8 {
-    return try renderCheckedModuleProblemsWithConfig(allocator, main, filename, reporting.ReportingConfig.initColorTerminal());
 }
 
 fn renderCheckedModuleProblemsWithConfig(

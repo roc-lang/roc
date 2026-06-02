@@ -397,6 +397,7 @@ pub const ReadLineError =
         .windows => Windows.Error,
     };
 
+/// Result of reading a line of input: either the line bytes or end-of-input.
 pub const ReadLineResult = union(enum) {
     line: []u8,
     eof,
