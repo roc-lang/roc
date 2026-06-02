@@ -93,7 +93,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .emit = Emit.init(allocator),
                 .allocator = allocator,
                 .stack_offset = 0,
-                .relocations = .{},
+                .relocations = .empty,
                 .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
@@ -585,6 +585,22 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 try self.emit.movRegReg(width, dst, a);
             }
             try self.emit.orRegReg(width, dst, b);
+        }
+
+        /// Emit bitwise XOR: dst = a ^ b
+        pub fn emitXor(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            if (dst != a) {
+                try self.emit.movRegReg(width, dst, a);
+            }
+            try self.emit.xorRegReg(width, dst, b);
+        }
+
+        /// Emit bitwise NOT: dst = ~src
+        pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+            if (dst != src) {
+                try self.emit.movRegReg(width, dst, src);
+            }
+            try self.emit.notReg(width, dst);
         }
 
         /// Emit bitwise XOR with immediate: dst = src ^ imm

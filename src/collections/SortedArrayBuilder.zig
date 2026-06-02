@@ -21,7 +21,7 @@ const CompactWriter = @import("CompactWriter.zig");
 /// This is more efficient when we know we won't have duplicates
 pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
     return struct {
-        entries: std.ArrayList(Entry) = .{},
+        entries: std.ArrayList(Entry) = .empty,
         sorted: bool = true,
         deduplicated: bool = true,
 
@@ -356,7 +356,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 // Handle empty array case
                 if (self.entries_len == 0) {
                     return SortedArrayBuilder(K, V){
-                        .entries = .{},
+                        .entries = .empty,
                         .sorted = self.sorted,
                         .deduplicated = self.deduplicated,
                     };

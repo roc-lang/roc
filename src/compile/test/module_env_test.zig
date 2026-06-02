@@ -11,6 +11,7 @@ const CompactWriter = collections.CompactWriter;
 const Expr = CIR.Expr;
 const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
+const testing = std.testing;
 
 test "ModuleEnv.Serialized roundtrip" {
     const gpa = std.testing.allocator;
@@ -43,20 +44,23 @@ test "ModuleEnv.Serialized roundtrip" {
 
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    const tmp_file = try tmp_dir.dir.createFile("module_env.compact", .{ .read = true });
-    defer tmp_file.close();
+    const tmp_file = try tmp_dir.dir.createFile(std.testing.io, "test.compact", .{ .read = true });
+    defer tmp_file.close(std.testing.io);
 
     var writer = CompactWriter.init();
     defer writer.deinit(arena_alloc);
 
     const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
     try serialized.serialize(&original, arena_alloc, &writer);
-    try writer.writeGather(arena_alloc, tmp_file);
 
-    const file_size = try tmp_file.getEndPos();
+    // Write to file
+    try writer.writeGather(tmp_file, std.testing.io);
+
+    // Read back
+    const file_size = writer.total_bytes;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
     defer gpa.free(buffer);
-    _ = try tmp_file.pread(buffer, 0);
+    _ = try tmp_file.readPositionalAll(std.testing.io, buffer, 0);
 
     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
     const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
@@ -85,9 +89,75 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
 
-    const import_json_after = try env.imports.getOrPut(gpa, &env.common.strings, "json.Json");
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(import_json_after));
-    try std.testing.expectEqual(@as(usize, 2), env.imports.imports.len());
+    // Verify original data before serialization was correct
+    // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
+    // ModuleEnv.init() also interns 16 well-known identifiers: Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq
+    // Plus 19 type identifiers: Str, Builtin.Try, Builtin.Num.Numeral, Builtin.Str, List, Box, Builtin.Num.{U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec}
+    // Plus 3 field/tag identifiers: before_dot, after_dot, ProvidedByCompiler
+    // Plus 7 more identifiers: tag, payload, is_negative, digits_before_pt, digits_after_pt, box, unbox
+    // Plus 2 Try tag identifiers: Ok, Err
+    // Plus 1 method identifier: from_numeral
+    // Plus 2 Bool tag identifiers: True, False
+    // Plus 6 from_utf8 identifiers: byte_index, string, is_ok, problem_code, problem, index
+    // Plus 2 synthetic identifiers for ? operator desugaring: #ok, #err
+    // Plus 1 synthetic identifier for .. implicit rigids in open tag unions or records
+    // Plus 2 numeric method identifiers: abs, abs_diff
+    // Plus 1 inspect method identifier: to_inspect
+    // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+    // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
+    // Plus 1 fully qualified Bool type name: Builtin.Bool
+    // Count reflects the merged builtin set after the zig-16 / origin/main merge
+    // (grew from 85 to 90 builtin identifiers).
+    try testing.expectEqual(@as(u32, 90), original.common.idents.interner.entry_count);
+    try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
+    try testing.expectEqualStrings("world", original.getIdent(world_idx));
+
+    // Verify imports before serialization
+    try testing.expectEqual(import_json, import_json_duplicate); // Deduplication should work
+    try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
+
+    // First verify that the CommonEnv data was preserved after deserialization
+    // Should have same 81 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
+    // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
+    try testing.expectEqual(@as(u32, 90), env.common.idents.interner.entry_count);
+
+    try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
+    try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+
+    try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
+    try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);
+    try testing.expectEqual(@as(u32, 12), env.common.line_starts.items.items[1]);
+    try testing.expectEqual(@as(u32, 24), env.common.line_starts.items.items[2]);
+
+    try testing.expectEqualStrings(source, env.common.source);
+    try testing.expectEqualStrings("TestModule", env.module_name);
+
+    // Verify imports were preserved after deserialization
+    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
+
+    // Verify the import strings are correct (they reference string indices in the string store)
+    const import_str1 = env.common.strings.get(env.imports.imports.items.items[0]);
+    const import_str2 = env.common.strings.get(env.imports.imports.items.items[1]);
+
+    try testing.expectEqualStrings("json.Json", import_str1);
+    try testing.expectEqualStrings("core.List", import_str2);
+
+    // Verify that the map was repopulated correctly
+    try testing.expectEqual(@as(usize, 2), env.imports.map.count());
+
+    // Test that deduplication still works after deserialization for existing keys.
+    // Note: the deserialized StringLiteral.Store points into the cache buffer and
+    // cannot be grown (SafeList.deserializeInto contract), so we only test lookup
+    // of already-serialized strings here.
+    var test_arena = std.heap.ArenaAllocator.init(gpa);
+    defer test_arena.deinit();
+    const test_alloc = test_arena.allocator();
+
+    const import4 = try env.imports.getOrPut(test_alloc, &env.common.strings, "json.Json");
+
+    // Should find existing json.Json (deduplication)
+    try testing.expectEqual(@as(u32, 0), @intFromEnum(import4));
+    try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 }
 
 test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
@@ -104,7 +174,9 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     const method_ident = try original.insertIdent(Ident.for_text("get"));
     const first_qualified = try original.insertIdent(Ident.for_text("First.Local.get"));
     const second_qualified = try original.insertIdent(Ident.for_text("Second.Local.get"));
+    const owner_stmt: CIR.Statement.Idx = @enumFromInt(1);
 
+    try original.registerMethodOwnerAlias(type_ident, owner_stmt);
     try original.registerMethod(type_ident, method_ident, first_qualified, .{
         .type_node_idx = @enumFromInt(1),
         .def_idx = @enumFromInt(1),
@@ -167,11 +239,21 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     try env.pushTypesToSExprTree(expr_idx, &tree);
 
+    // Convert tree to string.
+    // fromArrayList takes ownership of the ArrayList buffer immediately, so
+    // we must call toArrayList() explicitly before inspecting the result.
     var result = std.ArrayList(u8).empty;
     defer result.deinit(gpa);
-    try tree.toStringPretty(result.writer(gpa).any(), .include_linecol);
+    {
+        var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &result);
+        try tree.toStringPretty(&aw.writer, .include_linecol);
+        result = aw.toArrayList();
+    }
 
-    try std.testing.expect(std.mem.indexOf(u8, result.items, "(expr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.items, "(type") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.items, "Str") != null);
+    // Verify the output contains the type information
+    const result_str = result.items;
+
+    try testing.expect(std.mem.find(u8, result_str, "(expr") != null);
+    try testing.expect(std.mem.find(u8, result_str, "(type") != null);
+    try testing.expect(std.mem.find(u8, result_str, "Str") != null);
 }

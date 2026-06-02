@@ -82,23 +82,22 @@ test "calculateLineNumberWidth" {
 }
 
 test "formatLineNumber" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-    const writer = buffer.writer();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
     // Test width 1
-    try formatLineNumber(writer, 5, 1);
-    try testing.expectEqualStrings("5", buffer.items);
+    try formatLineNumber(&writer.writer, 5, 1);
+    try testing.expectEqualStrings("5", writer.written());
 
     // Test width 3
-    buffer.clearRetainingCapacity();
-    try formatLineNumber(writer, 5, 3);
-    try testing.expectEqualStrings("  5", buffer.items);
+    writer.clearRetainingCapacity();
+    try formatLineNumber(&writer.writer, 5, 3);
+    try testing.expectEqualStrings("  5", writer.written());
 
     // Test width 4 with large number
-    buffer.clearRetainingCapacity();
-    try formatLineNumber(writer, 1234, 4);
-    try testing.expectEqualStrings("1234", buffer.items);
+    writer.clearRetainingCapacity();
+    try formatLineNumber(&writer.writer, 1234, 4);
+    try testing.expectEqualStrings("1234", writer.written());
 }
 
 test "calculateUnderlineLength" {
@@ -116,16 +115,15 @@ test "calculateUnderlineLength" {
 }
 
 test "printSpaces" {
-    var buffer = std.array_list.Managed(u8).init(testing.allocator);
-    defer buffer.deinit();
-    const writer = buffer.writer();
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try printSpaces(writer, 0);
-    try testing.expectEqualStrings("", buffer.items);
+    try printSpaces(&writer.writer, 0);
+    try testing.expectEqualStrings("", writer.written());
 
-    buffer.clearRetainingCapacity();
-    try printSpaces(writer, 5);
-    try testing.expectEqualStrings("     ", buffer.items);
+    writer.clearRetainingCapacity();
+    try printSpaces(&writer.writer, 5);
+    try testing.expectEqualStrings("     ", writer.written());
 }
 
 test "integration - format source region" {

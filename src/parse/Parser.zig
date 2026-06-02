@@ -60,8 +60,8 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .type_path_stack_visible_start = 0,
         .collect_type_dependencies = false,
         .scratch_idents = scratch_idents,
-        .scratch_nodes = .{},
-        .diagnostics = .{},
+        .scratch_nodes = .empty,
+        .diagnostics = .empty,
         .cached_malformed_node = null,
         .nesting_counter = MAX_NESTING_LEVELS,
     };

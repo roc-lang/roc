@@ -86,6 +86,16 @@ const HostContext = struct {
         const msg = self.readString(ptr, len);
         std.debug.print("[EXPECT FAILED] {s}\n", .{msg});
     }
+
+    /// Called by Stdout.line! hosted effect
+    pub fn echo(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+        _ = module;
+        const self: *HostContext = @ptrCast(@alignCast(ctx));
+        const ptr = params[0].I32;
+        const len = params[1].I32;
+        const msg = self.readString(ptr, len);
+        std.debug.print("{s}\n", .{msg});
+    }
 };
 
 // Global context for host imports (needed because bytebox stores pointer, not value)
@@ -93,7 +103,7 @@ var global_host_context: HostContext = .{};
 
 /// Initialize WASM module from file.
 fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data = std.fs.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+    const wasm_data = std.Io.Dir.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
         std.debug.print("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -113,6 +123,7 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
     try env_imports.addHostFunction("roc_panic", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_panic, &global_host_context);
     try env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_dbg, &global_host_context);
     try env_imports.addHostFunction("roc_expect_failed", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.roc_expect_failed, &global_host_context);
+    try env_imports.addHostFunction("echo", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, HostContext.echo, &global_host_context);
 
     // Use a reasonable stack for the interpreter (256KB - same as playground tests)
     const imports = [_]bytebox.ModuleImportPackage{env_imports};
@@ -201,15 +212,13 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const 
 }
 
 pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     var arena_impl = std.heap.ArenaAllocator.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
-
-    const stdout = std.fs.File.stdout().deprecatedWriter();
 
     // Handle CLI arguments
     const args = try std.process.argsAlloc(arena);
@@ -221,40 +230,40 @@ pub fn main() !void {
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--help")) {
-            try stdout.print("Usage: test-wasm-static-lib [options]\n", .{});
-            try stdout.print("Options:\n", .{});
-            try stdout.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
-            try stdout.print("  --expected OUTPUT    Expected output string\n", .{});
-            try stdout.print("  --help               Display this help message\n", .{});
+            std.debug.print("Usage: test-wasm-static-lib [options]\n", .{});
+            std.debug.print("Options:\n", .{});
+            std.debug.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
+            std.debug.print("  --expected OUTPUT    Expected output string\n", .{});
+            std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.print("Error: --wasm-path requires an argument\n", .{});
+                std.debug.print("Error: --wasm-path requires an argument\n", .{});
                 return;
             }
             wasm_path = args[i];
         } else if (std.mem.eql(u8, arg, "--expected")) {
             i += 1;
             if (i >= args.len) {
-                try stdout.print("Error: --expected requires an argument\n", .{});
+                std.debug.print("Error: --expected requires an argument\n", .{});
                 return;
             }
             expected_output = args[i];
         }
     }
 
-    try stdout.print("=== WASM Static Library Test ===\n", .{});
-    try stdout.print("WASM file: {s}\n", .{wasm_path});
-    try stdout.print("Expected output: \"{s}\"\n\n", .{expected_output});
+    std.debug.print("=== WASM Static Library Test ===\n", .{});
+    std.debug.print("WASM file: {s}\n", .{wasm_path});
+    std.debug.print("Expected output: \"{s}\"\n\n", .{expected_output});
 
     const result = runTest(gpa, arena, wasm_path, expected_output);
 
     if (result.passed) {
-        try stdout.print("PASSED: {s}\n", .{result.name});
+        std.debug.print("PASSED: {s}\n", .{result.name});
     } else {
-        try stdout.print("FAILED: {s}\n", .{result.name});
-        try stdout.print("  {s}\n", .{result.message});
+        std.debug.print("FAILED: {s}\n", .{result.name});
+        std.debug.print("  {s}\n", .{result.message});
     }
 
     if (!result.passed) {

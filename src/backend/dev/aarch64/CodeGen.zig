@@ -85,7 +85,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .emit = Emit.init(allocator),
                 .allocator = allocator,
                 .stack_offset = 0,
-                .relocations = .{},
+                .relocations = .empty,
                 .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
@@ -512,6 +512,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit bitwise OR: dst = a | b
         pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
             try self.emit.orrRegRegReg(width, dst, a, b);
+        }
+
+        /// Emit bitwise XOR: dst = a ^ b
+        pub fn emitXor(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            try self.emit.eorRegRegReg(width, dst, a, b);
+        }
+
+        /// Emit bitwise NOT: dst = ~src
+        pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+            // MVN <dst>, <src> is an alias for ORN <dst>, XZR, <src>.
+            try self.emit.ornRegRegReg(width, dst, .ZRSP, src);
         }
 
         /// Emit bitwise XOR with immediate: dst = src ^ imm

@@ -971,13 +971,13 @@ const Lowerer = struct {
         const target_content = self.result.layouts.getLayout(target_layout);
         const source_content = self.result.layouts.getLayout(source_layout);
         if (target_content.eql(source_content)) return try self.assignLocal(target, source, next);
-        if (target_content.tag == .box and self.result.layouts.getLayout(target_content.data.box).eql(source_content)) {
+        if (target_content.tag == .box and self.result.layouts.getLayout(target_content.getIdx()).eql(source_content)) {
             return try self.assignUnaryLowLevel(target, .box_box, source, next);
         }
         if (target_content.tag == .box_of_zst and self.result.layouts.isZeroSized(source_content)) {
             return try self.assignUnaryLowLevel(target, .box_box, source, next);
         }
-        if (source_content.tag == .box and self.result.layouts.getLayout(source_content.data.box).eql(target_content)) {
+        if (source_content.tag == .box and self.result.layouts.getLayout(source_content.getIdx()).eql(target_content)) {
             return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
         }
         if (source_content.tag == .box_of_zst and self.result.layouts.isZeroSized(target_content)) {
@@ -993,8 +993,8 @@ const Lowerer = struct {
 
         if (@import("builtin").mode == .Debug) {
             if (target_content.tag == .list and source_content.tag == .list) {
-                const target_elem = target_content.data.list;
-                const source_elem = source_content.data.list;
+                const target_elem = target_content.getIdx();
+                const source_elem = source_content.getIdx();
                 std.debug.panic(
                     "postcheck invariant violated: LIR lowering expected matching list layouts, target={d} elem={d} ({s}) source={d} elem={d} ({s})",
                     .{
@@ -2607,7 +2607,7 @@ const Lowerer = struct {
         const tag_union_layout = self.result.layouts.getLayout(tag_union_layout_idx);
         return switch (tag_union_layout.tag) {
             .tag_union => blk: {
-                const data = self.result.layouts.getTagUnionData(tag_union_layout.data.tag_union.idx);
+                const data = self.result.layouts.getTagUnionData(tag_union_layout.getTagUnion().idx);
                 const variants = self.result.layouts.getTagUnionVariants(data);
                 if (variant_index >= variants.len) Common.invariant("tag payload variant exceeded committed tag-union layout");
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
@@ -2621,21 +2621,21 @@ const Lowerer = struct {
         const source_layout_idx = self.result.store.getLocal(source).layout_idx;
         const source_layout = self.result.layouts.getLayout(source_layout_idx);
         const struct_layout_idx = switch (source_layout.tag) {
-            .box => source_layout.data.box,
+            .box => source_layout.getIdx(),
             else => source_layout_idx,
         };
         const struct_layout = self.result.layouts.getLayout(struct_layout_idx);
         if (struct_layout.tag != .struct_) {
             Common.invariant("field read expected a struct layout");
         }
-        return self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.data.struct_.idx, field_index);
+        return self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_layout.getStruct().idx, field_index);
     }
 
     fn localListElemLayout(self: *Lowerer, source: LIR.LocalId) layout.Idx {
         const list_layout_idx = self.result.store.getLocal(source).layout_idx;
         const list_layout = self.result.layouts.getLayout(list_layout_idx);
         return switch (list_layout.tag) {
-            .list => list_layout.data.list,
+            .list => list_layout.getIdx(),
             .list_of_zst => .zst,
             else => Common.invariant("list expression target was not a list layout"),
         };
@@ -2646,7 +2646,7 @@ const Lowerer = struct {
         const index = payload_idx orelse return payload_layout_idx;
         const payload_layout = self.result.layouts.getLayout(payload_layout_idx);
         return switch (payload_layout.tag) {
-            .struct_ => self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.data.struct_.idx, index),
+            .struct_ => self.result.layouts.getStructFieldLayoutByOriginalIndex(payload_layout.getStruct().idx, index),
             else => blk: {
                 if (index != 0) Common.invariant("tag payload field read indexed a non-struct payload");
                 break :blk payload_layout_idx;

@@ -15,6 +15,7 @@ const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
 
+const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("Builder.zig");
 
 const Allocator = std.mem.Allocator;
@@ -98,6 +99,9 @@ pub const MonoLlvmCodeGen = struct {
     triple: []const u8,
     builtin_symbol_mode: BuiltinSymbolMode = .bitcode,
     store: *const lir.LirStore,
+
+    /// Layout store for resolving composite type layouts (records, tuples).
+    /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
 
     builder: ?*LlvmBuilder = null,
@@ -442,9 +446,21 @@ pub const MonoLlvmCodeGen = struct {
             .name = "Roc statement LLVM CodeGen",
             .version = .{ .major = 1, .minor = 0, .patch = 0 },
         };
-        if (std.process.getEnvVarOwned(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
+        const environ: std.process.Environ = if (builtin.os.tag == .windows)
+            .{ .block = .global }
+        else blk: {
+            const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+            break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+        };
+        if (environ.getAlloc(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.fs.cwd(), keep_path) catch return error.CompilationFailed;
+            // Render the IR into a buffer and write it through the CoreCtx
+            // filesystem abstraction rather than reaching into the cwd directory
+            // handle directly, keeping compiler-core decoupled from the OS I/O layer.
+            var ir_text: std.Io.Writer.Allocating = .init(self.allocator);
+            defer ir_text.deinit();
+            builder.print(&ir_text.writer) catch return error.CompilationFailed;
+            CoreCtx.writeFileCwd(std.Options.debug_io, keep_path, ir_text.written()) catch return error.CompilationFailed;
         } else |_| {}
         return builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
     }
@@ -603,8 +619,8 @@ pub const MonoLlvmCodeGen = struct {
                 const base = try self.resolveStructBase(ref.source);
                 const base_layout = self.layoutValue(base.layout_idx);
                 if (base_layout.tag != .struct_) return error.CompilationFailed;
-                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.data.struct_.idx, ref.field_idx);
-                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.data.struct_.idx, ref.field_idx);
+                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
                 const src = try self.offsetPtr(base.ptr, offset);
                 try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(field_layout), self.alignmentForLayout(field_layout));
             },
@@ -615,9 +631,9 @@ pub const MonoLlvmCodeGen = struct {
                 var src = base.ptr;
                 var copy_layout = payload_layout;
                 if (payload_layout_val.tag == .struct_) {
-                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.data.struct_.idx, ref.payload_idx);
+                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
                     src = try self.offsetPtr(base.ptr, offset);
-                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.data.struct_.idx, ref.payload_idx);
+                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
                 }
                 try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
@@ -787,10 +803,10 @@ pub const MonoLlvmCodeGen = struct {
         const base_layout = self.layoutValue(allocated.layout_idx);
         if (base_layout.tag != .struct_) return;
         for (field_locals, 0..) |field_local, i| {
-            const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.data.struct_.idx, @intCast(i));
+            const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const field_size = self.layoutByteSize(field_layout);
             if (field_size == 0) continue;
-            const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.data.struct_.idx, @intCast(i));
+            const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const dst = try self.offsetPtr(allocated.ptr, offset);
             try self.copyBytes(dst, self.slot(field_local).ptr, field_size, self.alignmentForLayout(field_layout));
         }
@@ -854,7 +870,8 @@ pub const MonoLlvmCodeGen = struct {
             },
             .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(arg_locals[0]).ptr, self.slot(arg_locals[1]).ptr, self.localLayout(arg_locals[0]))),
             .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
-            .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => try self.emitNumericBinary(target, op, arg_locals),
+            .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor => try self.emitNumericBinary(target, op, arg_locals),
+            .num_bitwise_not => try self.emitNumericBitwiseNot(target, arg_locals[0]),
             .num_negate => try self.emitNumericNegate(target, arg_locals[0]),
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
@@ -985,6 +1002,9 @@ pub const MonoLlvmCodeGen = struct {
                 .num_times => .mul,
                 .num_div_by, .num_div_trunc_by => if (signed) .sdiv else .udiv,
                 .num_rem_by, .num_mod_by => if (signed) .srem else .urem,
+                .num_bitwise_and => .@"and",
+                .num_bitwise_or => .@"or",
+                .num_bitwise_xor => .xor,
                 else => return error.UnsupportedLowLevel,
             };
             const raw = wip.bin(tag, lhs, rhs, "") catch return error.CompilationFailed;
@@ -1114,6 +1134,14 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    fn emitNumericBitwiseNot(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const result = wip.not(value, "") catch return error.CompilationFailed;
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
     fn emitNumericAbs(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -1172,9 +1200,9 @@ pub const MonoLlvmCodeGen = struct {
             try self.emitIntTryConversion(target, args[0]);
             return;
         }
-        if (std.mem.indexOf(u8, name, "_to_") != null and args.len >= 1 and
-            std.mem.indexOf(u8, name, "_try") == null and
-            std.mem.indexOf(u8, name, "_str") == null)
+        if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
+            std.mem.find(u8, name, "_try") == null and
+            std.mem.find(u8, name, "_str") == null)
         {
             const value = try self.loadScalar(self.slot(args[0]).ptr, self.localLayout(args[0]));
             const coerced = try self.coerceScalar(value, self.scalarType(self.localLayout(target)), self.localLayout(args[0]).isSigned());
@@ -1393,7 +1421,7 @@ pub const MonoLlvmCodeGen = struct {
         const name = builder.strtabStringFmt(".roc.bytes.{d}", .{self.string_counter}) catch return error.OutOfMemory;
         self.string_counter += 1;
         const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
-        variable.setLinkage(.internal, builder);
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
         variable.setMutability(.constant, builder);
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
         return variable.toValue(builder);
@@ -1838,7 +1866,7 @@ pub const MonoLlvmCodeGen = struct {
         const record_layout = self.localLayout(record);
         const record_layout_val = self.layoutValue(record_layout);
         if (record_layout_val.tag != .struct_) return error.CompilationFailed;
-        const record_idx = record_layout_val.data.struct_.idx;
+        const record_idx = record_layout_val.getStruct().idx;
         const len_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0);
         const start_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1);
         const len_layout = self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0);
@@ -1976,7 +2004,7 @@ pub const MonoLlvmCodeGen = struct {
         const layout_val = self.layoutValue(layout_idx);
         if (self.layoutByteSize(layout_idx) == 0) return builder.intValue(.i1, 1) catch return error.OutOfMemory;
         switch (layout_val.tag) {
-            .scalar => switch (layout_val.data.scalar.tag) {
+            .scalar => switch (layout_val.getScalar().tag) {
                 .str => {
                     const lhs_fields = try self.rocStrArgFields(lhs_ptr);
                     const rhs_fields = try self.rocStrArgFields(rhs_ptr);
@@ -2002,7 +2030,7 @@ pub const MonoLlvmCodeGen = struct {
                 var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
                 for (0..info.fields.len) |i| {
                     const field = info.fields.get(@intCast(i));
-                    const offset = self.layouts().getStructFieldOffset(layout_val.data.struct_.idx, @intCast(i));
+                    const offset = self.layouts().getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     const field_eq = try self.emitValueEqual(try self.offsetPtr(lhs_ptr, offset), try self.offsetPtr(rhs_ptr, offset), field.layout);
                     result = wip.bin(.@"and", result, field_eq, "") catch return error.CompilationFailed;
                 }
@@ -2074,7 +2102,7 @@ pub const MonoLlvmCodeGen = struct {
         const lhs_disc = try self.readTagDiscriminant(lhs_ptr, tag_layout);
         const rhs_disc = try self.readTagDiscriminant(rhs_ptr, tag_layout);
         const disc_eq = wip.icmp(.eq, lhs_disc, rhs_disc, "") catch return error.CompilationFailed;
-        const data = self.layouts().getTagUnionData(self.layoutValue(tag_layout).data.tag_union.idx);
+        const data = self.layouts().getTagUnionData(self.layoutValue(tag_layout).getTagUnion().idx);
         const variants = self.layouts().getTagUnionVariants(data);
         const result_ptr = wip.alloca(.normal, .i8, .@"1", LlvmBuilder.Alignment.fromByteUnits(1), .default, "tag_eq") catch return error.CompilationFailed;
         try self.storeBool(result_ptr, disc_eq);
@@ -2115,7 +2143,7 @@ pub const MonoLlvmCodeGen = struct {
         const helper_key: layout.RcHelperKey = if (layout_val.tag == .closure)
             .{
                 .op = if (op == .free) .decref else op,
-                .layout_idx = layout_val.data.closure.captures_layout_idx,
+                .layout_idx = layout_val.getClosure().captures_layout_idx,
             }
         else
             .{ .op = op, .layout_idx = slot_v.layout_idx };
@@ -2653,7 +2681,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_val = self.layoutValue(layout_idx);
         if (layout_val.tag != .tag_union) return builder.intValue(.i64, 0) catch return error.OutOfMemory;
-        const data = self.layouts().getTagUnionData(layout_val.data.tag_union.idx);
+        const data = self.layouts().getTagUnionData(layout_val.getTagUnion().idx);
         if (data.discriminant_size == 0) return builder.intValue(.i64, 0) catch return error.OutOfMemory;
         const disc_ptr = try self.offsetPtr(ptr, data.discriminant_offset);
         const ty = intTypeForBytes(data.discriminant_size);
@@ -2664,7 +2692,7 @@ pub const MonoLlvmCodeGen = struct {
     fn tagDiscriminantOffset(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!u32 {
         const layout_val = self.layoutValue(layout_idx);
         if (layout_val.tag != .tag_union) return error.CompilationFailed;
-        const data = self.layouts().getTagUnionData(layout_val.data.tag_union.idx);
+        const data = self.layouts().getTagUnionData(layout_val.getTagUnion().idx);
         return data.discriminant_offset;
     }
 
@@ -2673,7 +2701,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_val = self.layoutValue(layout_idx);
         if (layout_val.tag != .tag_union) return;
-        const data = self.layouts().getTagUnionData(layout_val.data.tag_union.idx);
+        const data = self.layouts().getTagUnionData(layout_val.getTagUnion().idx);
         if (data.discriminant_size == 0) return;
         const disc_ptr = try self.offsetPtr(ptr, data.discriminant_offset);
         const ty = intTypeForBytes(data.discriminant_size);
@@ -2682,9 +2710,9 @@ pub const MonoLlvmCodeGen = struct {
 
     fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
         var tag_layout = self.layoutValue(layout_idx);
-        if (tag_layout.tag == .box) tag_layout = self.layoutValue(tag_layout.data.box);
+        if (tag_layout.tag == .box) tag_layout = self.layoutValue(tag_layout.getIdx());
         if (tag_layout.tag != .tag_union) return .zst;
-        const data = self.layouts().getTagUnionData(tag_layout.data.tag_union.idx);
+        const data = self.layouts().getTagUnionData(tag_layout.getTagUnion().idx);
         const variants = self.layouts().getTagUnionVariants(data);
         if (discriminant >= variants.len) return .zst;
         return variants.get(discriminant).payload_layout;
@@ -2693,7 +2721,7 @@ pub const MonoLlvmCodeGen = struct {
     fn resolveStrFromUtf8Layout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFromUtf8LayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .tag_union) return error.CompilationFailed;
-        const tu_data = self.layouts().getTagUnionData(ret_layout_val.data.tag_union.idx);
+        const tu_data = self.layouts().getTagUnionData(ret_layout_val.getTagUnion().idx);
         const variants = self.layouts().getTagUnionVariants(tu_data);
 
         var ok_disc: ?u16 = null;
@@ -2714,9 +2742,9 @@ pub const MonoLlvmCodeGen = struct {
             err_disc = @intCast(i);
             const err_layout = self.layoutValue(candidate);
             switch (err_layout.tag) {
-                .struct_ => err_record_idx = err_layout.data.struct_.idx,
+                .struct_ => err_record_idx = err_layout.getStruct().idx,
                 .tag_union => {
-                    const inner_tu = self.layouts().getTagUnionData(err_layout.data.tag_union.idx);
+                    const inner_tu = self.layouts().getTagUnionData(err_layout.getTagUnion().idx);
                     if (self.findBadUtf8Variant(inner_tu)) |info| {
                         err_record_idx = info.struct_idx;
                         inner_disc_offset = inner_tu.discriminant_offset;
@@ -2739,7 +2767,7 @@ pub const MonoLlvmCodeGen = struct {
             const field_size = self.layoutByteSize(field.layout);
             const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
             const is_index = switch (field_layout.tag) {
-                .scalar => field_layout.data.scalar.tag == .int and switch (field_layout.data.scalar.data.int) {
+                .scalar => field_layout.getScalar().tag == .int and switch (field_layout.getScalar().getInt()) {
                     .u64, .i64 => true,
                     else => false,
                 },
@@ -2769,7 +2797,7 @@ pub const MonoLlvmCodeGen = struct {
         const layout_val = self.layoutValue(layout_idx);
         if (layout_val.tag != .struct_) return null;
 
-        const struct_data = self.layouts().getStructData(layout_val.data.struct_.idx);
+        const struct_data = self.layouts().getStructData(layout_val.getStruct().idx);
         const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
         if (fields.len != 1) return null;
 
@@ -2786,7 +2814,7 @@ pub const MonoLlvmCodeGen = struct {
             const payload_layout = self.layoutValue(candidate);
             if (payload_layout.tag != .struct_) continue;
 
-            const struct_idx = payload_layout.data.struct_.idx;
+            const struct_idx = payload_layout.getStruct().idx;
             const struct_data = self.layouts().getStructData(struct_idx);
             const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
             if (fields.len != 2) continue;
@@ -2814,7 +2842,7 @@ pub const MonoLlvmCodeGen = struct {
         const source_layout = self.localLayout(source);
         const layout_val = self.layoutValue(source_layout);
         return switch (layout_val.tag) {
-            .box => .{ .ptr = try self.loadPointer(self.slot(source).ptr), .layout_idx = layout_val.data.box },
+            .box => .{ .ptr = try self.loadPointer(self.slot(source).ptr), .layout_idx = layout_val.getIdx() },
             .box_of_zst => .{ .ptr = self.slot(source).ptr, .layout_idx = .zst },
             else => .{ .ptr = self.slot(source).ptr, .layout_idx = source_layout },
         };

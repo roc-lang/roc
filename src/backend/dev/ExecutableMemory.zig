@@ -7,6 +7,39 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
+// Declare the thin extern bindings we need locally; only referenced on Windows.
+const win32 = struct {
+    const DWORD = u32;
+    const SIZE_T = usize;
+    const LPVOID = ?*anyopaque;
+    const PDWORD = *DWORD;
+
+    const MEM_COMMIT: DWORD = 0x1000;
+    const MEM_RESERVE: DWORD = 0x2000;
+    const MEM_RELEASE: DWORD = 0x8000;
+    const PAGE_READWRITE: DWORD = 0x04;
+    const PAGE_EXECUTE_READ: DWORD = 0x20;
+
+    extern "kernel32" fn VirtualAlloc(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flAllocationType: DWORD,
+        flProtect: DWORD,
+    ) callconv(.winapi) LPVOID;
+    extern "kernel32" fn VirtualFree(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        dwFreeType: DWORD,
+    ) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn VirtualProtect(
+        lpAddress: LPVOID,
+        dwSize: SIZE_T,
+        flNewProtect: DWORD,
+        lpflOldProtect: PDWORD,
+    ) callconv(.winapi) std.os.windows.BOOL;
+};
+
 /// A region of memory that can be executed as code.
 pub const ExecutableMemory = struct {
     /// The executable memory region
@@ -99,7 +132,7 @@ pub const ExecutableMemory = struct {
 fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
-            const prot = std.posix.PROT.READ | std.posix.PROT.WRITE;
+            const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
             const flags = std.posix.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true };
             const result = std.posix.mmap(null, size, prot, flags, -1, 0) catch {
                 return error.MmapFailed;
@@ -107,12 +140,12 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
             return @alignCast(result[0..size]);
         },
         .windows => {
-            const mem = std.os.windows.VirtualAlloc(
+            const mem = win32.VirtualAlloc(
                 null,
                 size,
-                std.os.windows.MEM_COMMIT | std.os.windows.MEM_RESERVE,
-                std.os.windows.PAGE_READWRITE,
-            ) catch return error.VirtualAllocFailed;
+                win32.MEM_COMMIT | win32.MEM_RESERVE,
+                win32.PAGE_READWRITE,
+            ) orelse return error.VirtualAllocFailed;
             const ptr: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(mem));
             return ptr[0..size];
         },
@@ -124,17 +157,17 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
 fn makeExecutable(memory: []align(std.heap.page_size_min) u8) !void {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
-            const prot = std.posix.PROT.READ | std.posix.PROT.EXEC;
-            std.posix.mprotect(memory, prot) catch return error.MprotectFailed;
+            const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };
+            if (std.c.mprotect(@ptrCast(memory.ptr), memory.len, prot) != 0) return error.MprotectFailed;
         },
         .windows => {
-            var old_protect: std.os.windows.DWORD = undefined;
-            std.os.windows.VirtualProtect(
+            var old_protect: win32.DWORD = undefined;
+            if (win32.VirtualProtect(
                 memory.ptr,
                 memory.len,
-                std.os.windows.PAGE_EXECUTE_READ,
+                win32.PAGE_EXECUTE_READ,
                 &old_protect,
-            ) catch return error.VirtualProtectFailed;
+            ) == .FALSE) return error.VirtualProtectFailed;
         },
         else => return error.UnsupportedPlatform,
     }
@@ -147,10 +180,7 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
             std.posix.munmap(memory);
         },
         .windows => {
-            const result = std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE);
-            if (@typeInfo(@TypeOf(result)) == .error_union) {
-                result catch {};
-            }
+            _ = win32.VirtualFree(memory.ptr, 0, win32.MEM_RELEASE);
         },
         // allocateMemory returns error.UnsupportedPlatform for other OSes,
         // so freeMemory should never be called on them

@@ -418,8 +418,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.scratch_key.clearRetainingCapacity();
-        const writer = self.scratch_key.writer(self.allocator);
-        try writer.print("proc:{d}:{s}:{d}:{d}:{d}|", .{
+        try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{d}:{d}:{d}|", .{
             @intFromEnum(key.module_name),
             @tagName(key.kind),
             if (key.export_name) |name| @intFromEnum(name) else std.math.maxInt(u32),
@@ -523,7 +522,7 @@ fn appendOptionalNestedProcSiteKey(
     if (maybe_key) |key| {
         try scratch.append(allocator, 1);
         try appendProcedureTemplateRef(scratch, key.owner_template, allocator);
-        try scratch.writer(allocator).print("site:{d}|", .{@intFromEnum(key.site)});
+        try scratch.print(allocator, "site:{d}|", .{@intFromEnum(key.site)});
     } else {
         try scratch.append(allocator, 0);
     }
@@ -557,7 +556,7 @@ fn appendProcedureTemplateRef(
     ref: ProcedureTemplateRef,
     allocator: Allocator,
 ) Allocator.Error!void {
-    try scratch.writer(allocator).print("template:{d}:{d}:", .{
+    try scratch.print(allocator, "template:{d}:{d}:", .{
         @intFromEnum(ref.proc_base),
         @intFromEnum(ref.template),
     });

@@ -157,7 +157,6 @@ pub const DecompressingHashReader = struct {
     pub fn verifyComplete(self: *Self) !void {
         _ = self.interface.discardRemaining() catch |err| switch (err) {
             error.ReadFailed => 0,
-            else => return err,
         };
         // The hash should have been verified during stream
         if (!self.hash_verified) {

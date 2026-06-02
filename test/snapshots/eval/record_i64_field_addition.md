@@ -13,21 +13,9 @@ advance = |robot| { ..robot, y: robot.y + 1 }
 expect advance({ x: 7, y: 3 }) == { x: 7, y: 4 }
 ~~~
 # EXPECTED
-INFINITE TYPE - record_i64_field_addition.md:4:1:4:46
+NIL
 # PROBLEMS
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**record_i64_field_addition.md:4:1:4:46:**
-```roc
-advance = |robot| { ..robot, y: robot.y + 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -100,7 +88,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 120)
+						(e-dispatch-call (method "plus") (constraint-fn-var 124)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -122,8 +110,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 266)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 268)
+					(e-lookup-local
+						(p-assign (ident "advance")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -142,10 +131,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "Robot -> Robot")))
 	(type_decls
 		(alias (type "Robot")
 			(ty-header (name "Robot"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Robot -> Robot"))))
 ~~~

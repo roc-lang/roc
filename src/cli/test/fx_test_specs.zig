@@ -20,6 +20,9 @@ pub const TestSpec = struct {
     description: []const u8 = "",
     /// Skip this test on Windows (usually due to dev backend limitations)
     skip_on_windows: bool = false,
+    /// Skip this test unconditionally. Use sparingly and link to the tracking
+    /// issue/comment that documents the underlying bug.
+    skip: bool = false,
 };
 
 /// Regression coverage for #9401: boxed erased callables must use the same

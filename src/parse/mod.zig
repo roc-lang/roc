@@ -9,7 +9,7 @@ const tracy = @import("tracy");
 
 pub const tokenize = @import("tokenize.zig");
 
-const Allocators = base.Allocators;
+const Allocator = std.mem.Allocator;
 const CommonEnv = base.CommonEnv;
 const Diagnostic = AST.Diagnostic;
 
@@ -32,14 +32,9 @@ pub const NumericLiteral = @import("NumericLiteral.zig");
 pub const AST = @import("AST.zig");
 
 /// Internal parsing implementation.
-/// TODO: Future enhancement - consider using allocators.scratch for temporary allocations
-/// during parsing (tokenizer scratch, intermediate buffers). Currently only
-/// gpa is used.
-fn runParse(allocators: *Allocators, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
+fn runParse(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    const gpa = allocators.gpa;
 
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
@@ -80,8 +75,8 @@ fn runParse(allocators: *Allocators, env: *CommonEnv, parserCall: *const fn (*Pa
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parse(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(allocators, env, parseFileAndReturnIdx);
+pub fn parse(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(gpa, env, parseFileAndReturnIdx);
 }
 
 fn parseFileAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -98,8 +93,8 @@ fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parseExpr(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(allocators, env, parseExprAndReturnIdx);
+pub fn parseExpr(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(gpa, env, parseExprAndReturnIdx);
 }
 
 fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -111,8 +106,8 @@ fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parseHeader(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(allocators, env, parseHeaderAndReturnIdx);
+pub fn parseHeader(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(gpa, env, parseHeaderAndReturnIdx);
 }
 
 fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
@@ -124,8 +119,8 @@ fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parseStatement(allocators: *Allocators, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(allocators, env, parseStatementAndReturnIdx);
+pub fn parseStatement(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runParse(gpa, env, parseStatementAndReturnIdx);
 }
 
 test "parser tests" {
@@ -154,15 +149,11 @@ test "parse error triggers errdefer cleanup" {
     const close_parens = ")" ** 150;
     const source = open_parens ++ "1" ++ close_parens;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
     // This should fail with TooNested error
-    const result = parseExpr(&allocators, &env);
+    const result = parseExpr(gpa, &env);
     try std.testing.expectError(error.TooNested, result);
 }
 
@@ -213,14 +204,10 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
         \\}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parseExpr(&allocators, &env);
+    const ast = try parseExpr(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expect(ast.parse_diagnostics.items.len > 0);
@@ -244,14 +231,10 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
         \\main = {}
     ;
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(&allocators, &env);
+    const ast = try parse(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);

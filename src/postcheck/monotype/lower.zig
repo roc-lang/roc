@@ -1817,8 +1817,11 @@ const Builder = struct {
 
     fn inspectTuple(self: *Builder, value: Ast.ExprId, items: []const Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
         if (items.len == 0) return try self.stringExpr("()", str_ty);
+        const stable_items = try self.allocator.dupe(Type.TypeId, items);
+        defer self.allocator.free(stable_items);
+
         var out = try self.stringExpr("(", str_ty);
-        for (items, 0..) |item_ty, i| {
+        for (stable_items, 0..) |item_ty, i| {
             if (i != 0) out = try self.concatExpr(out, try self.stringExpr(", ", str_ty), str_ty);
             const item = try self.program.addExpr(.{
                 .ty = item_ty,
@@ -1831,8 +1834,11 @@ const Builder = struct {
 
     fn inspectRecord(self: *Builder, value: Ast.ExprId, fields: []const Type.Field, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
         if (fields.len == 0) return try self.stringExpr("{}", str_ty);
+        const stable_fields = try self.allocator.dupe(Type.Field, fields);
+        defer self.allocator.free(stable_fields);
+
         var out = try self.stringExpr("{ ", str_ty);
-        for (fields, 0..) |field, i| {
+        for (stable_fields, 0..) |field, i| {
             if (i != 0) out = try self.concatExpr(out, try self.stringExpr(", ", str_ty), str_ty);
             out = try self.concatExpr(out, try self.stringExpr(self.program.names.recordFieldLabelText(field.name), str_ty), str_ty);
             out = try self.concatExpr(out, try self.stringExpr(": ", str_ty), str_ty);
@@ -1853,11 +1859,15 @@ const Builder = struct {
                 .data = .{ .crash = msg },
             });
         }
-        const branches = try self.allocator.alloc(Ast.Branch, tags.len);
+        const stable_tags = try self.allocator.dupe(Type.Tag, tags);
+        defer self.allocator.free(stable_tags);
+
+        const branches = try self.allocator.alloc(Ast.Branch, stable_tags.len);
         defer self.allocator.free(branches);
 
-        for (tags, 0..) |tag, i| {
-            const payload_tys = self.program.types.span(tag.payloads);
+        for (stable_tags, 0..) |tag, i| {
+            const payload_tys = try self.allocator.dupe(Type.TypeId, self.program.types.span(tag.payloads));
+            defer self.allocator.free(payload_tys);
             const payload_pats = try self.allocator.alloc(Ast.PatId, payload_tys.len);
             defer self.allocator.free(payload_pats);
             const payload_exprs = try self.allocator.alloc(Ast.ExprId, payload_tys.len);

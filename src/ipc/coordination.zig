@@ -27,11 +27,11 @@ pub const CoordinationError = error{
 /// Read shared memory coordination info from platform-specific source
 /// On Windows: reads from command line arguments
 /// On POSIX: reads from a file next to the executable
-pub fn readFdInfo(allocator: std.mem.Allocator) CoordinationError!FdInfo {
+pub fn readFdInfo(allocator: std.mem.Allocator, io: std.Io) CoordinationError!FdInfo {
     if (comptime platform.is_windows) {
         return readFdInfoFromCommandLine(allocator);
     } else {
-        return readFdInfoFromFile(allocator);
+        return readFdInfoFromFile(allocator, io);
     }
 }
 
@@ -52,19 +52,28 @@ pub fn parseHandle(handle_str: []const u8) CoordinationError!platform.Handle {
 
 /// Windows: Read handle and size from command line arguments
 fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdInfo {
-    const args = std.process.argsAlloc(allocator) catch {
-        std.log.err("Failed to allocate memory for command line arguments", .{});
+    // In Zig 0.16 `std.process.argsAlloc` was removed; on Windows we read the raw
+    // command line from the PEB and parse it with the standard library iterator.
+    // The shim entry point is not driven by Zig's `main(init: Init)`, so we cannot
+    // receive an `Args` value from the runtime.
+    const cmd_line_w = std.os.windows.peb().ProcessParameters.CommandLine.slice();
+    var iter = std.process.Args.Iterator.Windows.init(allocator, cmd_line_w) catch {
+        std.log.err("Failed to initialize command line iterator", .{});
         return error.AllocationFailed;
     };
-    defer std.process.argsFree(allocator, args);
+    defer iter.deinit();
 
-    if (args.len < 3) {
-        std.log.err("Invalid command line arguments: expected at least 3 arguments, got {}", .{args.len});
+    // Skip argv[0] (program name).
+    _ = iter.next();
+
+    const handle_str = iter.next() orelse {
+        std.log.err("Invalid command line arguments: missing handle", .{});
         return error.ArgumentsInvalid;
-    }
-
-    const handle_str = args[1];
-    const size_str = args[2];
+    };
+    const size_str = iter.next() orelse {
+        std.log.err("Invalid command line arguments: missing size", .{});
+        return error.ArgumentsInvalid;
+    };
 
     const fd_str = allocator.dupe(u8, handle_str) catch {
         std.log.err("Failed to duplicate handle string", .{});
@@ -84,9 +93,9 @@ fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdI
 }
 
 /// POSIX: Read fd and size from temporary file
-fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
+fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationError!FdInfo {
     // Get our own executable path
-    const exe_path = std.fs.selfExePathAlloc(allocator) catch {
+    const exe_path = std.process.executablePathAlloc(io, allocator) catch {
         std.log.err("Failed to get executable path", .{});
         return error.FdInfoReadFailed;
     };
@@ -128,19 +137,11 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     defer allocator.free(fd_file_path);
 
     // Read the file
-    const file = std.fs.cwd().openFile(fd_file_path, .{}) catch {
-        std.log.err("Failed to open fd file at '{s}'", .{fd_file_path});
-        return error.FileNotFound;
-    };
-    defer file.close();
-
-    var buffer: [128]u8 = undefined;
-    const bytes_read = file.readAll(&buffer) catch {
-        std.log.err("Failed to read fd file", .{});
+    const content = std.Io.Dir.cwd().readFileAlloc(io, fd_file_path, allocator, .limited(128)) catch {
+        std.log.err("Failed to read fd file at '{s}'", .{fd_file_path});
         return error.FileReadFailed;
     };
-
-    const content = buffer[0..bytes_read];
+    defer allocator.free(content);
 
     // Parse the content: first line is fd, second line is size
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
@@ -175,6 +176,7 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
 /// On POSIX: writes a file next to the target executable
 pub fn writeFdInfo(
     allocator: std.mem.Allocator,
+    io: std.Io,
     handle: platform.Handle,
     size: usize,
     target_path: []const u8,
@@ -199,18 +201,18 @@ pub fn writeFdInfo(
         defer allocator.free(coord_file_path);
 
         // Write the coordination file
-        const file = std.fs.cwd().createFile(coord_file_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().createFile(io, coord_file_path, .{}) catch |err| {
             std.log.err("Failed to create coordination file at '{s}': {}", .{ coord_file_path, err });
             return err;
         };
-        defer file.close();
+        defer file.close(io);
 
         const content = std.fmt.allocPrint(allocator, "{}\n{}\n", .{ fd, size }) catch {
             return error.OutOfMemory;
         };
         defer allocator.free(content);
 
-        file.writeAll(content) catch |err| {
+        file.writeStreamingAll(io, content) catch |err| {
             std.log.err("Failed to write coordination file: {}", .{err});
             return err;
         };

@@ -3,7 +3,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.EnvMap {
+fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return util.buildIsolatedTestEnvMap(allocator, null);
 }
 
@@ -19,11 +19,11 @@ test "CLI test cache roots are distinct" {
     try std.testing.expect(!std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir));
     try std.testing.expect(!std.mem.eql(u8, first.zig_local_cache_dir, second.zig_local_cache_dir));
 
-    var first_dir = try std.fs.openDirAbsolute(first.roc_cache_dir, .{});
-    first_dir.close();
+    var first_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, first.roc_cache_dir, .{});
+    first_dir.close(std.testing.io);
 
-    var second_dir = try std.fs.openDirAbsolute(second.roc_cache_dir, .{});
-    second_dir.close();
+    var second_dir = try std.Io.Dir.openDirAbsolute(std.testing.io, second.roc_cache_dir, .{});
+    second_dir.close(std.testing.io);
 }
 
 const GeneratedModuleGraphConfig = struct {
@@ -36,7 +36,7 @@ const GeneratedModuleGraphConfig = struct {
 
 fn writeGeneratedModuleGraphProject(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
 ) !void {
     try std.testing.expect(config.roc_file_count > 0);
@@ -51,14 +51,14 @@ fn writeGeneratedModuleGraphProject(
 }
 
 fn writeGeneratedPackageModule(
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
 ) !void {
-    var file = try dir.createFile("main.roc", .{});
-    defer file.close();
+    var file = try dir.createFile(std.testing.io, "main.roc", .{});
+    defer file.close(std.testing.io);
 
     var write_buffer: [4096]u8 = undefined;
-    var writer = file.writer(&write_buffer);
+    var writer = file.writer(std.testing.io, &write_buffer);
     const out = &writer.interface;
 
     const type_module_count = config.roc_file_count - 1;
@@ -95,18 +95,18 @@ fn writeGeneratedPackageModule(
 
 fn writeGeneratedTypeModule(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
     module_idx: usize,
 ) !void {
     const file_name = try std.fmt.allocPrint(allocator, "T{d}.roc", .{module_idx});
     defer allocator.free(file_name);
 
-    var file = try dir.createFile(file_name, .{});
-    defer file.close();
+    var file = try dir.createFile(std.testing.io, file_name, .{});
+    defer file.close(std.testing.io);
 
     var write_buffer: [4096]u8 = undefined;
-    var writer = file.writer(&write_buffer);
+    var writer = file.writer(std.testing.io, &write_buffer);
     const out = &writer.interface;
 
     // Keep the graph acyclic: T2..Tn import T1, and main.roc imports all T*.roc.
@@ -143,30 +143,28 @@ fn runGeneratedModuleGraphCheck(
 
     try writeGeneratedModuleGraphProject(allocator, tmp_dir.dir, config);
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
 
-    try tmp_dir.dir.makePath("roc-cache");
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
     const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
     defer allocator.free(cache_path);
 
     const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
     defer allocator.free(main_path);
 
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(cwd_path);
 
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ roc_path, "check", main_path },
+    const result = try util.runChildWithTimeout(allocator, &.{ roc_path, "check", main_path }, .{
         .cwd = cwd_path,
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
@@ -176,7 +174,7 @@ fn runGeneratedModuleGraphCheck(
 
     const cached_module_count = try countModuleCacheFiles(allocator, cache_path);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print(
             \\roc check failed for generated module graph:
             \\  roc files: {d}
@@ -193,7 +191,7 @@ fn runGeneratedModuleGraphCheck(
         printTruncatedOutput("stdout", result.stdout);
         printTruncatedOutput("stderr", result.stderr);
     }
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expect(result.term == .exited and result.term.exited == 0);
 
     if (cached_module_count != config.roc_file_count) {
         std.debug.print(
@@ -205,17 +203,17 @@ fn runGeneratedModuleGraphCheck(
 }
 
 fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) !usize {
-    var cache_dir = std.fs.cwd().openDir(cache_path, .{ .iterate = true }) catch |err| switch (err) {
+    var cache_dir = std.Io.Dir.cwd().openDir(std.testing.io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return 0,
         else => return err,
     };
-    defer cache_dir.close();
+    defer cache_dir.close(std.testing.io);
 
     var walker = try cache_dir.walk(allocator);
     defer walker.deinit();
 
     var count: usize = 0;
-    while (try walker.next()) |entry| {
+    while (try walker.next(std.testing.io)) |entry| {
         if (entry.kind != .file) continue;
         if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
         if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
@@ -251,15 +249,15 @@ test "roc check writes parse errors to stderr" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code)
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains error information (THIS IS THE KEY TEST - without flush, this will be empty)
     try testing.expect(result.stderr.len > 0);
 
     // 3. Stderr contains error reporting
-    const has_error = std.mem.indexOf(u8, result.stderr, "Failed to check") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Unsupported") != null;
+    const has_error = std.mem.find(u8, result.stderr, "Failed to check") != null or
+        std.mem.find(u8, result.stderr, "error") != null or
+        std.mem.find(u8, result.stderr, "Unsupported") != null;
     try testing.expect(has_error);
 }
 
@@ -273,20 +271,20 @@ test "roc check displays correct file path in parse error messages" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code) due to parse error
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains error information
     try testing.expect(result.stderr.len > 0);
 
     // 3. Stderr contains the actual file path, not mangled bytes
     // The error message should include "has_parse_error.roc" in the location indicator
-    const has_file_path = std.mem.indexOf(u8, result.stderr, "has_parse_error.roc") != null;
+    const has_file_path = std.mem.find(u8, result.stderr, "has_parse_error.roc") != null;
     try testing.expect(has_file_path);
 
     // 4. Stderr should NOT contain sequences of 0xaa bytes (indicates path encoding issue)
     // When paths are mangled, they appear as repeated 0xaa bytes in the output
     const mangled_path_pattern = [_]u8{ 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
-    const has_mangled_path = std.mem.indexOf(u8, result.stderr, &mangled_path_pattern) != null;
+    const has_mangled_path = std.mem.find(u8, result.stderr, &mangled_path_pattern) != null;
     try testing.expect(!has_mangled_path);
 }
 
@@ -300,12 +298,12 @@ test "roc check succeeds on valid file" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Stderr should be empty or minimal for success
     // (No errors should be reported)
-    const has_error = std.mem.indexOf(u8, result.stderr, "Failed to check") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null;
+    const has_error = std.mem.find(u8, result.stderr, "Failed to check") != null or
+        std.mem.find(u8, result.stderr, "error") != null;
     try testing.expect(!has_error);
 }
 
@@ -388,7 +386,7 @@ test "roc version outputs at least 5 chars to stdout" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Stdout contains at least 5 characters
     try testing.expect(result.stdout.len >= 5);
@@ -404,14 +402,14 @@ test "roc repl shows welcome banner" {
     defer gpa.free(result.stderr);
 
     // Command exits successfully (EOF closes REPL gracefully)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Stdout contains the welcome banner
-    const has_welcome = std.mem.indexOf(u8, result.stdout, "Roc REPL") != null;
+    const has_welcome = std.mem.find(u8, result.stdout, "Roc REPL") != null;
     try testing.expect(has_welcome);
 
     // Stdout mentions help
-    const has_help_hint = std.mem.indexOf(u8, result.stdout, ":help") != null;
+    const has_help_hint = std.mem.find(u8, result.stdout, ":help") != null;
     try testing.expect(has_help_hint);
 }
 
@@ -425,10 +423,10 @@ test "roc repl evaluates simple expression" {
     defer gpa.free(result.stderr);
 
     // Command exits successfully
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains the result "2"
-    const has_result = std.mem.indexOf(u8, result.stdout, "2") != null;
+    const has_result = std.mem.find(u8, result.stdout, "2") != null;
     try testing.expect(has_result);
 }
 
@@ -442,11 +440,11 @@ test "roc repl :help command works" {
     defer gpa.free(result.stderr);
 
     // Command exits successfully
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains help text (mentions commands)
-    const has_help_output = std.mem.indexOf(u8, result.stdout, ":exit") != null or
-        std.mem.indexOf(u8, result.stdout, ":quit") != null;
+    const has_help_output = std.mem.find(u8, result.stdout, ":exit") != null or
+        std.mem.find(u8, result.stdout, ":quit") != null;
     try testing.expect(has_help_output);
 }
 
@@ -460,10 +458,10 @@ test "roc repl :exit command exits cleanly" {
     defer gpa.free(result.stderr);
 
     // Command exits successfully
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains goodbye message
-    const has_goodbye = std.mem.indexOf(u8, result.stdout, "Goodbye") != null;
+    const has_goodbye = std.mem.find(u8, result.stdout, "Goodbye") != null;
     try testing.expect(has_goodbye);
 }
 
@@ -477,10 +475,10 @@ test "roc repl variable definition and usage" {
     defer gpa.free(result.stderr);
 
     // Command exits successfully
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains the result "8"
-    const has_result = std.mem.indexOf(u8, result.stdout, "8") != null;
+    const has_result = std.mem.find(u8, result.stdout, "8") != null;
     try testing.expect(has_result);
 }
 
@@ -494,10 +492,10 @@ test "roc repl string expression" {
     defer gpa.free(result.stderr);
 
     // Command exits successfully
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Output contains the string (with quotes in output)
-    const has_string = std.mem.indexOf(u8, result.stdout, "hello") != null;
+    const has_string = std.mem.find(u8, result.stdout, "hello") != null;
     try testing.expect(has_string);
 }
 
@@ -511,10 +509,10 @@ test "roc help contains Usage:" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Stdout contains "Usage:"
-    const has_usage = std.mem.indexOf(u8, result.stdout, "Usage:") != null;
+    const has_usage = std.mem.find(u8, result.stdout, "Usage:") != null;
     try testing.expect(has_usage);
 }
 
@@ -528,10 +526,10 @@ test "roc licenses contains =====" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Stdout contains "====="
-    const has_usage = std.mem.indexOf(u8, result.stdout, "=====") != null;
+    const has_usage = std.mem.find(u8, result.stdout, "=====") != null;
     try testing.expect(has_usage);
 }
 
@@ -545,13 +543,13 @@ test "roc fmt --check fails on unformatted file" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code) because file needs formatting
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr or stdout contains formatting-related message
-    const has_format_msg = std.mem.indexOf(u8, result.stderr, "needs_formatting.roc") != null or
-        std.mem.indexOf(u8, result.stdout, "needs_formatting.roc") != null or
-        std.mem.indexOf(u8, result.stderr, "formatted") != null or
-        std.mem.indexOf(u8, result.stdout, "formatted") != null;
+    const has_format_msg = std.mem.find(u8, result.stderr, "needs_formatting.roc") != null or
+        std.mem.find(u8, result.stdout, "needs_formatting.roc") != null or
+        std.mem.find(u8, result.stderr, "formatted") != null or
+        std.mem.find(u8, result.stdout, "formatted") != null;
     try testing.expect(has_format_msg);
 }
 
@@ -565,7 +563,7 @@ test "roc fmt --check succeeds on well-formatted file" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code) because file is well-formatted
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc fmt reformats file in place" {
@@ -578,39 +576,39 @@ test "roc fmt reformats file in place" {
     defer tmp_dir.cleanup();
 
     // Read the source file
-    const cwd = std.fs.cwd();
-    const source_content = try cwd.readFileAlloc(gpa, "test/cli/needs_formatting.roc", 10 * 1024);
+    const cwd = std.Io.Dir.cwd();
+    const source_content = try cwd.readFileAlloc(std.testing.io, "test/cli/needs_formatting.roc", gpa, .limited(10 * 1024));
     defer gpa.free(source_content);
     const original_size = source_content.len;
 
     // Write to temp file
-    try tmp.writeFile(.{ .sub_path = "temp_format.roc", .data = source_content });
+    try tmp.writeFile(std.testing.io, .{ .sub_path = "temp_format.roc", .data = source_content });
 
     // Get absolute path to temp file
-    const tmp_path = try tmp.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
     const temp_file_path = try std.fs.path.join(gpa, &.{ tmp_path, "temp_format.roc" });
     defer gpa.free(temp_file_path);
 
     // Get absolute path to roc binary
-    const cwd_path = try cwd.realpathAlloc(gpa, ".");
+    const cwd_path = try cwd.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Run roc fmt on the temp file
-    const result = try std.process.Child.run(.{
-        .allocator = gpa,
+    const result = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{ roc_path, "fmt", temp_file_path },
-        .cwd = cwd_path,
-        .max_output_bytes = 10 * 1024 * 1024,
+        .cwd = .{ .path = cwd_path },
+        .stdout_limit = .limited(10 * 1024 * 1024),
+        .stderr_limit = .limited(10 * 1024 * 1024),
     });
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
     // Read the formatted file
-    const formatted_content = try tmp.readFileAlloc(gpa, "temp_format.roc", 10 * 1024);
+    const formatted_content = try tmp.readFileAlloc(std.testing.io, "temp_format.roc", gpa, .limited(10 * 1024));
     defer gpa.free(formatted_content);
     const formatted_size = formatted_content.len;
 
@@ -627,8 +625,8 @@ test "roc fmt does not change well-formatted file" {
     const gpa = testing.allocator;
 
     // Read the well-formatted file before formatting
-    const cwd = std.fs.cwd();
-    const before_content = try cwd.readFileAlloc(gpa, "test/cli/well_formatted.roc", 10 * 1024);
+    const cwd = std.Io.Dir.cwd();
+    const before_content = try cwd.readFileAlloc(std.testing.io, "test/cli/well_formatted.roc", gpa, .limited(10 * 1024));
     defer gpa.free(before_content);
 
     // Run roc fmt on the well-formatted file
@@ -637,7 +635,7 @@ test "roc fmt does not change well-formatted file" {
     defer gpa.free(result.stderr);
 
     // Read the file after formatting
-    const after_content = try cwd.readFileAlloc(gpa, "test/cli/well_formatted.roc", 10 * 1024);
+    const after_content = try cwd.readFileAlloc(std.testing.io, "test/cli/well_formatted.roc", gpa, .limited(10 * 1024));
     defer gpa.free(after_content);
 
     // Verify that the content is identical (file was not modified)
@@ -649,48 +647,60 @@ test "roc fmt --stdin formats unformatted input" {
     const gpa = testing.allocator;
 
     // Read the unformatted file to use as stdin
-    const cwd = std.fs.cwd();
-    const input_content = try cwd.readFileAlloc(gpa, "test/cli/needs_formatting.roc", 10 * 1024);
+    const cwd = std.Io.Dir.cwd();
+    const input_content = try cwd.readFileAlloc(std.testing.io, "test/cli/needs_formatting.roc", gpa, .limited(10 * 1024));
     defer gpa.free(input_content);
 
     // Get absolute path to roc binary
-    const cwd_path = try cwd.realpathAlloc(gpa, ".");
+    const cwd_path = try cwd.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(std.testing.io, roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
     };
 
     // Run roc fmt --stdin with input piped in
-    var child = std.process.Child.init(&.{ roc_path, "fmt", "--stdin" }, gpa);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.cwd = cwd_path;
-
-    try child.spawn();
+    var child = try std.process.spawn(std.testing.io, .{
+        .argv = &.{ roc_path, "fmt", "--stdin" },
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .cwd = .{ .path = cwd_path },
+    });
+    defer child.kill(std.testing.io);
 
     // Write input to stdin and close it
-    try child.stdin.?.writeAll(input_content);
-    child.stdin.?.close();
+    child.stdin.?.writeStreamingAll(std.testing.io, input_content) catch {};
+    child.stdin.?.close(std.testing.io);
     child.stdin = null;
 
-    // Collect output before waiting
-    const stdout = try child.stdout.?.readToEndAlloc(gpa, 10 * 1024 * 1024);
-    defer gpa.free(stdout);
-    const stderr = try child.stderr.?.readToEndAlloc(gpa, 10 * 1024 * 1024);
-    defer gpa.free(stderr);
+    // Collect output using MultiReader
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(gpa, std.testing.io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+
+    while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+    try multi_reader.checkAnyError();
 
     // Wait for completion
-    const result = try child.wait();
+    const result = try child.wait(std.testing.io);
+
+    const stdout = try multi_reader.toOwnedSlice(0);
+    defer gpa.free(stdout);
+    const stderr = try multi_reader.toOwnedSlice(1);
+    defer gpa.free(stderr);
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result == .Exited and result.Exited == 0);
+    try testing.expect(result == .exited and result.exited == 0);
 
     // 2. Stdout contains formatted output (different from input)
     try testing.expect(!std.mem.eql(u8, stdout, input_content));
@@ -704,48 +714,60 @@ test "roc fmt --stdin does not change well-formatted input" {
     const gpa = testing.allocator;
 
     // Read the well-formatted file to use as stdin
-    const cwd = std.fs.cwd();
-    const input_content = try cwd.readFileAlloc(gpa, "test/cli/well_formatted.roc", 10 * 1024);
+    const cwd = std.Io.Dir.cwd();
+    const input_content = try cwd.readFileAlloc(std.testing.io, "test/cli/well_formatted.roc", gpa, .limited(10 * 1024));
     defer gpa.free(input_content);
 
     // Get absolute path to roc binary
-    const cwd_path = try cwd.realpathAlloc(gpa, ".");
+    const cwd_path = try cwd.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
-    std.fs.accessAbsolute(roc_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(std.testing.io, roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
     };
 
     // Run roc fmt --stdin with input piped in
-    var child = std.process.Child.init(&.{ roc_path, "fmt", "--stdin" }, gpa);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.cwd = cwd_path;
-
-    try child.spawn();
+    var child = try std.process.spawn(std.testing.io, .{
+        .argv = &.{ roc_path, "fmt", "--stdin" },
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .cwd = .{ .path = cwd_path },
+    });
+    defer child.kill(std.testing.io);
 
     // Write input to stdin and close it
-    try child.stdin.?.writeAll(input_content);
-    child.stdin.?.close();
+    child.stdin.?.writeStreamingAll(std.testing.io, input_content) catch {};
+    child.stdin.?.close(std.testing.io);
     child.stdin = null;
 
-    // Collect output before waiting
-    const stdout = try child.stdout.?.readToEndAlloc(gpa, 10 * 1024 * 1024);
-    defer gpa.free(stdout);
-    const stderr = try child.stderr.?.readToEndAlloc(gpa, 10 * 1024 * 1024);
-    defer gpa.free(stderr);
+    // Collect output using MultiReader
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(gpa, std.testing.io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+
+    while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+    try multi_reader.checkAnyError();
 
     // Wait for completion
-    const result = try child.wait();
+    const result = try child.wait(std.testing.io);
+
+    const stdout = try multi_reader.toOwnedSlice(0);
+    defer gpa.free(stdout);
+    const stderr = try multi_reader.toOwnedSlice(1);
+    defer gpa.free(stderr);
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result == .Exited and result.Exited == 0);
+    try testing.expect(result == .exited and result.exited == 0);
 
     // 2. Stdout contains the same content as input (no changes)
     try testing.expectEqualStrings(input_content, stdout);
@@ -761,15 +783,15 @@ test "roc check reports type error - annotation mismatch" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code) due to type error
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains type error information
     try testing.expect(result.stderr.len > 0);
 
     // 3. Error message mentions type mismatch or error
-    const has_type_error = std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    const has_type_error = std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.find(u8, result.stderr, "error") != null or
+        std.mem.find(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
 }
 
@@ -783,16 +805,16 @@ test "roc check reports type error - plus operator with incompatible types" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code) due to type error
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains type error information
     try testing.expect(result.stderr.len > 0);
 
     // 3. Error message mentions missing method or type error
-    const has_type_error = std.mem.indexOf(u8, result.stderr, "MISSING METHOD") != null or
-        std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
-        std.mem.indexOf(u8, result.stderr, "error") != null or
-        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    const has_type_error = std.mem.find(u8, result.stderr, "MISSING METHOD") != null or
+        std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.find(u8, result.stderr, "error") != null or
+        std.mem.find(u8, result.stderr, "Found") != null;
     try testing.expect(has_type_error);
 }
 
@@ -813,11 +835,11 @@ test "roc check test/int/app.roc does not panic" {
     // Now it should fail gracefully (exit code 1) with type errors, not panic (abort).
 
     // 1. Should not abort (panic would cause exit code 134 on macOS/Linux)
-    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    const did_panic = result.term == .signal or (result.term == .exited and result.term.exited == 134);
     try testing.expect(!did_panic);
 
     // 2. Should not contain "panic" in output
-    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null;
     try testing.expect(!has_panic_text);
 }
 
@@ -827,7 +849,7 @@ fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) !void {
     const result = try util.runRoc(gpa, &.{ opt, "--no-cache" }, roc_file);
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try std.testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc test/int/app.roc runs successfully (interpreter)" {
@@ -859,10 +881,10 @@ test "roc run test/str/app_static_24_byte_string.roc does not panic" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    const did_panic = result.term == .Signal or
-        (result.term == .Exited and result.term.Exited == 134) or
-        std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "reached unreachable code") != null;
+    const did_panic = result.term == .signal or
+        (result.term == .exited and result.term.exited == 134) or
+        std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "reached unreachable code") != null;
 
     if (did_panic) {
         std.debug.print("roc direct run panicked\nterm: {}\nstdout: {s}\nstderr: {s}\n", .{
@@ -888,7 +910,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app" });
@@ -903,13 +925,13 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ result.term, result.stdout, result.stderr });
     }
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Output file was created
-    const stat = tmp_dir.dir.statFile("test_app") catch |err| {
+    const stat = tmp_dir.dir.statFile(std.testing.io, "test_app", .{}) catch |err| {
         std.debug.print("Failed to stat output file: {}\nstderr: {s}\n", .{ err, result.stderr });
         return err;
     };
@@ -919,7 +941,7 @@ test "roc build creates executable from test/int/app.roc (interpreter)" {
 
     // 4. Stdout contains success message
     try testing.expect(result.stdout.len > 5);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Built ") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build creates executable from test/int/app.roc (dev)" {
@@ -938,7 +960,7 @@ test "roc build executable runs correctly (interpreter)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app" });
@@ -952,27 +974,27 @@ test "roc build executable runs correctly (interpreter)" {
     defer gpa.free(build_result.stdout);
     defer gpa.free(build_result.stderr);
 
-    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+    if (build_result.term != .exited or build_result.term.exited != 0) {
         std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ build_result.term, build_result.stdout, build_result.stderr });
     }
-    try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
+    try testing.expect(build_result.term == .exited and build_result.term.exited == 0);
 
     // Run the built executable
-    const run_result = try std.process.Child.run(.{
-        .allocator = gpa,
+    const run_result = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{output_path},
-        .max_output_bytes = 10 * 1024 * 1024,
+        .stdout_limit = .limited(10 * 1024 * 1024),
+        .stderr_limit = .limited(10 * 1024 * 1024),
     });
     defer gpa.free(run_result.stdout);
     defer gpa.free(run_result.stderr);
 
     // Verify that:
     // 1. Executable ran successfully
-    try testing.expect(run_result.term == .Exited and run_result.term.Exited == 0);
+    try testing.expect(run_result.term == .exited and run_result.term.exited == 0);
 
     // 2. Output contains expected success message
-    const has_success = std.mem.indexOf(u8, run_result.stdout, "SUCCESS") != null or
-        std.mem.indexOf(u8, run_result.stdout, "PASSED") != null;
+    const has_success = std.mem.find(u8, run_result.stdout, "SUCCESS") != null or
+        std.mem.find(u8, run_result.stdout, "PASSED") != null;
     try testing.expect(has_success);
 }
 
@@ -986,7 +1008,7 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app_dev" });
@@ -994,12 +1016,19 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
 
     const cache_path = try std.fs.path.join(gpa, &.{ tmp_path, "xdg-cache" });
     defer gpa.free(cache_path);
-    try tmp_dir.dir.makePath("xdg-cache");
+    try tmp_dir.dir.createDirPath(std.testing.io, "xdg-cache");
 
     const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
     defer gpa.free(output_arg);
 
-    var env_map = try std.process.getEnvMap(gpa);
+    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+    var env_map = try environ.createMap(gpa);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
 
@@ -1012,31 +1041,31 @@ test "roc build --opt=dev executable runs correctly for test/int/app.roc" {
     defer gpa.free(build_result.stdout);
     defer gpa.free(build_result.stderr);
 
-    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+    if (build_result.term != .exited or build_result.term.exited != 0) {
         std.debug.print("roc build --opt=dev failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{
             build_result.term,
             build_result.stdout,
             build_result.stderr,
         });
     }
-    try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
+    try testing.expect(build_result.term == .exited and build_result.term.exited == 0);
 
-    const stat = tmp_dir.dir.statFile("test_app_dev") catch |err| {
+    const stat = tmp_dir.dir.statFile(std.testing.io, "test_app_dev", .{}) catch |err| {
         std.debug.print("Failed to stat dev backend output file: {}\nstderr: {s}\n", .{ err, build_result.stderr });
         return err;
     };
     try testing.expect(stat.size > 0);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = gpa,
+    const run_result = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{output_path},
-        .max_output_bytes = 10 * 1024 * 1024,
+        .stdout_limit = .limited(10 * 1024 * 1024),
+        .stderr_limit = .limited(10 * 1024 * 1024),
     });
     defer gpa.free(run_result.stdout);
     defer gpa.free(run_result.stderr);
 
-    try testing.expect(run_result.term == .Exited and run_result.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "ALL TESTS PASSED") != null);
+    try testing.expect(run_result.term == .exited and run_result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, run_result.stdout, "ALL TESTS PASSED") != null);
 }
 
 test "roc build fails with file not found error" {
@@ -1049,13 +1078,13 @@ test "roc build fails with file not found error" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code)
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains file not found error
-    const has_error = std.mem.indexOf(u8, result.stderr, "FileNotFound") != null or
-        std.mem.indexOf(u8, result.stderr, "not found") != null or
-        std.mem.indexOf(u8, result.stderr, "NOT FOUND") != null or
-        std.mem.indexOf(u8, result.stderr, "Failed") != null;
+    const has_error = std.mem.find(u8, result.stderr, "FileNotFound") != null or
+        std.mem.find(u8, result.stderr, "not found") != null or
+        std.mem.find(u8, result.stderr, "NOT FOUND") != null or
+        std.mem.find(u8, result.stderr, "Failed") != null;
     try testing.expect(has_error);
 }
 
@@ -1069,11 +1098,11 @@ test "roc build fails with invalid target error" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code)
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains invalid target error
-    const has_error = std.mem.indexOf(u8, result.stderr, "Invalid target") != null or
-        std.mem.indexOf(u8, result.stderr, "invalid") != null;
+    const has_error = std.mem.find(u8, result.stderr, "Invalid target") != null or
+        std.mem.find(u8, result.stderr, "invalid") != null;
     try testing.expect(has_error);
 }
 
@@ -1093,14 +1122,14 @@ test "roc build glibc target gives helpful error on non-Linux" {
 
     // Verify that:
     // 1. Command failed (non-zero exit code)
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 2. Stderr contains helpful error message about glibc not being supported
-    const has_glibc_error = std.mem.indexOf(u8, result.stderr, "glibc") != null;
+    const has_glibc_error = std.mem.find(u8, result.stderr, "glibc") != null;
     try testing.expect(has_glibc_error);
 
     // 3. Stderr suggests using musl instead
-    const suggests_musl = std.mem.indexOf(u8, result.stderr, "musl") != null;
+    const suggests_musl = std.mem.find(u8, result.stderr, "musl") != null;
     try testing.expect(suggests_musl);
 }
 
@@ -1112,13 +1141,13 @@ fn testCachesPassingResults(opt: []const u8) !void {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+    try std.testing.expect(result1.term == .exited and result1.term.exited == 0);
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
+    try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
+    try std.testing.expect(std.mem.find(u8, result2.stdout, "(cached)") != null);
 }
 
 test "roc test caches passing results (interpreter)" {
@@ -1136,13 +1165,13 @@ fn testCachesFailingResults(opt: []const u8) !void {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
+    try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "(cached)") != null);
 }
 
 test "roc test caches failing results (interpreter)" {
@@ -1162,56 +1191,56 @@ test "roc test cache invalidated by source change (interpreter)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
 
     // Write a type module to temp dir (type name must match filename)
     const source_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(1, 2) == 3 }\n";
-    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = source_content });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = source_content });
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
     const temp_file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
     defer gpa.free(temp_file_path);
 
     // Get absolute path to roc binary
-    const cwd_path = try cwd.realpathAlloc(gpa, ".");
+    const cwd_path = try cwd.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(cwd_path);
     const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
     const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // First run - populates cache
-    const result1 = try std.process.Child.run(.{
-        .allocator = gpa,
+    const result1 = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
-        .cwd = cwd_path,
-        .env_map = &env_map,
-        .max_output_bytes = 10 * 1024 * 1024,
+        .cwd = .{ .path = cwd_path },
+        .environ_map = &env_map,
+        .stdout_limit = .limited(10 * 1024 * 1024),
+        .stderr_limit = .limited(10 * 1024 * 1024),
     });
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
 
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+    try testing.expect(result1.term == .exited and result1.term.exited == 0);
 
     // Modify the source (change the expect body)
     const modified_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
-    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = modified_content });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = modified_content });
 
     // Second run - should NOT be cached (source changed)
-    const result2 = try std.process.Child.run(.{
-        .allocator = gpa,
+    const result2 = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
-        .cwd = cwd_path,
-        .env_map = &env_map,
-        .max_output_bytes = 10 * 1024 * 1024,
+        .cwd = .{ .path = cwd_path },
+        .environ_map = &env_map,
+        .stdout_limit = .limited(10 * 1024 * 1024),
+        .stderr_limit = .limited(10 * 1024 * 1024),
     });
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
+    try testing.expect(result2.term == .exited and result2.term.exited == 0);
 
     // Second run should NOT contain "(cached)" since source changed
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") == null);
+    try testing.expect(std.mem.find(u8, result2.stdout, "(cached)") == null);
 }
 
 test "roc test cache invalidated by source change (dev)" {
@@ -1224,9 +1253,9 @@ test "roc test cache invalidated by source change (dev)" {
     defer tmp_dir.cleanup();
 
     const source_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(1, 2) == 3 }\n";
-    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = source_content });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = source_content });
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
@@ -1235,17 +1264,17 @@ test "roc test cache invalidated by source change (dev)" {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+    try testing.expect(result1.term == .exited and result1.term.exited == 0);
 
     const updated_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
-    try tmp_dir.dir.writeFile(.{ .sub_path = "CacheTest.roc", .data = updated_content });
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = updated_content });
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
-    try testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") == null);
+    try testing.expect(result2.term == .exited and result2.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result2.stdout, "(cached)") == null);
 }
 
 fn testVerboseWorksFromCache(opt: []const u8) !void {
@@ -1256,14 +1285,14 @@ fn testVerboseWorksFromCache(opt: []const u8) !void {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 0);
+    try std.testing.expect(result1.term == .exited and result1.term.exited == 0);
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 0);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "(cached)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stdout, "PASS") != null);
+    try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
+    try std.testing.expect(std.mem.find(u8, result2.stdout, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stdout, "PASS") != null);
 }
 
 test "roc test --verbose works from cache (interpreter)" {
@@ -1281,15 +1310,15 @@ fn testVerboseCachesFailureReports(opt: []const u8) !void {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
+    try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "FAIL") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "FAIL") != null);
+    try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result1.stderr, "FAIL") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "FAIL") != null);
 }
 
 test "roc test --verbose caches failure reports (interpreter)" {
@@ -1307,16 +1336,16 @@ fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
     const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
-    try std.testing.expect(result1.term == .Exited and result1.term.Exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result1.stderr, "expect failed") == null);
+    try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
+    try std.testing.expect(std.mem.find(u8, result1.stderr, "expect failed") == null);
 
     const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
-    try std.testing.expect(result2.term == .Exited and result2.term.Exited == 1);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "(cached)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "expect") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result2.stderr, "TEST FAILURE") != null);
+    try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "(cached)") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "expect") != null);
+    try std.testing.expect(std.mem.find(u8, result2.stderr, "TEST FAILURE") != null);
 }
 
 test "roc test non-verbose run caches verbose failure reports for later verbose run (interpreter)" {
@@ -1339,15 +1368,15 @@ test "roc test with nested list chunks does not panic on layout upgrade (interpr
 
     // Verify that:
     // 1. Command failed with exit code 1 (test failure, not panic)
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // 2. Stderr contains "FAIL" indicating a test failure (not a panic/crash)
-    const has_fail = std.mem.indexOf(u8, result.stderr, "FAIL") != null;
+    const has_fail = std.mem.find(u8, result.stderr, "FAIL") != null;
     try testing.expect(has_fail);
 
     // 3. Stderr should not contain "panic" or "overflow" (no crash occurred)
-    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    const has_panic = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 }
 
@@ -1364,11 +1393,11 @@ fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // Output should contain line-numbered source lines with the gutter prefix.
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "\u{2502}") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "add(1, 1) == 3") != null);
 }
 
 test "roc test failure output contains source snippet (interpreter)" {
@@ -1387,11 +1416,11 @@ fn testFailureOutputContainsDocComment(opt: []const u8) !void {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "## This test should fail") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "add(1, 1) == 3") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "\u{2502}") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "## This test should fail") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "add(1, 1) == 3") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "\u{2502}") != null);
 }
 
 test "roc test failure output contains doc comment (interpreter)" {
@@ -1419,12 +1448,12 @@ fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
     defer gpa.free(verbose.stdout);
     defer gpa.free(verbose.stderr);
 
-    try testing.expect(non_verbose.term == .Exited and non_verbose.term.Exited == 1);
-    try testing.expect(verbose.term == .Exited and verbose.term.Exited == 1);
+    try testing.expect(non_verbose.term == .exited and non_verbose.term.exited == 1);
+    try testing.expect(verbose.term == .exited and verbose.term.exited == 1);
 
     for ([_][]const u8{ "\u{2502}", "add(1, 1) == 3" }) |needle| {
-        try testing.expect(std.mem.indexOf(u8, non_verbose.stderr, needle) != null);
-        try testing.expect(std.mem.indexOf(u8, verbose.stderr, needle) != null);
+        try testing.expect(std.mem.find(u8, non_verbose.stderr, needle) != null);
+        try testing.expect(std.mem.find(u8, verbose.stderr, needle) != null);
     }
 }
 
@@ -1448,15 +1477,15 @@ test "roc check returns exit code 2 for warnings" {
 
     // Verify that:
     // 1. Command exits with code 2 (warnings present, no errors)
-    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+    try testing.expect(result.term == .exited and result.term.exited == 2);
 
     // 2. Stderr contains warning information
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 
     // 3. Output shows 0 errors and at least 1 warning
-    const has_zero_errors = std.mem.indexOf(u8, result.stderr, "0 error") != null;
+    const has_zero_errors = std.mem.find(u8, result.stderr, "0 error") != null;
     try testing.expect(has_zero_errors);
 }
 
@@ -1469,12 +1498,12 @@ test "roc check returns exit code 0 for no warnings or errors" {
     defer gpa.free(result.stderr);
 
     // Print diagnostic info on failure
-    if (!(result.term == .Exited and result.term.Exited == 0)) {
+    if (!(result.term == .exited and result.term.exited == 0)) {
         std.debug.print("\n=== Test Failure Diagnostics ===\n", .{});
         std.debug.print("Expected: exit code 0\n", .{});
         switch (result.term) {
-            .Exited => |code| std.debug.print("Actual: exit code {}\n", .{code}),
-            .Signal => |sig| std.debug.print("Actual: killed by signal {}\n", .{sig}),
+            .exited => |code| std.debug.print("Actual: exit code {}\n", .{code}),
+            .signal => |sig| std.debug.print("Actual: killed by signal {}\n", .{sig}),
             else => std.debug.print("Actual: {}\n", .{result.term}),
         }
         std.debug.print("stdout: {s}\n", .{result.stdout});
@@ -1483,7 +1512,7 @@ test "roc check returns exit code 0 for no warnings or errors" {
     }
 
     // Verify that command exits with code 0 (no warnings, no errors)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check returns exit code 1 for errors" {
@@ -1495,7 +1524,7 @@ test "roc check returns exit code 1 for errors" {
     defer gpa.free(result.stderr);
 
     // Verify that command exits with code 1 (errors present)
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 }
 
 test "roc check reports comptime division by zero without panicking" {
@@ -1507,9 +1536,9 @@ test "roc check reports comptime division by zero without panicking" {
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check reports comptime modulo by zero without panicking" {
@@ -1521,9 +1550,9 @@ test "roc check reports comptime modulo by zero without panicking" {
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "COMPTIME CRASH") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "I64 division by zero") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "COMPTIME CRASH") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "I64 division by zero") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check reports large default Dec scientific literal without panicking" {
@@ -1535,9 +1564,9 @@ test "roc check reports large default Dec scientific literal without panicking" 
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check preserves numeric literal constraints before reporting large default Dec scientific literal" {
@@ -1549,9 +1578,9 @@ test "roc check preserves numeric literal constraints before reporting large def
     defer gpa.free(result.stderr);
 
     try util.checkFailure(result);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "INVALID NUMBER") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Dec") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "INVALID NUMBER") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Dec") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc check treats integral scientific notation as integer syntax sugar" {
@@ -1562,10 +1591,10 @@ test "roc check treats integral scientific notation as integer syntax sugar" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "No errors found") != null or
-        std.mem.indexOf(u8, result.stderr, "No errors found") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "panic:") == null);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stdout, "No errors found") != null or
+        std.mem.find(u8, result.stderr, "No errors found") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic:") == null);
 }
 
 test "roc run returns exit code 2 for warnings (interpreter)" {
@@ -1578,11 +1607,11 @@ test "roc run returns exit code 2 for warnings (interpreter)" {
 
     // Verify that:
     // 1. Command exits with code 2 (warnings present, no errors)
-    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+    try testing.expect(result.term == .exited and result.term.exited == 2);
 
     // 2. Stderr contains warning information
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 }
 
@@ -1594,10 +1623,10 @@ test "roc run --opt=dev returns exit code 2 for warnings" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+    try testing.expect(result.term == .exited and result.term.exited == 2);
 
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 }
 
@@ -1609,9 +1638,9 @@ test "roc run returns exit code 1 for old platform download" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "platform was built with the old Roc") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "platform was built with the old Roc") != null);
 }
 
 test "roc run --opt=dev rejects non executable targets" {
@@ -1622,11 +1651,11 @@ test "roc run --opt=dev rejects non executable targets" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited != 0);
+    try testing.expect(result.term == .exited and result.term.exited != 0);
 
-    const has_expected_error = std.mem.indexOf(u8, result.stderr, "only produces static libraries") != null or
-        std.mem.indexOf(u8, result.stderr, "TARGET NOT SUPPORTED") != null or
-        std.mem.indexOf(u8, result.stderr, "unsupported target") != null;
+    const has_expected_error = std.mem.find(u8, result.stderr, "only produces static libraries") != null or
+        std.mem.find(u8, result.stderr, "TARGET NOT SUPPORTED") != null or
+        std.mem.find(u8, result.stderr, "unsupported target") != null;
     try testing.expect(has_expected_error);
 }
 
@@ -1638,7 +1667,7 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app_warning" });
@@ -1653,22 +1682,22 @@ test "roc build returns exit code 2 for warnings (interpreter)" {
 
     // Verify that:
     // 1. Command exits with code 2 (warnings present, no errors)
-    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+    try testing.expect(result.term == .exited and result.term.exited == 2);
 
     // 2. Stderr contains warning information
-    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
-        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    const has_warning = std.mem.find(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.find(u8, result.stderr, "warning") != null;
     try testing.expect(has_warning);
 
     // 3. Binary was still created successfully
-    const stat = tmp_dir.dir.statFile("test_app_warning") catch |err| {
+    const stat = tmp_dir.dir.statFile(std.testing.io, "test_app_warning", .{}) catch |err| {
         std.debug.print("Failed to stat output file: {}\nstderr: {s}\n", .{ err, result.stderr });
         return err;
     };
     try testing.expect(stat.size > 0);
 
     // 4. Success message was printed
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Built ") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Built ") != null);
 }
 
 test "roc build returns exit code 2 for warnings (dev)" {
@@ -1686,7 +1715,7 @@ test "roc check with -j1 succeeds on valid file" {
     defer gpa.free(result.stderr);
 
     // Verify that command succeeded
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check with --jobs=1 succeeds on valid file" {
@@ -1698,7 +1727,7 @@ test "roc check with --jobs=1 succeeds on valid file" {
     defer gpa.free(result.stderr);
 
     // Verify that command succeeded
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check with --jobs=2 succeeds on valid file" {
@@ -1710,7 +1739,7 @@ test "roc check with --jobs=2 succeeds on valid file" {
     defer gpa.free(result.stderr);
 
     // Verify that command succeeded
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check with invalid --jobs value returns error" {
@@ -1722,10 +1751,10 @@ test "roc check with invalid --jobs value returns error" {
     defer gpa.free(result.stderr);
 
     // Verify that command failed with error
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
 
     // Verify error message mentions invalid value
-    const has_error = std.mem.indexOf(u8, result.stderr, "not a valid value") != null;
+    const has_error = std.mem.find(u8, result.stderr, "not a valid value") != null;
     try testing.expect(has_error);
 }
 
@@ -1742,19 +1771,45 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
 
     // Verify that:
     // 1. Command did not abort/panic (exit code 134 on macOS/Linux indicates SIGABRT)
-    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    const did_panic = result.term == .signal or (result.term == .exited and result.term.exited == 134);
     try testing.expect(!did_panic);
 
     // 2. Stderr should not contain "panic" or "Coordinator timeout"
-    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "Coordinator timeout") != null;
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "Coordinator timeout") != null;
     try testing.expect(!has_panic_text);
 
     // 3. Command should fail with a non-zero exit code (error, not success)
-    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+    try testing.expect(result.term != .exited or result.term.exited != 0);
 
     // 4. Stderr should contain some error information
     try testing.expect(result.stderr.len > 0);
+}
+
+test "roc check does not hang on tag union type alias inside List (issue 9481)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // A type alias for a tag union (`Rle(a)`), used as the element type of a `List`,
+    // and then compared with `==` against a list literal, caused the type checker to
+    // build a self-referential alias: the alias backing var redirected back to the
+    // alias var.
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/tag_union_alias_hang.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The command must not abort/panic (exit code 134 / a signal indicates SIGABRT).
+    const did_panic = result.term == .signal or (result.term == .exited and result.term.exited == 134);
+    try testing.expect(!did_panic);
+
+    // Neither the infinite-loop guard nor the coordinator watchdog should have fired.
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "Coordinator stuck") != null or
+        std.mem.find(u8, result.stderr, "Infinite loop") != null or
+        std.mem.find(u8, result.stderr, "INFINITE TYPE") != null;
+    try testing.expect(!has_panic_text);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check succeeds on Parser type module" {
@@ -1767,10 +1822,10 @@ test "roc check succeeds on Parser type module" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. No errors should be reported
-    const has_error = std.mem.indexOf(u8, result.stderr, "error") != null;
+    const has_error = std.mem.find(u8, result.stderr, "error") != null;
     try testing.expect(!has_error);
 }
 
@@ -1784,16 +1839,16 @@ test "roc test runs expects in Parser type module (interpreter)" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Output indicates tests passed
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
     // 3. Should have run 7 tests (extract count from "(N)" in output)
     const count = blk: {
-        const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
-        const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
+        const open = std.mem.find(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
+        const close = std.mem.findPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
     try testing.expect(count == 7);
@@ -1809,16 +1864,16 @@ test "roc test runs expects in Parser type module (dev)" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // 2. Output indicates tests passed
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 
     // 3. Should have run 7 tests (extract count from "(N)" in output)
     const count = blk: {
-        const open = std.mem.indexOf(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
-        const close = std.mem.indexOfPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
+        const open = std.mem.find(u8, result.stdout, "(") orelse break :blk @as(usize, 0);
+        const close = std.mem.findPos(u8, result.stdout, open, ")") orelse break :blk @as(usize, 0);
         break :blk std.fmt.parseInt(usize, result.stdout[open + 1 .. close], 10) catch 0;
     };
     try testing.expect(count == 7);
@@ -1836,15 +1891,15 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     defer gpa.free(result.stderr);
 
     // Should succeed (exit code 0), not panic
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Stderr should not contain "panic" or "overflow"
-    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    const has_panic = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 
     // Should report 1 passing test
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
 
@@ -1860,15 +1915,15 @@ test "roc test polymorphic list reverse with numeric literal does not overflow (
     defer gpa.free(result.stderr);
 
     // Should succeed (exit code 0), not panic
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
     // Stderr should not contain "panic" or "overflow"
-    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
-        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    const has_panic = std.mem.find(u8, result.stderr, "panic") != null or
+        std.mem.find(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 
     // Should report 1 passing test
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
 
@@ -1883,9 +1938,9 @@ test "roc test polymorphic list reverse within same module" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 
-    const has_passed = std.mem.indexOf(u8, result.stdout, "passed") != null;
+    const has_passed = std.mem.find(u8, result.stdout, "passed") != null;
     try testing.expect(has_passed);
 }
 
@@ -1897,17 +1952,17 @@ test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "overflowed its stack") == null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Segmentation fault") == null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "passed") != null);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "overflowed its stack") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
 }
 
 fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) !void {
-    try std.testing.expect(result.term == .Exited and result.term.Exited == 0);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, expected_pass_count) != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "failed") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "FAIL:") == null);
+    try std.testing.expect(result.term == .exited and result.term.exited == 0);
+    try std.testing.expect(std.mem.find(u8, result.stdout, expected_pass_count) != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "failed") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "FAIL:") == null);
 }
 
 test "roc test issue 9392 numeric utility expects are deterministic with no cache" {
@@ -1936,7 +1991,7 @@ test "roc run issue 9208 open union tag before Exit matches wildcard" {
     defer gpa.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
+        .exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
         else => {
             std.debug.print("roc run terminated abnormally: {}\n", .{result.term});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
@@ -1945,7 +2000,7 @@ test "roc run issue 9208 open union tag before Exit matches wildcard" {
         },
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "exited with other error: Bar") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "exited with other error: Bar") != null);
 }
 
 test "roc build issue 9435 hosted nominal return builds without mono panic" {
@@ -1954,7 +2009,7 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "hosted_nominal_return" });
@@ -1972,8 +2027,8 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     defer gpa.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| try std.testing.expect(code != 134),
-        .Signal => |sig| {
+        .exited => |code| try std.testing.expect(code != 134),
+        .signal => |sig| {
             std.debug.print("roc build crashed with signal {}\n", .{sig});
             std.debug.print("STDOUT: {s}\n", .{result.stdout});
             std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -1987,9 +2042,9 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
         },
     }
 
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "panic") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "mono nominal materialization") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "published instantiated nominal backing") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "mono nominal materialization") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "published instantiated nominal backing") == null);
 }
 
 test "roc docs Builtin.roc succeeds" {
@@ -2002,7 +2057,7 @@ test "roc docs Builtin.roc succeeds" {
 
     try util.checkSuccess(result);
 
-    const has_generated = std.mem.indexOf(u8, result.stdout, "Generated docs for") != null;
+    const has_generated = std.mem.find(u8, result.stdout, "Generated docs for") != null;
     try testing.expect(has_generated);
 }
 
@@ -2016,8 +2071,8 @@ test "roc test complex_package --verbose passes all tests" {
 
     try util.checkSuccess(result);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "tests passed") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "PASS") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "tests passed") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "PASS") != null);
 }
 
 test "roc bundle complex_package includes all transitively imported modules" {
@@ -2026,10 +2081,11 @@ test "roc bundle complex_package includes all transitively imported modules" {
 
     // Create a unique output directory so the produced .tar.zst does not
     // pollute the working tree and parallel test runs do not collide.
-    const out_dir_rel = try std.fmt.allocPrint(gpa, ".zig-cache/roc-bundle-test/{d}", .{std.time.nanoTimestamp()});
+    const now_ts = std.Io.Timestamp.now(std.testing.io, .real);
+    const out_dir_rel = try std.fmt.allocPrint(gpa, ".zig-cache/roc-bundle-test/{d}", .{now_ts.nanoseconds});
     defer gpa.free(out_dir_rel);
-    try std.fs.cwd().makePath(out_dir_rel);
-    defer std.fs.cwd().deleteTree(out_dir_rel) catch {};
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, out_dir_rel);
+    defer std.Io.Dir.cwd().deleteTree(std.testing.io, out_dir_rel) catch {};
 
     // Pass the entry point as a path relative to cwd (the project root): the
     // bundle command stores paths verbatim in the archive and rejects
@@ -2047,8 +2103,8 @@ test "roc bundle complex_package includes all transitively imported modules" {
     // Taxonomy.roc) and include them in the archive — instead of reporting
     // them as "missing from bundle".
     try util.checkSuccess(result);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Created:") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "missing from bundle") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "Created:") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "missing from bundle") == null);
 }
 
 test "failed inline expect exits with code 1 and continues program (dev)" {
@@ -2059,9 +2115,9 @@ test "failed inline expect exits with code 1 and continues program (dev)" {
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "expect failed") != null);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
+    try testing.expect(std.mem.find(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "expect failed") != null);
 }
 
 test "failed inline expect exits with code 1 and continues program (interpreter)" {
@@ -2072,7 +2128,7 @@ test "failed inline expect exits with code 1 and continues program (interpreter)
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 1);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Hello, World!") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "Expect failed") != null);
+    try testing.expect(result.term == .exited and result.term.exited == 1);
+    try testing.expect(std.mem.find(u8, result.stdout, "Hello, World!") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "Expect failed") != null);
 }

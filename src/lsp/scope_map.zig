@@ -39,7 +39,7 @@ pub const ScopeMap = struct {
 
     pub fn init(allocator: Allocator) ScopeMap {
         return .{
-            .bindings = std.ArrayList(Binding){},
+            .bindings = .empty,
             .allocator = allocator,
         };
     }
@@ -308,7 +308,7 @@ pub const ScopeMap = struct {
             .e_nominal_external => |nominal| {
                 try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
-            .e_hosted_lambda => |_| {},
+            .e_hosted_lambda => {},
             .e_for => |for_expr| {
                 // For loop variable is visible within the body
                 const body_region = module_env.store.getExprRegion(for_expr.body);

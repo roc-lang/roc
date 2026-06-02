@@ -13,6 +13,7 @@ const std = @import("std");
 
 pub const unbundle = @import("unbundle.zig");
 pub const download = @import("download.zig");
+pub const localhost = @import("localhost.zig");
 
 // Re-export commonly used functions and types
 pub const unbundleFiles = unbundle.unbundle;

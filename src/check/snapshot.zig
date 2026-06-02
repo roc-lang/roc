@@ -299,7 +299,7 @@ pub const Store = struct {
         // Here, we run the TypeWriter, writing directly into our backing
         {
             const formatted_strings_start = self.formatted_strings_backing.items.len;
-            try type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap);
+            type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap) catch return error.OutOfMemory;
             const formatted_strings_end = self.formatted_strings_backing.items.len;
 
             const formatted_range = ByteListRange{
@@ -564,7 +564,7 @@ pub const Store = struct {
             self.scratch_content.clearFrom(content_scratch_top);
 
             // Format the tag using TypeWriter (uses correct Roc syntax like "TagName(a, b)")
-            const formatted_tag = try type_writer.writeTagGet(tag, root_var);
+            const formatted_tag = type_writer.writeTagGet(tag, root_var) catch return error.OutOfMemory;
             const formatted_owned = try self.gpa.dupe(u8, formatted_tag);
 
             // Create and append the snapshot tag to scratch
