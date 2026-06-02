@@ -4763,13 +4763,24 @@ fn printTestFailure(
     try stderr.print("\x1b[0m\n", .{});
 }
 
+const ReplMode = enum {
+    interactive,
+    batch,
+};
+
 fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     const stdout = ctx.io.stdout();
-    const stderr = ctx.io.stderr();
     const backend_kind = repl_args.opt.toBackend();
+    const stdin = std.Io.File.stdin();
+    const stdin_is_tty = stdin.isTty(ctx.io.std_io) catch false;
+    const stdout_is_tty = std.Io.File.stdout().isTty(ctx.io.std_io) catch false;
+    const mode: ReplMode = if (stdin_is_tty and stdout_is_tty) .interactive else .batch;
+    const report_config = try replReportingConfig(ctx, repl_args, mode);
 
-    try stdout.writeAll("Roc REPL\nType :help for commands.\n");
-    ctx.io.flush();
+    if (mode == .interactive) {
+        try stdout.writeAll("Roc REPL\nType :help for commands.\n");
+        ctx.io.flush();
+    }
 
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
@@ -4777,38 +4788,130 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
     var session = try ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
     defer session.deinit();
 
+    var pending = std.ArrayList(u8).empty;
+    defer pending.deinit(ctx.gpa);
+
     var should_exit = false;
-    const stdin = std.Io.File.stdin();
+    var had_diagnostics = false;
     while (!should_exit) {
-        const raw_line = reader.readLine(ctx.gpa, ctx.io.std_io, "> ", stdin) catch |err| switch (err) {
-            error.ExitRepl => break,
-            else => return err,
-        };
-        defer ctx.gpa.free(raw_line);
+        const prompt: []const u8 = if (mode == .interactive)
+            if (pending.items.len == 0) "> " else "| "
+        else
+            "";
 
-        const statements = try session.splitInputIntoStatements(raw_line);
-        defer session.freeStatementSlices(statements);
-
-        for (statements) |statement| {
-            const output = session.step(statement) catch |err| {
-                try stderr.print("Error: {s}\n", .{@errorName(err)});
-                ctx.io.flush();
-                continue;
-            };
-            defer ctx.gpa.free(output);
-
-            if (std.mem.eql(u8, output, "Goodbye!")) {
-                try stdout.writeAll("Goodbye!\n");
-                should_exit = true;
+        const read_result = try reader.readLine(ctx.gpa, ctx.io.std_io, prompt, stdin);
+        switch (read_result) {
+            .eof => {
+                if (pending.items.len > 0) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, mode, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                } else if (mode == .interactive) {
+                    try stdout.writeAll("Goodbye!\n");
+                }
                 break;
-            }
+            },
+            .line => |raw_line| {
+                defer ctx.gpa.free(raw_line);
 
-            if (output.len > 0) {
-                try stdout.print("{s}\n", .{output});
-            }
+                if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
+                    continue;
+                }
+
+                if (pending.items.len == 0 and std.mem.findAny(u8, raw_line, "\n\r") != null) {
+                    should_exit = try processReplInput(ctx, &session, raw_line, report_config, mode, &had_diagnostics);
+                    continue;
+                }
+
+                if (pending.items.len > 0) try pending.append(ctx.gpa, '\n');
+                try pending.appendSlice(ctx.gpa, raw_line);
+
+                switch (try session.inputStatus(pending.items)) {
+                    .incomplete => {},
+                    .complete, .invalid => {
+                        should_exit = try processReplInput(ctx, &session, pending.items, report_config, mode, &had_diagnostics);
+                        pending.clearRetainingCapacity();
+                    },
+                }
+            },
         }
         ctx.io.flush();
     }
+
+    if (mode == .batch and had_diagnostics) {
+        return error.CliError;
+    }
+}
+
+fn processReplInput(
+    ctx: *CliCtx,
+    session: *ReplSession,
+    input: []const u8,
+    report_config: reporting.ReportingConfig,
+    mode: ReplMode,
+    had_diagnostics: *bool,
+) !bool {
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    const statements = try session.splitInputIntoStatements(input);
+    defer session.freeStatementSlices(statements);
+
+    for (statements) |statement| {
+        const result = try session.stepWithConfig(statement, report_config);
+        defer result.deinit(ctx.gpa);
+
+        switch (result) {
+            .output => |output| {
+                if (output.len > 0) {
+                    try stdout.print("{s}\n", .{output});
+                }
+            },
+            .diagnostic => |diagnostic| {
+                had_diagnostics.* = true;
+                if (diagnostic.len > 0) {
+                    try stderr.print("{s}\n", .{diagnostic});
+                }
+            },
+            .none => {},
+            .exit => {
+                if (mode == .interactive) {
+                    try stdout.writeAll("Goodbye!\n");
+                }
+                return true;
+            },
+        }
+    }
+
+    return false;
+}
+
+fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMode) !reporting.ReportingConfig {
+    const stderr_is_tty = std.Io.File.stderr().isTty(ctx.io.std_io) catch false;
+    const no_color_env = try envVarNonEmpty(ctx.gpa, "NO_COLOR");
+    const force_color = try envVarNonEmpty(ctx.gpa, "FORCE_COLOR");
+    const high_contrast = try envVarEquals(ctx.gpa, "ROC_HIGH_CONTRAST", "1");
+    const color_disabled = repl_args.no_color or no_color_env;
+    const should_color = !color_disabled and (force_color or (mode == .interactive and stderr_is_tty));
+
+    var config = if (should_color)
+        if (high_contrast) reporting.ReportingConfig.initHighContrast() else reporting.ReportingConfig.initColorTerminal()
+    else
+        reporting.ReportingConfig.initMarkdown();
+
+    config.is_tty = stderr_is_tty;
+    return config;
+}
+
+fn envVarNonEmpty(allocator: Allocator, name: []const u8) !bool {
+    const value = getEnvVar(allocator, name) orelse return false;
+    defer allocator.free(value);
+    return value.len > 0;
+}
+
+fn envVarEquals(allocator: Allocator, name: []const u8, expected: []const u8) !bool {
+    const value = getEnvVar(allocator, name) orelse return false;
+    defer allocator.free(value);
+    return std.mem.eql(u8, value, expected);
 }
 
 const glue = @import("glue");

@@ -39,6 +39,52 @@ Hooray!
 
 > Tip: If you don't provide a path to a .roc file, `roc` will default to "main.roc" - so since your Roc program is named main.roc, you can run your program by just running `roc` in the future.
 
+## The REPL
+
+You can also try Roc expressions and definitions without creating a file by running `roc repl`.
+
+```bash
+$ roc repl
+```
+
+Inside the REPL, enter an expression to evaluate it:
+
+```roc
+1 + 1
+```
+
+You can define names and use them in later inputs:
+
+```roc
+x = 1 + 1
+x * 2
+```
+
+The REPL also works well with piped input. In piped mode it prints only evaluation output to stdout; prompts, the welcome banner, and the goodbye message are not printed.
+
+In PowerShell, send multiple input lines with an array:
+
+```powershell
+@("x = 1 + 1", "x * 2") | roc repl
+```
+
+You should see:
+
+```text
+assigned `x`
+4.0
+```
+
+In Unix shells, use `printf` for the same thing:
+
+```bash
+$ printf 'x = 1 + 1\nx * 2\n' | roc repl
+assigned `x`
+4.0
+```
+
+Diagnostics from piped input are written to stderr, so tools can read successful results from stdout separately from parse and type errors. If you want plain diagnostics without ANSI color codes, use `roc repl --no-color` or set `NO_COLOR` environment variable.
+
 ## The `main!` function
 
 Let's take a look at `main!` next:
