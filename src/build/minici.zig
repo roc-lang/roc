@@ -32,7 +32,39 @@ const jobs = [_]Job{
     .{ .name = "run-check-builtin-format" },
     .{ .name = "run-check-snapshots" },
     .{ .name = "run-check-fx-platform-test-coverage" },
-    .{ .name = "run-test-zig" },
+    .{ .name = "run-test-zig-module-collections" },
+    .{ .name = "run-test-zig-module-base" },
+    .{ .name = "run-test-zig-module-types" },
+    .{ .name = "run-test-zig-module-builtins" },
+    .{ .name = "run-test-zig-module-compile" },
+    .{ .name = "run-test-zig-module-reporting" },
+    .{ .name = "run-test-zig-module-parse" },
+    .{ .name = "run-test-zig-module-can" },
+    .{ .name = "run-test-zig-module-check" },
+    .{ .name = "run-test-zig-module-ctx" },
+    .{ .name = "run-test-zig-module-layout" },
+    .{ .name = "run-test-zig-module-interpreter_layout" },
+    .{ .name = "run-test-zig-module-values" },
+    .{ .name = "run-test-zig-module-ipc" },
+    .{ .name = "run-test-zig-module-fmt" },
+    .{ .name = "run-test-zig-module-watch" },
+    .{ .name = "run-test-zig-module-bundle" },
+    .{ .name = "run-test-zig-module-unbundle" },
+    .{ .name = "run-test-zig-module-base58" },
+    .{ .name = "run-test-zig-module-lsp" },
+    .{ .name = "run-test-zig-module-backend" },
+    .{ .name = "run-test-zig-module-lir_core" },
+    .{ .name = "run-test-zig-module-postcheck" },
+    .{ .name = "run-test-zig-module-lir" },
+    .{ .name = "run-test-zig-module-symbol" },
+    .{ .name = "run-test-zig-module-sljmp" },
+    .{ .name = "run-test-zig-module-echo_platform" },
+    .{ .name = "run-test-zig-module-docs" },
+    .{ .name = "run-test-zig-snapshot-tool" },
+    .{ .name = "run-test-zig-builtin-doc" },
+    .{ .name = "run-test-zig-cli-main" },
+    .{ .name = "run-test-zig-watch-cli" },
+    .{ .name = "run-test-zig-fx-platform" },
     .{ .name = "run-test-eval", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
@@ -59,6 +91,37 @@ fn nowNs(io: std.Io) u64 {
 
 fn durationSince(io: std.Io, started: u64) u64 {
     return nowNs(io) -| started;
+}
+
+fn seconds(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000_000_000.0;
+}
+
+fn isPass(result: CommandResult) bool {
+    return std.mem.eql(u8, result.status, "pass");
+}
+
+fn isCheckJob(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "run-check-");
+}
+
+fn buildStatusText(result: CommandResult) []const u8 {
+    if (isPass(result)) return "completed";
+    if (std.mem.eql(u8, result.status, "crash")) return "crashed";
+    return "failed";
+}
+
+fn runStatusText(result: CommandResult) []const u8 {
+    if (result.build_violation) return "failed (run-phase build violation)";
+    if (isPass(result)) return "passed";
+    if (std.mem.eql(u8, result.status, "crash")) return "crashed";
+    return "failed";
+}
+
+fn printRerunHint(result: CommandResult) void {
+    const step_name = if (result.command.len > 2) result.command[2] else "build-ci";
+    std.debug.print("  Re-run failed step: `zig build {s} --summary all --color off`\n", .{step_name});
+    std.debug.print("  Log: `{s}`\n", .{result.log_path});
 }
 
 fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
@@ -108,11 +171,12 @@ fn detectRunPhaseBuildViolation(log: []const u8) bool {
             continue;
         }
         if (!in_summary) continue;
-        const lower_contains_compile = std.mem.find(u8, line, "Compile") != null or
-            std.mem.find(u8, line, "compile") != null;
-        const lower_contains_install = std.mem.find(u8, line, "Install") != null or
-            std.mem.find(u8, line, "install") != null;
-        if (!lower_contains_compile and !lower_contains_install) continue;
+        const action = std.mem.trim(u8, line, " |+-");
+        const is_compile_action = std.mem.startsWith(u8, action, "compile ") or
+            std.mem.startsWith(u8, action, "Compile ");
+        const is_install_action = std.mem.startsWith(u8, action, "install ") or
+            std.mem.startsWith(u8, action, "Install ");
+        if (!is_compile_action and !is_install_action) continue;
         if (std.mem.find(u8, line, "cached") != null) continue;
         if (std.mem.find(u8, line, "Cache Hit") != null) continue;
         return true;
@@ -538,16 +602,19 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(io, raw_dir);
     try std.Io.Dir.cwd().createDirPath(io, logs_dir);
 
+    std.debug.print("=== MINICI ORCHESTRATOR ===\n", .{});
+
     const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null);
     const build_log = logs_dir ++ "/build-ci.txt";
-    std.debug.print("minici start: build-ci\n", .{});
+    std.debug.print("Building CI steps ... ", .{});
     const build_result = try runCommand(allocator, io, build_argv, build_log, false);
-    std.debug.print("minici done: build-ci ({s})\n", .{build_result.status});
+    std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
 
     var results = std.ArrayList(CommandResult).empty;
     defer results.deinit(allocator);
 
-    if (!std.mem.eql(u8, build_result.status, "pass")) {
+    if (!isPass(build_result)) {
+        printRerunHint(build_result);
         try writeReportJson(allocator, io, build_result, results.items);
         try writeHtml(allocator, io, build_result, results.items);
         std.process.exit(1);
@@ -560,17 +627,27 @@ pub fn main(init: std.process.Init) !void {
         else
             null;
         const argv = try buildCommand(allocator, zig_exe, job.name, stats_path);
-        std.debug.print("minici start: {s}\n", .{job.name});
+        std.debug.print("Running `{s}` ... ", .{job.name});
         var result = try runCommand(allocator, io, argv, log_path, true);
         result.stats_path = stats_path;
         try results.append(allocator, result);
-        std.debug.print("minici done: {s} ({s})\n", .{ job.name, result.status });
+        std.debug.print("{s} in {d:.3}s\n", .{ runStatusText(result), seconds(result.duration_ns) });
+
+        if (!isPass(result)) {
+            printRerunHint(result);
+        }
+
+        if (isCheckJob(job.name) and !isPass(result)) {
+            try writeReportJson(allocator, io, build_result, results.items);
+            try writeHtml(allocator, io, build_result, results.items);
+            std.process.exit(1);
+        }
     }
 
     try writeReportJson(allocator, io, build_result, results.items);
     try writeHtml(allocator, io, build_result, results.items);
 
     for (results.items) |result| {
-        if (!std.mem.eql(u8, result.status, "pass")) std.process.exit(1);
+        if (!isPass(result)) std.process.exit(1);
     }
 }

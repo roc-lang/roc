@@ -3337,8 +3337,10 @@ pub fn build(b: *std.Build) void {
 
         // Create individual test step for this module
         const test_exe_name = module_test.test_step.name;
-        const step_name = b.fmt("test-{s}", .{test_exe_name});
-        const individual_test_step = b.step(step_name, b.fmt("Run {s} tests only", .{test_exe_name}));
+        const run_module_test_step = b.step(
+            b.fmt("run-test-zig-module-{s}", .{test_exe_name}),
+            b.fmt("Run {s} Zig module tests", .{test_exe_name}),
+        );
 
         // Create run step that accepts command line args (including --test-filter)
         const individual_run = b.addRunArtifact(module_test.test_step);
@@ -3349,7 +3351,13 @@ pub fn build(b: *std.Build) void {
             individual_run.step.dependOn(&install_stack_overflow_test_helper.step);
             individual_run.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
         }
-        individual_test_step.dependOn(&individual_run.step);
+        run_module_test_step.dependOn(&individual_run.step);
+
+        const legacy_test_step = b.step(
+            b.fmt("test-{s}", .{test_exe_name}),
+            b.fmt("Alias for run-test-zig-module-{s}", .{test_exe_name}),
+        );
+        legacy_test_step.dependOn(run_module_test_step);
 
         b.default_step.dependOn(&module_test.test_step.step);
         build_test_zig_step.dependOn(&module_test.test_step.step);
@@ -3401,6 +3409,12 @@ pub fn build(b: *std.Build) void {
             run_snapshot_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_snapshot_test.step);
+
+        const run_snapshot_tool_test_step = b.step(
+            "run-test-zig-snapshot-tool",
+            "Run snapshot tool Zig tests",
+        );
+        run_snapshot_tool_test_step.dependOn(&run_snapshot_test.step);
     }
 
     // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
@@ -3452,9 +3466,14 @@ pub fn build(b: *std.Build) void {
         // failure without running the entire default `test` aggregate.
         const builtin_doc_test_step = b.step(
             "test-builtin-doc",
-            "Run Builtin.roc doc code-block tests",
+            "Alias for run-test-zig-builtin-doc",
         );
-        builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
+        const run_builtin_doc_test_step = b.step(
+            "run-test-zig-builtin-doc",
+            "Run Builtin.roc doc code-block Zig tests",
+        );
+        run_builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
+        builtin_doc_test_step.dependOn(run_builtin_doc_test_step);
     }
 
     // Add CLI test
@@ -3498,6 +3517,12 @@ pub fn build(b: *std.Build) void {
             run_cli_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_cli_test.step);
+
+        const run_cli_main_test_step = b.step(
+            "run-test-zig-cli-main",
+            "Run roc CLI main Zig tests",
+        );
+        run_cli_main_test_step.dependOn(&run_cli_test.step);
     }
 
     // Add watch tests
@@ -3531,6 +3556,12 @@ pub fn build(b: *std.Build) void {
             run_watch_test.addArgs(run_args);
         }
         tests_summary.addRun(&run_watch_test.step);
+
+        const run_watch_cli_test_step = b.step(
+            "run-test-zig-watch-cli",
+            "Run watch command Zig tests",
+        );
+        run_watch_cli_test_step.dependOn(&run_watch_test.step);
     }
 
     // Add check for forbidden patterns in type checker code
@@ -3927,6 +3958,12 @@ pub fn build(b: *std.Build) void {
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
+
+        const run_fx_platform_zig_test_step = b.step(
+            "run-test-zig-fx-platform",
+            "Run fx platform Zig tests",
+        );
+        run_fx_platform_zig_test_step.dependOn(&run_fx_platform_test.step);
     }
 
     // Build glue platform host at runtime for the native platform.
