@@ -179,6 +179,7 @@ fn detectRunPhaseBuildViolation(log: []const u8) bool {
         if (!is_compile_action and !is_install_action) continue;
         if (std.mem.find(u8, line, "cached") != null) continue;
         if (std.mem.find(u8, line, "Cache Hit") != null) continue;
+        if (std.mem.find(u8, line, "(reused)") != null) continue;
         return true;
     }
     return false;
