@@ -47,7 +47,7 @@ pub const DependencyGraph = struct {
     pub fn addEdge(self: *DependencyGraph, from_def: CIR.Def.Idx, to_def: CIR.Def.Idx) std.mem.Allocator.Error!void {
         const gop = try self.edges.getOrPut(self.allocator, from_def);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(self.allocator, to_def);
     }
@@ -298,7 +298,7 @@ fn collectExprDependencies(
         },
 
         // Literals and hosted lambdas have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
         .e_run_low_level => |run_ll| {
             for (cir.store.sliceExpr(run_ll.args)) |arg_idx| {
@@ -428,7 +428,7 @@ pub fn getTopLevelConstants(
 ) std.mem.Allocator.Error![]const CIR.Def.Idx {
     const defs_slice = cir.store.sliceDefs(all_defs);
 
-    var constants = std.ArrayList(CIR.Def.Idx){};
+    var constants: std.ArrayList(CIR.Def.Idx) = .empty;
     errdefer constants.deinit(allocator);
 
     for (defs_slice) |def_idx| {
@@ -548,9 +548,9 @@ const TarjanState = struct {
             .indices = .{},
             .lowlinks = .{},
             .visited = .{},
-            .stack = .{},
+            .stack = .empty,
             .on_stack = .{},
-            .sccs = .{},
+            .sccs = .empty,
             .allocator = allocator,
         };
     }
@@ -600,7 +600,7 @@ const TarjanState = struct {
         const v_lowlink = self.lowlinks.get(v).?;
         const v_index = self.indices.get(v).?;
         if (v_lowlink == v_index) {
-            var scc_defs = std.ArrayList(CIR.Def.Idx){};
+            var scc_defs: std.ArrayList(CIR.Def.Idx) = .empty;
 
             while (true) {
                 const w = self.stack.pop() orelse unreachable; // Stack should not be empty

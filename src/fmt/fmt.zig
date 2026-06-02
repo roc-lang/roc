@@ -1,34 +1,19 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
-const base = @import("base");
 
 const tracy = @import("tracy");
-const builtin = @import("builtin");
 
-const Allocators = base.Allocators;
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
 const AST = parse.AST;
 const SafeList = collections.SafeList;
 
 const tokenize = parse.tokenize;
-
-const is_windows = builtin.target.os.tag == .windows;
-
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
-    .mode = .streaming,
-};
-
-fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
-    return &stderr_file_writer.interface;
-}
 
 const FormatFlags = enum {
     debug_binop,
@@ -52,10 +37,9 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, check: bool) !FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io, stderr: *std.Io.Writer) !FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    const stderr = stderrWriter();
 
     var success_count: usize = 0;
     var failed_count: usize = 0;
@@ -63,15 +47,15 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
     var unformatted_files = if (check) std.array_list.Managed([]const u8).init(gpa) else null;
 
     // First try as a directory.
-    if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
+    if (base_dir.openDir(io, path, .{ .iterate = true })) |const_dir| {
         var dir = const_dir;
-        defer dir.close();
+        defer dir.close(io);
         // Walk is recursive.
         var walker = try dir.walk(arena);
         defer walker.deinit();
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind == .file) {
-                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
+                if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
                     success_count += 1;
                 } else |err| switch (err) {
                     error.NotRocFile => {},
@@ -83,7 +67,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
+        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, io, stderr)) |_| {
             success_count += 1;
         } else |err| switch (err) {
             error.NotRocFile => {},
@@ -134,7 +118,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8)) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io, stderr: *std.Io.Writer) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -146,20 +130,20 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     const format_file_frame = tracy.namedFrame("format_file");
     defer format_file_frame.end();
 
-    const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
-    defer input_file.close();
+    const input_file = try base_dir.openFile(io, path, .{ .mode = .read_only });
+    defer input_file.close(io);
 
     const contents = blk: {
         const blk_trace = tracy.traceNamed(@src(), "readAllAlloc");
         defer blk_trace.end();
 
-        if (input_file.stat()) |stat| {
+        if (input_file.stat(io)) |stat| {
             // Attempt to allocate exactly the right size first.
             // The avoids needless reallocs and saves some perf.
             const size = stat.size;
             const buf = try gpa.alloc(u8, @intCast(size));
             errdefer gpa.free(buf);
-            if (try input_file.readAll(buf) != size) {
+            if (try input_file.readPositionalAll(io, buf, 0) != size) {
                 // This is unexpected, the file is smaller than the size from stat.
                 // It must have been modified inplace.
                 // TODO: handle this more gracefully.
@@ -167,27 +151,33 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
             }
             break :blk buf;
         } else |_| {
-            // Fallback on readToEndAlloc.
-            const buf = try input_file.readToEndAlloc(gpa, std.math.maxInt(u32));
-            break :blk buf;
+            // Fallback: read using a streaming reader.
+            var read_buf: [4096]u8 = undefined;
+            var file_reader = input_file.readerStreaming(io, &read_buf);
+            var contents_list = std.ArrayList(u8).empty;
+            errdefer contents_list.deinit(gpa);
+            while (true) {
+                const n = file_reader.interface.readSliceShort(contents_list.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory) catch |err| switch (err) {
+                    error.ReadFailed => return error.ReadFailed,
+                };
+                contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
+                if (n < 4096) break;
+            }
+            break :blk try contents_list.toOwnedSlice(gpa);
         }
     };
     defer gpa.free(contents);
 
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast.*);
+        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
 
@@ -200,43 +190,52 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
             try unformatted_files.?.append(path);
         }
     } else { // Otherwise actually format it
-        const output_file = try base_dir.createFile(path, .{});
-        defer output_file.close();
+        const output_file = try base_dir.createFile(io, path, .{});
+        defer output_file.close(io);
         var output_buffer: [4096]u8 = undefined;
-        var output_writer = output_file.writer(&output_buffer);
+        var output_writer = output_file.writer(io, &output_buffer);
         try formatAst(parse_ast.*, &output_writer.interface);
     }
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator) !void {
-    const contents = try std.fs.File.stdin().readToEndAlloc(gpa, std.math.maxInt(u32));
+pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) !void {
+    const contents = blk: {
+        var read_buf: [4096]u8 = undefined;
+        var stdin_reader = stdin.readerStreaming(io, &read_buf);
+        var contents_list = std.ArrayList(u8).empty;
+        errdefer contents_list.deinit(gpa);
+        while (true) {
+            const n = stdin_reader.interface.readSliceShort(contents_list.addManyAsSlice(gpa, 4096) catch return error.OutOfMemory) catch |err| switch (err) {
+                error.ReadFailed => return error.ReadFailed,
+            };
+            contents_list.shrinkRetainingCapacity(contents_list.items.len - 4096 + n);
+            if (n < 4096) break;
+        }
+        break :blk try contents_list.toOwnedSlice(gpa);
+    };
     defer gpa.free(contents);
 
     // ModuleEnv retains a reference to contents for diagnostics
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderrWriter()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, module_env.common.source, parse_ast.*);
+        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = stdout.writer(io, &stdout_buffer);
     try formatAst(parse_ast.*, &stdout_writer.interface);
 }
 
-fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) !void {
+fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) !void {
     // compute offsets of each line, looping over bytes of the input
     var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
@@ -261,7 +260,6 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
         }
     }
 
-    const stderr = stderrWriter();
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
@@ -496,11 +494,21 @@ const Formatter = struct {
                         } else {
                             try fmt.pushAll(" as");
                         }
-                        flushed = try fmt.flushCommentsBefore(a);
-                        if (!flushed) {
-                            try fmt.push(' ');
+                        // Only preserve newlines between `as` and the alias if there
+                        // is an actual comment there. A bare source newline like
+                        // `as\n    X1` should normalize to ` as X1`; otherwise we
+                        // strand the alias on its own line and (with auto-expose)
+                        // glue it directly to `exposing` (see issue #9373).
+                        if (fmt.hasCommentBefore(a)) {
+                            flushed = try fmt.flushCommentsBefore(a);
+                            if (!flushed) {
+                                try fmt.push(' ');
+                            } else {
+                                try fmt.pushIndent();
+                            }
                         } else {
-                            try fmt.pushIndent();
+                            try fmt.push(' ');
+                            flushed = false;
                         }
                     } else {
                         try fmt.pushAll(" as ");
@@ -755,7 +763,7 @@ const Formatter = struct {
                 }
                 try fmt.formatExprDiscard(r.expr);
             },
-            .@"break" => |_| {
+            .@"break" => {
                 try fmt.pushAll("break");
             },
             .malformed => {
@@ -987,15 +995,12 @@ const Formatter = struct {
             fmt.curr_indent = record_indent;
         }
         try fmt.push('{');
-        if (fields.len == 0) {
-            // Just the extension, e.g. { .. } or { ..a }
-            try fmt.push(' ');
+        if (record_multiline) {
+            fmt.curr_indent += 1;
         } else {
-            if (record_multiline) {
-                fmt.curr_indent += 1;
-            } else {
-                try fmt.push(' ');
-            }
+            try fmt.push(' ');
+        }
+        if (fields.len > 0) {
             for (fields, 0..) |field_idx, i| {
                 const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
                 if (record_multiline) {
@@ -1282,9 +1287,33 @@ const Formatter = struct {
                     // Plain identifier: add () after it
                     try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
                     try fmt.pushAll("()");
-                } else if (right_expr == .apply or right_expr == .tag) {
-                    // Already has parens (apply) or tag: format normally
+                } else if (right_expr == .tag) {
+                    // Tag: format normally
                     try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                } else if (right_expr == .apply) {
+                    // The arrow parser strips the outer parens around the fn part
+                    // of an `apply` (because `->(...)` consumes the parens directly
+                    // rather than producing a tuple), so e.g. `10->(|x| x + 1)()`
+                    // parses to apply{fn=lambda, args=()}. Re-add those parens when
+                    // the fn would otherwise be ambiguous (see issue #9372).
+                    const apply = right_expr.apply;
+                    const apply_fn_idx = apply.@"fn";
+                    const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
+                    const fn_needs_parens = switch (apply_fn) {
+                        .ident, .tag, .apply, .tuple, .field_access, .tuple_access, .method_call, .list, .record, .string, .multiline_string, .string_part, .int, .frac, .typed_int, .typed_frac, .single_quote => false,
+                        else => true,
+                    };
+                    if (fn_needs_parens) {
+                        try fmt.push('(');
+                        try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                        try fmt.push(')');
+                        const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
+                        const fn_region = fmt.nodeRegion(@intFromEnum(apply_fn_idx));
+                        const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
+                        try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(apply.args), Formatter.formatExpr);
+                    } else {
+                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                    }
                 } else {
                     // Lambda or other expression: wrap in parens for round-trip safety
                     try fmt.push('(');
@@ -1301,12 +1330,12 @@ const Formatter = struct {
             .typed_int => |ti| {
                 try fmt.pushTokenText(ti.token);
                 try fmt.push('.');
-                try fmt.pushTokenText(ti.type_token);
+                try fmt.pushAll(fmt.ast.env.getIdent(ti.type_ident));
             },
             .typed_frac => |tf| {
                 try fmt.pushTokenText(tf.token);
                 try fmt.push('.');
-                try fmt.pushTokenText(tf.type_token);
+                try fmt.pushAll(fmt.ast.env.getIdent(tf.type_ident));
             },
             .list => |l| {
                 try fmt.formatCollection(region, .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
@@ -1627,7 +1656,7 @@ const Formatter = struct {
                 }
                 try fmt.formatExprDiscard(f.body);
             },
-            .ellipsis => |_| {
+            .ellipsis => {
                 try fmt.pushAll("...");
             },
             .record_builder => |rb| {
@@ -1792,6 +1821,18 @@ const Formatter = struct {
             .frac => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
+            },
+            .typed_int => |n| {
+                region = n.region;
+                try fmt.formatIdent(n.number_tok, null);
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
+            },
+            .typed_frac => |n| {
+                region = n.region;
+                try fmt.formatIdent(n.number_tok, null);
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(n.type_ident));
             },
             .record => |r| {
                 region = r.region;
@@ -2668,6 +2709,17 @@ const Formatter = struct {
         return fmt.flushCommentsBeforeMin(tokenIdx, 0);
     }
 
+    /// True iff the source text between the previous token and `tokenIdx`
+    /// contains an actual `#` comment. Use this to decide whether to preserve
+    /// inter-token whitespace, since `flushCommentsBefore` always emits any
+    /// source newlines it finds (which is wrong for places where bare line
+    /// breaks should be normalized to a single space).
+    fn hasCommentBefore(fmt: *Formatter, tokenIdx: Token.Idx) bool {
+        const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
+        const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
+        return std.mem.findScalar(u8, fmt.ast.env.source[start..end], '#') != null;
+    }
+
     /// Like `flushCommentsBefore`, but ensures at least `min_leading_newlines` newlines
     /// are emitted before any comment or trailing content. Used to insert blank lines
     /// between top-level defs.
@@ -3143,14 +3195,10 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var allocators: Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
@@ -3159,7 +3207,10 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         parse_ast.store.emptyScratch();
 
         std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(module_env, stderrWriter()) catch @panic("Failed to print SExpr");
+        var sexpr_buf: std.Io.Writer.Allocating = .init(gpa);
+        defer sexpr_buf.deinit();
+        parse_ast.toSExprStr(module_env, &sexpr_buf.writer) catch @panic("Failed to print SExpr");
+        std.debug.print("{s}", .{sexpr_buf.written()});
         std.debug.print("\n==========\n\n", .{});
     }
 
@@ -3260,7 +3311,7 @@ test "issue 8989: platform header targets section is preserved" {
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
     defer std.testing.allocator.free(result);
     // The targets section must be preserved in the output
-    try std.testing.expect(std.mem.indexOf(u8, result, "targets:") != null);
+    try std.testing.expect(std.mem.find(u8, result, "targets:") != null);
 }
 
 test "blank line inserted between consecutive type annotations" {

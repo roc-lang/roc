@@ -6,12 +6,27 @@ const base = @import("base");
 
 const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
+const NumericLiteral = @import("../NumericLiteral.zig");
 
 var rand = std.Random.DefaultPrng.init(1234);
 
 /// Generate a random index of type `T`.
 fn rand_idx(comptime T: type) T {
-    return @enumFromInt(rand.random().int(u32));
+    if (T == base.Ident.Idx) {
+        return .{
+            .attributes = .{
+                .effectful = rand.random().boolean(),
+                .ignored = rand.random().boolean(),
+                .reassignable = rand.random().boolean(),
+            },
+            .idx = rand.random().int(u29),
+        };
+    }
+
+    return switch (@typeInfo(T)) {
+        .@"enum" => @enumFromInt(rand.random().int(u32)),
+        else => @compileError("rand_idx needs an explicit constructor for this index type"),
+    };
 }
 
 /// Generate a random token index.
@@ -289,12 +304,30 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, AST.Pattern{
         .int = .{
             .number_tok = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
             .region = rand_region(),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .frac = .{
             .number_tok = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
+        .typed_int = .{
+            .number_tok = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
+        .typed_frac = .{
+            .number_tok = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
             .region = rand_region(),
         },
     });
@@ -513,26 +546,30 @@ test "NodeStore round trip - Expr" {
         .int = .{
             .region = rand_region(),
             .token = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .frac = .{
             .region = rand_region(),
             .token = rand_token_idx(),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_int = .{
             .region = rand_region(),
             .token = rand_token_idx(),
-            .type_token = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_frac = .{
             .region = rand_region(),
             .token = rand_token_idx(),
-            .type_token = rand_token_idx(),
+            .type_ident = rand_idx(base.Ident.Idx),
+            .literal = rand_idx(NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
@@ -841,5 +878,7 @@ test "NodeStore debug function" {
     });
 
     // Call debug function - it should not crash (use null writer to avoid polluting test output)
-    try store.debugTo(std.io.null_writer.any());
+    var discard_buf: [4096]u8 = undefined;
+    var discard = std.Io.Writer.Discarding.init(&discard_buf);
+    try store.debugTo(&discard.writer);
 }

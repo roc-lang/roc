@@ -97,8 +97,8 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
-                .buf = .{},
-                .relocs = .{},
+                .buf = .empty,
+                .relocs = .empty,
             };
         }
 
@@ -468,12 +468,18 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// ADD reg, reg, imm12 (add immediate)
         pub fn addRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
+            try self.addRegRegImm12Shifted(width, dst, src, imm, false);
+        }
+
+        /// ADD reg, reg, imm12 (add immediate, with optional LSL #12)
+        pub fn addRegRegImm12Shifted(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12, lsl_12: bool) !void {
             // ADD <Xd>, <Xn>, #<imm>{, <shift>}
             // sf 0 0 1 0 0 0 1 sh imm12 Rn Rd
             const sf = width.sf();
+            const sh: u32 = if (lsl_12) 1 else 0;
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0010001 << 24) |
-                (0 << 22) | // sh=0 (no shift)
+                (sh << 22) |
                 (@as(u32, imm) << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
@@ -482,12 +488,18 @@ pub fn Emit(comptime target: RocTarget) type {
 
         /// SUB reg, reg, imm12 (subtract immediate)
         pub fn subRegRegImm12(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
+            try self.subRegRegImm12Shifted(width, dst, src, imm, false);
+        }
+
+        /// SUB reg, reg, imm12 (subtract immediate, with optional LSL #12)
+        pub fn subRegRegImm12Shifted(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12, lsl_12: bool) !void {
             // SUB <Xd>, <Xn>, #<imm>{, <shift>}
             // sf 1 0 1 0 0 0 1 sh imm12 Rn Rd
             const sf = width.sf();
+            const sh: u32 = if (lsl_12) 1 else 0;
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b1010001 << 24) |
-                (0 << 22) |
+                (sh << 22) |
                 (@as(u32, imm) << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
@@ -564,6 +576,22 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b0101010 << 24) |
                 (0b00 << 22) |
                 (0 << 21) |
+                (@as(u32, src2.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src1.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// ORN reg, reg, reg (OR NOT: dst = src1 | ~src2)
+        /// With src1 = XZR this computes dst = ~src2 (the MVN alias).
+        pub fn ornRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            // ORN <Xd>, <Xn>, <Xm> — same as ORR but with the N (negate) bit set.
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0101010 << 24) |
+                (0b00 << 22) |
+                (1 << 21) |
                 (@as(u32, src2.enc()) << 16) |
                 (0b000000 << 10) |
                 (@as(u32, src1.enc()) << 5) |
@@ -722,6 +750,11 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b10000 << 24) |
                 (@as(u32, immhi) << 5) |
                 @as(u32, rd.enc());
+            try self.emit32(inst);
+        }
+
+        pub fn adrp(self: *Self, rd: GeneralReg) !void {
+            const inst: u32 = 0x90000000 | @as(u32, rd.enc());
             try self.emit32(inst);
         }
 

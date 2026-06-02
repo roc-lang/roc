@@ -224,6 +224,9 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_num_from_numeral = .{},
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_typed_int = .{
             .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
             .type_name = rand_ident_idx(),
@@ -232,6 +235,11 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_typed_frac = .{
             .value = .{ .bytes = @bitCast(@as(i128, 314)), .kind = .i128 },
+            .type_name = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_typed_num_from_numeral = .{
             .type_name = rand_ident_idx(),
         },
     });
@@ -924,6 +932,23 @@ test "NodeStore round trip - Diagnostics" {
         .type_not_exposed = .{
             .module_name = rand_ident_idx(),
             .type_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .private_type_in_exposed_type = .{
+            .exposed_type = rand_ident_idx(),
+            .private_type = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .private_type_in_exposed_field = .{
+            .exposed_type = rand_ident_idx(),
+            .field_name = rand_ident_idx(),
+            .private_type = rand_ident_idx(),
             .region = rand_region(),
         },
     });

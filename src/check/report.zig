@@ -46,6 +46,7 @@ const TypePair = problem_mod.TypePair;
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
 const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
+const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
@@ -66,11 +67,16 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
+const EffectfulExpect = problem_mod.EffectfulExpect;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
+
+// Number errors
+const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
@@ -576,7 +582,7 @@ pub const ReportBuilder = struct {
                     }, self, report);
                 },
                 .fields_missing => |fm| {
-                    // Materialize slice from range
+                    // Build slice from range
                     const fields = self.diff_fields.sliceRange(fm.fields).items(.name);
                     if (fields.len == 1) {
                         try D.renderSlice(&.{
@@ -770,6 +776,7 @@ pub const ReportBuilder = struct {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
+                    .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                 }
             },
             .recursive_alias => |data| {
@@ -783,6 +790,15 @@ pub const ReportBuilder = struct {
             },
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
+            },
+            .polymorphic_value => |data| {
+                return self.buildPolymorphicValueReport(data);
+            },
+            .effectful_top_level => |data| {
+                return self.buildEffectfulTopLevelReport(data);
+            },
+            .effectful_expect => |data| {
+                return self.buildEffectfulExpectReport(data);
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
@@ -799,6 +815,7 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
@@ -1975,6 +1992,92 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for when a static dispatch method is called on a receiver
+    /// whose type is an unresolved type variable that no instantiation can ever
+    /// pin down. Unresolved type variables have no methods, so the dispatch is
+    /// genuinely ambiguous.
+    fn buildStaticDispatchUnresolvedDispatcher(
+        self: *Self,
+        data: UnresolvedDispatcher,
+    ) !Report {
+        var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
+        errdefer report.deinit();
+
+        // For a desugared operator, render the source operator symbol rather than
+        // the internal desugared method name (e.g. `==` not `is_eq`, `+` not
+        // `plus`). Equality (`==`/`!=`) gets "compare values with" wording; every
+        // other operator gets generic operator-usage wording.
+        const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
+        const is_equality = data.is_binop and data.method_name.eql(self.can_ir.idents.is_eq);
+
+        if (is_equality) {
+            const op = if (data.binop_negated) "!=" else operator orelse "==";
+            try D.renderSlice(&.{
+                D.bytes("This is trying to compare values with"),
+                D.bytes(op).withAnnotation(.inline_code),
+                D.bytes(", but their type is an unresolved type variable, which has no methods.").withNoPrecedingSpace(),
+            }, self, &report);
+        } else if (data.is_binop and operator != null) {
+            try D.renderSlice(&.{
+                D.bytes("This is trying to use the"),
+                D.bytes(operator.?).withAnnotation(.inline_code),
+                D.bytes("operator on a value whose type is an unresolved type variable, which has no methods."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("This is trying to dispatch a method named"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("on an unresolved type variable, but unresolved type variables have no methods."),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+
+        // Add source region highlighting on the offending dispatch call (the
+        // primary region).
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // When the dispatch is hidden inside a helper, the call site (primary
+        // region) and the argument that left the receiver's type undetermined
+        // (secondary region) differ. In that case, show the argument too, with a
+        // connecting note. When they coincide — the dispatch IS the call site, as
+        // in the direct cases — omit the secondary so the rendering is unchanged.
+        if (data.secondary_region) |secondary| {
+            if (secondary.start.offset != data.region.start.offset or
+                secondary.end.offset != data.region.end.offset)
+            {
+                try D.renderSlice(&.{
+                    D.bytes("The type was left undetermined by this call:"),
+                }, self, &report);
+                try report.document.addLineBreak();
+
+                const secondary_info = self.module_env.calcRegionInfo(secondary);
+                try report.document.addSourceRegion(
+                    secondary_info,
+                    .error_highlight,
+                    self.filename,
+                    self.source,
+                    self.module_env.getLineStarts(),
+                );
+                try report.document.addLineBreak();
+            }
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."),
+        }, self, &report);
+
+        return report;
+    }
+
     /// Build a report for when a number literal is used where a non-number type is expected
     fn buildNumberUsedAsNonNumber(
         self: *Self,
@@ -2034,6 +2137,40 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(snapshot_str);
+
+        return report;
+    }
+
+    fn buildInvalidNumericLiteralReport(
+        self: *Self,
+        data: InvalidNumericLiteral,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        errdefer report.deinit();
+
+        const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
+
+        try D.renderSlice(&.{
+            D.bytes("This number literal does not fit in the inferred type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The inferred type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }
@@ -2959,6 +3096,36 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildPolymorphicValueReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "POLYMORPHIC VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addReflowingText("This top-level value still has an unresolved polymorphic type:");
+        try report.document.addLineBreak();
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        const type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Its type is:");
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(type_str, .code_block);
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Add an annotation or use this value in a way that fixes its concrete type.");
+
+        return report;
+    }
+
     fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) !Report {
         var report = Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", .runtime_error);
         errdefer report.deinit();
@@ -3060,6 +3227,42 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) !Report {
+        var report = Report.init(self.gpa, "EFFECTFUL TOP-LEVEL VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This top-level definition performs an effect while initializing."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Move the effect into a function body so it runs when the function is called."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) !Report {
+        var report = Report.init(self.gpa, "EFFECTFUL EXPECT", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This expect performs an effect while evaluating its condition."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
         }, self, &report);
         return report;
     }
@@ -3292,7 +3495,9 @@ pub const ReportBuilder = struct {
     /// Get a number string ("1", "2", ...)
     fn getNumOwned(self: *Self, report: *Report, n: u32) ![]const u8 {
         self.bytes_buf.clearRetainingCapacity();
-        try self.bytes_buf.writer().print("{d}", .{n});
+        var tmp: [20]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
+        try self.bytes_buf.appendSlice(formatted);
         return try report.addOwnedString(self.bytes_buf.items);
     }
 
@@ -3329,7 +3534,9 @@ pub const ReportBuilder = struct {
                     3 => &[_]u8{ 'r', 'd' },
                     else => &[_]u8{ 't', 'h' },
                 };
-                try buf.writer().print("{d}{s}", .{ n, suffix });
+                var tmp: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&tmp, "{d}{s}", .{ n, suffix }) catch unreachable;
+                try buf.appendSlice(formatted);
             },
         }
     }

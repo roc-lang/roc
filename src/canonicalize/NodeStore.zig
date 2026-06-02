@@ -303,9 +303,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 75;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 49;
+pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -705,6 +705,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_num_from_numeral => {
+            return CIR.Expr{ .e_num_from_numeral = .{} };
+        },
         .expr_typed_int => {
             const p = payload.expr_typed_int;
             const value = store.int128_values.items.items[p.int128_idx];
@@ -730,6 +733,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .type_name = @bitCast(p.type_name),
                 },
             };
+        },
+        .expr_typed_num_from_numeral => {
+            const p = payload.expr_typed_num_from_numeral;
+            return CIR.Expr{ .e_typed_num_from_numeral = .{
+                .type_name = @bitCast(p.type_name),
+            } };
         },
         .expr_string_segment => {
             const p = payload.expr_string_segment;
@@ -1208,6 +1217,7 @@ pub fn replaceExprWithTypeDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
+/// Replaces an existing expression with an if expression in-place.
 /// Replaces an existing expression with an e_tag expression in-place.
 /// This is used for constant folding tag unions with payloads during compile-time evaluation.
 /// The arg_indices slice contains the indices of the tag argument expressions.
@@ -1481,7 +1491,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                     @as(CIR.Pattern.Idx, @enumFromInt(list_data.pattern_idx))
                 else
                     null;
-                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                break :blk @as(@FieldType(@FieldType(CIR.Pattern, "list"), "rest_info"), .{
                     .index = list_data.rest_index,
                     .pattern = rest_pattern,
                 });
@@ -1881,7 +1891,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                 .body = @intFromEnum(s.body),
             } });
         },
-        .s_break => |_| {
+        .s_break => {
             node.tag = .statement_break;
         },
         .s_return => |s| {
@@ -2013,7 +2023,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .elems_len = e.elems.span.len,
             } });
         },
-        .e_empty_list => |_| {
+        .e_empty_list => {
             node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
@@ -2065,6 +2075,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .has_suffix = e.has_suffix,
             } });
         },
+        .e_num_from_numeral => {
+            node.tag = .expr_num_from_numeral;
+            node.setPayload(.{ .expr_num_from_numeral = .{} });
+        },
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
             const int128_idx: u32 = @intCast(store.int128_values.len());
@@ -2083,6 +2097,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
                 .int128_idx = int128_idx,
+            } });
+        },
+        .e_typed_num_from_numeral => |e| {
+            node.tag = .expr_typed_num_from_numeral;
+            node.setPayload(.{ .expr_typed_num_from_numeral = .{
+                .type_name = @bitCast(e.type_name),
             } });
         },
         .e_str_segment => |e| {
@@ -2219,7 +2239,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .expr = @intFromEnum(d.expr),
             } });
         },
-        .e_ellipsis => |_| {
+        .e_ellipsis => {
             node.tag = .expr_ellipsis;
         },
         .e_anno_only => |anno| {
@@ -2316,7 +2336,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .fields_ext_idx = fields_ext_idx,
             } });
         },
-        .e_empty_record => |_| {
+        .e_empty_record => {
             node.tag = .expr_empty_record;
         },
         .e_zero_argument_tag => |e| {
@@ -2758,7 +2778,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
                 .name = @intFromEnum(tv.ref),
             } });
         },
-        .underscore => |_| {
+        .underscore => {
             node.tag = .ty_underscore;
         },
         .lookup => |t| {
@@ -3068,7 +3088,7 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
 
 /// Check if a raw node index refers to a definition node.
 /// This is useful when exposed items might be either definitions or type declarations.
-pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+pub fn isDefNode(store: *const NodeStore, node_idx: u32) bool {
     const nid: Node.Idx = @enumFromInt(node_idx);
     const node = store.nodes.get(nid);
     return node.tag == .def;
@@ -3119,6 +3139,15 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
 /// Adds a scratch expression to temporary storage.
 pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) Allocator.Error!void {
     try store.addScratch("exprs", idx);
+}
+
+/// Appends a persistent expression span directly to index storage.
+pub fn appendExprSpan(store: *NodeStore, exprs: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
+    const index_start = store.index_data.len();
+    for (exprs) |expr| {
+        _ = try store.index_data.append(store.gpa, @intFromEnum(expr));
+    }
+    return .{ .span = .{ .start = @intCast(index_start), .len = @intCast(exprs.len) } };
 }
 
 /// Adds a capture index to the scratch captures list for building spans.
@@ -3303,9 +3332,20 @@ pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
     return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
 }
 
+/// Retrieve one item from a span without borrowing the backing index storage.
+pub fn getFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan, offset: usize) T {
+    std.debug.assert(offset < span.len);
+    return @as(T, @enumFromInt(store.index_data.items.items[span.start + offset]));
+}
+
 /// Returns a slice of definitions from the store.
 pub fn sliceDefs(store: *const NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
     return store.sliceFromSpan(CIR.Def.Idx, span.span);
+}
+
+/// Returns a single definition index from a span.
+pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def.Idx {
+    return store.getFromSpan(CIR.Def.Idx, span.span, offset);
 }
 
 /// Returns a slice of expressions from the store.
@@ -3313,9 +3353,19 @@ pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
+/// Returns a single expression index from a span.
+pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
+    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
+}
+
 /// Returns a slice of `CanIR.Pattern.Idx`
 pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
+}
+
+/// Returns a single pattern index from a span.
+pub fn patternAt(store: *const NodeStore, span: CIR.Pattern.Span, offset: usize) CIR.Pattern.Idx {
+    return store.getFromSpan(CIR.Pattern.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CIR.Expr.Capture.Idx`
@@ -3326,6 +3376,11 @@ pub fn sliceCaptures(store: *const NodeStore, span: CIR.Expr.Capture.Span) []CIR
 /// Returns a slice of statements from the store.
 pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
     return store.sliceFromSpan(CIR.Statement.Idx, span.span);
+}
+
+/// Returns a single statement index from a span.
+pub fn statementAt(store: *const NodeStore, span: CIR.Statement.Span, offset: usize) CIR.Statement.Idx {
+    return store.getFromSpan(CIR.Statement.Idx, span.span, offset);
 }
 
 /// Returns a slice of record fields from the store.
@@ -3684,6 +3739,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
+        .private_type_in_exposed_type => |r| {
+            node.tag = .diag_private_type_in_exposed_type;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.private_type) } });
+        },
+        .private_type_in_exposed_field => |r| {
+            node.tag = .diag_private_type_in_exposed_field;
+            region = r.region;
+            node.setPayload(.{ .diag_three_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.field_name), .ident3 = @bitCast(r.private_type) } });
+        },
         .type_from_missing_module => |r| {
             node.tag = .diag_type_from_missing_module;
             region = r.region;
@@ -4005,6 +4070,23 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .type_not_exposed = .{
                 .module_name = @as(base.Ident.Idx, @bitCast(p.ident1)),
                 .type_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_type => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_type = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_field => {
+            const p = payload.diag_three_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_field = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .field_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident3)),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -4449,8 +4531,8 @@ test "NodeStore empty CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_empty_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_empty_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize using CompactWriter
     var writer = CompactWriter.init();
@@ -4460,16 +4542,13 @@ test "NodeStore empty CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4515,8 +4594,8 @@ test "NodeStore basic CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_basic_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_basic_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4526,16 +4605,13 @@ test "NodeStore basic CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
@@ -4607,8 +4683,8 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const file = try tmp_dir.dir.createFile("test_multiple_nodestore.dat", .{ .read = true });
-    defer file.close();
+    const file = try tmp_dir.dir.createFile(std.testing.io, "test_multiple_nodestore.dat", .{ .read = true });
+    defer file.close(std.testing.io);
 
     // Serialize
     var writer = CompactWriter.init();
@@ -4618,16 +4694,13 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try serialized.serialize(&original, gpa, &writer);
 
     // Write to file
-    try writer.writeGather(gpa, file);
+    try writer.writeGather(file, std.testing.io);
 
     // Read back
-    try file.seekTo(0);
-    const file_size = try file.getEndPos();
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
     defer gpa.free(buffer);
 
-    const read_len = try file.readAll(buffer);
-    try testing.expectEqual(buffer.len, read_len);
+    _ = try file.readPositionalAll(std.testing.io, buffer, 0);
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));

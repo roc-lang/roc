@@ -5,6 +5,20 @@
 //! - Numeric overflow functions (for compiler-rt)
 //! - Dev backend wrapper functions (for roc build --opt=dev)
 
+const std = @import("std");
+const shim_io = @import("shim_io");
+
+pub const panic = std.debug.no_panic;
+
+pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+pub const std_options_debug_io = shim_io.io();
+/// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
+pub const std_options_debug_threaded_io = null;
+
+/// Disables stack-trace capture; see `shim_io.std_options_no_stack_tracing`.
+pub const std_options = shim_io.std_options_no_stack_tracing;
+
 // Export key functions that might need compiler-rt symbols
 comptime {
     // Export overflow functions that might need compiler-rt symbols
@@ -52,6 +66,9 @@ comptime {
     @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_dbg_str, .{ .name = "roc_builtins_dbg_str" });
+    @export(&dw.roc_builtins_roc_expect_failed, .{ .name = "roc_builtins_roc_expect_failed" });
+    @export(&dw.roc_builtins_roc_crashed, .{ .name = "roc_builtins_roc_crashed" });
+    @export(&dw.roc_builtins_str_from_literal, .{ .name = "roc_builtins_str_from_literal" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
@@ -99,6 +116,7 @@ comptime {
     @export(&dw.roc_builtins_i128_to_dec_try_unsafe, .{ .name = "roc_builtins_i128_to_dec_try_unsafe" });
     @export(&dw.roc_builtins_u128_to_dec_try_unsafe, .{ .name = "roc_builtins_u128_to_dec_try_unsafe" });
     // Dec arithmetic wrappers
+    @export(&dw.roc_builtins_dec_mul, .{ .name = "roc_builtins_dec_mul" });
     @export(&dw.roc_builtins_dec_mul_saturated, .{ .name = "roc_builtins_dec_mul_saturated" });
     @export(&dw.roc_builtins_dec_div, .{ .name = "roc_builtins_dec_div" });
     @export(&dw.roc_builtins_dec_div_trunc, .{ .name = "roc_builtins_dec_div_trunc" });
@@ -114,4 +132,18 @@ comptime {
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
     @export(&dw.roc_builtins_float_from_str, .{ .name = "roc_builtins_float_from_str" });
+    // List equality and reverse wrappers
+    @export(&dw.roc_builtins_list_eq, .{ .name = "roc_builtins_list_eq" });
+    @export(&dw.roc_builtins_list_str_eq, .{ .name = "roc_builtins_list_str_eq" });
+    @export(&dw.roc_builtins_list_list_eq, .{ .name = "roc_builtins_list_list_eq" });
+    @export(&dw.roc_builtins_list_reverse, .{ .name = "roc_builtins_list_reverse" });
+    // Integer modulo wrappers
+    @export(&dw.roc_builtins_i8_mod_by, .{ .name = "roc_builtins_i8_mod_by" });
+    @export(&dw.roc_builtins_u8_mod_by, .{ .name = "roc_builtins_u8_mod_by" });
+    @export(&dw.roc_builtins_i16_mod_by, .{ .name = "roc_builtins_i16_mod_by" });
+    @export(&dw.roc_builtins_u16_mod_by, .{ .name = "roc_builtins_u16_mod_by" });
+    @export(&dw.roc_builtins_i32_mod_by, .{ .name = "roc_builtins_i32_mod_by" });
+    @export(&dw.roc_builtins_u32_mod_by, .{ .name = "roc_builtins_u32_mod_by" });
+    @export(&dw.roc_builtins_i64_mod_by, .{ .name = "roc_builtins_i64_mod_by" });
+    @export(&dw.roc_builtins_u64_mod_by, .{ .name = "roc_builtins_u64_mod_by" });
 }

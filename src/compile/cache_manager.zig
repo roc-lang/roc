@@ -6,18 +6,19 @@
 //! that already have a published cache key.
 
 const std = @import("std");
-const io_mod = @import("io");
+const ctx_mod = @import("ctx");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
+pub const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
-const Io = io_mod.Io;
+const CoreCtx = ctx_mod.CoreCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 
 /// Public `CacheManager` declaration.
 pub const CacheManager = struct {
     config: CacheConfig,
-    io: Io,
+    roc_ctx: CoreCtx = undefined,
     allocator: Allocator,
     stats: CacheStats,
 
@@ -27,13 +28,15 @@ pub const CacheManager = struct {
         if (!self.config.verbose) return;
         var buf: [1024]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-        self.io.writeStderr(msg) catch {};
+        self.roc_ctx.writeStderr(msg) catch {};
     }
 
-    pub fn init(allocator: Allocator, config: CacheConfig, io: Io) Self {
+    pub fn init(allocator: Allocator, config: CacheConfig, roc_ctx: CoreCtx) Self {
+        var cfg = config;
+        cfg.roc_ctx = roc_ctx;
         return .{
-            .config = config,
-            .io = io,
+            .config = cfg,
+            .roc_ctx = roc_ctx,
             .allocator = allocator,
             .stats = CacheStats{},
         };
@@ -67,7 +70,7 @@ pub const CacheManager = struct {
         const full_subdir = try std.fs.path.join(self.allocator, &.{ entries_dir, subdir });
         defer self.allocator.free(full_subdir);
 
-        try self.io.makePath(full_subdir);
+        try self.roc_ctx.makePath(full_subdir);
     }
 
     pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8) void {
@@ -91,13 +94,13 @@ pub const CacheManager = struct {
         };
         defer self.allocator.free(temp_path);
 
-        self.io.writeFile(temp_path, data) catch |err| {
+        self.roc_ctx.writeFile(temp_path, data) catch |err| {
             self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
             self.stats.recordStoreFailure();
             return;
         };
 
-        self.io.rename(temp_path, cache_path) catch |err| {
+        self.roc_ctx.rename(temp_path, cache_path) catch |err| {
             self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
             self.stats.recordStoreFailure();
             return;
@@ -115,12 +118,12 @@ pub const CacheManager = struct {
         };
         defer self.allocator.free(cache_path);
 
-        if (!self.io.fileExists(cache_path)) {
+        if (!self.roc_ctx.fileExists(cache_path)) {
             self.stats.recordMiss();
             return null;
         }
 
-        const data = self.io.readFile(cache_path, self.allocator) catch |err| {
+        const data = self.roc_ctx.readFile(cache_path, self.allocator) catch |err| {
             self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.stats.recordMiss();
             return null;
@@ -140,6 +143,6 @@ pub const CacheManager = struct {
         var buf: [8192]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
         CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, fbs.writer()) catch return;
-        self.io.writeStderr(fbs.getWritten()) catch {};
+        self.roc_ctx.writeStderr(fbs.getWritten()) catch {};
     }
 };

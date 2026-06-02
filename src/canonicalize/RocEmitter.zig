@@ -89,7 +89,7 @@ pub fn reset(self: *Self) void {
 /// Emit an expression as Roc source code
 pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) !void {
     const expr = self.module_env.store.getExpr(expr_idx);
-    try self.emitExprValue(expr);
+    try self.emitExprValue(expr_idx, expr);
 }
 
 /// Emit a pattern as Roc source code
@@ -106,13 +106,13 @@ fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !v
         // Only add parens if inner op has lower precedence than outer op
         if (binopPrecedence(inner_op) < binopPrecedence(outer_op)) {
             try self.write("(");
-            try self.emitExprValue(expr);
+            try self.emitExprValue(expr_idx, expr);
             try self.write(")");
         } else {
-            try self.emitExprValue(expr);
+            try self.emitExpr(expr_idx);
         }
     } else {
-        try self.emitExprValue(expr);
+        try self.emitExpr(expr_idx);
     }
 }
 
@@ -130,16 +130,88 @@ fn binopPrecedence(op: Expr.Binop.Op) u8 {
 
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
 
-fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
+fn emitRecordedNumeral(self: *Self, expr_idx: Expr.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
+    const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+        std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(expr_idx)});
+    };
+
+    if (literal.isNegative()) {
+        try self.write("-");
+    }
+
+    const before = self.module_env.numeralDigitsBefore(literal);
+    const before_digits = try self.base256ToDecimalDigits(before);
+    defer self.allocator.free(before_digits);
+    try self.write(before_digits);
+
+    if (literal.isFractional()) {
+        try self.write(".");
+        const after = self.module_env.numeralDigitsAfter(literal);
+        const after_digits = try self.base256ToDecimalDigits(after);
+        defer self.allocator.free(after_digits);
+
+        const after_count: usize = @intCast(literal.after_decimal_digit_count);
+        if (after_count <= after_digits.len) {
+            try self.write(after_digits);
+        } else {
+            var pad = after_count - after_digits.len;
+            while (pad > 0) : (pad -= 1) {
+                try self.write("0");
+            }
+            try self.write(after_digits);
+        }
+    }
+
+    if (maybe_type_name) |type_name| {
+        try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(type_name)});
+    }
+}
+
+fn base256ToDecimalDigits(self: *Self, bytes_be: []const u8) std.mem.Allocator.Error![]u8 {
+    var start: usize = 0;
+    while (start < bytes_be.len and bytes_be[start] == 0) : (start += 1) {}
+    if (start == bytes_be.len) {
+        return try self.allocator.dupe(u8, "0");
+    }
+
+    const value = try self.allocator.dupe(u8, bytes_be[start..]);
+    defer self.allocator.free(value);
+
+    var digits = std.ArrayList(u8).empty;
+    defer digits.deinit(self.allocator);
+
+    var active = value;
+    while (active.len > 0) {
+        var remainder: u16 = 0;
+        for (active) |*byte| {
+            const next = remainder * 256 + byte.*;
+            byte.* = @intCast(next / 10);
+            remainder = next % 10;
+        }
+        try digits.append(self.allocator, @as(u8, @intCast(remainder)) + '0');
+
+        var trim: usize = 0;
+        while (trim < active.len and active[trim] == 0) : (trim += 1) {}
+        active = active[trim..];
+    }
+
+    const out = try self.allocator.alloc(u8, digits.items.len);
+    for (out, 0..) |*digit, i| {
+        digit.* = digits.items[digits.items.len - 1 - i];
+    }
+    return out;
+}
+
+fn emitExprValue(self: *Self, expr_idx: Expr.Idx, expr: Expr) EmitError!void {
     switch (expr) {
         .e_num => |num| {
             try self.emitIntValue(num.value);
         },
         .e_frac_f32 => |frac| {
-            try self.writer().print("{d}f32", .{frac.value});
+            try self.output.print(self.allocator, "{d}f32", .{frac.value});
         },
         .e_frac_f64 => |frac| {
-            try self.writer().print("{d}f64", .{frac.value});
+            try self.output.print(self.allocator, "{d}f64", .{frac.value});
         },
         .e_dec => |dec| {
             // Dec is stored scaled by 10^18, need to emit as decimal
@@ -149,27 +221,27 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
                 var str_buf: [40]u8 = undefined;
-                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
+                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
             } else {
                 var str_buf: [40]u8 = undefined;
-                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
-                try self.writer().writeAll(".");
+                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
+                try self.output.appendSlice(self.allocator, ".");
                 // Format frac_part with leading zeros (18 digits)
                 var frac_buf: [40]u8 = undefined;
                 const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
                 // Pad with leading zeros to 18 digits
                 var pad: usize = 18 - frac_str.len;
                 while (pad > 0) : (pad -= 1) {
-                    try self.writer().writeAll("0");
+                    try self.output.appendSlice(self.allocator, "0");
                 }
-                try self.writer().writeAll(frac_str);
+                try self.output.appendSlice(self.allocator, frac_str);
             }
         },
         .e_dec_small => |small| {
             const numerator = small.value.numerator;
             const power = small.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.writer().print("{}", .{numerator});
+                try self.output.print(self.allocator, "{}", .{numerator});
             } else {
                 // Convert to decimal string
                 var divisor: i32 = 1;
@@ -178,13 +250,16 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.writer().print("{}.{}", .{ whole, frac_part });
+                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
             }
+        },
+        .e_num_from_numeral => {
+            try self.emitRecordedNumeral(expr_idx, null);
         },
         .e_typed_int => |typed| {
             try self.emitIntValue(typed.value);
             const type_name = self.module_env.getIdent(typed.type_name);
-            try self.writer().print(".{s}", .{type_name});
+            try self.output.print(self.allocator, ".{s}", .{type_name});
         },
         .e_typed_frac => |typed| {
             // Emit as decimal and add type suffix
@@ -193,20 +268,23 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                try self.writer().print("{d}.0", .{whole});
+                try self.output.print(self.allocator, "{d}.0", .{whole});
             } else {
-                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+                try self.output.print(self.allocator, "{d}.{d:0>18}", .{ whole, frac_part });
             }
             const type_name = self.module_env.getIdent(typed.type_name);
-            try self.writer().print(".{s}", .{type_name});
+            try self.output.print(self.allocator, ".{s}", .{type_name});
+        },
+        .e_typed_num_from_numeral => |typed| {
+            try self.emitRecordedNumeral(expr_idx, typed.type_name);
         },
         .e_str_segment => |seg| {
             const text = self.module_env.common.getString(seg.literal);
-            try self.writer().print("\"{s}\"", .{text});
+            try self.output.print(self.allocator, "\"{s}\"", .{text});
         },
         .e_bytes_literal => |bytes| {
             const data = self.module_env.common.getString(bytes.literal);
-            try self.writer().print("<bytes:{d}>", .{data.len});
+            try self.output.print(self.allocator, "<bytes:{d}>", .{data.len});
         },
         .e_str => |str| {
             // Multi-segment string
@@ -252,7 +330,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_tuple_access => |tuple_access| {
             try self.emitExpr(tuple_access.tuple);
-            try self.writer().print(".{d}", .{tuple_access.elem_index});
+            try self.output.print(self.allocator, ".{d}", .{tuple_access.elem_index});
         },
         .e_if => |if_expr| {
             const branch_indices = self.module_env.store.sliceIfBranches(if_expr.branches);
@@ -304,7 +382,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 if (use_shorthand) {
                     try self.write(name);
                 } else {
-                    try self.writer().print("{s}: ", .{name});
+                    try self.output.print(self.allocator, "{s}: ", .{name});
                     try self.emitExpr(field.value);
                 }
             }
@@ -362,7 +440,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // need to inline them as parameters.
             const lambda = self.module_env.store.getExpr(closure.lambda_idx);
             std.debug.assert(lambda == .e_lambda);
-            try self.emitExprValue(lambda);
+            try self.emitExpr(closure.lambda_idx);
         },
         .e_lambda => |lambda| {
             try self.write("|");
@@ -431,7 +509,9 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitExpr(eq.rhs);
         },
         .e_type_method_call => |method_call| {
-            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            const alias_str = try std.fmt.allocPrint(self.allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            defer self.allocator.free(alias_str);
+            try self.write(alias_str);
             try self.write(".");
             try self.write(self.module_env.getIdent(method_call.method_name));
             try self.write("(");
@@ -443,7 +523,9 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(")");
         },
         .e_type_dispatch_call => |method_call| {
-            try self.writer().print("__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            const alias_str = try std.fmt.allocPrint(self.allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            defer self.allocator.free(alias_str);
+            try self.write(alias_str);
             try self.write(".");
             try self.write(self.module_env.getIdent(method_call.method_name));
             try self.write("(");
@@ -459,7 +541,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_crash => |crash| {
             const msg = self.module_env.common.getString(crash.msg);
-            try self.writer().print("crash \"{s}\"", .{msg});
+            try self.output.print(self.allocator, "crash \"{s}\"", .{msg});
         },
         .e_dbg => |dbg| {
             try self.write("dbg ");
@@ -551,7 +633,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
         },
         .str_literal => |str| {
             const text = self.module_env.common.getString(str.literal);
-            try self.writer().print("\"{s}\"", .{text});
+            try self.output.print(self.allocator, "\"{s}\"", .{text});
         },
         .applied_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
@@ -653,7 +735,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             const numerator = dec.value.numerator;
             const power = dec.value.denominator_power_of_ten;
             if (power == 0) {
-                try self.writer().print("{}", .{numerator});
+                try self.output.print(self.allocator, "{}", .{numerator});
             } else {
                 var divisor: i32 = 1;
                 for (0..power) |_| {
@@ -661,7 +743,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                 }
                 const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
                 const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.writer().print("{}.{}", .{ whole, frac_part });
+                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
             }
         },
         .dec_literal => |dec| {
@@ -671,29 +753,29 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
                 var str_buf: [40]u8 = undefined;
-                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
+                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
             } else {
                 var str_buf: [40]u8 = undefined;
-                try self.writer().writeAll(i128h.i128_to_str(&str_buf, whole).str);
-                try self.writer().writeAll(".");
+                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
+                try self.output.appendSlice(self.allocator, ".");
                 var frac_buf: [40]u8 = undefined;
                 const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
                 var pad: usize = 18 - frac_str.len;
                 while (pad > 0) : (pad -= 1) {
-                    try self.writer().writeAll("0");
+                    try self.output.appendSlice(self.allocator, "0");
                 }
-                try self.writer().writeAll(frac_str);
+                try self.output.appendSlice(self.allocator, frac_str);
             }
         },
         .frac_f32_literal => |frac| {
             var float_buf: [400]u8 = undefined;
-            try self.writer().writeAll(i128h.f32_to_str(&float_buf, frac.value));
-            try self.writer().writeAll("f32");
+            try self.output.appendSlice(self.allocator, i128h.f32_to_str(&float_buf, frac.value));
+            try self.output.appendSlice(self.allocator, "f32");
         },
         .frac_f64_literal => |frac| {
             var float_buf: [400]u8 = undefined;
-            try self.writer().writeAll(i128h.f64_to_str(&float_buf, frac.value));
-            try self.writer().writeAll("f64");
+            try self.output.appendSlice(self.allocator, i128h.f64_to_str(&float_buf, frac.value));
+            try self.output.appendSlice(self.allocator, "f64");
         },
     }
 }
@@ -769,10 +851,6 @@ fn emitIdent(self: *Self, name: []const u8) !void {
         // Regular user identifier: emit as-is
         try self.output.appendSlice(self.allocator, name);
     }
-}
-
-fn writer(self: *Self) std.ArrayList(u8).Writer {
-    return self.output.writer(self.allocator);
 }
 
 fn binopToStr(op: Expr.Binop.Op) []const u8 {

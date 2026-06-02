@@ -141,15 +141,12 @@ test "check type - number annotation mismatch with string" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
-test "check type - i64 annotation with fractional literal passes type checking" {
-    // Note: Validation of numeric literals (e.g., fractional to integer) happens
-    // during comptime evaluation, not type checking. This test verifies that
-    // type checking passes - the actual validation error is caught by comptime eval.
+test "check type - i64 annotation with fractional literal fails type checking" {
     const source =
         \\x : I64
         \\x = 3.14
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+    try checkTypesModule(source, .fail, "INVALID NUMBER");
 }
 
 test "check type - string plus number should fail" {
@@ -3523,7 +3520,7 @@ test "top-level: type annotation followed by body should not create duplicate de
         var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
         defer report.deinit();
 
-        if (std.mem.indexOf(u8, report.title, "DUPLICATE DEFINITION") != null) {
+        if (std.mem.find(u8, report.title, "DUPLICATE DEFINITION") != null) {
             duplicate_def_found = true;
             break;
         }

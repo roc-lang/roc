@@ -10,10 +10,10 @@ navigate the code without prior context.
 The interpreter works by consuming ARC-inserted LIR and interpreting that
 program directly. In the public post-check pipeline, CIR is never given to the
 interpreter or interpreter shim; the parent compiler lowers through checked
-artifacts, MIR, IR, LIR, and ARC first.
+modules, post-check IRs, LIR, and ARC first.
 
 ```
-checked artifacts → MIR → IR → LIR → ARC → Interpret
+checked modules → post-check IRs → LIR → ARC → Interpret
 ```
 
 ### Core Modules
@@ -38,9 +38,10 @@ checked artifacts → MIR → IR → LIR → ARC → Interpret
 ## Evaluation Flow
 
 1. **Published inputs** — Consumers (REPL, tests, CLI) type check source and
-   publish checked artifacts plus explicit roots.
-2. **Lowering** — The checked-artifact pipeline lowers through MIR, IR, LIR, and
-   ARC, producing a `LirStore`, committed layouts, and explicit root procedures.
+   publish checked modules plus explicit roots.
+2. **Lowering** — The checked-module pipeline lowers through post-check IRs,
+   LIR, and ARC, producing a `LirStore`, committed layouts, and explicit root
+   procedures.
 3. **Interpretation** — `LirInterpreter.init()` creates the interpreter, then
    `eval()` or `evalEntrypoint()` runs the stack-safe engine.
 4. **Stack-safe engine** — `evalStackSafe()` is the main loop. It pops work
@@ -58,7 +59,7 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 - **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
   C-callable entry point (`roc_entrypoint`) that maps/views an ARC-inserted LIR
-  runtime image and evaluates it via the interpreter.
+  image and evaluates it via the interpreter.
 
 ## Tests
 

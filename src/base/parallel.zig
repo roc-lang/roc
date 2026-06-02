@@ -3,6 +3,7 @@
 //! (Currently only used in the snapshot tool)
 const std = @import("std");
 const builtin = @import("builtin");
+const stack_overflow = @import("stack_overflow.zig");
 const Allocator = std.mem.Allocator;
 
 /// True on freestanding targets (e.g. wasm32) where threading is unavailable.
@@ -42,6 +43,10 @@ fn WorkerContext(comptime T: type) type {
 
 /// Worker thread implementation using work-stealing
 fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
+    if (comptime !is_freestanding) {
+        _ = stack_overflow.installForCurrentThread();
+    }
+
     if (ctx.options.use_per_thread_arenas) {
         // Use per-thread arena allocator with page allocator that clears between work items
         // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -52,10 +57,13 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
             const i = ctx.index.fetchAdd(1, .monotonic);
             if (i >= ctx.work_item_count) break;
 
-            // Clear arena between work items
-            const reset_ok = arena.reset(.retain_capacity);
+            // Each work item can compile a complete Roc program. Release the
+            // previous item's peak allocation instead of retaining a high-water
+            // arena for the rest of the worker's lifetime.
+            const reset_ok = arena.reset(.free_all);
             if (!reset_ok) {
-                // Reset still succeeded functionally; retain_capacity failed.
+                // Reset still succeeded functionally; the requested reset mode
+                // could not be fully honored.
             }
 
             ctx.worker_fn(arena.allocator(), ctx.context, i);

@@ -13,9 +13,26 @@ Foo := [Val(I64)].{
 main = 123.Foo
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The `from_numeral` method on `Foo` has an incompatible type:
+**number_suffix_custom_type.md:6:8:6:15:**
+```roc
+main = 123.Foo
+```
+       ^^^^^^^
+
+The method `from_numeral` has the type:
+
+    I64, U8 -> Foo
+
+But I need it to have the type:
+
+    Numeral -> Try(Foo, [InvalidNumeral(Str)])
+
+**Hint:** This function expects 1 argument but got 2.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
@@ -55,7 +72,7 @@ EndOfFile,
 							(e-ident (raw "n")))))))
 		(s-decl
 			(p-ident (raw "main"))
-			(e-typed-int (raw "123") (type ".Foo")))))
+			(e-typed-int (raw "123") (type "Foo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,7 +104,7 @@ main = 123.Foo
 				(ty-lookup (name "Foo") (local)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-typed-int (value "123") (type "Foo")))
 	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-tag-union
@@ -98,7 +115,7 @@ main = 123.Foo
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "I64, U8 -> Foo"))
+		(patt (type "Error"))
 		(patt (type "Error")))
 	(type_decls
 		(nominal (type "Foo")

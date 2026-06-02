@@ -18,25 +18,26 @@ const TermColor = struct {
     pub const reset = "\x1b[0m";
 };
 
-pub fn main() !void {
-    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     var stdout_buffer: [4096]u8 = undefined;
-    var stdout_state = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_state = std.Io.File.stdout().writer(io, &stdout_buffer);
     const stdout = &stdout_state.interface;
 
     try stdout.print("Checking test wiring in src/ directory...\n\n", .{});
 
     try stdout.print("Step 1: Finding all potential test files...\n", .{});
-    var test_files = PathList{};
+    var test_files : PathList = .empty;
     defer freePathList(&test_files, gpa);
 
-    var mod_files = PathList{};
+    var mod_files : PathList = .empty;
     defer freePathList(&mod_files, gpa);
 
-    try walkTree(gpa, "src", &test_files, &mod_files);
+    try walkTree(gpa, io, "src", &test_files, &mod_files);
     try stdout.print("Found {d} potential test files\n\n", .{test_files.items.len});
 
     // Some tests are wired through build.zig rather than mod.zig files.
@@ -48,19 +49,19 @@ pub fn main() !void {
     //   statements for wired test files.
     // - Treat src/cli/test/fx_platform_test.zig as an aggregator since it imports
     //   fx_test_specs.zig which contains shared test specifications.
-    if (fileExists("src/cli/main.zig")) {
+    if (fileExists(io, "src/cli/main.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/main.zig"));
     }
-    if (fileExists("src/cli/test/fx_platform_test.zig")) {
+    if (fileExists(io, "src/cli/test/fx_platform_test.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/fx_platform_test.zig"));
     }
-    if (fileExists("src/cli/test/test_runner.zig")) {
+    if (fileExists(io, "src/cli/test/test_runner.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/test_runner.zig"));
     }
-    if (fileExists("src/cli/cli_error.zig")) {
+    if (fileExists(io, "src/cli/cli_error.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/cli_error.zig"));
     }
-    if (fileExists("src/snapshot_tool/main.zig")) {
+    if (fileExists(io, "src/snapshot_tool/main.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/snapshot_tool/main.zig"));
     }
 
@@ -70,7 +71,7 @@ pub fn main() !void {
         return;
     }
 
-    try stdout.print("Step 2: Extracting test references from mod.zig files...\n", .{});
+    try stdout.print("Step 2: Extracting test references from mod.zig files and build roots...\n", .{});
     var referenced = std.StringHashMap(void).init(gpa);
     defer {
         var it = referenced.keyIterator();
@@ -81,20 +82,20 @@ pub fn main() !void {
     }
 
     for (mod_files.items) |mod_path| {
-        try collectModImports(gpa, mod_path, &referenced);
+        try collectModImports(gpa, io, mod_path, &referenced);
     }
-    // Also treat test roots declared in build.zig (b.addTest root_source_file)
-    // as valid wiring for the corresponding files (e.g. src/cli/main.zig and
-    // src/cli/test/roc_subcommands.zig).
-    try markBuildTestRootsAsReferenced(gpa, &referenced);
+    // Also treat build-registered Zig roots (build.zig + src/build/modules.zig)
+    // as valid wiring for the corresponding files, and scan their imports as
+    // aggregators.
+    try markBuildRootsAsReferenced(gpa, io, &referenced);
 
     try stdout.print(
-        "Found {d} file references in mod.zig files and build.zig test roots\n\n",
+        "Found {d} file references in mod.zig files and build roots\n\n",
         .{referenced.count()},
     );
 
     try stdout.print("Step 3: Checking if all test files are properly wired...\n\n", .{});
-    var unwired = PathList{};
+    var unwired : PathList = .empty;
     defer freePathList(&unwired, gpa);
 
     for (test_files.items) |test_path| {
@@ -114,7 +115,7 @@ pub fn main() !void {
         for (unwired.items) |path| {
             const path_text: []const u8 = path;
             try stdout.print("  {s}[MISSING]{s} {s}\n", .{ TermColor.red, TermColor.reset, path_text });
-            try printSuggestion(gpa, stdout, path_text);
+            try printSuggestion(gpa, io, stdout, path_text);
             try stdout.print("\n", .{});
         }
 
@@ -155,15 +156,16 @@ fn normalizePath(allocator: Allocator, path: []u8) ![]u8 {
 
 fn walkTree(
     allocator: Allocator,
+    io: std.Io,
     dir_path: []const u8,
     test_files: *PathList,
     mod_files: *PathList,
 ) !void {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind == .sym_link) continue;
 
         const joined_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
@@ -172,10 +174,10 @@ fn walkTree(
         switch (entry.kind) {
             .directory => {
                 defer allocator.free(next_path);
-                try walkTree(allocator, next_path, test_files, mod_files);
+                try walkTree(allocator, io, next_path, test_files, mod_files);
             },
             .file => {
-                try handleFile(allocator, next_path, entry.name, test_files, mod_files);
+                try handleFile(allocator, io, next_path, entry.name, test_files, mod_files);
             },
             else => allocator.free(next_path),
         }
@@ -184,6 +186,7 @@ fn walkTree(
 
 fn handleFile(
     allocator: Allocator,
+    std_io: std.Io,
     path: []u8,
     file_name: []const u8,
     test_files: *PathList,
@@ -204,7 +207,7 @@ fn handleFile(
         return;
     }
 
-    if (try fileHasTestDecl(allocator, path)) {
+    if (try fileHasTestDecl(allocator, std_io, path)) {
         try test_files.append(allocator, path);
         return;
     }
@@ -219,8 +222,8 @@ fn shouldSkipTestFile(path: []const u8) bool {
     return false;
 }
 
-fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
-    const source = try readSourceFile(allocator, path);
+fn fileHasTestDecl(allocator: Allocator, std_io: std.Io, path: []const u8) !bool {
+    const source = try readSourceFile(allocator, std_io, path);
     defer allocator.free(source);
     var tree = try Ast.parse(allocator, source, .zig);
     defer tree.deinit(allocator);
@@ -235,12 +238,12 @@ fn fileHasTestDecl(allocator: Allocator, path: []const u8) !bool {
     return false;
 }
 
-fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
-    return try std.fs.cwd().readFileAllocOptions(
-        allocator,
+fn readSourceFile(allocator: Allocator, std_io: std.Io, path: []const u8) ![:0]u8 {
+    return try std.Io.Dir.cwd().readFileAllocOptions(
+        std_io,
         path,
-        max_file_bytes,
-        null,
+        allocator,
+        .limited(max_file_bytes),
         std.mem.Alignment.of(u8),
         0,
     );
@@ -248,10 +251,11 @@ fn readSourceFile(allocator: Allocator, path: []const u8) ![:0]u8 {
 
 fn collectModImports(
     allocator: Allocator,
+    std_io: std.Io,
     mod_path: []const u8,
     referenced: *std.StringHashMap(void),
 ) !void {
-    const source = try readSourceFile(allocator, mod_path);
+    const source = try readSourceFile(allocator, std_io, mod_path);
     defer allocator.free(source);
 
     var tree = try Ast.parse(allocator, source, .zig);
@@ -307,53 +311,64 @@ fn resolveImportPath(
     return std.fs.path.resolvePosix(allocator, &.{ mod_dir, import_path });
 }
 
-/// Mark files that are used as test roots in build.zig as "wired".
+/// Mark files that are used as build roots as "wired".
 ///
 /// In addition to mod.zig imports, some tests are hooked up via explicit
-/// `b.addTest` calls in build.zig (for example the CLI tests). Any Zig
-/// file that is used as a `root_source_file = b.path("...")` in such a
-/// test configuration should not be reported as missing wiring.
-fn markBuildTestRootsAsReferenced(
+/// build roots. Any Zig file that is used as a
+/// `root_source_file = b.path("...")` should not be reported as missing
+/// wiring. These roots also act as aggregators for their own imports.
+fn markBuildRootsAsReferenced(
     allocator: Allocator,
+    std_io: std.Io,
     referenced: *std.StringHashMap(void),
 ) !void {
-    const build_path = "build.zig";
-    if (!fileExists(build_path)) return;
+    const build_sources = [_][]const u8{
+        "build.zig",
+        "src/build/modules.zig",
+    };
+    for (build_sources) |build_path| {
+        if (!fileExists(std_io, build_path)) continue;
+        try markBuildRootsFromFile(allocator, std_io, build_path, referenced);
+    }
+}
 
-    const source = try readSourceFile(allocator, build_path);
+fn markBuildRootsFromFile(
+    allocator: Allocator,
+    std_io: std.Io,
+    build_path: []const u8,
+    referenced: *std.StringHashMap(void),
+) !void {
+    const source = try readSourceFile(allocator, std_io, build_path);
     defer allocator.free(source);
 
     const pattern = ".root_source_file = b.path(\"";
     var search_index: usize = 0;
 
-    while (std.mem.indexOfPos(u8, source, search_index, pattern)) |match_pos| {
+    while (std.mem.findPos(u8, source, search_index, pattern)) |match_pos| {
         const literal_start = match_pos + pattern.len;
-        var cursor = literal_start;
+        const literal_end = std.mem.findScalarPos(u8, source, literal_start, '"') orelse break;
+        const rel_path = source[literal_start..literal_end];
+        search_index = literal_end + 1;
 
-        // Find end of the string literal.
-        while (cursor < source.len and source[cursor] != '"') : (cursor += 1) {}
-        if (cursor >= source.len) break;
+        if (!std.mem.endsWith(u8, rel_path, ".zig")) continue;
+        if (!std.mem.startsWith(u8, rel_path, "src/")) continue;
+        if (!fileExists(std_io, rel_path)) continue;
 
-        const rel_path = source[literal_start..cursor];
+        try markReferenced(allocator, referenced, rel_path);
+        try collectModImports(allocator, std_io, rel_path, referenced);
+    }
+}
 
-        // Only consider Zig source files under src/ as potential test roots.
-        if (!std.mem.endsWith(u8, rel_path, ".zig")) {
-            search_index = cursor + 1;
-            continue;
-        }
-        if (!std.mem.startsWith(u8, rel_path, "src/")) {
-            search_index = cursor + 1;
-            continue;
-        }
-
-        const key = try allocator.dupe(u8, rel_path);
-        if (referenced.contains(key)) {
-            allocator.free(key);
-        } else {
-            try referenced.put(key, {});
-        }
-
-        search_index = cursor + 1;
+fn markReferenced(
+    allocator: Allocator,
+    referenced: *std.StringHashMap(void),
+    path: []const u8,
+) !void {
+    const key = try allocator.dupe(u8, path);
+    if (referenced.contains(key)) {
+        allocator.free(key);
+    } else {
+        try referenced.put(key, {});
     }
 }
 
@@ -365,15 +380,16 @@ fn lessThanPath(_: void, lhs: []u8, rhs: []u8) bool {
 
 fn printSuggestion(
     allocator: Allocator,
+    std_io: std.Io,
     writer: anytype,
     test_path: []const u8,
 ) !void {
-    const maybe_mod = try findNearestMod(allocator, test_path);
+    const maybe_mod = try findNearestMod(allocator, std_io, test_path);
     if (maybe_mod) |mod_path| {
         defer allocator.free(mod_path);
 
         const mod_dir = std.fs.path.dirname(mod_path) orelse ".";
-        const relative = try std.fs.path.relativePosix(allocator, mod_dir, test_path);
+        const relative = try std.fs.path.relativePosix(allocator, ".", mod_dir, test_path);
         defer allocator.free(relative);
 
         try writer.print("    {s}[HINT]{s} Should be added to {s}\n", .{
@@ -393,12 +409,12 @@ fn printSuggestion(
     }
 }
 
-fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
+fn findNearestMod(allocator: Allocator, std_io: std.Io, file_path: []const u8) !?[]u8 {
     var current_dir_opt = std.fs.path.dirname(file_path);
     while (current_dir_opt) |current_dir| {
         const joined = try std.fs.path.join(allocator, &.{ current_dir, "mod.zig" });
         const candidate = try normalizePath(allocator, joined);
-        if (fileExists(candidate)) {
+        if (fileExists(std_io, candidate)) {
             return candidate;
         }
         allocator.free(candidate);
@@ -407,8 +423,8 @@ fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
     return null;
 }
 
-fn fileExists(path: []const u8) bool {
-    _ = std.fs.cwd().statFile(path) catch return false;
+fn fileExists(std_io: std.Io, path: []const u8) bool {
+    _ = std.Io.Dir.cwd().statFile(std_io, path, .{}) catch return false;
     return true;
 }
 

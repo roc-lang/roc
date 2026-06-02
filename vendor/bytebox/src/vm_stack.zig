@@ -3684,7 +3684,6 @@ pub const StackVM = struct {
 
         var buffer = std.array_list.Managed(u8).init(allocator);
         try buffer.ensureTotalCapacity(512);
-        var writer = buffer.writer();
 
         for (self.stack.frames[0..self.stack.num_frames], 0..) |_, i| {
             const reverse_index = (self.stack.num_frames - 1) - i;
@@ -3692,7 +3691,7 @@ pub const StackVM = struct {
 
             var indent_level: usize = 0;
             while (indent_level < indent) : (indent_level += 1) {
-                try writer.print("\t", .{});
+                try buffer.appendSlice("\t");
             }
 
             const name_section: *const NameCustomSection = &frame.func.module.module_def.name_section;
@@ -3701,7 +3700,9 @@ pub const StackVM = struct {
             const func_name_index: usize = frame.func.def_index;
             const function_name = name_section.findFunctionName(func_name_index);
 
-            try writer.print("{}: {s}!{s}\n", .{ reverse_index, module_name, function_name });
+            const line = try std.fmt.allocPrint(allocator, "{}: {s}!{s}\n", .{ reverse_index, module_name, function_name });
+            defer allocator.free(line);
+            try buffer.appendSlice(line);
         }
 
         return buffer;

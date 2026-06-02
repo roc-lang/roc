@@ -31,6 +31,7 @@ pub const StaticDispatch = types.StaticDispatch;
 pub const DispatcherNotNominal = types.DispatcherNotNominal;
 pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
+pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
@@ -57,6 +58,8 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
+pub const EffectfulTopLevel = types.EffectfulTopLevel;
+pub const EffectfulExpect = types.EffectfulExpect;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;

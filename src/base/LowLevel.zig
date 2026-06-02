@@ -105,6 +105,12 @@ pub const LowLevel = enum {
     num_shift_right_by,
     num_shift_right_zf_by,
 
+    // Bitwise logical operations
+    num_bitwise_and,
+    num_bitwise_or,
+    num_bitwise_xor,
+    num_bitwise_not,
+
     // Numeric parsing operations
     num_from_numeral,
     u8_from_str,
@@ -506,13 +512,16 @@ pub const LowLevel = enum {
             .str_trim_end,
             .str_with_ascii_lowercased,
             .str_with_ascii_uppercased,
-            .str_drop_prefix,
-            .str_drop_suffix,
             .str_reserve,
             .str_release_excess_capacity,
-            .str_to_utf8,
-            .str_from_utf8,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_from_utf8,
+            => RcEffect.retainsOrReleases(),
+
+            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleases(),
 
             .list_drop_at,
             .list_sublist,
@@ -604,6 +613,10 @@ pub const LowLevel = enum {
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,
+            .num_bitwise_and,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
             .num_from_numeral,
             .u8_from_str,
             .i8_from_str,

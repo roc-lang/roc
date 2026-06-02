@@ -9,9 +9,20 @@ x : U8
 x = -1
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-NIL
+**INVALID NUMBER**
+This number literal does not fit in the inferred type:
+**u8_negative_value.md:2:5:2:7:**
+```roc
+x = -1
+```
+    ^^
+
+The inferred type is:
+
+    U8
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -46,7 +57,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U8")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "U8"))))
+		(expr (type "Error"))))
 ~~~

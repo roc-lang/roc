@@ -79,7 +79,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a => {} where [a.to_str : a -> _ret]")))
+		(patt (type "a -> {} where [a.to_str : a -> _ret]")))
 	(expressions
-		(expr (type "a => {} where [a.to_str : a -> _ret]"))))
+		(expr (type "a -> {} where [a.to_str : a -> _ret]"))))
 ~~~

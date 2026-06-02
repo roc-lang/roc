@@ -60,8 +60,7 @@ main = |_| {
 ~~~
 # EXPECTED
 TYPE MISMATCH - let_polymorphism_records.md:34:47:34:49
-MISSING METHOD - let_polymorphism_records.md:48:2:48:17
-MISSING METHOD - let_polymorphism_records.md:48:2:48:3
+TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -75,29 +74,19 @@ Other code expects this to have the type:
 
     Str
 
-**MISSING METHOD**
-This **plus** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:48:2:48:17:**
+**TYPE MISMATCH**
+I'm having trouble with this bool operation:
+**let_polymorphism_records.md:48:6:48:17:**
 ```roc
 	1 + update_data
 ```
-	^^^^^^^^^^^^^^^
+	    ^^^^^^^^^^^
 
-The value's type, which does not have a method named **plus**, is:
+Both sides of `and` must be `Bool` values, but the right side is:
 
-    {}
+    { data: a, ..b }, a -> { data: a, ..b }
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**let_polymorphism_records.md:48:2:48:3:**
-```roc
-	1 + update_data
-```
-	^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Error
+__Note:__ Roc does not have "truthiness". You must convert values to bools yourself.
 
 # TOKENS
 ~~~zig
@@ -300,21 +289,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call (constraint-fn-var 165)
+		(e-call (constraint-fn-var 225)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call (constraint-fn-var 173)
+		(e-call (constraint-fn-var 233)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call (constraint-fn-var 181)
+		(e-call (constraint-fn-var 241)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -335,7 +324,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 198)
+		(e-call (constraint-fn-var 278)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -343,7 +332,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 210)
+		(e-call (constraint-fn-var 290)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -352,7 +341,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 226)
+		(e-call (constraint-fn-var 326)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -370,20 +359,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 242)
+		(e-call (constraint-fn-var 362)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 252)
+		(e-call (constraint-fn-var 372)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 288)
+		(e-call (constraint-fn-var 468)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -398,19 +387,18 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-expr
-					(e-binop (op "add")
-						(e-num (value "1"))
-						(e-lookup-local
-							(p-assign (ident "update_data")))))
-				(e-binop (op "add")
-					(e-field-access (field "count")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "int_container")))))
-					(e-field-access (field "count")
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "str_container"))))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-dispatch-call (method "plus") (constraint-fn-var 514)
+					(receiver
+						(e-field-access (field "count")
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "int_container"))))))
+					(args
+						(e-field-access (field "count")
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "str_container")))))))))))
 ~~~
 # TYPES
 ~~~clojure

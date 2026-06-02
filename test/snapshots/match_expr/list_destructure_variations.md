@@ -114,11 +114,13 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "first")))
-						(e-lookup-local
-							(p-assign (ident "second"))))))
+					(e-dispatch-call (method "plus") (constraint-fn-var 91)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "first"))))
+						(args
+							(e-lookup-local
+								(p-assign (ident "second")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -152,14 +154,18 @@ match list {
 							(rest-at (index 3)
 								(p-assign (ident "more"))))))
 				(value
-					(e-binop (op "add")
-						(e-binop (op "add")
+					(e-dispatch-call (method "plus") (constraint-fn-var 136)
+						(receiver
+							(e-dispatch-call (method "plus") (constraint-fn-var 134)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "x"))))
+								(args
+									(e-lookup-local
+										(p-assign (ident "y"))))))
+						(args
 							(e-lookup-local
-								(p-assign (ident "x")))
-							(e-lookup-local
-								(p-assign (ident "y"))))
-						(e-lookup-local
-							(p-assign (ident "z")))))))))
+								(p-assign (ident "z"))))))))))
 ~~~
 # TYPES
 ~~~clojure

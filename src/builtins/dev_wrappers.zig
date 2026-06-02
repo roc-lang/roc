@@ -242,6 +242,9 @@ pub const StrFromUtf8Layout = extern struct {
     outer_disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
+    inner_disc_offset: u32,
+    inner_disc_size: u32,
+    inner_bad_utf8_tag: u32,
 };
 
 /// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
@@ -264,6 +267,7 @@ pub fn roc_builtins_str_from_utf8_result(
 
     utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
     utils.writeAs(u8, out + layout.err_problem_offset, @intFromEnum(result.problem_code), @src());
+    writeDiscriminant(out, layout.inner_disc_offset, layout.inner_disc_size, layout.inner_bad_utf8_tag);
     writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
 
@@ -333,13 +337,23 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
             pos += 1;
         }
         heap_ptr[pos] = '"';
-        out.* = .{ .bytes = heap_ptr, .length = result_len, .capacity_or_alloc_ptr = result_len };
+        out.* = .{ .bytes = heap_ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(result_len), .length = result_len };
     }
 }
 
 /// Wrapper: project a runtime RocStr to the host dbg ABI using the actual RocStr storage.
 pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
     roc_ops.dbg(str_ptr.asSlice());
+}
+
+/// Report a failed `expect` using static message bytes owned by generated code.
+pub fn roc_builtins_roc_expect_failed(msg_bytes: [*]const u8, msg_len: usize, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.expectFailed(msg_bytes[0..msg_len]);
+}
+
+/// Report a Roc crash using static message bytes owned by generated code.
+pub fn roc_builtins_roc_crashed(msg_bytes: [*]const u8, msg_len: usize, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.crash(msg_bytes[0..msg_len]);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -800,10 +814,15 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
         @memcpy(heap_ptr[0..slice.len], slice);
         out.* = .{
             .bytes = heap_ptr,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(slice.len),
             .length = slice.len,
-            .capacity_or_alloc_ptr = slice.len,
         };
     }
+}
+
+/// Build a RocStr from static literal bytes owned by generated code.
+pub fn roc_builtins_str_from_literal(out: *RocStr, bytes: [*]const u8, len: usize, roc_ops: *RocOps) callconv(.c) void {
+    writeRocStrFromSlice(out, bytes[0..len], roc_ops);
 }
 
 /// Wrapper: decToStrC (decomposed i128)
@@ -960,7 +979,7 @@ pub fn roc_builtins_int_try_unsigned(out: [*]u8, val: u64, max_val: u64, payload
 }
 
 /// Dec → integer try unsafe
-pub fn roc_builtins_dec_to_int_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
+pub fn roc_builtins_dec_to_int_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, target_is_signed: u32, val_size: u32, success_offset: u32, value_offset: u32) callconv(.c) void {
     const dec_val: i128 = @bitCast(i128h.from_u64_pair(dec_low, dec_high));
     const one = dec.RocDec.one_point_zero_i128;
 
@@ -979,15 +998,14 @@ pub fn roc_builtins_dec_to_int_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u6
 
     if (is_int and in_range) {
         const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(int_val)));
-        @memcpy(out[0..val_size], v_bytes[0..val_size]);
+        @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
     }
 
-    out[val_size] = @intFromBool(is_int);
-    out[val_size + 1] = @intFromBool(in_range);
+    out[success_offset] = @intFromBool(is_int and in_range);
 }
 
 /// f64 → integer try unsafe
-pub fn roc_builtins_f64_to_int_try_unsafe(out: [*]u8, val: f64, target_bits: u32, target_is_signed: u32, val_size: u32) callconv(.c) void {
+pub fn roc_builtins_f64_to_int_try_unsafe(out: [*]u8, val: f64, target_bits: u32, target_is_signed: u32, val_size: u32, success_offset: u32, value_offset: u32) callconv(.c) void {
     const is_int: bool = !std.math.isNan(val) and !std.math.isInf(val) and @trunc(val) == val;
 
     const in_range: bool = blk: {
@@ -1022,73 +1040,81 @@ pub fn roc_builtins_f64_to_int_try_unsafe(out: [*]u8, val: f64, target_bits: u32
             if (val_size <= 8) {
                 const v: i64 = @intFromFloat(val);
                 const v_bytes: [8]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
             } else {
                 const v: i128 = i128h.f64_to_i128(val);
                 const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(v)));
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
             }
         } else {
             if (val_size <= 8) {
                 const v: u64 = @intFromFloat(val);
                 const v_bytes: [8]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
             } else {
                 const v: u128 = i128h.f64_to_u128(val);
                 const v_bytes: [16]u8 = @bitCast(v);
-                @memcpy(out[0..val_size], v_bytes[0..val_size]);
+                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
             }
         }
     }
 
-    out[val_size] = @intFromBool(is_int);
-    out[val_size + 1] = @intFromBool(in_range);
+    out[success_offset] = @intFromBool(is_int and in_range);
 }
 
 /// Dec → f32 try unsafe
-pub fn roc_builtins_dec_to_f32_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64) callconv(.c) void {
+pub fn roc_builtins_dec_to_f32_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64, success_offset: u32, value_offset: u32) callconv(.c) void {
     const dec_val: i128 = @bitCast(i128h.from_u64_pair(dec_low, dec_high));
     const f64_val: f64 = dec.toF64(dec.RocDec{ .num = dec_val });
     const f32_val: f32 = @floatCast(f64_val);
     const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(f64_val) or std.math.isNan(f32_val));
     const f32_bytes: [4]u8 = @bitCast(f32_val);
-    @memcpy(out[0..4], &f32_bytes);
-    out[4] = @intFromBool(success);
+    @memcpy(out[value_offset..][0..4], &f32_bytes);
+    out[success_offset] = @intFromBool(success);
 }
 
 /// f64 → f32 try unsafe
-pub fn roc_builtins_f64_to_f32_try_unsafe(out: [*]u8, val: f64) callconv(.c) void {
+pub fn roc_builtins_f64_to_f32_try_unsafe(out: [*]u8, val: f64, success_offset: u32, value_offset: u32) callconv(.c) void {
     const f32_val: f32 = @floatCast(val);
     const success: bool = !std.math.isInf(f32_val) and (!std.math.isNan(val) or std.math.isNan(f32_val));
     const f32_bytes: [4]u8 = @bitCast(f32_val);
-    @memcpy(out[0..4], &f32_bytes);
-    out[4] = @intFromBool(success);
+    @memcpy(out[value_offset..][0..4], &f32_bytes);
+    out[success_offset] = @intFromBool(success);
 }
 
 /// i128 → Dec try unsafe
-pub fn roc_builtins_i128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+pub fn roc_builtins_i128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u64, success_offset: u32, value_offset: u32) callconv(.c) void {
     const val: i128 = @bitCast(i128h.from_u64_pair(val_low, val_high));
     const result = dec.RocDec.fromWholeInt(val);
     const success = result != null;
     const dec_val: i128 = if (result) |d| d.num else 0;
     const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
-    @memcpy(out[0..16], &dec_bytes);
-    out[16] = @intFromBool(success);
+    @memcpy(out[value_offset..][0..16], &dec_bytes);
+    out[success_offset] = @intFromBool(success);
 }
 
 /// u128 → Dec try unsafe
-pub fn roc_builtins_u128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u64) callconv(.c) void {
+pub fn roc_builtins_u128_to_dec_try_unsafe(out: [*]u8, val_low: u64, val_high: u64, success_offset: u32, value_offset: u32) callconv(.c) void {
     const val: u128 = i128h.from_u64_pair(val_low, val_high);
     const fits_i128 = val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
     const result: ?dec.RocDec = if (fits_i128) dec.RocDec.fromWholeInt(@as(i128, @bitCast(val))) else null;
     const success = result != null;
     const dec_val: i128 = if (result) |d| d.num else 0;
     const dec_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(dec_val)));
-    @memcpy(out[0..16], &dec_bytes);
-    out[16] = @intFromBool(success);
+    @memcpy(out[value_offset..][0..16], &dec_bytes);
+    out[success_offset] = @intFromBool(success);
 }
 
 // ── Dec arithmetic wrappers (decomposed i128) ──
+
+/// Dec multiply (decomposed)
+pub fn roc_builtins_dec_mul(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
+    const result = dec.mulOrPanicC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+}
 
 /// Dec multiply saturated (decomposed)
 pub fn roc_builtins_dec_mul_saturated(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
@@ -1361,4 +1387,124 @@ pub fn roc_builtins_float_from_str(
         8 => writeFloatParseResult(f64, out, disc_offset, roc_str),
         else => unreachable,
     }
+}
+
+// ── List equality and reverse wrappers ──
+
+/// Compare two lists of flat (non-refcounted) elements for equality.
+/// Elements are compared byte-by-byte using the element width.
+pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, elem_width: usize) callconv(.c) bool {
+    if (a_len != b_len) return false;
+    if (a_len == 0) return true;
+    if (a_bytes == b_bytes) return true;
+    const a = a_bytes orelse return b_bytes == null;
+    const b = b_bytes orelse return false;
+    return std.mem.eql(u8, a[0 .. a_len * elem_width], b[0 .. b_len * elem_width]);
+}
+
+/// Compare two lists of strings for equality.
+pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize) callconv(.c) bool {
+    if (a_len != b_len) return false;
+    if (a_len == 0) return true;
+    if (a_bytes == b_bytes) return true;
+    const a = a_bytes orelse return b_bytes == null;
+    const b = b_bytes orelse return false;
+    const str_size = @sizeOf(RocStr);
+    for (0..a_len) |i| {
+        const a_str: *const RocStr = @ptrCast(@alignCast(a + i * str_size));
+        const b_str: *const RocStr = @ptrCast(@alignCast(b + i * str_size));
+        if (!strEqual(a_str.*, b_str.*)) return false;
+    }
+    return true;
+}
+
+/// Compare two lists of lists for equality (inner elements are flat).
+pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, inner_elem_width: usize) callconv(.c) bool {
+    if (a_len != b_len) return false;
+    if (a_len == 0) return true;
+    if (a_bytes == b_bytes) return true;
+    const a = a_bytes orelse return b_bytes == null;
+    const b = b_bytes orelse return false;
+    const list_size = @sizeOf(RocList);
+    for (0..a_len) |i| {
+        const a_list: *const RocList = @ptrCast(@alignCast(a + i * list_size));
+        const b_list: *const RocList = @ptrCast(@alignCast(b + i * list_size));
+        if (a_list.length != b_list.length) return false;
+        if (a_list.length == 0) continue;
+        if (a_list.bytes == b_list.bytes) continue;
+        const ab = a_list.bytes orelse return b_list.bytes == null;
+        const bb = b_list.bytes orelse return false;
+        if (!std.mem.eql(u8, ab[0 .. a_list.length * inner_elem_width], bb[0 .. b_list.length * inner_elem_width])) return false;
+    }
+    return true;
+}
+
+/// Reverse a list of flat elements.
+pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: usize, _: usize, elem_width: usize, alignment: u32, roc_ops: *RocOps) callconv(.c) void {
+    if (list_len == 0 or elem_width == 0) {
+        out.* = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+        return;
+    }
+    const src = list_bytes orelse {
+        out.* = RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
+        return;
+    };
+    const total_bytes = list_len * elem_width;
+    const dest = allocateWithRefcountC(total_bytes, alignment, false, roc_ops);
+    // Copy elements in reverse order
+    var i: usize = 0;
+    while (i < list_len) : (i += 1) {
+        const src_offset = (list_len - 1 - i) * elem_width;
+        const dst_offset = i * elem_width;
+        @memcpy(dest[dst_offset .. dst_offset + elem_width], src[src_offset .. src_offset + elem_width]);
+    }
+    out.* = RocList{ .bytes = dest, .length = list_len, .capacity_or_alloc_ptr = list_len };
+}
+
+/// i32 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i32_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    return @mod(a, b);
+}
+
+/// i8 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i8_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: i8 = @intCast(a);
+    const rhs: i8 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// u8 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u8_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: u8 = @intCast(a);
+    const rhs: u8 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// i16 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i16_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: i16 = @intCast(a);
+    const rhs: i16 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// u16 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u16_mod_by(a: i32, b: i32) callconv(.c) i32 {
+    const lhs: u16 = @intCast(a);
+    const rhs: u16 = @intCast(b);
+    return @intCast(@mod(lhs, rhs));
+}
+
+/// u32 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u32_mod_by(a: u32, b: u32) callconv(.c) u32 {
+    return @mod(a, b);
+}
+
+/// i64 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_i64_mod_by(a: i64, b: i64) callconv(.c) i64 {
+    return @mod(a, b);
+}
+
+/// u64 modulo (floored division mod, not truncated remainder)
+pub fn roc_builtins_u64_mod_by(a: u64, b: u64) callconv(.c) u64 {
+    return @mod(a, b);
 }

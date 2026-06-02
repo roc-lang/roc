@@ -30,8 +30,23 @@ runs:
           trap 'rm -f "$output_file"' EXIT
 
           set +e
-          eval "${{ inputs.command }}" 2>&1 | tee "$output_file"
-          exit_code=${PIPESTATUS[0]}
+          heartbeat() {
+            while true; do
+              sleep 300
+              echo "[flaky-retry] command still running after ${SECONDS}s..."
+            done
+          }
+          heartbeat &
+          heartbeat_pid=$!
+          # Avoid piping through tee here. Some Zig build children can inherit
+          # the pipe and keep it open after Zig has already exited successfully.
+          eval "${{ inputs.command }}" > "$output_file" 2>&1 &
+          command_pid=$!
+          wait "$command_pid"
+          exit_code=$?
+          kill "$heartbeat_pid" 2>/dev/null || true
+          wait "$heartbeat_pid" 2>/dev/null || true
+          cat "$output_file"
           set -e
 
 

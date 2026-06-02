@@ -2466,7 +2466,7 @@ test "relocatable call stabilizes memory args before clobbering base param regis
     var emit = Emit.init(std.testing.allocator);
     defer emit.deinit();
 
-    var relocs = std.ArrayList(Relocation){};
+    var relocs = std.ArrayList(Relocation).empty;
     defer relocs.deinit(std.testing.allocator);
 
     var stack_offset: i32 = 0;

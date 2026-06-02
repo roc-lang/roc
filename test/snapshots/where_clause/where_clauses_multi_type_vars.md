@@ -9,9 +9,20 @@ process : a, b -> c where [a.convert : a -> c, b.transform : b -> c]
 process = |_, _| ...
 ~~~
 # EXPECTED
-NIL
+NOT IMPLEMENTED - where_clauses_multi_type_vars.md:1:1:1:1
 # PROBLEMS
-NIL
+**NOT IMPLEMENTED**
+This feature is not yet implemented: ellipsis expression
+
+**where_clauses_multi_type_vars.md:1:1:1:1:**
+```roc
+process : a, b -> c where [a.convert : a -> c, b.transform : b -> c]
+```
+^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,CloseSquare,
@@ -58,7 +69,7 @@ NO CHANGE
 			(args
 				(p-underscore)
 				(p-underscore))
-			(e-not-implemented))
+			(e-runtime-error (tag "not_implemented")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

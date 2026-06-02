@@ -59,12 +59,13 @@ pub const GlueError = error{
     CompilationFailed,
     ModuleRetrieval,
     OutOfMemory,
+    WriteFailed,
 };
 
 /// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
 /// Hosted function ordering comes from published `HostedProcTable` records.
-pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
-    rocGlueInner(gpa, stderr, stdout, args, temp_dir) catch |err| {
+pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
+    rocGlueInner(gpa, stderr, stdout, args, temp_dir, std_io) catch |err| {
         (switch (err) {
             error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
             error.NotPlatformFile => blk: {
@@ -80,21 +81,23 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
+            error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
         }) catch {};
         return err;
     };
 }
 
-fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8) GlueError!void {
+fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
+
     // 0. Validate glue spec file exists
-    std.fs.cwd().access(args.glue_spec, .{}) catch {
+    std.Io.Dir.cwd().access(std_io, args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
 
     // 1. Parse platform header to get requires entries and verify it's a platform file.
     // Header parsing is still allowed here because it is parser-stage syntax handling,
     // not post-check semantic recovery.
-    const platform_info = parsePlatformHeader(gpa, args.platform_path) catch |err| {
+    const platform_info = parsePlatformHeader(gpa, args.platform_path, std_io) catch |err| {
         return switch (err) {
             error.NotPlatformFile => error.NotPlatformFile,
             error.FileNotFound => error.FileNotFound,
@@ -106,14 +109,15 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 2. Compile platform using BuildEnv by creating a synthetic app.
     // BuildEnv publishes checked artifacts for both the synthetic app and the platform.
-    const platform_abs_path = std.fs.cwd().realpathAlloc(gpa, args.platform_path) catch {
+    const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.platform_path, gpa) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
 
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(gpa);
-    const w = app_source.writer(gpa);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &app_source);
+    const w = &aw.writer;
 
     try w.print("app [", .{});
 
@@ -150,23 +154,25 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
     }
 
+    // Sync the writer back to app_source
+    app_source = aw.toArrayList();
     const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
         return error.OutOfMemory;
     };
     defer gpa.free(synthetic_app_path);
 
-    std.fs.cwd().writeFile(.{
+    std.Io.Dir.cwd().writeFile(std_io, .{
         .sub_path = synthetic_app_path,
         .data = app_source.items,
     }) catch {
         return error.SyntheticAppWrite;
     };
 
-    const cwd = std.process.getCwdAlloc(gpa) catch {
+    const cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(cwd);
-    var build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd) catch {
+    var build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, std_io) catch {
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
@@ -261,16 +267,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     // 5. Compile glue spec through checked artifacts and lower to LIR.
-    const glue_spec_abs = std.fs.cwd().realpathAlloc(gpa, args.glue_spec) catch {
+    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.glue_spec, gpa) catch {
         return error.GlueSpecNotFound;
     };
     defer gpa.free(glue_spec_abs);
 
-    const glue_cwd = std.process.getCwdAlloc(gpa) catch {
+    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
         return error.BuildEnvInit;
     };
     defer gpa.free(glue_cwd);
-    var glue_build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd) catch {
+    var glue_build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd, std_io) catch {
         return error.BuildEnvInit;
     };
     defer glue_build_env.deinit();
@@ -291,13 +297,13 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer gpa.free(relation_artifacts);
 
-    var lowered = lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{ .requests = root_artifact.root_requests.requests },
+        .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = base.target.TargetUsize.native,
         },
@@ -323,8 +329,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
 
     // 6. Construct List(Types) using the exact committed LIR layout and invoke the LIR interpreter.
     const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
-    var default_roc_ops_env: echo_platform.DefaultRocOpsEnv = .{};
-    var roc_ops = echo_platform.makeDefaultRocOps(&default_roc_ops_env, @constCast(&hosted_function_ptrs));
+    var echo_env = echo_platform.EchoEnv{ .std_io = std_io };
+    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, @constCast(&hosted_function_ptrs));
     const glue_writer = GlueRocValueWriter{
         .layouts = &lowered.lir_result.layouts,
         .schemas = &lowered.runtime_value_schemas,
@@ -376,7 +382,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return;
     }
 
-    std.fs.cwd().makePath(args.output_dir) catch {
+    std.Io.Dir.cwd().createDirPath(std_io, args.output_dir) catch {
         stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
         return error.CompilationFailed;
     };
@@ -389,7 +395,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         };
         defer gpa.free(file_path);
 
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(std_io, .{
             .sub_path = file_path,
             .data = file.content,
         }) catch {
@@ -631,9 +637,9 @@ pub const PlatformHeaderInfo = struct {
 };
 
 /// Parse a platform header to extract requires entries and validate it's a platform file.
-fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeaderInfo {
+fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) !PlatformHeaderInfo {
     // Read source file
-    var source = std.fs.cwd().readFileAlloc(gpa, platform_path, std.math.maxInt(usize)) catch |err| switch (err) {
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return error.ParseFailed,
     };
@@ -654,12 +660,8 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8) !PlatformHeade
     env.module_name = module_name;
     env.common.calcLineStarts(gpa) catch return error.OutOfMemory;
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(gpa);
-    defer allocators.deinit();
-
     // Parse the source code
-    var parse_ast = parse.parse(&allocators, &env.common) catch return error.ParseFailed;
+    var parse_ast = parse.parse(gpa, &env.common) catch return error.ParseFailed;
     defer parse_ast.deinit();
 
     // Get the file header
@@ -1083,26 +1085,8 @@ const TypeTable = struct {
     ) CollectedTypeRepr {
         var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
         defer all_fields.deinit(self.gpa);
-        all_fields.appendSlice(self.gpa, fields) catch return self.oomUnknown("record");
-        if (ext) |ext_id| self.appendRecordExtFields(artifact, ext_id, &all_fields);
+        appendRecordRowFields(self.gpa, artifact, fields, ext, &all_fields) catch return self.oomUnknown("record");
         return self.convertRecordFields(artifact, all_fields.items);
-    }
-
-    fn appendRecordExtFields(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        ext: CheckedArtifact.CheckedTypeId,
-        fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-    ) void {
-        switch (checkedTypePayload(artifact, ext)) {
-            .empty_record => {},
-            .record => |record| {
-                fields.appendSlice(self.gpa, record.fields) catch glueInvariant("could not allocate extended record fields", .{});
-                self.appendRecordExtFields(artifact, record.ext, fields);
-            },
-            .record_unbound => |unbound| fields.appendSlice(self.gpa, unbound) catch glueInvariant("could not allocate unbound record fields", .{}),
-            else => glueInvariant("non-record extension reached glue record conversion", .{}),
-        }
     }
 
     fn convertRecordFields(
@@ -1277,8 +1261,7 @@ const TypeTable = struct {
     ) CollectedTypeRepr {
         var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
         defer all_tags.deinit(self.gpa);
-        all_tags.appendSlice(self.gpa, tags) catch return self.oomUnknown("tag_union");
-        self.appendTagUnionExtTags(artifact, ext, &all_tags);
+        appendTagRowTags(self.gpa, artifact, tags, ext, &all_tags) catch return self.oomUnknown("tag_union");
 
         if (all_tags.items.len == 0) return .unit;
 
@@ -1403,22 +1386,6 @@ const TypeTable = struct {
         } };
     }
 
-    fn appendTagUnionExtTags(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        ext: CheckedArtifact.CheckedTypeId,
-        tags: *std.ArrayList(CheckedArtifact.CheckedTag),
-    ) void {
-        switch (checkedTypePayload(artifact, ext)) {
-            .empty_tag_union => {},
-            .tag_union => |tag_union| {
-                tags.appendSlice(self.gpa, tag_union.tags) catch glueInvariant("could not allocate extended tag-union tags", .{});
-                self.appendTagUnionExtTags(artifact, tag_union.ext, tags);
-            },
-            else => glueInvariant("non-tag-union extension reached glue tag-union conversion", .{}),
-        }
-    }
-
     fn convertFunc(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -1483,8 +1450,8 @@ const GlueRocValueWriter = struct {
         if (record_layout.tag != .struct_) {
             glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @intFromEnum(record_layout_idx) });
         }
-        const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.data.struct_.idx, field_index);
-        const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.data.struct_.idx, field_index);
+        const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, field_index);
+        const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, field_index);
         return .{
             .ptr = record_base + offset,
             .layout_idx = field_layout,
@@ -1499,7 +1466,7 @@ const GlueRocValueWriter = struct {
     fn listElementLayout(self: *const GlueRocValueWriter, list_layout_idx: layout.Idx) layout.Idx {
         const list_layout = self.layouts.getLayout(list_layout_idx);
         return switch (list_layout.tag) {
-            .list => list_layout.data.list,
+            .list => list_layout.getIdx(),
             .list_of_zst => .zst,
             else => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };
@@ -1531,7 +1498,7 @@ const GlueRocValueWriter = struct {
         }
         if (elem_size == 0) {
             return .{
-                .list = .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = len },
+                .list = .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len) },
                 .bytes = null,
                 .elem_layout = elem_layout,
                 .elem_size = elem_size,
@@ -1552,7 +1519,7 @@ const GlueRocValueWriter = struct {
             .list = .{
                 .bytes = bytes,
                 .length = len,
-                .capacity_or_alloc_ptr = len,
+                .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(len),
             },
             .bytes = bytes,
             .elem_layout = elem_layout,
@@ -1633,8 +1600,8 @@ fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
 
         return RocStr{
             .bytes = first_element,
+            .capacity_or_alloc_ptr = RocStr.encodeCapacity(SMALL_STRING_SIZE),
             .length = str.len,
-            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
         };
     } else {
         return RocStr.fromSlice(str, roc_ops);
@@ -1992,8 +1959,8 @@ fn extractGlueResult(
     result_base: [*]const u8,
     result_layout: layout.Idx,
 ) GlueResultFiles {
-    const ok_index = writer.tagIndex("Try", "Ok");
-    const err_index = writer.tagIndex("Try", "Err");
+    const ok_index = writer.tagIndex("Builtin.Try", "Ok");
+    const err_index = writer.tagIndex("Builtin.Try", "Err");
     const discriminant = writer.readTagDiscriminant(result_base, result_layout);
 
     if (discriminant == ok_index) {
@@ -2049,6 +2016,76 @@ fn checkedTypeRootForScheme(
 ) CheckedArtifact.CheckedTypeId {
     return (artifact.checked_types.schemeForKey(scheme_key) orelse
         glueInvariant("checked type scheme missing from artifact", .{})).root;
+}
+
+fn appendRecordRowFields(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    head: []const CheckedArtifact.CheckedRecordField,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
+) Allocator.Error!void {
+    try fields.appendSlice(gpa, head);
+
+    var current = ext;
+    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer seen.deinit();
+
+    while (current) |current_id| {
+        if (seen.contains(current_id)) break;
+        try seen.put(current_id, {});
+
+        switch (checkedTypePayload(artifact, current_id)) {
+            .alias => |alias| current = alias.backing,
+            .empty_record => break,
+            .flex, .rigid => |variable| {
+                if (variable.row_default == .empty_record) break;
+                glueInvariant("open non-record checked row reached glue record conversion", .{});
+            },
+            .record => |record| {
+                try fields.appendSlice(gpa, record.fields);
+                current = record.ext;
+            },
+            .record_unbound => |tail_fields| {
+                try fields.appendSlice(gpa, tail_fields);
+                break;
+            },
+            else => glueInvariant("non-record checked row reached glue record conversion", .{}),
+        }
+    }
+}
+
+fn appendTagRowTags(
+    gpa: std.mem.Allocator,
+    artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    head: []const CheckedArtifact.CheckedTag,
+    ext: ?CheckedArtifact.CheckedTypeId,
+    tags: *std.ArrayList(CheckedArtifact.CheckedTag),
+) Allocator.Error!void {
+    try tags.appendSlice(gpa, head);
+
+    var current = ext;
+    var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
+    defer seen.deinit();
+
+    while (current) |current_id| {
+        if (seen.contains(current_id)) break;
+        try seen.put(current_id, {});
+
+        switch (checkedTypePayload(artifact, current_id)) {
+            .alias => |alias| current = alias.backing,
+            .empty_tag_union => break,
+            .flex, .rigid => |variable| {
+                if (variable.row_default == .empty_tag_union) break;
+                glueInvariant("open non-tag checked row reached glue tag-union conversion", .{});
+            },
+            .tag_union => |tag_union| {
+                try tags.appendSlice(gpa, tag_union.tags);
+                current = tag_union.ext;
+            },
+            else => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+        }
+    }
 }
 
 fn typeStringAlloc(
@@ -2143,8 +2180,7 @@ fn writeRecordTypeString(
 ) Allocator.Error!void {
     var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
     defer all_fields.deinit(gpa);
-    try all_fields.appendSlice(gpa, fields);
-    if (ext) |ext_id| appendRecordStringExtFields(gpa, artifact, ext_id, &all_fields);
+    try appendRecordRowFields(gpa, artifact, fields, ext, &all_fields);
 
     if (all_fields.items.len == 0) {
         try buf.appendSlice(gpa, "{}");
@@ -2179,23 +2215,6 @@ fn writeRecordTypeString(
     try buf.appendSlice(gpa, " }");
 }
 
-fn appendRecordStringExtFields(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ext: CheckedArtifact.CheckedTypeId,
-    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) void {
-    switch (checkedTypePayload(artifact, ext)) {
-        .empty_record => {},
-        .record => |record| {
-            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record type-string extension", .{});
-            appendRecordStringExtFields(gpa, artifact, record.ext, fields);
-        },
-        .record_unbound => |unbound| fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate record type-string unbound fields", .{}),
-        else => glueInvariant("non-record extension reached glue type string", .{}),
-    }
-}
-
 fn writeTupleTypeString(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
@@ -2221,8 +2240,7 @@ fn writeTagUnionTypeString(
 ) Allocator.Error!void {
     var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
     defer all_tags.deinit(gpa);
-    try all_tags.appendSlice(gpa, tags);
-    appendTagStringExtTags(gpa, artifact, ext, &all_tags);
+    try appendTagRowTags(gpa, artifact, tags, ext, &all_tags);
 
     try buf.append(gpa, '[');
     for (all_tags.items, 0..) |tag, i| {
@@ -2238,22 +2256,6 @@ fn writeTagUnionTypeString(
         }
     }
     try buf.append(gpa, ']');
-}
-
-fn appendTagStringExtTags(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ext: CheckedArtifact.CheckedTypeId,
-    tags: *std.ArrayList(CheckedArtifact.CheckedTag),
-) void {
-    switch (checkedTypePayload(artifact, ext)) {
-        .empty_tag_union => {},
-        .tag_union => |tag_union| {
-            tags.appendSlice(gpa, tag_union.tags) catch glueInvariant("could not allocate tag-union type-string extension", .{});
-            appendTagStringExtTags(gpa, artifact, tag_union.ext, tags);
-        },
-        else => glueInvariant("non-tag-union extension reached glue type string", .{}),
-    }
 }
 
 fn functionPayloadForRoot(
@@ -2276,7 +2278,9 @@ fn extractRecordFields(
 ) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
     var fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
     defer fields.deinit(gpa);
-    if (!collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields)) {
+    if (!(collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields) catch {
+        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    })) {
         return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
     }
 
@@ -2314,38 +2318,20 @@ fn collectRecordFieldsForRoot(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
     fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) bool {
+) Allocator.Error!bool {
     switch (checkedTypePayload(artifact, checked_type)) {
-        .alias => |alias| return collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
-        .nominal => |nominal| return collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
+        .alias => |alias| return try collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
+        .nominal => |nominal| return try collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
         .record => |record| {
-            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record field extraction", .{});
-            collectRecordExtFields(gpa, artifact, record.ext, fields);
+            try appendRecordRowFields(gpa, artifact, record.fields, record.ext, fields);
             return true;
         },
         .record_unbound => |unbound| {
-            fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate unbound record field extraction", .{});
+            try fields.appendSlice(gpa, unbound);
             return true;
         },
         .empty_record => return true,
         else => return false,
-    }
-}
-
-fn collectRecordExtFields(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    ext: CheckedArtifact.CheckedTypeId,
-    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) void {
-    switch (checkedTypePayload(artifact, ext)) {
-        .empty_record => {},
-        .record => |record| {
-            fields.appendSlice(gpa, record.fields) catch glueInvariant("could not allocate record extension extraction", .{});
-            collectRecordExtFields(gpa, artifact, record.ext, fields);
-        },
-        .record_unbound => |unbound| fields.appendSlice(gpa, unbound) catch glueInvariant("could not allocate unbound record extension extraction", .{}),
-        else => glueInvariant("non-record extension reached record field extraction", .{}),
     }
 }
 

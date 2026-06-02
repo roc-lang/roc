@@ -523,7 +523,7 @@ const Unifier = struct {
                     try self.unifyGuarded(backing_var, vars.b.var_);
                 }
             },
-            .rigid => |_| {
+            .rigid => {
                 try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
@@ -537,25 +537,10 @@ const Unifier = struct {
                 }
             },
             .structure => {
-                // When unifying an alias with a concrete structure, we
-                // want to preserve the alias for display while ensuring the
-                // types are compatible.
-
-                // First, we unify the concrete var with the alias backing var
-                // IMPORTANT: The arg order here is important! Unifying
-                // updates the second var to hold the type, and the first
-                // var to redirect to the second
+                // Structural aliases are transparent. The concrete structure
+                // constrains the alias backing; alias spelling is checked
+                // presentation data, not union-find representative shape.
                 try self.unifyGuarded(vars.b.var_, backing_var);
-
-                // Next, we create a fresh alias (which internally points to `backing_var`),
-                // then we redirect both a & b to the new alias.
-                const fresh_alias_var = try self.fresh(vars, .{ .alias = a_alias });
-
-                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
-                // Because of this, we do not loose any rank information.
-                // This is essentially a custom `self.merge` strategy
-                try self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var);
-                try self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var);
             },
             .err => self.merge(vars, .err),
         }
@@ -634,27 +619,11 @@ const Unifier = struct {
             },
             .rigid => return error.TypeMismatch,
             .alias => |b_alias| {
-                // When unifying an alias with a concrete structure, we
-                // want to preserve the alias for display while ensuring the
-                // types are compatible.
-
                 const backing_var = self.types_store.getAliasBackingVar(b_alias);
-
-                // First, we unify the concrete var with the alias backing var
-                // IMPORTANT: The arg order here is important! Unifying
-                // updates the second var to hold the type, and the first
-                // var to redirect to the second
+                // Structural aliases are transparent. The concrete structure
+                // constrains the alias backing; alias spelling is checked
+                // presentation data, not union-find representative shape.
                 try self.unifyGuarded(vars.a.var_, backing_var);
-
-                // Next, we create a fresh alias (which internally points to `backing_var`),
-                // then we redirect both a & b to the new alias.
-                const fresh_alias_var = try self.fresh(vars, .{ .alias = b_alias });
-
-                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
-                // Because of this, we do not loose any rank information.
-                // This is essentially a custom `self.merge` strategy
-                try self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var);
-                try self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var);
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
@@ -2288,7 +2257,11 @@ const Unifier = struct {
         );
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(two_constraints.b);
+            var constraint = two_constraints.b;
+            if (two_constraints.a.origin == .from_numeral and two_constraints.b.origin == .from_numeral) {
+                constraint.num_literal = mergeFromNumeralLiteralInfo(two_constraints.a.num_literal, two_constraints.b.num_literal);
+            }
+            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
         }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
@@ -2425,6 +2398,46 @@ const Unifier = struct {
         };
     }
 };
+
+fn mergeFromNumeralLiteralInfo(
+    a: ?types_mod.NumeralInfo,
+    b: ?types_mod.NumeralInfo,
+) ?types_mod.NumeralInfo {
+    const a_info = a orelse return b;
+    const b_info = b orelse return a;
+
+    var merged = if (!numeralInfoFitsDec(a_info)) a_info else b_info;
+    merged.is_negative = a_info.is_negative or b_info.is_negative;
+    merged.is_fractional = a_info.is_fractional or b_info.is_fractional;
+    merged.fits_dec = mergeFitsDec(a_info.fits_dec, b_info.fits_dec);
+    merged.frac_requirements = mergeFracRequirements(a_info, b_info);
+    return merged;
+}
+
+fn mergeFitsDec(a: ?bool, b: ?bool) ?bool {
+    if (a == false or b == false) return false;
+    if (a == true or b == true) return true;
+    return null;
+}
+
+fn mergeFracRequirements(
+    a: types_mod.NumeralInfo,
+    b: types_mod.NumeralInfo,
+) ?types_mod.FracRequirements {
+    if (!a.is_fractional) return b.frac_requirements;
+    if (!b.is_fractional) return a.frac_requirements;
+
+    const a_req = a.frac_requirements orelse return null;
+    const b_req = b.frac_requirements orelse return null;
+    return a_req.unify(b_req);
+}
+
+fn numeralInfoFitsDec(info: types_mod.NumeralInfo) bool {
+    if (!info.is_fractional) return true;
+    if (info.fits_dec) |fits| return fits;
+    const requirements = info.frac_requirements orelse return false;
+    return requirements.fits_in_dec;
+}
 
 /// A list of constraint that should apply to concrete type
 pub const DeferredConstraintCheck = struct {

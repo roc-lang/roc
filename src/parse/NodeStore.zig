@@ -9,6 +9,7 @@ const base = @import("base");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
+const NumericLiteral = @import("NumericLiteral.zig");
 const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
@@ -45,6 +46,8 @@ scratch_target_entries: base.Scratch(AST.TargetEntry.Idx),
 scratch_target_files: base.Scratch(AST.TargetFile.Idx),
 scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
 scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
+numeric_literals: std.ArrayList(NumericLiteral.Stored),
+numeric_literal_bytes: std.ArrayList(u8),
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from AST unions. Update these when modifying the unions.
@@ -54,7 +57,7 @@ pub const AST_HEADER_NODE_COUNT = 6;
 /// Count of the statement nodes in the AST
 pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
-pub const AST_PATTERN_NODE_COUNT = 15;
+pub const AST_PATTERN_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
@@ -83,6 +86,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa),
         .scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa),
         .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
+        .numeric_literals = try std.ArrayList(NumericLiteral.Stored).initCapacity(gpa, capacity / 8),
+        .numeric_literal_bytes = try std.ArrayList(u8).initCapacity(gpa, capacity),
     };
 
     const expected_idx = store.nodes.items.len;
@@ -122,6 +127,8 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_target_files.deinit();
     store.scratch_for_clause_type_aliases.deinit();
     store.scratch_requires_entries.deinit();
+    store.numeric_literals.deinit(store.gpa);
+    store.numeric_literal_bytes.deinit(store.gpa);
 }
 
 /// Ensures that all scratch buffers in the store
@@ -144,22 +151,13 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_requires_entries.clearFrom(0);
 }
 
-const StderrWriter = std.io.GenericWriter(std.fs.File, std.fs.File.WriteError, struct {
-    fn write(file: std.fs.File, bytes: []const u8) std.fs.File.WriteError!usize {
-        return file.write(bytes);
-    }
-}.write);
-
 /// Prints debug information about all nodes and scratch buffers in the store.
-pub fn debug(store: *NodeStore) void {
-    if (comptime builtin.target.os.tag != .freestanding) {
-        const stderr_writer: StderrWriter = .{ .context = std.fs.File.stderr() };
-        store.debugTo(stderr_writer.any()) catch {};
-    }
+pub fn debug(store: *NodeStore, writer: *std.Io.Writer) void {
+    store.debugTo(writer) catch {};
 }
 
 /// Writes debug information about all nodes and scratch buffers to the given writer.
-pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
+pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) !void {
     try writer.print("\n==> IR.NodeStore DEBUG <==\n", .{});
     try writer.print("Nodes:\n", .{});
     var nodes_iter = store.nodes.iterIndices();
@@ -190,6 +188,51 @@ pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag,
         .region = region,
     });
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Records parser-owned numeric literal facts and returns the id stored on the AST node.
+pub fn addNumericLiteral(
+    store: *NodeStore,
+    text: []const u8,
+    kind: NumericLiteral.Kind,
+) std.mem.Allocator.Error!NumericLiteral.Idx {
+    const parsed = try NumericLiteral.parse(store.gpa, text, kind);
+    defer parsed.deinit(store.gpa);
+
+    const digits_start: u32 = @intCast(store.numeric_literal_bytes.items.len);
+    try store.numeric_literal_bytes.appendSlice(store.gpa, parsed.before);
+    try store.numeric_literal_bytes.appendSlice(store.gpa, parsed.after);
+
+    const idx: NumericLiteral.Idx = @enumFromInt(store.numeric_literals.items.len);
+    try store.numeric_literals.append(store.gpa, .{
+        .kind = parsed.kind,
+        .compact = parsed.compact,
+        .digits_start = digits_start,
+        .before_len = @intCast(parsed.before.len),
+        .after_len = @intCast(parsed.after.len),
+        .after_decimal_digit_count = parsed.after_decimal_digit_count,
+        .flags = .{
+            .is_negative = parsed.is_negative,
+            .had_decimal_point = parsed.had_decimal_point,
+        },
+    });
+    return idx;
+}
+
+/// Return parsed numeric literal facts by index.
+pub fn getNumericLiteral(store: *const NodeStore, idx: NumericLiteral.Idx) NumericLiteral.Stored {
+    return store.numeric_literals.items[@intFromEnum(idx)];
+}
+
+/// Return base-256 digits before the decimal point for a numeric literal.
+pub fn numericDigitsBefore(store: *const NodeStore, literal: NumericLiteral.Stored) []const u8 {
+    return store.numeric_literal_bytes.items[literal.digits_start..][0..literal.before_len];
+}
+
+/// Return base-256 digits after the decimal point for a numeric literal.
+pub fn numericDigitsAfter(store: *const NodeStore, literal: NumericLiteral.Stored) []const u8 {
+    const start = literal.digits_start + literal.before_len;
+    return store.numeric_literal_bytes.items[start..][0..literal.after_len];
 }
 
 /// Adds a file node to the store.
@@ -540,11 +583,27 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.tag = .int_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
+            node.data.lhs = @intFromEnum(n.literal);
         },
         .frac => |n| {
             node.tag = .frac_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
+            node.data.lhs = @intFromEnum(n.literal);
+        },
+        .typed_int => |n| {
+            node.tag = .typed_int_patt;
+            node.region = n.region;
+            node.main_token = n.number_tok;
+            node.data.lhs = @bitCast(n.type_ident);
+            node.data.rhs = @intFromEnum(n.literal);
+        },
+        .typed_frac => |n| {
+            node.tag = .typed_frac_patt;
+            node.region = n.region;
+            node.main_token = n.number_tok;
+            node.data.lhs = @bitCast(n.type_ident);
+            node.data.rhs = @intFromEnum(n.literal);
         },
         .string => |s| {
             node.tag = .string_patt;
@@ -620,23 +679,27 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .int;
             node.region = e.region;
             node.main_token = e.token;
+            node.data.lhs = @intFromEnum(e.literal);
         },
         .frac => |e| {
             node.tag = .frac;
             node.region = e.region;
             node.main_token = e.token;
+            node.data.lhs = @intFromEnum(e.literal);
         },
         .typed_int => |e| {
             node.tag = .typed_int;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = e.type_token;
+            node.data.lhs = @bitCast(e.type_ident);
+            node.data.rhs = @intFromEnum(e.literal);
         },
         .typed_frac => |e| {
             node.tag = .typed_frac;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = e.type_token;
+            node.data.lhs = @bitCast(e.type_ident);
+            node.data.rhs = @intFromEnum(e.literal);
         },
         .tag => |e| {
             node.tag = .tag;
@@ -1563,12 +1626,30 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
         .int_patt => {
             return .{ .int = .{
                 .number_tok = node.main_token,
+                .literal = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .frac_patt => {
             return .{ .frac = .{
                 .number_tok = node.main_token,
+                .literal = @enumFromInt(node.data.lhs),
+                .region = node.region,
+            } };
+        },
+        .typed_int_patt => {
+            return .{ .typed_int = .{
+                .number_tok = node.main_token,
+                .type_ident = @bitCast(node.data.lhs),
+                .literal = @enumFromInt(node.data.rhs),
+                .region = node.region,
+            } };
+        },
+        .typed_frac_patt => {
+            return .{ .typed_frac = .{
+                .number_tok = node.main_token,
+                .type_ident = @bitCast(node.data.lhs),
+                .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
@@ -1645,26 +1726,30 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .int => {
             return .{ .int = .{
                 .token = node.main_token,
+                .literal = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .frac => {
             return .{ .frac = .{
                 .token = node.main_token,
+                .literal = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .typed_int => {
             return .{ .typed_int = .{
                 .token = node.main_token,
-                .type_token = node.data.lhs,
+                .type_ident = @bitCast(node.data.lhs),
+                .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
         .typed_frac => {
             return .{ .typed_frac = .{
                 .token = node.main_token,
-                .type_token = node.data.lhs,
+                .type_ident = @bitCast(node.data.lhs),
+                .literal = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },

@@ -17,6 +17,7 @@ pub const static_data_exports = @import("static_data_exports.zig");
 pub const messages = @import("messages.zig");
 pub const channel = @import("channel.zig");
 pub const coordinator = @import("coordinator.zig");
+pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
@@ -33,11 +34,11 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: Io) !?CleanupThread {
+    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: CoreCtx) !?CleanupThread {
         return null;
     }
 
-    pub fn deleteTempDir(_: std.mem.Allocator, _: []const u8) void {}
+    pub fn deleteTempDir(_: std.mem.Allocator, _: CoreCtx, _: []const u8) void {}
 };
 
 pub const CacheManager = manager.CacheManager;
@@ -48,7 +49,7 @@ pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
-pub const Io = @import("io").Io;
+pub const CoreCtx = @import("ctx").CoreCtx;
 
 // /// Global cache statistics (optional, for debugging)
 // var global_stats: Stats = .{};
@@ -65,10 +66,8 @@ pub const Io = @import("io").Io;
 
 // /// Print global stats to stderr
 // pub fn printGlobalStats() !void {
-//     var stderr_buffer: [1024]u8 = undefined;
-//     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-//     const stderr = &stderr_writer.interface;
-//     try global_stats.print(stderr.any());
+//     // TODO: Use CoreCtx abstraction for stderr output
+//     // try global_stats.print(stderr);
 // }
 
 test "compile tests" {
@@ -91,10 +90,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("messages.zig"));
     std.testing.refAllDecls(@import("channel.zig"));
     std.testing.refAllDecls(@import("coordinator.zig"));
+    std.testing.refAllDecls(@import("app_header.zig"));
 
     std.testing.refAllDecls(@import("test/cache_test.zig"));
     std.testing.refAllDecls(@import("test/test_build_env.zig"));
     std.testing.refAllDecls(@import("test/test_package_env.zig"));
     std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
+    std.testing.refAllDecls(@import("test/embedding_smoke.zig"));
 }

@@ -280,7 +280,7 @@ fn populateAnchorMap(
         // map type-like prefixes (`Num`, `Num.U8`).
         var rel_end: usize = entry_rel_path.len;
         if (entry.kind == .value) {
-            const last_dot = std.mem.lastIndexOfScalar(u8, entry_rel_path, '.') orelse {
+            const last_dot = std.mem.findScalarLast(u8, entry_rel_path, '.') orelse {
                 try populateAnchorMap(map, gpa, arena, module_name, entry.children, entry_rel_path);
                 continue;
             };
@@ -290,7 +290,7 @@ fn populateAnchorMap(
         // Walk each `.`-separated prefix of the relative path.
         var seg_start: usize = 0;
         while (seg_start < rel_end) {
-            const next_dot = std.mem.indexOfScalarPos(u8, entry_rel_path[0..rel_end], seg_start, '.');
+            const next_dot = std.mem.findScalarPos(u8, entry_rel_path[0..rel_end], seg_start, '.');
             const seg_end = next_dot orelse rel_end;
             const short_name = entry_rel_path[seg_start..seg_end];
             const prefix_path = entry_rel_path[0..seg_end];
@@ -386,18 +386,19 @@ fn entryNameHasModulePrefix(module_name: []const u8, entry_name: []const u8) boo
 /// with `gpa` and become the caller's responsibility.
 pub fn renderPackageDocs(
     gpa: Allocator,
+    io: std.Io,
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
 ) !void {
     // Ensure the output directory exists
-    std.fs.cwd().makePath(output_dir_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    var output_dir = try std.fs.cwd().openDir(output_dir_path, .{});
-    defer output_dir.close();
+    var output_dir = try std.Io.Dir.cwd().openDir(io, output_dir_path, .{});
+    defer output_dir.close(io);
 
     var ctx = try RenderContext.init(package_docs, gpa);
     defer ctx.deinit(gpa);
@@ -405,38 +406,38 @@ pub fn renderPackageDocs(
     ctx.broken_links_gpa = if (broken_links_out != null) gpa else null;
 
     // Write static assets
-    try writeStaticAssets(output_dir);
+    try writeStaticAssets(io, output_dir);
 
     if (package_docs.modules.len == 1) {
         // Single module: write module content directly to root index.html
         ctx.single_module_at_root = true;
         const mod = &package_docs.modules[0];
         try ctx.enterModule(gpa, mod);
-        try writeModulePageToDir(&ctx, gpa, output_dir, mod, "");
+        try writeModulePageToDir(&ctx, gpa, io, output_dir, mod, "");
         ctx.leaveModule();
     } else {
         // Multiple modules: write package index and per-module pages
-        try writePackageIndex(&ctx, gpa, output_dir);
+        try writePackageIndex(&ctx, gpa, io, output_dir);
 
         for (package_docs.modules) |*mod| {
             try ctx.enterModule(gpa, mod);
-            try writeModulePage(&ctx, gpa, output_dir, mod);
+            try writeModulePage(&ctx, gpa, io, output_dir, mod);
         }
         ctx.leaveModule();
     }
 }
 
-fn writeStaticAssets(dir: std.fs.Dir) !void {
-    try dir.writeFile(.{ .sub_path = "styles.css", .data = embedded_css });
-    try dir.writeFile(.{ .sub_path = "search.js", .data = embedded_js });
-    try dir.writeFile(.{ .sub_path = "favicon.svg", .data = embedded_favicon });
+fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) !void {
+    try dir.writeFile(io, .{ .sub_path = "styles.css", .data = embedded_css });
+    try dir.writeFile(io, .{ .sub_path = "search.js", .data = embedded_js });
+    try dir.writeFile(io, .{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
-fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir) !void {
-    const file = try dir.createFile("index.html", .{});
-    defer file.close();
+fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) !void {
+    const file = try dir.createFile(io, "index.html", .{});
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var bw = file.writer(&buf);
+    var bw = file.writer(io, &buf);
     const w = &bw.interface;
 
     var index_title_buf: [256]u8 = undefined;
@@ -468,26 +469,26 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir)
     try bw.interface.flush();
 }
 
-fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, mod: *const DocModel.ModuleDocs) !void {
+fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) !void {
     // Create module subdirectory
-    dir.makeDir(mod.name) catch |err| switch (err) {
+    dir.createDirPath(io, mod.name) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    var sub_dir = try dir.openDir(mod.name, .{});
-    defer sub_dir.close();
+    var sub_dir = try dir.openDir(io, mod.name, .{});
+    defer sub_dir.close(io);
 
-    try writeModulePageToDir(ctx, gpa, sub_dir, mod, "../");
+    try writeModulePageToDir(ctx, gpa, io, sub_dir, mod, "../");
 }
 
 /// Write a module's documentation page as index.html in the given directory.
 /// `base` is the relative path prefix for static assets (e.g. "" for root, "../" for subdirs).
-fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, dir: std.fs.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) !void {
-    const file = try dir.createFile("index.html", .{});
-    defer file.close();
+fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) !void {
+    const file = try dir.createFile(io, "index.html", .{});
+    defer file.close(io);
     var buf: [4096]u8 = undefined;
-    var bw = file.writer(&buf);
+    var bw = file.writer(io, &buf);
     const w = &bw.interface;
 
     var title_buf: [256]u8 = undefined;
@@ -1076,7 +1077,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
         // clicking a sidebar entry from another module's page navigates to
         // the correct module page (not just changes the fragment on the
         // current page).
-        var module_link_prefix = std.ArrayList(u8){};
+        var module_link_prefix = std.ArrayList(u8).empty;
         defer module_link_prefix.deinit(gpa);
         if (ctx.single_module_at_root) {
             if (base.len == 0) {
@@ -1217,7 +1218,7 @@ fn renderSearchTree(
 fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, entry: *const DocModel.DocEntry, anchor_id: []const u8) !void {
     // Display only the identifier (last component) of the entry name
     // For "Builtin.Str.Utf8Problem.is_eq", display as "is_eq"
-    const display_name = if (std.mem.lastIndexOfScalar(u8, entry.name, '.')) |idx|
+    const display_name = if (std.mem.findScalarLast(u8, entry.name, '.')) |idx|
         entry.name[idx + 1 ..]
     else
         entry.name;
@@ -1277,7 +1278,7 @@ fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8, start
         // Find the closing fence
         const close_pos = findCodeFence(doc, pos) orelse {
             // Unclosed fence; render the rest as a code block
-            const code = std.mem.trimRight(u8, doc[pos..], "\n\r");
+            const code = std.mem.trimEnd(u8, doc[pos..], "\n\r");
             if (code.len > 0) {
                 try w.writeAll("                <pre><code>");
                 try writeHtmlEscaped(w, code);
@@ -1287,7 +1288,7 @@ fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8, start
         };
 
         // Render the code block content
-        const code = std.mem.trimRight(u8, doc[pos..close_pos], "\n\r");
+        const code = std.mem.trimEnd(u8, doc[pos..close_pos], "\n\r");
         if (code.len > 0) {
             try w.writeAll("                <pre><code>");
             try writeHtmlEscaped(w, code);
@@ -1524,7 +1525,7 @@ fn isIdentCont(c: u8) bool {
 /// `bracket_offset`). The href is still written so output is unchanged —
 /// broken-link collection is observational.
 fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, bracket_offset: usize) !void {
-    const first_dot = std.mem.indexOfScalar(u8, label, '.');
+    const first_dot = std.mem.findScalar(u8, label, '.');
     const head = if (first_dot) |d| label[0..d] else label;
 
     // Build the anchor we are about to write into a small stack buffer so we
@@ -1645,7 +1646,7 @@ fn renderDocTypeHtml(
             .html => |html| try w.writeAll(html),
             .escaped => |text| try writeHtmlEscaped(w, text),
             .type_ref => |ref| {
-                const display_name = if (std.mem.lastIndexOfScalar(u8, ref.type_name, '.')) |idx|
+                const display_name = if (std.mem.findScalarLast(u8, ref.type_name, '.')) |idx|
                     ref.type_name[idx + 1 ..]
                 else
                     ref.type_name;
@@ -1840,7 +1841,7 @@ fn writeTypeLink(
     // path within the module (e.g. "Builtin.Num.U8"). When linking inside the
     // current module, look the head segment up in the anchor map so the link
     // resolves to the actual entry id.
-    const first_dot = std.mem.indexOfScalar(u8, type_name, '.');
+    const first_dot = std.mem.findScalar(u8, type_name, '.');
     const head = if (first_dot) |d| type_name[0..d] else type_name;
     const tail: []const u8 = if (first_dot) |d| type_name[d..] else "";
     const remapped_head: ?[]const u8 = if (is_same_module) ctx.lookupAnchorHead(head) else null;
@@ -1996,7 +1997,7 @@ test "writeDocRefHref reports broken shorthand refs" {
     // Render to a tmp dir so we exercise the full pipeline.
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", gpa);
     defer gpa.free(tmp_path);
 
     var broken_links: std.ArrayListUnmanaged(BrokenLink) = .empty;
@@ -2008,7 +2009,7 @@ test "writeDocRefHref reports broken shorthand refs" {
         broken_links.deinit(gpa);
     }
 
-    try renderPackageDocs(gpa, &package_docs, tmp_path, &broken_links);
+    try renderPackageDocs(gpa, std.testing.io, &package_docs, tmp_path, &broken_links);
 
     // Exactly the `[div_by]` ref should be flagged. It sits on the third
     // line of the doc, which started at source line 41 → expected line 43.

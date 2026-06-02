@@ -27,6 +27,7 @@ target
 generated-docs
 
 zig-out
+zig-pkg
 .zig-cache
 .direnv
 .envrc
@@ -154,7 +155,7 @@ kcov-output/
 src/snapshots/**/*.html
 
 # Local claude-code settings
-.claude/settings.local.json
+.claude/
 
 *.bak
 kcov-output/
@@ -164,3 +165,6 @@ kcov-output/
 
 # Generated glue output files
 test/glue/*/roc_platform_abi.zig
+
+# Debug files written by builtin_doc_tests when a block fails
+test/echo/builtin_doc_*.roc

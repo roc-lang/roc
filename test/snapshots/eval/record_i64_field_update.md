@@ -18,35 +18,9 @@ expect retreat({ x: 7, y: 3 }) == { x: 7, y: 2 }
 expect advance(retreat({ x: 0, y: 0 })) == { x: 0, y: 0 }
 ~~~
 # EXPECTED
-INFINITE TYPE - record_i64_field_update.md:4:1:4:46
-INFINITE TYPE - record_i64_field_update.md:7:1:7:46
+NIL
 # PROBLEMS
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**record_i64_field_update.md:4:1:4:46:**
-```roc
-advance = |robot| { ..robot, y: robot.y + 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
-**INFINITE TYPE**
-I am inferring a weird self-referential type:
-**record_i64_field_update.md:7:1:7:46:**
-```roc
-retreat = |robot| { ..robot, y: robot.y - 1 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
-
-    Robot
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
@@ -171,12 +145,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "add")
-							(e-field-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 169)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -192,12 +168,14 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-binop (op "sub")
-							(e-field-access (field "y")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "robot")))))
-							(e-num (value "1")))))))
+						(e-dispatch-call (method "minus") (constraint-fn-var 324)
+							(receiver
+								(e-field-access (field "y")
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "robot"))))))
+							(args
+								(e-num (value "1"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Robot") (local))
@@ -212,8 +190,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 325)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 468)
+					(e-lookup-local
+						(p-assign (ident "advance")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -230,8 +209,9 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 502)
-					(e-runtime-error (tag "erroneous_value_use"))
+				(e-call (constraint-fn-var 882)
+					(e-lookup-local
+						(p-assign (ident "retreat")))
 					(e-record
 						(fields
 							(field (name "x")
@@ -246,34 +226,38 @@ NO CHANGE
 						(field (name "y")
 							(e-num (value "2"))))))))
 	(s-expect
-		(e-binop (op "eq")
-			(e-call (constraint-fn-var 680)
-				(e-runtime-error (tag "erroneous_value_use"))
-				(e-call (constraint-fn-var 679)
-					(e-runtime-error (tag "erroneous_value_use"))
-					(e-record
-						(fields
-							(field (name "x")
-								(e-num (value "0")))
-							(field (name "y")
-								(e-num (value "0")))))))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-num (value "0")))
-					(field (name "y")
-						(e-num (value "0"))))))))
+		(e-structural-eq (negated "false")
+			(lhs
+				(e-call (constraint-fn-var 1437)
+					(e-lookup-local
+						(p-assign (ident "advance")))
+					(e-call (constraint-fn-var 1296)
+						(e-lookup-local
+							(p-assign (ident "retreat")))
+						(e-record
+							(fields
+								(field (name "x")
+									(e-num (value "0")))
+								(field (name "y")
+									(e-num (value "0"))))))))
+			(rhs
+				(e-record
+					(fields
+						(field (name "x")
+							(e-num (value "0")))
+						(field (name "y")
+							(e-num (value "0")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Robot -> Robot"))
+		(patt (type "Robot -> Robot")))
 	(type_decls
 		(alias (type "Robot")
 			(ty-header (name "Robot"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "Robot -> Robot"))
+		(expr (type "Robot -> Robot"))))
 ~~~

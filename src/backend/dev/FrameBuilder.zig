@@ -381,6 +381,10 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             if (aligned_frame <= 504) {
                 // stp x29, x30, [sp, #-N]! (4 bytes)
                 size += 4;
+            } else if (windowsNeedsStackProbe(aligned_frame)) {
+                size += windowsStackProbeSizeAarch64(aligned_frame);
+                // stp x29, x30, [sp]
+                size += 4;
             } else {
                 // sub sp, sp, #N (4 bytes) + stp x29, x30, [sp] (4 bytes)
                 size += 8;
@@ -397,6 +401,52 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             }
 
             return size;
+        }
+
+        fn emitStackSubAarch64(emit: *EmitType, size: u32) !void {
+            std.debug.assert(size > 0);
+            std.debug.assert(size <= 0x1000);
+            if (size == 0x1000) {
+                try emit.subRegRegImm12Shifted(.w64, .ZRSP, .ZRSP, 1, true);
+            } else {
+                try emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
+            }
+        }
+
+        fn emitStackAddAarch64(emit: *EmitType, size: u32) !void {
+            std.debug.assert(size > 0);
+            std.debug.assert(size <= 0x1000);
+            if (size == 0x1000) {
+                try emit.addRegRegImm12Shifted(.w64, .ZRSP, .ZRSP, 1, true);
+            } else {
+                try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
+            }
+        }
+
+        fn windowsStackProbeSizeAarch64(alloc_size: u32) u32 {
+            std.debug.assert(alloc_size >= 0x1000);
+            return @intCast(((alloc_size + 0x0fff) / 0x1000) * 8);
+        }
+
+        fn emitWindowsStackProbeAarch64(emit: *EmitType, alloc_size: u32) !void {
+            std.debug.assert(alloc_size >= 0x1000);
+            var remaining = alloc_size;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 0x1000);
+                try emitStackSubAarch64(emit, chunk);
+                try emit.ldrRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
+                remaining -= chunk;
+            }
+        }
+
+        fn emitWindowsStackReleaseAarch64(emit: *EmitType, alloc_size: u32) !void {
+            std.debug.assert(alloc_size >= 0x1000);
+            var remaining = alloc_size;
+            while (remaining > 0) {
+                const chunk = @min(remaining, 0x1000);
+                try emitStackAddAarch64(emit, chunk);
+                remaining -= chunk;
+            }
         }
 
         fn emitPrologueAarch64(self: *Self, emit: *EmitType) !i32 {
@@ -441,50 +491,6 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             return 16 + @as(i32, @intCast(callee_saved_space));
         }
 
-        /// Emit an inline stack-probe loop equivalent to MSVC's `__chkstk` for
-        /// AArch64. The x86_64 prologue grew the same logic in commit 8964805938
-        /// — without it, a direct `sub sp, N` for frames ≥ one page skips
-        /// guard pages and the program later faults with STATUS_ACCESS_VIOLATION
-        /// on the first access to an uncommitted page. On Windows ARM64 the
-        /// default stack commit is also 4 KB, so the same bug reproduces (CI:
-        /// test/fx/record_builder_cli_parser.roc [dev] on Windows 11 ARM).
-        ///
-        /// Counter in IP0 (x16), page-size constant in IP1 (x17). Both are
-        /// caller-saved scratch in every AArch64 ABI we target.
-        ///
-        ///   mov   x16, alloc_size       ; counter
-        ///   mov   x17, #0x1000          ; page size (movz, lsl #12 → single insn)
-        /// .loop:
-        ///   sub   sp, sp, x17           ; lower one page
-        ///   str   xzr, [sp]             ; touch the new top to commit it
-        ///   sub   x16, x16, x17
-        ///   cmp   x16, x17
-        ///   b.hi  .loop                 ; while remaining > one page
-        ///   sub   sp, sp, x16           ; allocate remainder (may be zero)
-        ///   str   xzr, [sp]             ; probe the final page
-        ///
-        /// The trailing `stp fp, lr, [sp]` from the caller overwrites the final
-        /// probe at [sp+0] — that's intentional; the probe was only there to
-        /// commit the page.
-        fn emitWindowsStackProbeAarch64(emit: *EmitType, alloc_size: u32) !void {
-            try emit.movRegImm64(.IP0, alloc_size);
-            try emit.movRegImm32(.w64, .IP1, 0x1000);
-
-            const loop_start = emit.buf.items.len;
-            try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP1);
-            try emit.strRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
-            try emit.subRegRegReg(.w64, .IP0, .IP0, .IP1);
-            try emit.cmpRegReg(.w64, .IP0, .IP1);
-
-            // b.hi loop_start — branch if counter > page size (still ≥ one page left)
-            const bcond_pos: i64 = @intCast(emit.buf.items.len);
-            const target_pos: i64 = @intCast(loop_start);
-            try emit.bcond(.hi, @intCast(target_pos - bcond_pos));
-
-            try emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
-            try emit.strRegMemUoff(.w64, .ZRSP, .ZRSP, 0);
-        }
-
         fn emitEpilogueAarch64(self: *Self, emit: *EmitType) !void {
             // Recompute if needed (use full callee-saved area size for fixed offsets)
             if (self.actual_stack_alloc == 0) {
@@ -505,6 +511,9 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 // Medium frame: ldp without writeback, then add sp with imm12
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
                 try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.actual_stack_alloc));
+            } else if (is_windows) {
+                try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
+                try emitWindowsStackReleaseAarch64(emit, self.actual_stack_alloc);
             } else {
                 // Large frame: ldp without writeback, then add sp via scratch register
                 try emit.ldpSignedOffset(.w64, .FP, .LR, .ZRSP, 0);
@@ -1018,6 +1027,25 @@ test "DeferredFrameBuilder calculatePrologueSize x86_64" {
     const calculated_size = frame.calculatePrologueSize();
     // Basic prologue: push rbp (1) + mov rbp,rsp (3) + sub rsp,N (7) = 11 bytes
     try std.testing.expect(calculated_size >= 11);
+}
+
+test "DeferredFrameBuilder Windows aarch64 large frame prologue size matches emitted bytes" {
+    const Emit = aarch64.WinEmit;
+    const Builder = DeferredFrameBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var frame = Builder.init();
+    const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
+    frame.setCalleeSavedMask(x19_bit);
+    frame.setStackSize(4096);
+
+    const calculated_size = frame.calculatePrologueSize();
+    _ = try frame.emitPrologue(&emit);
+
+    try std.testing.expect(frame.actual_stack_alloc >= 4096);
+    try std.testing.expectEqual(calculated_size, @as(u32, @intCast(emit.buf.items.len)));
 }
 
 // Windows-specific tests

@@ -29,7 +29,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
         .f64 => .{ .primitive = .f64 },
         .i128, .u128 => .{ .stack_memory = 16 },
         .dec => .{ .stack_memory = 16 },
-        .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + len(4) + cap(4)
+        .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + encoded cap(4) + len(4)
         else => .{ .stack_memory = 0 }, // composite — use wasmReprWithStore for size
     };
 }
@@ -47,9 +47,9 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
                 .scalar => .{ .primitive = scalarValType(l) },
-                .struct_ => .{ .stack_memory = structSizeWasm(ls, l.data.struct_.idx) },
+                .struct_ => .{ .stack_memory = structSizeWasm(ls, l.getStruct().idx) },
                 .tag_union => blk: {
-                    const tu_layout = tagUnionLayoutWithStore(l.data.tag_union.idx, ls);
+                    const tu_layout = tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
                     // Discriminant-only tag unions (enums, disc_offset == 0) with size ≤ 4
                     // are treated as i32 primitives. Tag unions with payloads
                     // (disc_offset > 0) always use stack memory so the payload
@@ -63,7 +63,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) WasmRe
                 .closure => blk: {
                     // For unwrapped_capture closures, the runtime value IS the capture
                     // value itself (not a pointer). Resolve the captures layout to check.
-                    const captures_repr = wasmReprWithStore(l.data.closure.captures_layout_idx, ls);
+                    const captures_repr = wasmReprWithStore(l.getClosure().captures_layout_idx, ls);
                     break :blk switch (captures_repr) {
                         .primitive => captures_repr,
                         .stack_memory => .{ .stack_memory = ls.layoutSize(l) },
@@ -126,17 +126,17 @@ fn layoutStorageByteSizeWasm(layout_idx: layout.Idx, ls: *const layout.Store) u3
     const l = ls.getLayout(layout_idx);
     return switch (l.tag) {
         .zst => 0,
-        .scalar => switch (l.data.scalar.tag) {
+        .scalar => switch (l.getScalar().tag) {
             .str => 12,
             .opaque_ptr => 4,
-            .int => switch (l.data.scalar.data.int) {
+            .int => switch (l.getScalar().getInt()) {
                 .u8, .i8 => 1,
                 .u16, .i16 => 2,
                 .u32, .i32 => 4,
                 .u64, .i64 => 8,
                 .u128, .i128 => 16,
             },
-            .frac => switch (l.data.scalar.data.frac) {
+            .frac => switch (l.getScalar().getFrac()) {
                 .f32 => 4,
                 .f64 => 8,
                 .dec => 16,
@@ -144,8 +144,8 @@ fn layoutStorageByteSizeWasm(layout_idx: layout.Idx, ls: *const layout.Store) u3
         },
         .list, .list_of_zst => 12,
         .box, .box_of_zst, .erased_callable => 4,
-        .struct_ => structSizeWasm(ls, l.data.struct_.idx),
-        .tag_union => tagUnionLayoutWithStore(l.data.tag_union.idx, ls).size,
+        .struct_ => structSizeWasm(ls, l.getStruct().idx),
+        .tag_union => tagUnionLayoutWithStore(l.getTagUnion().idx, ls).size,
         .closure => ls.layoutSize(l),
     };
 }
@@ -154,15 +154,15 @@ fn layoutByteAlignWasm(layout_idx: layout.Idx, ls: *const layout.Store) u32 {
     const l = ls.getLayout(layout_idx);
     return switch (l.tag) {
         .zst => 1,
-        .scalar => switch (l.data.scalar.tag) {
+        .scalar => switch (l.getScalar().tag) {
             .str => 4,
             .opaque_ptr => 4,
-            .int => @intCast(l.data.scalar.data.int.alignment().toByteUnits()),
-            .frac => @intCast(l.data.scalar.data.frac.alignment().toByteUnits()),
+            .int => @intCast(l.getScalar().getInt().alignment().toByteUnits()),
+            .frac => @intCast(l.getScalar().getFrac().alignment().toByteUnits()),
         },
         .list, .list_of_zst, .box, .box_of_zst, .erased_callable => 4,
-        .struct_ => structAlignWasm(ls, l.data.struct_.idx),
-        .tag_union => tagUnionLayoutWithStore(l.data.tag_union.idx, ls).alignment,
+        .struct_ => structAlignWasm(ls, l.getStruct().idx),
+        .tag_union => tagUnionLayoutWithStore(l.getTagUnion().idx, ls).alignment,
         .closure => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
     };
 }
@@ -215,13 +215,13 @@ fn alignUp(value: u32, alignment: u32) u32 {
 
 /// Extract ValType from a scalar Layout.
 fn scalarValType(l: layout.Layout) ValType {
-    return switch (l.data.scalar.tag) {
-        .int => switch (l.data.scalar.data.int) {
+    return switch (l.getScalar().tag) {
+        .int => switch (l.getScalar().getInt()) {
             .u8, .i8, .u16, .i16, .u32, .i32 => .i32,
             .u64, .i64 => .i64,
             .u128, .i128 => .i32, // pointer to stack memory
         },
-        .frac => switch (l.data.scalar.data.frac) {
+        .frac => switch (l.getScalar().getFrac()) {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .i32, // pointer to stack memory

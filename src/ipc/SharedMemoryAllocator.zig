@@ -66,11 +66,11 @@ pub fn getSystemPageSize() !usize {
 }
 
 /// Creates a new anonymous shared memory region with the given size
-pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
+pub fn create(io: std.Io, size: usize, page_size: usize) !SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Create the shared memory mapping
-    const handle = try platform.createMapping(aligned_size);
+    const handle = try platform.createMapping(io, aligned_size);
     errdefer platform.closeHandle(handle, true);
 
     // Map the memory
@@ -109,6 +109,52 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
     };
 
     return result;
+}
+
+/// Like `create`, but if the OS rejects the preferred reservation (typically
+/// ENOMEM from `mmap` because the requested size doesn't fit in the available
+/// user virtual address space), halve the size and retry until it succeeds or
+/// the next attempt would drop below `min_size`. Errors unrelated to size
+/// (e.g. memfd_create failure) propagate immediately without retrying.
+///
+/// This matters on aarch64 Linux kernels built with `CONFIG_ARM64_VA_BITS=39`
+/// — the default on 64-bit Raspberry Pi OS — which cap user VA at ~256 GiB and
+/// reject a 2 TiB reservation outright. On systems where the preferred size
+/// fits, a single attempt succeeds and no retry happens.
+///
+/// `min_size` is clamped to `preferred_size` so callers can pass a fixed
+/// "real-program floor" without worrying about targets (32-bit, valgrind
+/// builds) whose preferred size is already smaller.
+pub fn createWithMinSize(
+    io: std.Io,
+    preferred_size: usize,
+    min_size: usize,
+    page_size: usize,
+) !SharedMemoryAllocator {
+    const aligned_preferred = std.mem.alignForward(usize, preferred_size, page_size);
+    const aligned_min = std.mem.alignForward(usize, @min(min_size, preferred_size), page_size);
+
+    var current_size = aligned_preferred;
+    while (true) {
+        if (create(io, current_size, page_size)) |shm| {
+            if (current_size < aligned_preferred) {
+                std.log.warn(
+                    "shared memory: OS rejected preferred reservation of {} bytes; using {} bytes instead",
+                    .{ aligned_preferred, current_size },
+                );
+            }
+            return shm;
+        } else |err| {
+            const size_related = switch (err) {
+                error.MmapFailed, error.FtruncateFailed, error.OutOfMemory => true,
+                else => false,
+            };
+            if (!size_related or current_size <= aligned_min) return err;
+
+            const halved = current_size / 2;
+            current_size = if (halved < aligned_min) aligned_min else halved;
+        }
+    }
 }
 
 /// Opens an existing shared memory region by reading its header first.
@@ -172,9 +218,9 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
 /// Creates a SharedMemoryAllocator from coordination info.
 /// This is a convenience method for child processes that reads coordination info
 /// and creates the allocator in one step.
-pub fn fromCoordination(gpa: std.mem.Allocator, page_size: usize) !SharedMemoryAllocator {
+pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) !SharedMemoryAllocator {
     // Read coordination info
-    var fd_info = try coordination.readFdInfo(gpa);
+    var fd_info = try coordination.readFdInfo(gpa, io);
     defer fd_info.deinit(gpa);
 
     // Parse the handle and create the allocator
@@ -419,10 +465,11 @@ pub fn reset(self: *SharedMemoryAllocator) void {
 
 test "shared memory allocator basic operations" {
     const testing = std.testing;
+    const io = testing.io;
 
     // Create shared memory
     const page_size = try getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(1024 * 1024, page_size); // 1MB
+    var shm = try SharedMemoryAllocator.create(io, 1024 * 1024, page_size); // 1MB
     defer shm.deinit(testing.allocator);
 
     const shm_allocator = shm.allocator();
@@ -449,13 +496,14 @@ test "shared memory allocator basic operations" {
 
 test "shared memory allocator cross-process" {
     const testing = std.testing;
+    const io = testing.io;
 
     // Skip on CI or if not supported
 
     // Parent: Create and write data
     {
         const page_size = try getSystemPageSize();
-        var shm = try SharedMemoryAllocator.create(1024 * 1024, page_size);
+        var shm = try SharedMemoryAllocator.create(io, 1024 * 1024, page_size);
         defer shm.deinit(testing.allocator);
 
         const data = try shm.allocator().alloc(u32, 10);
@@ -467,9 +515,10 @@ test "shared memory allocator cross-process" {
 
 test "shared memory allocator thread safety" {
     const testing = std.testing;
+    const io = testing.io;
 
     const page_size = try getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(16 * 1024 * 1024, page_size); // 16MB
+    var shm = try SharedMemoryAllocator.create(io, 16 * 1024 * 1024, page_size); // 16MB
     defer shm.deinit(testing.allocator);
 
     const shm_allocator = shm.allocator();

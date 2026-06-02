@@ -85,7 +85,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .emit = Emit.init(allocator),
                 .allocator = allocator,
                 .stack_offset = 0,
-                .relocations = .{},
+                .relocations = .empty,
                 .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
@@ -514,6 +514,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.orrRegRegReg(width, dst, a, b);
         }
 
+        /// Emit bitwise XOR: dst = a ^ b
+        pub fn emitXor(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+            try self.emit.eorRegRegReg(width, dst, a, b);
+        }
+
+        /// Emit bitwise NOT: dst = ~src
+        pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+            // MVN <dst>, <src> is an alias for ORN <dst>, XZR, <src>.
+            try self.emit.ornRegRegReg(width, dst, .ZRSP, src);
+        }
+
         /// Emit bitwise XOR with immediate: dst = src ^ imm
         pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
             // Load immediate into scratch register and use EOR
@@ -742,6 +753,27 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Load immediate value into register
         pub fn emitLoadImm(self: *Self, dst: GeneralReg, value: i64) !void {
             try self.emit.movRegImm64(dst, @bitCast(value));
+        }
+
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) !void {
+            const page_offset = self.currentOffset();
+            try self.emit.adrp(dst);
+            const offset12 = self.currentOffset();
+            try self.emit.addRegRegImm12(.w64, dst, dst, 0);
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(page_offset),
+                    .name = symbol_name,
+                    .kind = .page21,
+                },
+            });
+            try self.relocations.append(self.allocator, .{
+                .linked_data = .{
+                    .offset = @intCast(offset12),
+                    .name = symbol_name,
+                    .kind = .pageoff12,
+                },
+            });
         }
 
         // Control flow

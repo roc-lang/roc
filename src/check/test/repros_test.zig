@@ -378,3 +378,99 @@ test "check - repro - bad inline if branch mismatch in utf8 byte loop" {
 
     try test_env.assertNoErrors();
 }
+
+test "check - repro - using dbg in a function does not make it effectful" {
+    const src =
+        \\main! = |_args| {}
+        \\
+        \\User := [
+        \\  LoggedIn(Str),
+        \\  Guest
+        \\].{
+        \\  welcome : User -> {}
+        \\  welcome = |self| match (self) {
+        \\    Guest => dbg "Welcome Guest"
+        \\    LoggedIn(name) => dbg Str.concat("Welcome Guest", name)
+        \\  }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - equality on tag-union alias" {
+    const src =
+        \\Color : [Red, Green, Blue]
+        \\
+        \\pick : U8 -> Color
+        \\pick = |n| match n {
+        \\    0 => Red
+        \\    1 => Green
+        \\    _ => Blue
+        \\}
+        \\
+        \\is_red : Bool
+        \\is_red = pick(0) == Red
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - inequality on tag-union alias" {
+    const src =
+        \\Color : [Red, Green, Blue]
+        \\
+        \\pick : U8 -> Color
+        \\pick = |n| match n {
+        \\    0 => Red
+        \\    1 => Green
+        \\    _ => Blue
+        \\}
+        \\
+        \\not_red : Bool
+        \\not_red = pick(0) != Red
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - equality on record alias" {
+    const src =
+        \\Point : { x : U8, y : U8 }
+        \\
+        \\origin : Point
+        \\origin = { x: 0, y: 0 }
+        \\
+        \\is_origin : Bool
+        \\is_origin = origin == { x: 0, y: 0 }
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - equality on record alias of tag-union aliases" {
+    const src =
+        \\Palette : [None, Color1, Color2, Color3, Color4]
+        \\
+        \\DrawColors : {
+        \\    primary : Palette,
+        \\    secondary : Palette,
+        \\}
+        \\
+        \\from_flags : U8 -> DrawColors
+        \\from_flags = |flags| match flags {
+        \\    0 => { primary: None, secondary: None }
+        \\    _ => { primary: Color2, secondary: Color4 }
+        \\}
+        \\
+        \\is_match : Bool
+        \\is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}

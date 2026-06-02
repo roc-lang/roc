@@ -15,8 +15,7 @@ const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const ModuleEnv = @import("../ModuleEnv.zig");
-const Allocators = base.Allocators;
-const parseIntWithUnderscores = Can.parseIntWithUnderscores;
+const CoreCtx = @import("ctx").CoreCtx;
 const RocDec = builtins.dec.RocDec;
 
 fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
@@ -374,7 +373,8 @@ test "canonicalize integer requirements determination" {
 }
 
 test "canonicalize integer literals outside supported range" {
-    // Test integer literals that are too big to be represented
+    // Exact integer literals that do not fit the compact payload stay available
+    // for `from_numeral`; checking decides whether a concrete target accepts them.
     const test_cases = [_][]const u8{
         // Negative number slightly lower than i128 min
         "-170141183460469231731687303715884105729",
@@ -390,7 +390,9 @@ test "canonicalize integer literals outside supported range" {
 
         const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
         const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-        try testing.expect(expr == .e_runtime_error);
+        try testing.expect(expr == .e_num_from_numeral);
+        const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+        try testing.expect(!literal.isFractional());
     }
 }
 
@@ -415,8 +417,9 @@ test "invalid number literal - too large for u128" {
             // If no errors at all, check the expression type
             const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
             const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-            // Large numbers should either fail to parse or produce a runtime error
-            try testing.expect(expr == .e_runtime_error);
+            try testing.expect(expr == .e_num_from_numeral);
+            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+            try testing.expect(!literal.isFractional());
         }
     } else {
         // We have parse/tokenize errors, which is expected for this large number
@@ -445,8 +448,10 @@ test "invalid number literal - negative too large for i128" {
             // If no errors at all, check the expression type
             const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
             const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
-            // Large numbers should either fail to parse or produce a runtime error
-            try testing.expect(expr == .e_runtime_error);
+            try testing.expect(expr == .e_num_from_numeral);
+            const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
+            try testing.expect(!literal.isFractional());
+            try testing.expect(literal.isNegative());
         }
     } else {
         // We have parse/tokenize errors, which is expected for this large number
@@ -524,7 +529,7 @@ test "hexadecimal integer literals" {
         .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809) },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -536,14 +541,12 @@ test "hexadecimal integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -589,7 +592,7 @@ test "binary integer literals" {
         .{ .literal = "-0b1000000000000001", .expected_value = -32769 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -601,14 +604,12 @@ test "binary integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -654,7 +655,7 @@ test "octal integer literals" {
         .{ .literal = "-0o100001", .expected_value = -32769 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -666,14 +667,12 @@ test "octal integer literals" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -719,7 +718,7 @@ test "integer literals with uppercase base prefixes" {
         .{ .literal = "0XaBcD", .expected_value = 43981 },
     };
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
     var builtin_ctx = try BuiltinTestContext.init(gpa);
@@ -731,14 +730,12 @@ test "integer literals with uppercase base prefixes" {
 
         try env.initCIRFields("test");
 
-        var allocators: Allocators = undefined;
-        allocators.initInPlace(gpa);
-        defer allocators.deinit();
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(&allocators, &env.common);
+        const ast = try parse.parseExpr(gpa, &env.common);
         defer ast.deinit();
 
-        var czer = try Can.initModule(&allocators, &env, ast, builtin_ctx.canInitContext());
+        var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -757,7 +754,7 @@ test "integer literals with uppercase base prefixes" {
 }
 
 test "numeric literal patterns use pattern idx as type var" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
@@ -810,7 +807,7 @@ test "numeric literal patterns use pattern idx as type var" {
 }
 
 test "pattern numeric literal value edge cases" {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const gpa = gpa_state.allocator();
 
@@ -908,194 +905,6 @@ test "pattern numeric literal value edge cases" {
         const stored_neg_zero = env.store.getPattern(neg_zero_idx);
         try std.testing.expect(stored_neg_zero == .dec_literal);
         try std.testing.expectEqual(@as(i128, 0), stored_neg_zero.dec_literal.value.num);
-    }
-}
-
-test "parseIntWithUnderscores function" {
-    // Test the parseIntWithUnderscores helper function directly
-    const test_cases = [_]struct {
-        text: []const u8,
-        base: u8,
-        expected: u128,
-    }{
-        // Hex cases from the failing snapshot
-        .{ .text = "E", .base = 16, .expected = 14 },
-        .{ .text = "f", .base = 16, .expected = 15 },
-        .{ .text = "20", .base = 16, .expected = 32 },
-
-        // Binary cases that work
-        .{ .text = "10001", .base = 2, .expected = 17 },
-        .{ .text = "1_0010", .base = 2, .expected = 18 },
-
-        // Decimal cases
-        .{ .text = "123", .base = 10, .expected = 123 },
-        .{ .text = "1_000", .base = 10, .expected = 1000 },
-
-        // More hex cases - mixed case
-        .{ .text = "FF", .base = 16, .expected = 255 },
-        .{ .text = "ff", .base = 16, .expected = 255 },
-        .{ .text = "Ff", .base = 16, .expected = 255 },
-        .{ .text = "1A", .base = 16, .expected = 26 },
-        .{ .text = "1a", .base = 16, .expected = 26 },
-        .{ .text = "AB_CD", .base = 16, .expected = 0xABCD },
-        .{ .text = "ab_cd", .base = 16, .expected = 0xABCD },
-
-        // More binary cases
-        .{ .text = "1111", .base = 2, .expected = 15 },
-        .{ .text = "1010_1010", .base = 2, .expected = 0b10101010 },
-
-        // Octal cases
-        .{ .text = "777", .base = 8, .expected = 0o777 },
-        .{ .text = "123", .base = 8, .expected = 0o123 },
-        .{ .text = "7_7_7", .base = 8, .expected = 0o777 },
-
-        // Edge cases
-        .{ .text = "0", .base = 10, .expected = 0 },
-        .{ .text = "0", .base = 16, .expected = 0 },
-        .{ .text = "0", .base = 2, .expected = 0 },
-        .{ .text = "1", .base = 10, .expected = 1 },
-        .{ .text = "A", .base = 16, .expected = 10 },
-        .{ .text = "a", .base = 16, .expected = 10 },
-    };
-
-    for (test_cases) |tc| {
-        const result = parseIntWithUnderscores(u128, tc.text, tc.base) catch |err| {
-            std.debug.print("ERROR parsing '{s}' base {}: {}\n", .{ tc.text, tc.base, err });
-            return err;
-        };
-
-        if (result != tc.expected) {
-            std.debug.print("MISMATCH: parseIntWithUnderscores('{s}', {}) = {} (expected {})\n", .{ tc.text, tc.base, result, tc.expected });
-        }
-
-        try std.testing.expectEqual(tc.expected, result);
-    }
-}
-
-test "parseNumeralWithSuffix function" {
-    // Test the parseNumeralWithSuffix function to ensure correct parsing of prefixes and suffixes
-    const test_cases = [_]struct {
-        input: []const u8,
-        expected_num_text: []const u8,
-        expected_suffix: ?[]const u8,
-    }{
-        // Hex literals - these were the originally failing cases
-        .{ .input = "0xE", .expected_num_text = "0xE", .expected_suffix = null },
-        .{ .input = "0xf", .expected_num_text = "0xf", .expected_suffix = null },
-        .{ .input = "0x20", .expected_num_text = "0x20", .expected_suffix = null },
-        .{ .input = "0xFF", .expected_num_text = "0xFF", .expected_suffix = null },
-        .{ .input = "0Xff", .expected_num_text = "0Xff", .expected_suffix = null },
-        .{ .input = "0XFF", .expected_num_text = "0XFF", .expected_suffix = null },
-
-        // Binary literals that work correctly
-        .{ .input = "0b10001", .expected_num_text = "0b10001", .expected_suffix = null },
-        .{ .input = "0b1_0010", .expected_num_text = "0b1_0010", .expected_suffix = null },
-        .{ .input = "0B1111", .expected_num_text = "0B1111", .expected_suffix = null },
-        .{ .input = "0b0", .expected_num_text = "0b0", .expected_suffix = null },
-
-        // Octal literals
-        .{ .input = "0o777", .expected_num_text = "0o777", .expected_suffix = null },
-        .{ .input = "0O123", .expected_num_text = "0O123", .expected_suffix = null },
-
-        // Suffixed literals
-        .{ .input = "1u8", .expected_num_text = "1", .expected_suffix = "u8" },
-        .{ .input = "0xFFu32", .expected_num_text = "0xFF", .expected_suffix = "u32" },
-        .{ .input = "0b1010i16", .expected_num_text = "0b1010", .expected_suffix = "i16" },
-        .{ .input = "11.0f32", .expected_num_text = "11.0", .expected_suffix = "f32" },
-        .{ .input = "3.14f64", .expected_num_text = "3.14", .expected_suffix = "f64" },
-
-        // Regular decimal literals
-        .{ .input = "123", .expected_num_text = "123", .expected_suffix = null },
-        .{ .input = "1_000", .expected_num_text = "1_000", .expected_suffix = null },
-        .{ .input = "42", .expected_num_text = "42", .expected_suffix = null },
-    };
-
-    for (test_cases) |tc| {
-        const result = types.parseNumeralWithSuffix(tc.input);
-
-        if (!std.mem.eql(u8, result.num_text, tc.expected_num_text)) {
-            std.debug.print("MISMATCH num_text: parseNumeralWithSuffix('{s}').num_text = '{s}' (expected '{s}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
-        }
-        try std.testing.expectEqualSlices(u8, tc.expected_num_text, result.num_text);
-
-        if (tc.expected_suffix) |expected_suffix| {
-            try std.testing.expect(result.suffix != null);
-            try std.testing.expectEqualSlices(u8, expected_suffix, result.suffix.?);
-        } else {
-            try std.testing.expect(result.suffix == null);
-        }
-    }
-}
-
-test "hex literal parsing logic integration" {
-    // Test the complete hex literal parsing logic used in canonicalizeExpr
-    const test_cases = [_]struct {
-        literal: []const u8,
-        expected_value: u128,
-    }{
-        // These are the exact literals from the failing snapshot
-        .{ .literal = "0xE", .expected_value = 14 },
-        .{ .literal = "0xf", .expected_value = 15 },
-        .{ .literal = "0x20", .expected_value = 32 },
-
-        // Binary literals that work correctly
-        .{ .literal = "0b10001", .expected_value = 17 },
-        .{ .literal = "0b1_0010", .expected_value = 18 },
-    };
-
-    for (test_cases) |tc| {
-        // Mimic the exact parsing logic from canonicalizeExpr
-        const parsed = types.parseNumeralWithSuffix(tc.literal);
-
-        const is_negated = parsed.num_text[0] == '-';
-        const after_minus_sign = @as(usize, @intFromBool(is_negated));
-
-        var first_digit: usize = undefined;
-        const DEFAULT_BASE = 10;
-        var int_base: u8 = undefined;
-
-        if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
-            switch (parsed.num_text[after_minus_sign + 1]) {
-                'x', 'X' => {
-                    int_base = 16;
-                    first_digit = after_minus_sign + 2;
-                },
-                'o', 'O' => {
-                    int_base = 8;
-                    first_digit = after_minus_sign + 2;
-                },
-                'b', 'B' => {
-                    int_base = 2;
-                    first_digit = after_minus_sign + 2;
-                },
-                else => {
-                    int_base = DEFAULT_BASE;
-                    first_digit = after_minus_sign;
-                },
-            }
-        } else {
-            int_base = DEFAULT_BASE;
-            first_digit = after_minus_sign;
-        }
-
-        const digit_part = parsed.num_text[first_digit..];
-
-        // Debug print to see what's happening
-        if (tc.literal[0] == '0' and (tc.literal[1] == 'x' or tc.literal[1] == 'b')) {
-            // std.debug.print("Parsing '{s}': num_text='{s}', digit_part='{s}', base={}, expected={}\n", .{ tc.literal, parsed.num_text, digit_part, int_base, tc.expected_value });
-        }
-
-        const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch |err| {
-            std.debug.print("ERROR parsing digit_part '{s}' with base {}: {}\n", .{ digit_part, int_base, err });
-            try std.testing.expect(false);
-            continue;
-        };
-
-        if (u128_val != tc.expected_value) {
-            std.debug.print("MISMATCH for '{s}': got {}, expected {}\n", .{ tc.literal, u128_val, tc.expected_value });
-        }
-
-        try std.testing.expectEqual(tc.expected_value, u128_val);
     }
 }
 

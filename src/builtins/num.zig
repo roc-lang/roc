@@ -104,11 +104,24 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
 
 /// Parses a floating-point number from a RocStr.
 pub fn parseFloatFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    if (std.fmt.parseFloat(T, buf.asSlice())) |success| {
+    const bytes = buf.asSlice();
+    if (std.fmt.parseFloat(T, bytes)) |success| {
+        if (std.math.isInf(success) and !isExplicitInfinity(bytes)) {
+            return .{ .errorcode = 1, .value = 0 };
+        }
         return .{ .errorcode = 0, .value = success };
     } else |_| {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+fn isExplicitInfinity(bytes: []const u8) bool {
+    var text = std.mem.trim(u8, bytes, " \t\r\n");
+    if (text.len > 0 and (text[0] == '+' or text[0] == '-')) {
+        text = text[1..];
+    }
+    return std.ascii.eqlIgnoreCase(text, "inf") or
+        std.ascii.eqlIgnoreCase(text, "infinity");
 }
 
 /// Exports a function to parse floating-point numbers from strings.
@@ -356,7 +369,7 @@ pub fn exportSqrt(comptime T: type, comptime name: []const u8) void {
 pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.c) T {
-            return @as(T, @intFromFloat((math.round(input))));
+            return @as(T, @round(input));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -366,7 +379,7 @@ pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8
 pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.c) T {
-            return @as(T, @intFromFloat((math.floor(input))));
+            return @as(T, @floor(input));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -376,7 +389,7 @@ pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8
 pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.c) T {
-            return @as(T, @intFromFloat((math.ceil(input))));
+            return @as(T, @ceil(input));
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -1137,6 +1150,13 @@ test "parseFloatFromStr error cases" {
     const malformed_result = parseFloatFromStr(f32, malformed_str);
     try std.testing.expectEqual(@as(f32, 0.0), malformed_result.value);
     try std.testing.expectEqual(@as(u8, 1), malformed_result.errorcode);
+
+    const overflow_str = @import("str.zig").RocStr.fromSlice("1e999", test_env.getOps());
+    defer overflow_str.decref(test_env.getOps());
+
+    const overflow_result = parseFloatFromStr(f64, overflow_str);
+    try std.testing.expectEqual(@as(f64, 0.0), overflow_result.value);
+    try std.testing.expectEqual(@as(u8, 1), overflow_result.errorcode);
 }
 
 test "parseFloatFromStr special values" {

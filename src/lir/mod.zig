@@ -1,19 +1,24 @@
 //! Statement-only LIR module.
 
 const std = @import("std");
+const core = @import("lir_core");
 
 /// Core statement-only LIR type definitions.
-pub const LIR = @import("LIR.zig");
+pub const LIR = core.LIR;
 /// Flat storage for statement-only LIR nodes and spans.
-pub const LirStore = @import("LirStore.zig");
-/// Source-blind IR-to-LIR lowering boundary.
-pub const LowerIr = @import("lower_ir.zig");
-/// Public checked-artifact-to-LIR lowering entrypoint.
+pub const LirStore = core.LirStore;
+/// LIR-owned root metadata.
+pub const RootMetadata = core.RootMetadata;
+/// Hosted ABI metadata carried by LIR proc specs.
+pub const Hosted = core.Hosted;
+/// LIR program result shared by post-check lowering and consumers.
+pub const Program = core.Program;
+/// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.
 pub const Arc = @import("arc.zig");
-/// Shared-memory ARC-inserted LIR runtime image for interpreter-shim execution.
-pub const RuntimeImage = @import("runtime_image.zig");
+/// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
+pub const LirImage = @import("lir_image.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -45,13 +50,21 @@ pub const LirProcSpec = LIR.LirProcSpec;
 pub const LirProcSpecId = LIR.LirProcSpecId;
 /// Builtin low-level operation identifier reused from `base`.
 pub const LowLevel = LIR.LowLevel;
+/// Pattern type used in LIR.
+pub const LirPattern = LIR.LirPattern;
+/// Identifier of a stored LirPattern.
+pub const LirPatternId = LIR.LirPatternId;
+/// Span into flat pattern-id storage.
+pub const LirPatternSpan = LIR.LirPatternSpan;
 
 test "lir tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(LowerIr);
+    std.testing.refAllDecls(RootMetadata);
+    std.testing.refAllDecls(Hosted);
+    std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(Arc);
-    std.testing.refAllDecls(RuntimeImage);
+    std.testing.refAllDecls(LirImage);
 }

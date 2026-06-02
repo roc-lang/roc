@@ -24,6 +24,7 @@ const eval = @import("eval");
 const lir = @import("lir");
 const types = @import("types");
 const can = @import("can");
+const CoreCtx = can.CoreCtx;
 const check = @import("check");
 const unbundle = @import("unbundle");
 const fmt = @import("fmt");
@@ -32,13 +33,13 @@ const WasmFilesystem = @import("WasmFilesystem.zig");
 // WASM filesystem context — module-level so it persists across compilations.
 var wasm_ctx: WasmFilesystem.WasmContext = .{};
 const layout = @import("layout");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const Can = can.Can;
 const Check = check.Check;
 const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
+const LoadedBuiltinModule = eval.builtin_loading.LoadedModule;
 const Allocator = std.mem.Allocator;
 const AST = parse.AST;
 
@@ -139,11 +140,11 @@ const Diagnostic = struct {
 /// Compiler stage data
 const CompilerStageData = struct {
     module_env: *ModuleEnv,
+    owned_source: ?[]const u8 = null,
     parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
-    builtin_module: ?BuiltinModule = null,
     imported_modules: ?[]const *const ModuleEnv = null,
     auto_imported_types: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null,
 
@@ -157,70 +158,6 @@ const CompilerStageData = struct {
     parse_reports: std.array_list.Managed(reporting.Report),
     can_reports: std.array_list.Managed(reporting.Report),
     type_reports: std.array_list.Managed(reporting.Report),
-
-    const BuiltinModule = struct {
-        env: *ModuleEnv,
-        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-        gpa: Allocator,
-
-        fn deinit(self: *@This()) void {
-            self.env.imports.map.deinit(self.gpa);
-            self.gpa.free(self.buffer);
-            self.gpa.destroy(self.env);
-        }
-
-        fn loadCompiled(gpa: Allocator, bin_data: []const u8, module_name_param: []const u8, module_source: []const u8) !@This() {
-            const CompactWriter = collections.CompactWriter;
-            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-            @memcpy(buffer, bin_data);
-
-            logDebug("loadCompiledModule: bin_data.len={}, @sizeOf(ModuleEnv.Serialized)={}\n", .{ bin_data.len, @sizeOf(ModuleEnv.Serialized) });
-
-            const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-            logDebug("loadCompiledModule: raw all_statements.span.start={}, .len={}\n", .{
-                serialized_ptr.all_statements.span.start,
-                serialized_ptr.all_statements.span.len,
-            });
-
-            const module_env_ptr = try gpa.create(ModuleEnv);
-            errdefer gpa.destroy(module_env_ptr);
-
-            const base_ptr = @intFromPtr(buffer.ptr);
-
-            logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserializeInto(base_ptr, module_source);
-
-            logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
-            module_env_ptr.* = ModuleEnv{
-                .gpa = gpa,
-                .common = common,
-                .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
-                .module_kind = serialized_ptr.module_kind.decode(),
-                .all_defs = serialized_ptr.all_defs,
-                .all_statements = serialized_ptr.all_statements,
-                .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
-                .provides_entries = serialized_ptr.provides_entries.deserializeInto(base_ptr),
-                .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
-                .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
-                .module_name = module_name_param,
-                .display_module_name_idx = base.Ident.Idx.NONE,
-                .qualified_module_ident = base.Ident.Idx.NONE,
-                .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
-                .evaluation_order = null,
-                .idents = ModuleEnv.CommonIdents.find(&common),
-                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
-            };
-            logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
-
-            logDebug("loadCompiledModule: Returning LoadedModule\n", .{});
-            return .{ .env = module_env_ptr, .buffer = buffer, .gpa = gpa };
-        }
-    };
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
         return CompilerStageData{
@@ -282,9 +219,8 @@ const CompilerStageData = struct {
         self.module_env.deinit();
         allocator.destroy(self.module_env);
 
-        // Deinit the builtin module if it was loaded
-        if (self.builtin_module) |*bm| {
-            bm.deinit();
+        if (self.owned_source) |source| {
+            allocator.free(source);
         }
     }
 };
@@ -292,7 +228,7 @@ const CompilerStageData = struct {
 /// Global state machine
 var current_state: State = .START;
 var compiler_data: ?CompilerStageData = null;
-var cached_builtin_module: ?CompilerStageData.BuiltinModule = null;
+var cached_builtin_module: ?LoadedBuiltinModule = null;
 
 /// REPL state management
 const ReplDefinitionKind = enum {
@@ -505,10 +441,10 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
-fn getCachedBuiltinModule() !*CompilerStageData.BuiltinModule {
+fn getCachedBuiltinModule() !*LoadedBuiltinModule {
     if (cached_builtin_module == null) {
         logDebug("compileSource: Loading Builtin module\n", .{});
-        cached_builtin_module = try CompilerStageData.BuiltinModule.loadCompiled(
+        cached_builtin_module = try eval.builtin_loading.loadCompiledModule(
             allocator,
             compiled_builtins.builtin_bin,
             "Builtin",
@@ -880,11 +816,7 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -916,11 +848,7 @@ fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    defer allocators.deinit();
-
-    const ast = parse.parseStatement(&allocators, &env.common) catch return null;
+    const ast = parse.parseStatement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -1001,8 +929,90 @@ fn buildReplModuleSource(
     return source_writer.toOwnedSlice();
 }
 
-fn compileReplInspectedModule(source: []const u8) !eval.test_helpers.CompiledTargetProgram {
-    return eval.test_helpers.compileProgramForTarget(allocator, .module, source, &.{}, .u32);
+const ReplCompiledModule = struct {
+    lowered: eval.test_helpers.LoweredProgram,
+
+    fn deinit(self: *@This()) void {
+        self.lowered.deinit(allocator);
+    }
+};
+
+fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
+    for (module_env.store.sliceDefs(module_env.all_defs)) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        const ident = switch (pattern) {
+            .assign => |assign| assign.ident,
+            .as => |as_pattern| as_pattern.ident,
+            else => continue,
+        };
+        if (std.mem.eql(u8, module_env.getIdent(ident), name)) return def_idx;
+    }
+    return null;
+}
+
+fn compileReplInspectedModule(source: []const u8) !ReplCompiledModule {
+    var checked_module = try compileCheckedReplModuleSource(source);
+    errdefer checked_module.deinit();
+
+    const builtin_module = try getCachedBuiltinModule();
+
+    var source_modules = [_]check.TypedCIR.Modules.SourceModule{
+        .{ .precompiled = checked_module.module_env },
+        .{ .precompiled = builtin_module.env },
+    };
+    var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
+    defer typed_cir_modules.deinit();
+
+    var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        allocator,
+        &typed_cir_modules,
+        1,
+        .{
+            .module_env_storage = .{ .compiled_buffer = .{
+                .env = builtin_module.env,
+                .buffer = builtin_module.buffer,
+            } },
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+        },
+    );
+    errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
+
+    var publish_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = builtin_artifact.key,
+        .view = check.CheckedArtifact.importedView(&builtin_artifact),
+    }};
+
+    const main_def = findDefByName(checked_module.module_env, "main") orelse return error.TypeCheckError;
+    var explicit_roots = [_]check.CheckedArtifact.ExplicitRootRequestInput{.{
+        .kind = .dev_expr,
+        .source = .{ .def = main_def },
+        .abi = .roc,
+        .exposure = .private,
+    }};
+
+    var root_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        allocator,
+        &typed_cir_modules,
+        0,
+        .{
+            .module_env_storage = .{ .checked_source = checked_module.module_env },
+            .imports = &publish_imports,
+            .explicit_roots = &explicit_roots,
+            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+        },
+    );
+    errdefer root_artifact.deinitRetainingModuleEnv(allocator);
+
+    var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
+    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+
+    root_artifact.deinitRetainingModuleEnv(allocator);
+    import_artifacts[0].deinitRetainingModuleEnv(allocator);
+    checked_module.deinit();
+
+    return .{ .lowered = lowered };
 }
 
 fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
@@ -1127,7 +1137,7 @@ fn runReplExpression(
         try writeReplStaticError(response_buffer, @errorName(err), .typecheck);
         return;
     };
-    defer compiled.deinit(allocator);
+    defer compiled.deinit();
 
     const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
@@ -1175,48 +1185,58 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
         var module_env = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(module_env);
 
-        module_env.* = try ModuleEnv.init(allocator, source);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+
+        module_env.* = try ModuleEnv.init(allocator, owned_source);
+        errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        return CompilerStageData.init(allocator, module_env);
+        var result = CompilerStageData.init(allocator, module_env);
+        result.owned_source = owned_source;
+        return result;
     }
 
     const trimmed_source = std.mem.trim(u8, source, " \t\n\r");
     if (trimmed_source.len == 0) {
         // Return empty compiler stage data for whitespace-only input
         var module_env = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(module_env);
 
-        module_env.* = try ModuleEnv.init(allocator, source);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+
+        module_env.* = try ModuleEnv.init(allocator, owned_source);
+        errdefer module_env.deinit();
         try module_env.common.calcLineStarts(module_env.gpa);
-        return CompilerStageData.init(allocator, module_env);
+        var result = CompilerStageData.init(allocator, module_env);
+        result.owned_source = owned_source;
+        return result;
     }
 
-    // Set up the source in WASM filesystem - this creates a properly allocated copy
     wasm_ctx.setSource(allocator, source);
 
-    // Use the duplicated source from WasmContext for the rest of compilation.
-    // The original `source` slice points to JSON parser memory which will be freed
-    // when processMessage returns, so we must use the stable copy stored in wasm_ctx.source.
-    const stable_source = wasm_ctx.source orelse return error.OutOfMemory;
+    const stable_source = try allocator.dupe(u8, source);
+    errdefer allocator.free(stable_source);
 
     logDebug("compileSource: Starting compilation (source len={})\n", .{stable_source.len});
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
+    errdefer allocator.destroy(module_env);
 
     module_env.* = try ModuleEnv.init(allocator, stable_source);
+    errdefer module_env.deinit();
     try module_env.common.calcLineStarts(module_env.gpa);
     logDebug("compileSource: ModuleEnv initialized\n", .{});
 
     var result = CompilerStageData.init(allocator, module_env);
+    result.owned_source = stable_source;
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    var allocators: base.Allocators = undefined;
-    allocators.initInPlace(allocator);
-    // NOTE: allocators is not freed here - cleanup happens in CompilerStageData.deinit
-
-    const parse_ast = try parse.parse(&allocators, &module_env.common);
+    const parse_ast = try parse.parse(allocator, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 
@@ -1304,13 +1324,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     // compile consumes the same explicit Builtin module context.
 
     logDebug("compileSource: Loading builtin indices\n", .{});
-    const builtin_indices = blk: {
-        const aligned_buffer = try allocator.alignedAlloc(u8, @enumFromInt(@alignOf(can.CIR.BuiltinIndices)), compiled_builtins.builtin_indices_bin.len);
-        defer allocator.free(aligned_buffer);
-        @memcpy(aligned_buffer, compiled_builtins.builtin_indices_bin);
-        const indices_ptr = @as(*const can.CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-        break :blk indices_ptr.*;
-    };
+    const builtin_indices = try eval.builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
     logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
@@ -1341,7 +1355,8 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     };
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.initModule(&allocators, env, result.parse_ast.?, .{
+    const roc_ctx = CoreCtx.default(allocator, allocator, @as(std.Io, undefined));
+    var czer = try Can.initModule(roc_ctx, env, result.parse_ast.?, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
@@ -1383,19 +1398,10 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
     logDebug("compileSource: Starting type checking\n", .{});
     {
         const type_can_ir = result.module_env;
-        var imported_envs_builder = std.array_list.Managed(*const ModuleEnv).init(allocator);
-        errdefer imported_envs_builder.deinit();
-
-        const import_count = type_can_ir.imports.imports.items.items.len;
-        for (type_can_ir.imports.imports.items.items[0..import_count]) |str_idx| {
-            const import_name = type_can_ir.getString(str_idx);
-            if (std.mem.eql(u8, import_name, "Builtin")) {
-                try imported_envs_builder.append(builtin_module.env);
-            }
-        }
-
-        const imported_envs = try imported_envs_builder.toOwnedSlice();
+        const imported_envs = try allocator.alloc(*const ModuleEnv, 2);
         errdefer allocator.free(imported_envs);
+        imported_envs[0] = type_can_ir;
+        imported_envs[1] = builtin_module.env;
         result.imported_modules = imported_envs;
 
         const auto_imported_types = try allocator.create(std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType));
@@ -1412,13 +1418,12 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
-        result.solver = solver;
+        result.solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, auto_imported_types, &type_can_ir.store.regions, module_builtin_ctx);
+        var solver = &result.solver.?;
+        solver.fixupTypeWriter();
 
         solver.checkFile() catch |check_err| {
             logDebug("compileSource: checkFile failed: {}\n", .{check_err});
-            // OOM during type checking is critical.
-            // Deinit solver and propagate error.
             solver.deinit();
             result.solver = null; // Prevent double deinit in CompilerStageData.deinit
             return check_err;
@@ -1587,7 +1592,7 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     // Collect HTML in a buffer first, then escape it for JSON
     var html_buffer: [65536]u8 = undefined;
-    var html_writer = std.io.Writer.fixed(&html_buffer);
+    var html_writer = std.Io.Writer.fixed(&html_buffer);
 
     if (data.tokenize_reports.items.len > 0) {
         for (data.tokenize_reports.items) |report| {
@@ -1631,6 +1636,7 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
+/// Write REPL step result as JSON
 fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
@@ -1832,7 +1838,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
         import_views[i] = check.CheckedArtifact.importedView(artifact);
     }
 
-    var lowered = try lir.CheckedPipeline.lowerArtifactsToLir(
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
@@ -2108,7 +2114,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     mutable_cir.pushTypesToSExprTree(null, &tree) catch |err| {
         const error_msg = switch (err) {
             error.OutOfMemory => "Out of memory while generating types",
-            // Add other specific error messages if pushTypesToSExprTree can return other errors
+            error.WriteFailed => "Write failed while generating types",
         };
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
@@ -2123,7 +2129,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: *std.io.Writer, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.Io.Writer, report: reporting.Report) !void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -2185,7 +2191,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping (without surrounding quotes)
-fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, str: []const u8) !void {
     try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
@@ -2269,10 +2275,9 @@ export fn freeWasmString(ptr: [*]u8) void {
 /// Helper to create a simple error JSON string, following the length-prefix allocation pattern.
 fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
     // 1. Format the string into a temporary buffer to determine its length.
-    var temp_buffer = std.array_list.Managed(u8).init(allocator);
-    defer temp_buffer.deinit();
-    temp_buffer.writer().print("{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
-    const json_len = temp_buffer.items.len;
+    var fmt_buf: [4096]u8 = undefined;
+    const json_str = std.fmt.bufPrint(&fmt_buf, "{{\"status\":\"ERROR\",\"message\":\"{s}\"}}", .{error_message}) catch return null;
+    const json_len = json_str.len;
 
     // 2. Allocate memory for [u32: length][u8...: data][u8: null terminator]
     const total_len = @sizeOf(u32) + json_len + 1;
@@ -2283,7 +2288,7 @@ fn createSimpleErrorJson(error_message: []const u8) ?[*:0]u8 {
 
     // 4. Copy the JSON data
     const data_ptr = final_buffer.ptr + @sizeOf(u32);
-    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], temp_buffer.items);
+    @memcpy(final_buffer[@sizeOf(u32)..][0..json_len], json_str);
 
     // 5. Null-terminate
     final_buffer[@sizeOf(u32) + json_len] = 0;

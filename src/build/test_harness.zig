@@ -13,7 +13,91 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
-pub const Timer = std.time.Timer;
+/// Monotonic timer replacement for std.time.Timer (removed in Zig 0.16).
+pub const Timer = struct {
+    start_ns: u64,
+
+    pub const Error = error{UnsupportedClock};
+
+    pub fn start() Error!Timer {
+        return .{ .start_ns = readMonotonicNs() };
+    }
+
+    /// Returns elapsed nanoseconds since start.
+    pub fn read(self: *Timer) u64 {
+        return readMonotonicNs() - self.start_ns;
+    }
+
+    /// Returns elapsed nanoseconds and resets the timer.
+    pub fn lap(self: *Timer) u64 {
+        const now = readMonotonicNs();
+        const elapsed = now - self.start_ns;
+        self.start_ns = now;
+        return elapsed;
+    }
+
+    fn readMonotonicNs() u64 {
+        if (builtin.os.tag == .linux) {
+            var ts: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
+            var ts: std.c.timespec = undefined;
+            _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        } else if (builtin.os.tag == .windows) {
+            const k32 = struct {
+                extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.winapi) std.os.windows.BOOL;
+                extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.winapi) std.os.windows.BOOL;
+            };
+            var counter: i64 = undefined;
+            var freq: i64 = undefined;
+            if (k32.QueryPerformanceCounter(&counter) == .FALSE) unreachable;
+            if (k32.QueryPerformanceFrequency(&freq) == .FALSE) unreachable;
+            return @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
+        } else {
+            @compileError("unsupported monotonic clock for test harness");
+        }
+    }
+};
+
+const non_tty_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
+
+fn testProgressIntervalNs(is_tty: bool) u64 {
+    if (is_tty) return std.time.ns_per_s;
+
+    const raw_z = std.c.getenv(non_tty_progress_env) orelse return 0;
+    const raw = std.mem.span(raw_z);
+    if (raw.len == 0) {
+        std.debug.print("invalid {s}: value must be an integer number of milliseconds\n", .{non_tty_progress_env});
+        return 0;
+    }
+
+    const interval_ms = std.fmt.parseInt(u64, raw, 10) catch |err| {
+        std.debug.print("invalid {s}='{s}': {s}\n", .{ non_tty_progress_env, raw, @errorName(err) });
+        return 0;
+    };
+    if (interval_ms == 0) return 0;
+
+    return std.math.mul(u64, interval_ms, std.time.ns_per_ms) catch {
+        std.debug.print("invalid {s}='{s}': value is too large\n", .{ non_tty_progress_env, raw });
+        return 0;
+    };
+}
+
+fn printPoolProgress(is_tty: bool, completed: usize, total: usize, elapsed_ns: u64) void {
+    const wall_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+    if (is_tty) {
+        std.debug.print("\r  progress: {d}/{d} done, {d:.1}s elapsed", .{
+            completed, total, wall_s,
+        });
+    } else {
+        std.debug.print("  progress: {d}/{d} done, {d:.1}s elapsed\n", .{
+            completed, total, wall_s,
+        });
+    }
+}
+
 /// Whether the platform supports `fork` for child process spawning.
 pub const has_fork = (builtin.os.tag != .windows);
 
@@ -85,7 +169,7 @@ const job_object = if (builtin.os.tag == .windows) struct {
             JobObjectExtendedLimitInformation,
             &info,
             @sizeOf(JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
-        ) == 0) {
+        ) == .FALSE) {
             windows.CloseHandle(job);
             return null;
         }
@@ -101,13 +185,186 @@ const job_object = if (builtin.os.tag == .windows) struct {
     }
 } else struct {};
 
+fn terminateProcess(child_id: std.process.Child.Id) void {
+    if (builtin.os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn TerminateProcess(
+                hProcess: std.os.windows.HANDLE,
+                uExitCode: c_uint,
+            ) callconv(.winapi) std.os.windows.BOOL;
+        };
+        _ = k32.TerminateProcess(child_id, 1);
+        return;
+    }
+
+    const pid: std.posix.pid_t = child_id;
+    posixKill(pid, posix.SIG.KILL) catch {};
+}
+
+// POSIX compatibility helpers (removed from std.posix in Zig 0.16)
+//
+// Many POSIX functions moved out of std.posix into std.c (C bindings) or
+// std.os.linux (raw syscalls) in Zig 0.16.  These thin wrappers restore the
+// error-union API we relied on previously.
+
+/// stdoutFd: cross-platform stdout file descriptor as a posix.fd_t.
+///
+/// With link_libc=true, posix.fd_t resolves to std.c.fd_t, which is a HANDLE on
+/// Windows and i32 elsewhere. std.posix.STDOUT_FILENO is a comptime_int (1),
+/// which works on POSIX but cannot coerce to HANDLE on Windows.
+pub fn stdoutFd() posix.fd_t {
+    if (builtin.os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.winapi) ?std.os.windows.HANDLE;
+        };
+        const STD_OUTPUT_HANDLE: u32 = @bitCast(@as(i32, -11));
+        return k32.GetStdHandle(STD_OUTPUT_HANDLE).?;
+    }
+    return std.posix.STDOUT_FILENO;
+}
+
+/// stdinFd: cross-platform stdin file descriptor; see `stdoutFd`.
+pub fn stdinFd() posix.fd_t {
+    if (builtin.os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.winapi) ?std.os.windows.HANDLE;
+        };
+        const STD_INPUT_HANDLE: u32 = @bitCast(@as(i32, -10));
+        return k32.GetStdHandle(STD_INPUT_HANDLE).?;
+    }
+    return std.posix.STDIN_FILENO;
+}
+
+/// milliTimestamp: replacement for std.time.milliTimestamp (removed in Zig 0.16).
+pub fn milliTimestamp() i64 {
+    if (builtin.os.tag == .linux) {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        const ns = @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        return @as(i64, @intCast(ns / 1_000_000));
+    }
+    if (builtin.os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.winapi) std.os.windows.BOOL;
+            extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.winapi) std.os.windows.BOOL;
+        };
+        var counter: i64 = undefined;
+        var freq: i64 = undefined;
+        _ = k32.QueryPerformanceCounter(&counter);
+        _ = k32.QueryPerformanceFrequency(&freq);
+        // counter * 1000 would overflow within ~30 minutes of uptime on a 10MHz QPF;
+        // divide freq down first so the multiplication can't blow.
+        return @divTrunc(counter, @divTrunc(freq, 1000));
+    }
+    // POSIX (macOS, BSD, etc.) via libc.
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
+/// pipe: returns [2]fd_t or error.
+pub fn pipe() error{PipeFailed}![2]posix.fd_t {
+    var fds: [2]posix.fd_t = undefined;
+    const rc = std.c.pipe(&fds);
+    if (rc != 0) return error.PipeFailed;
+    return fds;
+}
+
+/// close: closes a file descriptor (ignores errors).
+pub fn closeFd(fd: posix.fd_t) void {
+    _ = std.c.close(fd);
+}
+
+/// fork: wrapper around std.c.fork that returns pid_t or error.
+pub fn fork() error{ForkFailed}!posix.pid_t {
+    const pid = std.c.fork();
+    if (pid < 0) return error.ForkFailed;
+    return pid;
+}
+
+/// Holds the process id and exit status from waitpid.
+pub const WaitResult = struct { pid: posix.pid_t, status: u32 };
+/// Waits for a child process and returns its pid and raw status.
+pub fn waitpid(pid: posix.pid_t, flags: c_int) WaitResult {
+    var status: c_int = 0;
+    const result = std.c.waitpid(pid, &status, flags);
+    return .{ .pid = result, .status = @bitCast(status) };
+}
+
+/// posixRead: read from fd, returns bytes read or error.
+pub fn posixRead(fd: posix.fd_t, buf: []u8) error{ReadFailed}!usize {
+    if (builtin.os.tag == .windows) {
+        // See writeAll: fd_t is HANDLE on Windows-libc and std.c.read takes a C fd int,
+        // so ReadFile is the only correct path here.
+        const k32 = struct {
+            extern "kernel32" fn ReadFile(
+                hFile: std.os.windows.HANDLE,
+                lpBuffer: [*]u8,
+                nNumberOfBytesToRead: u32,
+                lpNumberOfBytesRead: ?*u32,
+                lpOverlapped: ?*anyopaque,
+            ) callconv(.winapi) std.os.windows.BOOL;
+        };
+        const chunk: u32 = @intCast(@min(buf.len, std.math.maxInt(u32)));
+        var n_read: u32 = 0;
+        if (k32.ReadFile(fd, buf.ptr, chunk, &n_read, null) == .FALSE) {
+            // ERROR_BROKEN_PIPE (109) means clean EOF — surface as 0 bytes, not an error.
+            const err = std.os.windows.GetLastError();
+            if (err == .BROKEN_PIPE) return 0;
+            return error.ReadFailed;
+        }
+        return n_read;
+    }
+    const rc = std.c.read(fd, buf.ptr, buf.len);
+    if (rc < 0) return error.ReadFailed;
+    return @intCast(rc);
+}
+
+/// posixKill: send signal to pid.
+fn posixKill(pid: posix.pid_t, sig: posix.SIG) error{KillFailed}!void {
+    const rc = std.c.kill(pid, sig);
+    if (rc != 0) return error.KillFailed;
+}
+
+/// posixPoll: poll file descriptors.
+fn posixPoll(fds: []posix.pollfd, timeout: c_int) error{PollFailed}!usize {
+    const rc = std.c.poll(fds.ptr, @intCast(fds.len), timeout);
+    if (rc < 0) return error.PollFailed;
+    return @intCast(rc);
+}
+
+// End POSIX compatibility helpers
+
 // Pipe I/O helpers
 
 /// Write all bytes to fd, looping on partial writes.
 pub fn writeAll(fd: posix.fd_t, data: []const u8) void {
     var written: usize = 0;
+    if (builtin.os.tag == .windows) {
+        // posix.fd_t is a HANDLE on Windows-libc; std.c.write takes a C fd int (not a HANDLE)
+        // so calling it with a HANDLE pointer silently writes nothing. Use WriteFile directly.
+        const k32 = struct {
+            extern "kernel32" fn WriteFile(
+                hFile: std.os.windows.HANDLE,
+                lpBuffer: [*]const u8,
+                nNumberOfBytesToWrite: u32,
+                lpNumberOfBytesWritten: ?*u32,
+                lpOverlapped: ?*anyopaque,
+            ) callconv(.winapi) std.os.windows.BOOL;
+        };
+        while (written < data.len) {
+            const chunk: u32 = @intCast(@min(data.len - written, std.math.maxInt(u32)));
+            var n_written: u32 = 0;
+            if (k32.WriteFile(fd, data.ptr + written, chunk, &n_written, null) == .FALSE) return;
+            if (n_written == 0) return;
+            written += n_written;
+        }
+        return;
+    }
     while (written < data.len) {
-        written += posix.write(fd, data[written..]) catch return;
+        const rc = std.c.write(fd, data.ptr + written, data.len - written);
+        if (rc < 0) return;
+        written += @intCast(rc);
     }
 }
 
@@ -248,9 +505,10 @@ pub fn printSlowestN(
 pub const StandardArgs = struct {
     filters: []const []const u8 = &.{},
     max_threads: ?usize = null,
-    timeout_ms: u64 = 60_000,
+    timeout_ms: u64 = 120_000,
     timeout_provided: bool = false,
     verbose: bool = false,
+    include_llvm: bool = false,
     help_requested: bool = false,
     /// When set, the runner runs a single test (by index after filters) and
     /// serializes its result to stdout. Used by the Windows Child-based
@@ -282,6 +540,8 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             if (i < raw_args.len) try filters.append(allocator, raw_args[i]);
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
+        } else if (std.mem.eql(u8, arg, "--llvm") or std.mem.eql(u8, arg, "--include-llvm")) {
+            args.include_llvm = true;
         } else if (std.mem.eql(u8, arg, "--threads")) {
             i += 1;
             if (i < raw_args.len) {
@@ -295,7 +555,7 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             i += 1;
             if (i < raw_args.len) {
                 args.timeout_provided = true;
-                args.timeout_ms = std.fmt.parseInt(u64, raw_args[i], 10) catch 60_000;
+                args.timeout_ms = std.fmt.parseInt(u64, raw_args[i], 10) catch 120_000;
             }
         } else if (std.mem.eql(u8, arg, "--worker")) {
             i += 1;
@@ -322,10 +582,12 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
 }
 
 /// Parse standard harness flags from argv.
-pub fn parseStandardArgs(allocator: Allocator) !StandardArgs {
-    const raw_args = try std.process.argsAlloc(allocator);
+pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !StandardArgs {
+    const raw_args = try process_args.toSlice(allocator);
     // Don't free — we reference slices from it.
-    return parseStandardArgsFromSlice(raw_args, allocator);
+    // Cast from []const [:0]const u8 to []const []const u8.
+    const raw_args_plain: []const []const u8 = @ptrCast(raw_args);
+    return parseStandardArgsFromSlice(raw_args_plain, allocator);
 }
 
 test "parseStandardArgsFromSlice preserves help and explicit timeout" {
@@ -367,6 +629,19 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }
 
+test "parseStandardArgsFromSlice parses llvm aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "--include-llvm",
+    }, arena.allocator());
+
+    try std.testing.expect(args.include_llvm);
+    try std.testing.expectEqual(@as(usize, 0), args.positional.len);
+}
+
 test "parseStandardArgsFromSlice parses --worker and --worker-backend without polluting positional" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -393,8 +668,9 @@ test "parseStandardArgsFromSlice parses --worker and --worker-backend without po
 /// callbacks for test execution, serialization, and deserialization.
 pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
     return struct {
-        /// Run one test in the forked child. Called with an arena allocator.
-        runTest: *const fn (Allocator, Spec) Result,
+        /// Run one test in the forked child. Called with an arena allocator
+        /// and the same timeout budget enforced by the parent watchdog.
+        runTest: *const fn (Allocator, Spec, u64) Result,
         /// Serialize a result to the pipe fd.
         serialize: *const fn (posix.fd_t, Result) void,
         /// Deserialize a result from the accumulated pipe buffer.
@@ -410,6 +686,14 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// Use setsid() + kill(-pid) for process group cleanup.
         /// Enable when children spawn subprocesses (e.g., roc build).
         use_process_groups: bool = false,
+        /// Extra parent-watchdog time after the child-visible timeout budget.
+        /// Runners that enforce finer-grained timeouts inside the child use
+        /// this to let the child serialize its attributed timeout result.
+        timeout_report_grace_ms: u64 = 0,
+        /// On Windows, reuse child runner processes across tests. Disable this
+        /// for runners whose tests need a fresh runner process per spec, so
+        /// each logical test has one process boundary and one result frame.
+        windows_persistent_workers: bool = true,
         /// Called from the parent thread right before launching each test.
         /// Use for "RUN <name>" logging — keeps it coherent across N workers.
         onTestStarted: ?*const fn (Spec) void = null,
@@ -430,14 +714,14 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
         var global_slots: ?[]?ChildSlot = null;
 
-        fn sigintHandler(_: c_int) callconv(.c) void {
+        fn sigintHandler(_: posix.SIG) callconv(.c) void {
             const slots = global_slots orelse return;
             for (slots) |slot_opt| {
                 if (slot_opt) |slot| {
                     if (cfg.use_process_groups) {
-                        posix.kill(-slot.pid, posix.SIG.KILL) catch {};
+                        posixKill(-slot.pid, posix.SIG.KILL) catch {};
                     } else {
-                        posix.kill(slot.pid, posix.SIG.KILL) catch {};
+                        posixKill(slot.pid, posix.SIG.KILL) catch {};
                     }
                 }
             }
@@ -450,22 +734,22 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             _ = std.c.raise(posix.SIG.INT);
         }
 
-        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize) bool {
+        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64) bool {
             if (comptime !has_fork) return false;
 
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
 
-            const pipe_fds = posix.pipe() catch return false;
+            const pipe_fds = pipe() catch return false;
 
-            const pid = posix.fork() catch {
-                posix.close(pipe_fds[0]);
-                posix.close(pipe_fds[1]);
+            const pid = fork() catch {
+                closeFd(pipe_fds[0]);
+                closeFd(pipe_fds[1]);
                 return false;
             };
 
             if (pid == 0) {
                 // === Child process ===
-                posix.close(pipe_fds[0]);
+                closeFd(pipe_fds[0]);
 
                 if (cfg.use_process_groups) {
                     _ = std.c.setsid();
@@ -474,19 +758,19 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
                 const allocator = arena.allocator();
 
-                const result = cfg.runTest(allocator, specs[test_idx]);
+                const result = cfg.runTest(allocator, specs[test_idx], timeout_ms);
                 cfg.serialize(pipe_fds[1], result);
-                posix.close(pipe_fds[1]);
+                closeFd(pipe_fds[1]);
                 std.c._exit(0);
             }
 
             // === Parent ===
-            posix.close(pipe_fds[1]);
+            closeFd(pipe_fds[1]);
             slot.* = .{
                 .pid = pid,
                 .pipe_fd = pipe_fds[0],
                 .test_index = test_idx,
-                .start_time_ms = std.time.milliTimestamp(),
+                .start_time_ms = milliTimestamp(),
                 .buf = .empty,
                 .timed_out = false,
             };
@@ -498,9 +782,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             slot.* = null;
 
             drainPipe(s.pipe_fd, &s.buf);
-            posix.close(s.pipe_fd);
+            closeFd(s.pipe_fd);
 
-            const wait_result = posix.waitpid(s.pid, 0);
+            const wait_result = waitpid(s.pid, 0);
             const term_signal: u8 = @truncate(wait_result.status & 0x7f);
 
             if (s.timed_out or term_signal == 9) {
@@ -518,7 +802,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         fn drainPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) void {
             var read_buf: [4096]u8 = undefined;
             while (true) {
-                const n = posix.read(fd, &read_buf) catch break;
+                const n = posixRead(fd, &read_buf) catch break;
                 if (n == 0) break;
                 buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch break;
             }
@@ -530,6 +814,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// itself as a single-test worker); otherwise falls back to sequential
         /// in-process execution.
         pub fn run(
+            io: std.Io,
             specs: []const Spec,
             results: []Result,
             max_children: usize,
@@ -539,14 +824,14 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         ) void {
             if (comptime !has_fork) {
                 if (worker_argv_template) |tmpl| {
-                    runChildPool(specs, results, max_children, timeout_ms, gpa, tmpl);
+                    runChildPool(io, specs, results, max_children, timeout_ms, gpa, tmpl);
                 } else {
-                    runSequential(specs, results, gpa);
+                    runSequential(specs, results, gpa, timeout_ms);
                 }
                 return;
             }
-            // On POSIX, children are forked in-place — the runtime template is
-            // unused. The parameter is still in the signature for a uniform API.
+            // On POSIX, children are forked in-place; the runtime template is
+            // unused. It remains in the signature for a uniform API.
             _ = &worker_argv_template;
 
             const slots = gpa.alloc(?ChildSlot, max_children) catch {
@@ -571,7 +856,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             const poll_map = gpa.alloc(usize, max_children) catch return;
             defer gpa.free(poll_map);
 
-            const is_tty = posix.isatty(2);
+            const is_tty = std.Io.File.stderr().isTty(io) catch false;
+            const progress_interval_ns = testProgressIntervalNs(is_tty);
 
             var next_test: usize = 0;
             var completed: usize = 0;
@@ -581,7 +867,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             // Fill initial slots
             for (slots) |*slot| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(slot, specs, next_test)) {
+                if (!launchChild(slot, specs, next_test, timeout_ms)) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -604,13 +890,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
                 if (n_poll == 0) break;
 
-                _ = posix.poll(poll_fds[0..n_poll], 500) catch 0;
+                _ = posixPoll(poll_fds[0..n_poll], 500) catch 0;
 
                 for (poll_fds[0..n_poll], 0..) |pfd, pi| {
                     const slot_idx = poll_map[pi];
                     if (pfd.revents & posix.POLL.IN != 0) {
                         var read_buf: [4096]u8 = undefined;
-                        const n = posix.read(pfd.fd, &read_buf) catch 0;
+                        const n = posixRead(pfd.fd, &read_buf) catch 0;
                         if (n > 0) {
                             if (slots[slot_idx]) |*s| {
                                 s.buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch {};
@@ -622,7 +908,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(&slots[slot_idx], specs, next_test)) {
+                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms)) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -633,34 +919,31 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 // Check timeouts
                 if (timeout_ms > 0) {
-                    const now = std.time.milliTimestamp();
+                    const now = milliTimestamp();
                     for (slots) |*slot_opt| {
                         if (slot_opt.*) |*slot| {
                             const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
-                            if (elapsed > timeout_ms) {
+                            const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
+                            if (elapsed > kill_after_ms and !slot.timed_out) {
                                 slot.timed_out = true;
                                 const test_name = cfg.getName(specs[slot.test_index]);
                                 std.debug.print("\n  HANG  {s}  ({d}ms) — killing\n", .{ test_name, elapsed });
                                 if (cfg.use_process_groups) {
-                                    posix.kill(-slot.pid, posix.SIG.KILL) catch {};
+                                    posixKill(-slot.pid, posix.SIG.KILL) catch {};
                                 } else {
-                                    posix.kill(slot.pid, posix.SIG.KILL) catch {};
+                                    posixKill(slot.pid, posix.SIG.KILL) catch {};
                                 }
                             }
                         }
                     }
                 }
 
-                // Progress line every ~1s (tty only)
+                // TTY progress updates in-place. Non-TTY progress is opt-in via
+                // ROC_TEST_PROGRESS_INTERVAL_MS and prints one factual line per interval.
                 const progress_elapsed = progress_timer.read();
-                if (progress_elapsed - last_progress_ns >= 1_000_000_000) {
+                if (progress_interval_ns != 0 and progress_elapsed - last_progress_ns >= progress_interval_ns) {
                     last_progress_ns = progress_elapsed;
-                    if (is_tty) {
-                        const wall_s = @as(f64, @floatFromInt(progress_elapsed)) / 1_000_000_000.0;
-                        std.debug.print("\r  progress: {d}/{d} done, {d:.1}s elapsed", .{
-                            completed, specs.len, wall_s,
-                        });
-                    }
+                    printPoolProgress(is_tty, completed, specs.len, progress_elapsed);
                 }
             }
 
@@ -672,13 +955,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Sequential fallback for platforms without fork (Windows).
         /// Effectively unused under the Child-based path; kept as defense in
         /// depth for callers that don't build a `worker_argv_template`.
-        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator) void {
+        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);
                 if (cfg.onTestStarted) |cb| cb(spec);
-                const unstable_result = cfg.runTest(arena.allocator(), spec);
+                const unstable_result = cfg.runTest(arena.allocator(), spec, timeout_ms);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
             }
         }
@@ -702,9 +985,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         };
 
         const ChildPoolState = struct {
+            io: std.Io,
             next_test: std.atomic.Value(usize),
             slots: []?ActiveChild,
-            slots_mutex: std.Thread.Mutex,
+            slots_mutex: std.Io.Mutex,
             watchdog_done: std.atomic.Value(bool),
             template: []const []const u8,
             job: ?if (builtin.os.tag == .windows) std.os.windows.HANDLE else void,
@@ -715,6 +999,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         };
 
         fn runChildPool(
+            io: std.Io,
             specs: []const Spec,
             results: []Result,
             max_children: usize,
@@ -723,7 +1008,11 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             template: []const []const u8,
         ) void {
             if (comptime builtin.os.tag != .windows) {
-                runSequential(specs, results, gpa);
+                runSequential(specs, results, gpa, timeout_ms);
+                return;
+            }
+            if (!cfg.windows_persistent_workers) {
+                runChildPoolSingleShot(io, specs, results, max_children, timeout_ms, gpa, template);
                 return;
             }
 
@@ -738,9 +1027,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             @memset(slots, null);
 
             var state = ChildPoolState{
+                .io = io,
                 .next_test = std.atomic.Value(usize).init(0),
                 .slots = slots,
-                .slots_mutex = .{},
+                .slots_mutex = .init,
                 .watchdog_done = std.atomic.Value(bool).init(false),
                 .template = template,
                 .job = job,
@@ -767,6 +1057,62 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             if (watchdog) |wd| wd.join();
         }
 
+        const SingleShotChildPoolState = struct {
+            io: std.Io,
+            next_test: std.atomic.Value(usize),
+            template: []const []const u8,
+            timeout_ms: u64,
+            gpa: Allocator,
+            specs: []const Spec,
+            results: []Result,
+        };
+
+        fn runChildPoolSingleShot(
+            io: std.Io,
+            specs: []const Spec,
+            results: []Result,
+            max_children: usize,
+            timeout_ms: u64,
+            gpa: Allocator,
+            template: []const []const u8,
+        ) void {
+            var state = SingleShotChildPoolState{
+                .io = io,
+                .next_test = std.atomic.Value(usize).init(0),
+                .template = template,
+                .timeout_ms = timeout_ms,
+                .gpa = gpa,
+                .specs = specs,
+                .results = results,
+            };
+
+            const threads = gpa.alloc(std.Thread, max_children) catch return;
+            defer gpa.free(threads);
+
+            var spawned: usize = 0;
+            for (threads) |*t| {
+                t.* = std.Thread.spawn(.{}, singleShotWorkerThread, .{&state}) catch break;
+                spawned += 1;
+            }
+
+            for (threads[0..spawned]) |t| t.join();
+        }
+
+        fn singleShotWorkerThread(state: *SingleShotChildPoolState) void {
+            while (true) {
+                const idx = state.next_test.fetchAdd(1, .monotonic);
+                if (idx >= state.specs.len) return;
+
+                if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
+
+                state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, idx, &.{}, state.timeout_ms)) {
+                    .ok => |result| result,
+                    .timed_out => cfg.timeout_result,
+                    .crashed => cfg.default_result,
+                };
+            }
+        }
+
         /// One persistent Child per worker thread. Spawns once in
         /// `--worker-stream` mode, then loops: pull next test index from the
         /// shared atomic counter, write `"<idx>\n"` to stdin, read a `u32`
@@ -781,26 +1127,30 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// per-backend attribution for any test that lost its details.
         fn workerThread(state: *ChildPoolState, slot_idx: usize) void {
             const gpa = state.gpa;
+            const io = state.io;
 
             var argv: std.ArrayListUnmanaged([]const u8) = .empty;
             defer argv.deinit(gpa);
             argv.appendSlice(gpa, state.template) catch return;
             argv.append(gpa, "--worker-stream") catch return;
 
-            var child = std.process.Child.init(argv.items, gpa);
-            child.stdin_behavior = .Pipe;
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Inherit;
-            child.spawn() catch return;
+            var child = std.process.spawn(io, .{
+                .argv = argv.items,
+                .stdin = .pipe,
+                .stdout = .pipe,
+                .stderr = .inherit,
+            }) catch return;
 
             if (comptime builtin.os.tag == .windows) {
-                if (state.job) |h| job_object.assign(h, child.id);
+                if (state.job) |h| {
+                    if (child.id) |cid| job_object.assign(h, cid);
+                }
             }
 
             defer {
-                if (child.stdin) |stdin| stdin.close();
+                if (child.stdin) |stdin| stdin.close(io);
                 child.stdin = null;
-                _ = child.wait() catch {};
+                if (child.id != null) _ = child.wait(io) catch {};
             }
 
             while (true) {
@@ -809,13 +1159,13 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
 
-                state.slots_mutex.lock();
+                state.slots_mutex.lockUncancelable(io);
                 state.slots[slot_idx] = ActiveChild{
                     .child = &child,
-                    .start_ms = std.time.milliTimestamp(),
+                    .start_ms = milliTimestamp(),
                     .timed_out = false,
                 };
-                state.slots_mutex.unlock();
+                state.slots_mutex.unlock(io);
 
                 const cmd = std.fmt.allocPrint(gpa, "{d}\n", .{idx}) catch {
                     state.results[idx] = cfg.default_result;
@@ -823,13 +1173,21 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 };
                 defer gpa.free(cmd);
 
-                if (fileWriteAll(child.stdin.?, cmd)) |_| {} else |_| {
+                const child_stdin = child.stdin orelse {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                };
+                if (fileWriteAll(io, child_stdin, cmd)) |_| {} else |_| {
                     state.results[idx] = cfg.default_result;
                     return;
                 }
 
                 var length_bytes: [4]u8 = undefined;
-                if (fileReadExactly(child.stdout.?, &length_bytes)) |_| {} else |_| {
+                const child_stdout = child.stdout orelse {
+                    state.results[idx] = handleReadFailure(state, slot_idx);
+                    return;
+                };
+                if (fileReadExactly(io, child_stdout, &length_bytes)) |_| {} else |_| {
                     state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 }
@@ -840,15 +1198,15 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     return;
                 };
                 defer gpa.free(payload);
-                if (fileReadExactly(child.stdout.?, payload)) |_| {} else |_| {
+                if (fileReadExactly(io, child_stdout, payload)) |_| {} else |_| {
                     state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 }
 
-                state.slots_mutex.lock();
+                state.slots_mutex.lockUncancelable(io);
                 const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
                 state.slots[slot_idx] = null;
-                state.slots_mutex.unlock();
+                state.slots_mutex.unlock(io);
 
                 state.results[idx] = if (timed_out)
                     cfg.timeout_result
@@ -858,43 +1216,47 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         }
 
         fn handleReadFailure(state: *ChildPoolState, slot_idx: usize) Result {
-            state.slots_mutex.lock();
+            const io = state.io;
+            state.slots_mutex.lockUncancelable(io);
             const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
             state.slots[slot_idx] = null;
-            state.slots_mutex.unlock();
+            state.slots_mutex.unlock(io);
             return if (timed_out) cfg.timeout_result else cfg.default_result;
         }
 
-        fn fileWriteAll(file: std.fs.File, bytes: []const u8) !void {
-            var off: usize = 0;
-            while (off < bytes.len) {
-                off += try file.write(bytes[off..]);
-            }
+        fn fileWriteAll(io: std.Io, file: std.Io.File, bytes: []const u8) !void {
+            try file.writeStreamingAll(io, bytes);
         }
 
-        fn fileReadExactly(file: std.fs.File, out: []u8) !void {
+        fn fileReadExactly(io: std.Io, file: std.Io.File, out: []u8) !void {
             var off: usize = 0;
             while (off < out.len) {
-                const n = try file.read(out[off..]);
+                const n = file.readStreaming(io, &.{out[off..]}) catch |err| switch (err) {
+                    error.EndOfStream => return error.UnexpectedEof,
+                    else => return err,
+                };
                 if (n == 0) return error.UnexpectedEof;
                 off += n;
             }
         }
 
         fn watchdogThread(state: *ChildPoolState) void {
+            const io = state.io;
             while (!state.watchdog_done.load(.acquire)) {
-                std.Thread.sleep(100 * std.time.ns_per_ms);
+                // Swallow cancel: watchdog cleanup happens on the next tick.
+                std.Io.sleep(io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
                 if (state.timeout_ms == 0) continue;
 
-                const now = std.time.milliTimestamp();
-                state.slots_mutex.lock();
-                defer state.slots_mutex.unlock();
+                const now = milliTimestamp();
+                state.slots_mutex.lockUncancelable(io);
+                defer state.slots_mutex.unlock(io);
                 for (state.slots) |*slot_opt| {
                     if (slot_opt.*) |*slot| {
                         const elapsed: u64 = @intCast(@max(0, now - slot.start_ms));
-                        if (elapsed > state.timeout_ms and !slot.timed_out) {
+                        const kill_after_ms = state.timeout_ms +| cfg.timeout_report_grace_ms;
+                        if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
-                            _ = slot.child.kill() catch {};
+                            if (slot.child.id) |id| terminateProcess(id);
                         }
                     }
                 }
@@ -906,6 +1268,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Used by runner Phase-2 retry: re-run a failing test once per
         /// backend to attribute the crash.
         pub fn spawnSingleWorker(
+            io: std.Io,
             gpa: Allocator,
             template: []const []const u8,
             test_index: usize,
@@ -926,14 +1289,16 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             argv.append(gpa, idx_str) catch return .crashed;
             argv.appendSlice(gpa, extra_args) catch return .crashed;
 
-            var child = std.process.Child.init(argv.items, gpa);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Inherit;
-            child.spawn() catch return .crashed;
+            var child = std.process.spawn(io, .{
+                .argv = argv.items,
+                .stdout = .pipe,
+                .stderr = .inherit,
+            }) catch return .crashed;
 
             // Foreground watchdog: a thread that kills the child if it runs
             // over budget. Pairs with the synchronous read-then-wait below.
             const Watch = struct {
+                io: std.Io,
                 child_ptr: *std.process.Child,
                 deadline_ms: i64,
                 timed_out: std.atomic.Value(bool),
@@ -941,20 +1306,23 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 fn run(self: *@This()) void {
                     while (!self.done.load(.acquire)) {
-                        std.Thread.sleep(100 * std.time.ns_per_ms);
+                        // Swallow cancel: outer loop re-checks `done` and the deadline.
+                        std.Io.sleep(self.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
                         if (self.done.load(.acquire)) return;
-                        if (std.time.milliTimestamp() >= self.deadline_ms) {
+                        if (milliTimestamp() >= self.deadline_ms) {
                             self.timed_out.store(true, .release);
-                            _ = self.child_ptr.kill() catch {};
+                            if (self.child_ptr.id) |id| terminateProcess(id);
                             return;
                         }
                     }
                 }
             };
 
+            const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
             var watch = Watch{
+                .io = io,
                 .child_ptr = &child,
-                .deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms)),
+                .deadline_ms = milliTimestamp() + @as(i64, @intCast(kill_after_ms)),
                 .timed_out = std.atomic.Value(bool).init(false),
                 .done = std.atomic.Value(bool).init(false),
             };
@@ -967,12 +1335,18 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             defer buf.deinit(gpa);
             var read_buf: [4096]u8 = undefined;
             while (true) {
-                const n = child.stdout.?.read(&read_buf) catch break;
+                const n = child.stdout.?.readStreaming(io, &.{&read_buf}) catch |err| switch (err) {
+                    error.EndOfStream => break,
+                    else => break,
+                };
                 if (n == 0) break;
                 buf.appendSlice(gpa, read_buf[0..n]) catch break;
             }
 
-            const term = child.wait() catch std.process.Child.Term{ .Unknown = 0 };
+            const term = if (child.id != null)
+                child.wait(io) catch std.process.Child.Term{ .unknown = 0 }
+            else
+                std.process.Child.Term{ .unknown = 0 };
 
             watch.done.store(true, .release);
             if (watch_thread) |t| t.join();
@@ -980,7 +1354,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             if (watch.timed_out.load(.acquire)) return .timed_out;
 
             return switch (term) {
-                .Exited => |code| if (code == 0) blk: {
+                .exited => |code| if (code == 0) blk: {
                     const r = cfg.deserialize(buf.items, gpa) orelse break :blk SingleWorkerOutcome{ .crashed = {} };
                     break :blk SingleWorkerOutcome{ .ok = r };
                 } else .crashed,

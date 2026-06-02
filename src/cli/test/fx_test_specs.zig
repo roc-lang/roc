@@ -20,6 +20,9 @@ pub const TestSpec = struct {
     description: []const u8 = "",
     /// Skip this test on Windows (usually due to dev backend limitations)
     skip_on_windows: bool = false,
+    /// Skip this test unconditionally. Use sparingly and link to the tracking
+    /// issue/comment that documents the underlying bug.
+    skip: bool = false,
 };
 
 /// Regression coverage for #9401: boxed erased callables must use the same
@@ -112,6 +115,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_for_each.roc",
         .io_spec = "1>Item: apple|1>Item: banana|1>Item: cherry",
         .description = "List.for_each! with effectful callback",
+    },
+    .{
+        .roc_file = "test/fx/list_opaque_pattern_match_bug.roc",
+        .io_spec = "1>Test 1: Text elements in list|1>Div branch|1>  iterating child|1>Text branch: Hello|1>  iterating child|1>Text branch: World|1>Test 2: Label element with opaque payload in list|1>Div branch|1>  iterating child|1>Label branch|1>Done!",
+        .description = "Regression test: Pattern matching opaque payload variants retrieved from lists (issue #9113)",
     },
     .{
         .roc_file = "test/fx/string_pattern_matching.roc",
@@ -372,6 +380,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/issue8898.roc",
         .io_spec = "1>done",
         .description = "Regression test: Polymorphic function with for loop list literal panic (issue #8898)",
+    },
+    .{
+        .roc_file = "test/fx/issue_9113_opaque_payload_list_match.roc",
+        .io_spec = "1>Test 1: Text elements in list|1>Div branch|1>  iterating child|1>Text branch: Hello|1>  iterating child|1>Text branch: World|1>|1>Test 2: Label element with opaque payload in list|1>Div branch|1>  iterating child|1>Label branch|1>Done!",
+        .description = "Regression test: Opaque payload in list match works with platform modules (issue #9113)",
     },
     .{
         .roc_file = "test/fx/static_dispatch_platform_module.roc",

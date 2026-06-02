@@ -16,24 +16,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - record_pattern_edge_cases.md:5:51:5:52
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_pattern_edge_cases.md:5:51:5:52:**
-```roc
-    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
-```
-                                                  ^
-
-It has the type:
-
-    { c: Str, .. }
-
-But you are trying to use it as:
-
-    Str
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -145,7 +130,7 @@ match ... {
 (e-match
 	(match
 		(cond
-			(e-not-implemented))
+			(e-runtime-error (tag "not_implemented")))
 		(branches
 			(branch
 				(patterns
@@ -274,7 +259,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "firstName")))
 						(e-literal (string " ("))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 196)
+						(e-dispatch-call (method "to_str") (constraint-fn-var 176)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))
@@ -291,5 +276,5 @@ match ... {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

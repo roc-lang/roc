@@ -129,33 +129,23 @@ if (error_msg) |msg| {
 Link the object file with the platform host library to create the final executable:
 
 ```zig
-const bindings = @import("backend/llvm/bindings.zig");
+const embedded_lld = @import("embedded_lld");
 
 // Using LLD (LLVM's linker) for ELF targets
-const args = [_:null]?[*:0]const u8{
+const args = &.{
     "ld.lld",
     "output.o",
     "libhost.a",           // platform host library
     "-o", "my_program",
-    null,
 };
-const success = bindings.LinkELF(
-    args.len - 1,
-    &args,
-    false,  // can_exit_early
-    false,  // disable_output
-);
-
-if (!success) {
-    return error.LinkFailed;
-}
+try embedded_lld.link(allocator, .elf, args, .{});
 ```
 
-For different platforms, use the appropriate linker:
-- **Linux**: `bindings.LinkELF`
-- **macOS**: `bindings.LinkMachO`
-- **Windows**: `bindings.LinkCOFF`
-- **WebAssembly**: `bindings.LinkWasm`
+For different platforms, pass the appropriate linker format:
+- **Linux**: `.elf`
+- **macOS**: `.macho`
+- **Windows**: `.coff`
+- **WebAssembly**: `.wasm`
 
 ## Low-Level API
 

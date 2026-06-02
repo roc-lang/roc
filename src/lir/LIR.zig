@@ -12,7 +12,7 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
-const mir = @import("mir");
+const hosted = @import("hosted.zig");
 
 const StringLiteral = base.StringLiteral;
 
@@ -92,6 +92,13 @@ pub const LocalSpan = extern struct {
 /// Builtin low-level operations reused from `base`.
 pub const LowLevel = base.LowLevel;
 
+/// LIR string literal view into one stored backing string.
+pub const StrLiteral = struct {
+    backing: StringLiteral.Idx,
+    offset: u32,
+    len: u32,
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -105,7 +112,7 @@ pub const LiteralValue = union(enum) {
     f64_literal: f64,
     f32_literal: f32,
     dec_literal: i128,
-    str_literal: StringLiteral.Idx,
+    str_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
 };
@@ -123,10 +130,12 @@ pub const RefOp = union(enum) {
     tag_payload: struct {
         source: LocalId,
         payload_idx: u16,
+        variant_index: u16,
         tag_discriminant: u16,
     },
     tag_payload_struct: struct {
         source: LocalId,
+        variant_index: u16,
         tag_discriminant: u16,
     },
     list_reinterpret: struct {
@@ -138,7 +147,7 @@ pub const RefOp = union(enum) {
 };
 
 /// Platform-hosted proc metadata used for external proc ABIs.
-pub const HostedProc = mir.Hosted.Proc;
+pub const HostedProc = hosted.Proc;
 
 /// One explicit switch branch keyed by an integer branch value.
 pub const CFSwitchBranch = struct {
@@ -157,17 +166,35 @@ pub const CFSwitchBranchSpan = extern struct {
     }
 };
 
+/// One join target available in a proc.
+pub const JoinPoint = extern struct {
+    id: JoinPointId,
+    params: LocalSpan,
+    body: CFStmtId,
+};
+
+/// Span into flat join-point storage.
+pub const JoinPointSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    /// Returns an empty join-point span.
+    pub fn empty() JoinPointSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    /// Reports whether this span contains no join points.
+    pub fn isEmpty(self: JoinPointSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
 pub const SetLocalWriteMode = enum {
     initialize_join_result,
     replace_existing,
     initialize_join_param,
-};
-
-/// Explicit ARC source of the hidden element binding inside a `for_list`.
-pub const ForListElementSource = enum {
-    aliases_iterable_element,
 };
 
 /// Explicit final-drop callback plan for a packed boxed erased callable.
@@ -187,7 +214,7 @@ pub const ProcAbi = enum {
     erased_callable,
 };
 
-/// Single canonical statement/control-flow language for all lowered code.
+/// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
@@ -238,6 +265,7 @@ pub const CFStmt = union(enum) {
     },
     assign_tag: struct {
         target: LocalId,
+        variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,
         next: CFStmtId,
@@ -260,15 +288,18 @@ pub const CFStmt = union(enum) {
     runtime_error: void,
     incref: struct {
         value: LocalId,
+        rc: layout.RcHelper,
         count: u16 = 1,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
+        rc: layout.RcHelper,
         next: CFStmtId,
     },
     free: struct {
         value: LocalId,
+        rc: layout.RcHelper,
         next: CFStmtId,
     },
     switch_stmt: struct {
@@ -280,14 +311,6 @@ pub const CFStmt = union(enum) {
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
     },
-    for_list: struct {
-        elem: LocalId,
-        elem_source: ForListElementSource,
-        iterable: LocalId,
-        iterable_elem_layout: layout.Idx,
-        body: CFStmtId,
-        next: CFStmtId,
-    },
     loop_continue: void,
     loop_break: void,
     join: struct {
@@ -298,7 +321,6 @@ pub const CFStmt = union(enum) {
     },
     jump: struct {
         target: JoinPointId,
-        args: LocalSpan,
     },
     ret: struct {
         value: LocalId,
@@ -313,11 +335,81 @@ pub const CFStmt = union(enum) {
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    frame_locals: LocalSpan = LocalSpan.empty(),
+    join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     abi: ProcAbi = .roc,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
+};
+
+/// Identifier of a stored LirPattern.
+pub const LirPatternId = enum(u32) {
+    _,
+
+    pub const none: LirPatternId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: LirPatternId) bool {
+        return self == none;
+    }
+};
+
+/// Span into flat pattern-id storage.
+pub const LirPatternSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() LirPatternSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: LirPatternSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// Pattern in the LIR.
+pub const LirPattern = union(enum) {
+    bind: struct {
+        symbol: Symbol,
+        layout_idx: layout.Idx,
+        reassignable: bool = false,
+    },
+    wildcard: struct {
+        layout_idx: layout.Idx,
+    },
+    int_literal: struct {
+        value: i128,
+        layout_idx: layout.Idx,
+    },
+    float_literal: struct {
+        value: f64,
+        layout_idx: layout.Idx,
+    },
+    str_literal: StringLiteral.Idx,
+    tag: struct {
+        discriminant: u16,
+        union_layout: layout.Idx,
+        args: LirPatternSpan,
+    },
+    struct_: struct {
+        struct_layout: layout.Idx,
+        fields: LirPatternSpan,
+    },
+    list: struct {
+        list_layout: layout.Idx,
+        elem_layout: layout.Idx,
+        prefix: LirPatternSpan,
+        rest: LirPatternId,
+        suffix: LirPatternSpan,
+    },
+    as_pattern: struct {
+        symbol: Symbol,
+        layout_idx: layout.Idx,
+        reassignable: bool = false,
+        inner: LirPatternId,
+    },
 };
 
 test "Symbol size and alignment" {

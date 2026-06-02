@@ -1342,6 +1342,20 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"-42\"" },
     },
     .{
+        .name = "low_level - I8.abs_diff uses signed operand layout",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 120.I8
+        \\b : I8
+        \\b = -120.I8
+        \\x = I8.abs_diff(a, b)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "240" },
+    },
+    .{
         .name = "low_level - U16.to_str",
         .source =
         \\{
@@ -3073,6 +3087,296 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "4294967295" },
     },
     .{
+        .name = "low_level - U8.bitwise_and basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b1100
+        \\x = a.bitwise_and(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "8" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_or basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b1100
+        \\x = a.bitwise_or(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "14" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_xor basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b1100
+        \\x = a.bitwise_xor(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "255" },
+    },
+    .{
+        .name = "low_level - U8.bitwise_not high bits",
+        .source =
+        \\{
+        \\a : U8
+        \\a = 0b0000_1111
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "240" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_and basic",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 0b0110
+        \\x = a.bitwise_and(0b0011)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_xor with negative one inverts",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 5
+        \\x = a.bitwise_xor(-1)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_not equals negate minus one",
+        .source =
+        \\{
+        \\a : I8
+        \\a = 5
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - I8.bitwise_not of negative one is zero",
+        .source =
+        \\{
+        \\a : I8
+        \\a = -1
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "low_level - U16.bitwise_or sets high byte",
+        .source =
+        \\{
+        \\a : U16
+        \\a = 0x00FF
+        \\x = a.bitwise_or(0xFF00)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "65535" },
+    },
+    .{
+        .name = "low_level - U16.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U16
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "65535" },
+    },
+    .{
+        .name = "low_level - I16.bitwise_xor self is zero",
+        .source =
+        \\{
+        \\a : I16
+        \\a = 12345
+        \\x = a.bitwise_xor(a)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "low_level - U32.bitwise_xor swaps nibbles",
+        .source =
+        \\{
+        \\a : U32
+        \\a = 0xFFFF
+        \\x = a.bitwise_xor(0x0F0F)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "61680" },
+    },
+    .{
+        .name = "low_level - U32.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U32
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4294967295" },
+    },
+    .{
+        .name = "low_level - I32.bitwise_and masks low bits",
+        .source =
+        \\{
+        \\a : I32
+        \\a = -1
+        \\x = a.bitwise_and(0xFF)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "255" },
+    },
+    .{
+        .name = "low_level - U64.bitwise_and overlap",
+        .source =
+        \\{
+        \\a : U64
+        \\a = 0xFF00
+        \\x = a.bitwise_and(0x0FF0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3840" },
+    },
+    .{
+        .name = "low_level - U64.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U64
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "18446744073709551615" },
+    },
+    .{
+        .name = "low_level - I64.bitwise_not basic",
+        .source =
+        \\{
+        \\a : I64
+        \\a = 5
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - U128.bitwise_and high word",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 0xFFFF_FFFF_FFFF_FFFF_0000_0000_0000_0000
+        \\x = a.bitwise_and(0xFFFF_0000_0000_0000_0000_0000_0000_0000)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "340277174624079928635746076935438991360" },
+    },
+    .{
+        .name = "low_level - U128.bitwise_xor basic",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 0b1100
+        \\x = a.bitwise_xor(0b1010)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "low_level - U128.bitwise_not basic",
+        .source =
+        \\{
+        \\a : U128
+        \\a = 0
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "340282366920938463463374607431768211455" },
+    },
+    .{
+        .name = "low_level - I128.bitwise_not basic",
+        .source =
+        \\{
+        \\a : I128
+        \\a = 5
+        \\x = a.bitwise_not()
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "-6" },
+    },
+    .{
+        .name = "low_level - I128.bitwise_and with negative one is identity",
+        .source =
+        \\{
+        \\a : I128
+        \\a = 1234567890123456789
+        \\x = a.bitwise_and(-1)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1234567890123456789" },
+    },
+    .{
+        .name = "low_level - U64.bitwise ops combine",
+        .source =
+        \\{
+        \\a : U64
+        \\a = 0b1010
+        \\b = a.bitwise_or(0b0101)
+        \\c = b.bitwise_and(0b1100)
+        \\x = c.bitwise_xor(0b0001)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
         .name = "low_level - List.sort_with basic ascending sort",
         .source =
         \\{
@@ -3729,6 +4033,22 @@ pub const tests = [_]TestCase{
         \\main = apply_tag(Apply(|x| x + 1)) + apply_tag(Keep(7))
         ,
         .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "boxed lambda round trip: boxed callable captures boxed callable",
+        .source_kind = .module,
+        .source =
+        \\make_outer : {} -> Box((I64 -> I64))
+        \\make_outer = |_| {
+        \\    inner = Box.box(|x| x + 1)
+        \\
+        \\    Box.box(|x| Box.unbox(inner)(x) + 1)
+        \\}
+        \\
+        \\main : I64
+        \\main = Box.unbox(make_outer({}))(40)
+        ,
+        .expected = .{ .inspect_str = "42" },
     },
     .{
         .name = "boxed lambda round trip: nested box does not authorize unrelated erasure",

@@ -15,7 +15,7 @@ const Scope = @This();
 pub const ExternalTypeBinding = struct {
     module_ident: Ident.Idx,
     original_ident: Ident.Idx,
-    target_node_idx: ?u16,
+    target_node_idx: ?u32,
     import_idx: ?CIR.Import.Idx,
     origin_region: Region,
     /// True if the module was attempted to be imported but was not found.

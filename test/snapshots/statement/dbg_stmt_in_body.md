@@ -62,10 +62,12 @@ main = {
 			(s-dbg
 				(e-lookup-local
 					(p-assign (ident "x"))))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "1"))))))
+			(e-dispatch-call (method "plus") (constraint-fn-var 77)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "x"))))
+				(args
+					(e-num (value "1")))))))
 ~~~
 # TYPES
 ~~~clojure
