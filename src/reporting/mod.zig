@@ -19,6 +19,7 @@ pub const RenderTargetPreference = @import("config.zig").RenderTargetPreference;
 pub const source_region = @import("source_region.zig");
 
 pub const renderReport = @import("renderer.zig").renderReport;
+pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
 pub const renderReportToTerminal = @import("renderer.zig").renderReportToTerminal;
 pub const renderReportToMarkdown = @import("renderer.zig").renderReportToMarkdown;
 pub const renderReportToHtml = @import("renderer.zig").renderReportToHtml;

@@ -59,6 +59,17 @@ pub fn renderReport(report: *const Report, writer: *std.Io.Writer, target: Rende
     }
 }
 
+/// Render a report with an explicit reporting configuration.
+pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
+    const palette = ColorUtils.getPaletteForConfig(config);
+    switch (config.getRenderTarget()) {
+        .color_terminal => try renderReportToTerminal(report, writer, palette, config),
+        .markdown => try renderReportToMarkdown(report, writer, config),
+        .html => try renderReportToHtml(report, writer, config),
+        .language_server => try renderReportToLsp(report, writer, config),
+    }
+}
+
 /// Render a report to terminal with color support.
 pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
     // Render title with appropriate severity styling
