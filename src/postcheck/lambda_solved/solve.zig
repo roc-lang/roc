@@ -765,6 +765,18 @@ const Solver = struct {
         };
     }
 
+    fn recordFieldByLabel(self: *Solver, ty: Type.TypeVarId, label: []const u8) Allocator.Error!Type.TypeVarId {
+        return switch (try self.shapeContent(ty)) {
+            .record => |fields| {
+                for (self.program.types.fieldSpan(fields)) |field| {
+                    if (std.mem.eql(u8, self.program.lifted.names.recordFieldLabelText(field.name), label)) return field.ty;
+                }
+                Common.invariant("low-level record result was missing a required field");
+            },
+            else => Common.invariant("low-level record result had a non-record checked type"),
+        };
+    }
+
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         return switch (try self.shapeContent(ty)) {
             .tag_union => |tags| {
@@ -838,6 +850,17 @@ const Solver = struct {
                 expectLowLevelArity(op, args, 3);
                 try self.unify(expected, args[0]);
                 try self.unify(args[2], try self.listElem(expected));
+            },
+            .list_replace_unsafe => {
+                expectLowLevelArity(op, args, 3);
+                const elem = try self.listElem(args[0]);
+                try self.unify(args[2], elem);
+                try self.unify(try self.recordFieldByLabel(expected, "list"), args[0]);
+                try self.unify(try self.recordFieldByLabel(expected, "prev"), elem);
+            },
+            .list_swap => {
+                expectLowLevelArity(op, args, 3);
+                try self.unify(expected, args[0]);
             },
             .list_prepend => {
                 expectLowLevelArity(op, args, 2);

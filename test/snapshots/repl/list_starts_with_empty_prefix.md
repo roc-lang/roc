@@ -5,7 +5,7 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» List.starts_with([1, 2, 3], List.drop_first([1], 1))
+» List.starts_with([1, 2, 3], [])
 ~~~
 # OUTPUT
 True

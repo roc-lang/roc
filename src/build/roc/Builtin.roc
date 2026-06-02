@@ -1507,8 +1507,8 @@ Builtin :: [].{
 			List.fold(list, Item.default(), |acc, elem| acc + elem)
 		}
 
-		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty. 
-		## Works for any type that implements `min`. 
+		## Find the minimum element in a list, or `Err(ListWasEmpty)` if the list is empty.
+		## Works for any type that implements `min`.
 		min : List(a) -> Try(a, [ListWasEmpty])
 			where [a.min : a, a -> a]
 		min = |list|
