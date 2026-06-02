@@ -166,6 +166,37 @@ test "parse error triggers errdefer cleanup" {
     try std.testing.expectError(error.TooNested, result);
 }
 
+fn parserInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+    var parser = try Parser.init(tokens, allocator);
+    defer parser.store.deinit();
+    defer parser.decl_index.deinit();
+    defer parser.diagnostics.deinit(allocator);
+    defer parser.deinit();
+}
+
+test "Parser.init cleans up partial allocations on OOM" {
+    const gpa = std.testing.allocator;
+    const source = "Test := []";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const messages = try gpa.alloc(tokenize.Diagnostic, 128);
+    defer gpa.free(messages);
+
+    var tokenizer = try tokenize.Tokenizer.init(&env, gpa, env.source, messages);
+    var tokenizer_finished = false;
+    defer if (!tokenizer_finished) tokenizer.deinit(gpa);
+
+    try tokenizer.tokenize(gpa);
+
+    var output = tokenizer.finishAndDeinit();
+    tokenizer_finished = true;
+    defer output.tokens.deinit(gpa);
+
+    try std.testing.checkAllAllocationFailures(gpa, parserInitAllocationFailureImpl, .{output.tokens});
+}
+
 test "parse diagnostic report handles invalid mutable identifier spelling" {
     const gpa = std.testing.allocator;
     const source =

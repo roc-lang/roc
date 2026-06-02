@@ -318,6 +318,11 @@ pub const Module = struct {
         return self.env().method_idents.entries.items;
     }
 
+    /// Return the checked module's method definition table for static-dispatch lowering.
+    pub fn methodDefEntries(self: @This()) []const ModuleEnv.MethodDefs.Entry {
+        return self.env().method_defs.entries.items;
+    }
+
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {
         return ModuleEnv.varFrom(idx);
     }

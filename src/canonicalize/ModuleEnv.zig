@@ -418,6 +418,18 @@ pub const MethodKey = packed struct(u64) {
 ///
 /// This is populated during canonicalization when methods are defined in associated blocks.
 pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
+/// Type/checking and implementation metadata for a method.
+pub const MethodBinding = extern struct {
+    /// Node whose type variable contains the checked method type.
+    type_node_idx: Node.Idx,
+    /// Def that owns the method implementation identity.
+    def_idx: CIR.Def.Idx,
+};
+
+/// Mapping from (type_ident, method_ident) pairs to the method binding.
+/// This keeps method implementation lookup explicit without requiring local
+/// associated methods to be published through the module exposure table.
+pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
 /// Checked dispatch metadata for one source `for` loop.
 ///
@@ -587,6 +599,8 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Enables O(1) index-based method lookup during type checking and evaluation.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
+/// Mapping from (type_ident, method_ident) pairs to defining def indices.
+method_defs: MethodDefs,
 
 /// Dispatch plans attached by checking to source `for` loop nodes.
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
@@ -655,6 +669,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.method_idents.relocate(offset);
+    self.method_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
@@ -729,6 +744,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .method_defs = MethodDefs.init(),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
@@ -748,6 +764,7 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
+    self.method_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
@@ -1214,6 +1231,84 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
 
             // Show where the redeclaration is
+            try report.document.addReflowingText("The redeclaration is here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                redeclared_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("But ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_alias_redeclared => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+
+            var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("The type alias ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is being redeclared.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The redeclaration is here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                redeclared_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("But ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .nominal_type_redeclared => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+
+            var report = Report.init(allocator, "NOMINAL TYPE REDECLARED", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("The nominal type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is being redeclared.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
             try report.document.addReflowingText("The redeclaration is here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -2693,6 +2788,7 @@ pub const Serialized = extern struct {
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    method_defs: MethodDefs.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
@@ -2748,6 +2844,7 @@ pub const Serialized = extern struct {
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize method_idents map
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+        try self.method_defs.serialize(&env.method_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
@@ -2799,6 +2896,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
@@ -2853,6 +2951,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
@@ -3654,6 +3753,18 @@ pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ide
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
+/// Registers a method definition mapping for fast index-based lookup.
+pub fn registerMethodDef(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
+    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+    try self.method_defs.put(self.gpa, key, binding);
+}
+
+/// Registers both name and definition metadata for a method.
+pub fn registerMethod(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx, binding: MethodBinding) !void {
+    try self.registerMethodIdent(type_ident, method_ident, qualified_ident);
+    try self.registerMethodDef(type_ident, method_ident, binding);
+}
+
 /// Looks up a method identifier by type and method ident indices.
 /// This is the fast O(log n) index-based lookup that avoids string comparison.
 ///
@@ -3674,6 +3785,13 @@ pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_i
     // Cast away const for the get operation (it doesn't modify the structure, just ensures sorted)
     const mutable_self = @constCast(self);
     return mutable_self.method_idents.get(self.gpa, key);
+}
+
+/// Looks up a method binding by type and method ident indices (const version).
+pub fn lookupMethodBindingConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
+    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+    const mutable_self = @constCast(self);
+    return mutable_self.method_defs.get(self.gpa, key);
 }
 
 /// Looks up a method identifier by translating idents from a source environment.
@@ -3711,6 +3829,17 @@ pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self,
     return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
 }
 
+/// Looks up a method binding by translating idents from a source environment.
+pub fn lookupMethodBindingFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
+    const type_name = source_env.getIdent(type_ident);
+    const method_name = source_env.getIdent(method_ident);
+
+    const local_type_ident = self.common.findIdent(type_name) orelse return null;
+    const local_method_ident = self.common.findIdent(method_name) orelse return null;
+
+    return self.lookupMethodBindingConst(local_type_ident, local_method_ident);
+}
+
 /// Looks up a method identifier when the type and method idents come from different source environments.
 /// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
 pub fn lookupMethodIdentFromTwoEnvsConst(
@@ -3729,6 +3858,23 @@ pub fn lookupMethodIdentFromTwoEnvsConst(
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
     return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
+}
+
+/// Looks up a method binding when the type and method idents come from different source environments.
+pub fn lookupMethodBindingFromTwoEnvsConst(
+    self: *const Self,
+    type_source_env: *const Self,
+    type_ident: Ident.Idx,
+    method_source_env: *const Self,
+    method_ident: Ident.Idx,
+) ?MethodBinding {
+    const type_name = type_source_env.getIdent(type_ident);
+    const method_name = method_source_env.getIdent(method_ident);
+
+    const local_type_ident = self.common.findIdent(type_name) orelse return null;
+    const local_method_ident = self.common.findIdent(method_name) orelse return null;
+
+    return self.lookupMethodBindingConst(local_type_ident, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

@@ -98,6 +98,49 @@ fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Di
     return count;
 }
 
+fn isQualifiedName(name: []const u8, parent_name: []const u8, child_name: []const u8) bool {
+    const suffix_len = parent_name.len + 1 + child_name.len;
+    if (name.len < suffix_len) return false;
+
+    const suffix_start = name.len - suffix_len;
+    if (suffix_start != 0 and name[suffix_start - 1] != '.') return false;
+
+    const suffix = name[suffix_start..];
+    if (!std.mem.eql(u8, suffix[0..parent_name.len], parent_name)) return false;
+    if (suffix[parent_name.len] != '.') return false;
+    return std.mem.eql(u8, suffix[parent_name.len + 1 ..], child_name);
+}
+
+fn isNameOrQualifiedSuffix(name: []const u8, bare_name: []const u8) bool {
+    if (std.mem.eql(u8, name, bare_name)) return true;
+    if (name.len <= bare_name.len) return false;
+    const suffix_start = name.len - bare_name.len;
+    return name[suffix_start - 1] == '.' and std.mem.eql(u8, name[suffix_start..], bare_name);
+}
+
+fn countValueLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, parent_name: []const u8, child_name: []const u8) usize {
+    var count: usize = 0;
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .ident_not_in_scope => |d| {
+                const ident = env.getIdent(d.ident);
+                if (isNameOrQualifiedSuffix(ident, parent_name) or isQualifiedName(ident, parent_name, child_name)) count += 1;
+            },
+            .qualified_ident_does_not_exist => |d| {
+                if (isQualifiedName(env.getIdent(d.ident), parent_name, child_name)) count += 1;
+            },
+            .nested_value_not_found => |d| {
+                const parent = env.getIdent(d.parent_name);
+                const nested = env.getIdent(d.nested_name);
+                if (std.mem.eql(u8, parent, parent_name) and std.mem.eql(u8, nested, child_name)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
 test "canonicalization records explicit type declaration tables" {
     const allocator = testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -330,6 +373,81 @@ test "malformed associated type header does not suppress later associated value"
             const qualified_outer_ok = env.common.findIdent("Test.Outer.ok") orelse return error.MissingQualifiedOuterOkIdent;
             try testing.expect(env.getExposedNodeIndexById(qualified_outer_ok) != null);
             try testing.expectEqual(@as(usize, 0), countAssociatedLookupDiagnostics(env, diagnostics, "Outer.ok"));
+        }
+    }.check);
+}
+
+test "block-local associated value does not leak after owner scope exits" {
+    const source =
+        \\Test := [].{
+        \\    first = {
+        \\        T := [First].{
+        \\            marker = 1
+        \\        }
+        \\        1
+        \\    }
+        \\
+        \\    leaked = T.marker
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 1), countValueLookupDiagnostics(env, diagnostics, "T", "marker"));
+
+            if (env.common.findIdent("T.marker")) |ident| {
+                try testing.expect(env.getExposedNodeIndexById(ident) == null);
+            }
+            if (env.common.findIdent("Test.T.marker")) |ident| {
+                try testing.expect(env.getExposedNodeIndexById(ident) == null);
+            }
+        }
+    }.check);
+}
+
+test "block-local recursive nominal type can reference itself in its declaration" {
+    const source =
+        \\Test := [].{
+        \\    value = {
+        \\        Tree := [Leaf, Node(Tree)]
+        \\        1
+        \\    }
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "local type alias redeclaration diagnostic renders" {
+    const source =
+        \\Test := [].{
+        \\    value = {
+        \\        T : U64
+        \\        T : U8
+        \\        1
+        \\    }
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            var count: usize = 0;
+            for (diagnostics) |diagnostic| {
+                switch (diagnostic) {
+                    .type_alias_redeclared => {
+                        count += 1;
+                        var report = try env.diagnosticToReport(diagnostic, testing.allocator, env.module_name);
+                        defer report.deinit();
+                        try testing.expect(report.title.len > 0);
+                    },
+                    else => {},
+                }
+            }
+            try testing.expectEqual(@as(usize, 1), count);
         }
     }.check);
 }

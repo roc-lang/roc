@@ -309,6 +309,47 @@ test "roc check succeeds on valid file" {
     try testing.expect(!has_error);
 }
 
+test "roc check succeeds when block-local associated value captures local value" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(.{
+        .sub_path = "Test.roc",
+        .data =
+        \\Test := [].{
+        \\    value = {
+        \\        n = 41
+        \\        T := [Local].{
+        \\            marker = n
+        \\        }
+        \\        T.marker
+        \\    }
+        \\}
+        ,
+    });
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const test_path = try std.fs.path.join(gpa, &.{ tmp_path, "Test.roc" });
+    defer gpa.free(test_path);
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, test_path);
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("roc check failed for block-local associated capture regression: {}\n", .{result.term});
+        printTruncatedOutput("stdout", result.stdout);
+        printTruncatedOutput("stderr", result.stderr);
+    }
+
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
 test "roc check generated module graph succeeds with 1 file and 1 symbol" {
     try runGeneratedModuleGraphCheck(std.testing.allocator, .{
         .roc_file_count = 1,

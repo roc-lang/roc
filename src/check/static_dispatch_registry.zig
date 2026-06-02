@@ -121,17 +121,17 @@ pub const MethodRegistry = struct {
         const idents = module.identStoreConst();
         const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
 
-        for (module.methodIdentEntries()) |entry| {
-            const def_node_idx = module_env.getExposedNodeIndexById(entry.value) orelse {
+        for (module.methodDefEntries()) |entry| {
+            const method_ident = module_env.lookupMethodIdentConst(entry.key.type_ident, entry.key.method_ident) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
-                        "checked static dispatch registry invariant violated: method ident {d} has no exposed definition",
-                        .{@as(u32, @bitCast(entry.value))},
+                        "checked static dispatch registry invariant violated: method def for type {d} method {d} has no method ident",
+                        .{ @as(u32, @bitCast(entry.key.type_ident)), @as(u32, @bitCast(entry.key.method_ident)) },
                     );
                 }
                 unreachable;
             };
-            const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+            const def_idx = entry.value.def_idx;
             const template = local_templates.templateForDef(def_idx) orelse {
                 // Associated values without arguments are checked field access,
                 // not static-dispatch call targets. The method registry is a
@@ -139,7 +139,7 @@ pub const MethodRegistry = struct {
                 // so only procedure-backed entries belong here.
                 continue;
             };
-            const export_name = try names.internExportIdent(idents, entry.value);
+            const export_name = try names.internExportIdent(idents, method_ident);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
                 .export_name = export_name,

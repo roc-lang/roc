@@ -5978,12 +5978,12 @@ fn toInspectMethodVarForNominal(
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
     const original_env, const is_this_module = try self.methodOwnerEnv(nominal.origin_module);
-    const method_ident = original_env.lookupMethodIdentFromEnvConst(
+    const method_binding = original_env.lookupMethodBindingFromEnvConst(
         self.cir,
         nominal.ident.ident_idx,
         self.cir.idents.to_inspect,
     ) orelse return null;
-    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_ident, nominal.ident.ident_idx, env, region);
+    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, nominal.ident.ident_idx, env, region);
 }
 
 fn toInspectMethodVarForAlias(
@@ -5993,13 +5993,13 @@ fn toInspectMethodVarForAlias(
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
     const original_env, const is_this_module = try self.methodOwnerEnv(alias.origin_module);
-    const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
+    const method_binding = original_env.lookupMethodBindingFromTwoEnvsConst(
         original_env,
         alias.ident.ident_idx,
         self.cir,
         self.cir.idents.to_inspect,
     ) orelse return null;
-    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_ident, alias.ident.ident_idx, env, region);
+    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, alias.ident.ident_idx, env, region);
 }
 
 fn methodOwnerEnv(self: *Self, origin_module: Ident.Idx) Allocator.Error!struct { *const ModuleEnv, bool } {
@@ -6028,19 +6028,12 @@ fn methodVarFromOriginalEnv(
     self: *Self,
     original_env: *const ModuleEnv,
     is_this_module: bool,
-    method_ident: Ident.Idx,
+    type_node_idx: anytype,
     dispatcher_name: Ident.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!ToInspectMethodVar {
-    const node_idx = original_env.getExposedNodeIndexById(method_ident) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: to_inspect method ident has no exposed definition", .{});
-        }
-        unreachable;
-    };
-    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
-    const def_var: Var = ModuleEnv.varFrom(def_idx);
+    const def_var: Var = ModuleEnv.varFrom(type_node_idx);
     const method_var = if (is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
@@ -7224,12 +7217,7 @@ fn reportMissingNominalMethodForBinop(
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
-    const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, method_name) orelse {
-        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
-        return true;
-    };
-
-    if (original_env.getExposedNodeIndexById(method_ident) == null) {
+    if (original_env.lookupMethodBindingFromEnvConst(self.cir, nominal_type.ident.ident_idx, method_name) == null) {
         try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     }
@@ -8107,15 +8095,12 @@ fn staticDispatchConstraintAcceptsCandidate(
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
     const original_env = self.getNominalOriginEnv(nominal_type);
 
-    const method_ident = original_env.lookupMethodIdentFromEnvConst(
+    const method_binding = original_env.lookupMethodBindingFromEnvConst(
         self.cir,
         nominal_type.ident.ident_idx,
         constraint.fn_name,
     ) orelse return false;
-
-    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse return false;
-    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-    const def_var: Var = ModuleEnv.varFrom(def_idx);
+    const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
 
     const method_var = if (nominal_type.origin_module.eql(self.builtin_ctx.module_name)) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
@@ -8130,7 +8115,7 @@ fn staticDispatchConstraintAcceptsCandidate(
     return try self.probeUnifyWithoutRecordingProblems(method_var, constraint.fn_var);
 }
 
-fn listJoinWithListItemsMethodIdent(
+fn listJoinWithListItemsMethodDef(
     self: *Self,
     original_env: *const ModuleEnv,
     is_this_module: bool,
@@ -8138,17 +8123,14 @@ fn listJoinWithListItemsMethodIdent(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!?Ident.Idx {
+) Allocator.Error!?ModuleEnv.MethodBinding {
     if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
     if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
 
     const list_ident = original_env.idents.list;
     const join_list_with_ident = original_env.idents.join_list_with;
-    const helper_ident = original_env.lookupMethodIdentConst(list_ident, join_list_with_ident) orelse return null;
-
-    const helper_node_idx = original_env.getExposedNodeIndexById(helper_ident) orelse return null;
-    const helper_def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(helper_node_idx)));
-    const helper_def_var: Var = ModuleEnv.varFrom(helper_def_idx);
+    const helper_binding = original_env.lookupMethodBindingConst(list_ident, join_list_with_ident) orelse return null;
+    const helper_def_var: Var = ModuleEnv.varFrom(helper_binding.type_node_idx);
 
     const from_numeral_count = self.types.from_numeral_flex_count;
     const regions_len = self.regions.items.items.len;
@@ -8175,7 +8157,7 @@ fn listJoinWithListItemsMethodIdent(
     };
 
     if (!try self.probeUnifyWithoutRecordingProblems(helper_var, constraint.fn_var)) return null;
-    return helper_ident;
+    return helper_binding;
 }
 
 fn probeUnifyWithoutRecordingProblems(
@@ -8453,15 +8435,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         continue;
                     }
-                    const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
+                    const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
-                        const exact_method_ident = original_env.lookupMethodIdentFromEnvConst(
+                        const exact_method_binding = original_env.lookupMethodBindingFromEnvConst(
                             self.cir,
                             nominal_type.ident.ident_idx,
                             constraint.fn_name,
                         );
-                        if (exact_method_ident == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
+                        if (exact_method_binding == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -8471,7 +8453,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         }
-                        break :blk exact_method_ident orelse {
+                        break :blk exact_method_binding orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
                                 constraint,
@@ -8481,14 +8463,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         };
-                    } else (try self.listJoinWithListItemsMethodIdent(
+                    } else (try self.listJoinWithListItemsMethodDef(
                         original_env,
                         is_this_module,
                         nominal_type,
                         constraint,
                         env,
                         region,
-                    )) orelse original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
+                    )) orelse original_env.lookupMethodBindingFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -8503,21 +8485,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
-                    // Get the def index in the original env
-                    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
-                        // The ident exists but isn't exposed as a def
-                        try self.reportConstraintError(
-                            deferred_constraint.var_,
-                            constraint,
-                            .{ .missing_method = .nominal },
-                            env,
-                            is_numeric_default_pass,
-                        );
-                        continue;
-                    };
-
-                    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-                    const def_var: Var = ModuleEnv.varFrom(def_idx);
+                    const def_idx = method_binding.def_idx;
+                    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = original_env.store.getDef(def_idx);
                     // Track whether we just processed a cycle participant
                     var cycle_method_expr_var: ?Var = null;
@@ -8591,13 +8560,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // fresh flex var instead of def_var to avoid rank lowering.
                         break :blk expr_var_for_method;
                     } else if (is_this_module) blk: {
-                        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
-                            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+                        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+                            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
                         }
-                        break :blk def_var;
+                        break :blk method_type_var;
                     } else blk: {
                         // Copy the method from the other module's type store
-                        const copied_var = try self.copyVar(def_var, original_env, region);
+                        const copied_var = try self.copyVar(method_type_var, original_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
 
@@ -8667,13 +8636,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     }
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                        const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
+                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsConst(
                             original_env,
                             alias.ident.ident_idx,
                             self.cir,
                             constraint.fn_name,
                         );
-                        if (method_ident == null) {
+                        if (method_binding == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (self.varSupportsIsEq(backing_var)) {
                                 try self.satisfyImplicitEqualityConstraint(
@@ -8694,7 +8663,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
+                    const method_binding = original_env.lookupMethodBindingFromTwoEnvsConst(
                         original_env,
                         alias.ident.ident_idx,
                         self.cir,
@@ -8709,23 +8678,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
+                    const def_idx = method_binding.def_idx;
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
-                    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
-                        try self.reportConstraintError(
-                            deferred_constraint.var_,
-                            constraint,
-                            .{ .missing_method = .nominal },
-                            env,
-                            is_numeric_default_pass,
-                        );
-                        continue;
-                    };
-
-                    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-                    const def_var: Var = ModuleEnv.varFrom(def_idx);
+                    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = original_env.store.getDef(def_idx);
                     var cycle_method_expr_var: ?Var = null;
                     if (is_this_module) {
@@ -8782,12 +8740,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
                         break :blk expr_var_for_method;
                     } else if (is_this_module) blk: {
-                        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
-                            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+                        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+                            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
                         }
-                        break :blk def_var;
+                        break :blk method_type_var;
                     } else blk: {
-                        const copied_var = try self.copyVar(def_var, original_env, region);
+                        const copied_var = try self.copyVar(method_type_var, original_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
 
@@ -9378,8 +9336,8 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
             if (constraint.origin == .from_numeral) continue;
 
             // Check if Dec has this method
-            const method_ident = builtin_env.lookupMethodIdentFromEnvConst(self.cir, indices.dec_ident, constraint.fn_name);
-            if (method_ident == null) {
+            const method_binding = builtin_env.lookupMethodBindingFromEnvConst(self.cir, indices.dec_ident, constraint.fn_name);
+            if (method_binding == null) {
                 // Dec doesn't have this method - report error
                 try self.reportConstraintError(
                     var_,

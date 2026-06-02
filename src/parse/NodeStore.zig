@@ -67,27 +67,66 @@ pub const AST_EXPR_NODE_COUNT = std.meta.fields(AST.Expr).len;
 /// ensure resizing of underlying data structures happens
 /// very rarely.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!NodeStore {
+    var nodes = try Node.List.initCapacity(gpa, capacity);
+    errdefer nodes.deinit(gpa);
+    var extra_data = try std.ArrayList(u32).initCapacity(gpa, capacity / 2);
+    errdefer extra_data.deinit(gpa);
+    var scratch_statements = try base.Scratch(AST.Statement.Idx).init(gpa);
+    errdefer scratch_statements.deinit();
+    var scratch_tokens = try base.Scratch(Token.Idx).init(gpa);
+    errdefer scratch_tokens.deinit();
+    var scratch_exprs = try base.Scratch(AST.Expr.Idx).init(gpa);
+    errdefer scratch_exprs.deinit();
+    var scratch_patterns = try base.Scratch(AST.Pattern.Idx).init(gpa);
+    errdefer scratch_patterns.deinit();
+    var scratch_record_fields = try base.Scratch(AST.RecordField.Idx).init(gpa);
+    errdefer scratch_record_fields.deinit();
+    var scratch_pattern_record_fields = try base.Scratch(AST.PatternRecordField.Idx).init(gpa);
+    errdefer scratch_pattern_record_fields.deinit();
+    var scratch_match_branches = try base.Scratch(AST.MatchBranch.Idx).init(gpa);
+    errdefer scratch_match_branches.deinit();
+    var scratch_type_annos = try base.Scratch(AST.TypeAnno.Idx).init(gpa);
+    errdefer scratch_type_annos.deinit();
+    var scratch_anno_record_fields = try base.Scratch(AST.AnnoRecordField.Idx).init(gpa);
+    errdefer scratch_anno_record_fields.deinit();
+    var scratch_exposed_items = try base.Scratch(AST.ExposedItem.Idx).init(gpa);
+    errdefer scratch_exposed_items.deinit();
+    var scratch_where_clauses = try base.Scratch(AST.WhereClause.Idx).init(gpa);
+    errdefer scratch_where_clauses.deinit();
+    var scratch_target_entries = try base.Scratch(AST.TargetEntry.Idx).init(gpa);
+    errdefer scratch_target_entries.deinit();
+    var scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa);
+    errdefer scratch_target_files.deinit();
+    var scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa);
+    errdefer scratch_for_clause_type_aliases.deinit();
+    var scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa);
+    errdefer scratch_requires_entries.deinit();
+    var numeric_literals = try std.ArrayList(NumericLiteral.Stored).initCapacity(gpa, capacity / 8);
+    errdefer numeric_literals.deinit(gpa);
+    var numeric_literal_bytes = try std.ArrayList(u8).initCapacity(gpa, capacity);
+    errdefer numeric_literal_bytes.deinit(gpa);
+
     var store: NodeStore = .{
         .gpa = gpa,
-        .nodes = try Node.List.initCapacity(gpa, capacity),
-        .extra_data = try std.ArrayList(u32).initCapacity(gpa, capacity / 2),
-        .scratch_statements = try base.Scratch(AST.Statement.Idx).init(gpa),
-        .scratch_tokens = try base.Scratch(Token.Idx).init(gpa),
-        .scratch_exprs = try base.Scratch(AST.Expr.Idx).init(gpa),
-        .scratch_patterns = try base.Scratch(AST.Pattern.Idx).init(gpa),
-        .scratch_record_fields = try base.Scratch(AST.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = try base.Scratch(AST.PatternRecordField.Idx).init(gpa),
-        .scratch_match_branches = try base.Scratch(AST.MatchBranch.Idx).init(gpa),
-        .scratch_type_annos = try base.Scratch(AST.TypeAnno.Idx).init(gpa),
-        .scratch_anno_record_fields = try base.Scratch(AST.AnnoRecordField.Idx).init(gpa),
-        .scratch_exposed_items = try base.Scratch(AST.ExposedItem.Idx).init(gpa),
-        .scratch_where_clauses = try base.Scratch(AST.WhereClause.Idx).init(gpa),
-        .scratch_target_entries = try base.Scratch(AST.TargetEntry.Idx).init(gpa),
-        .scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa),
-        .scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa),
-        .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
-        .numeric_literals = try std.ArrayList(NumericLiteral.Stored).initCapacity(gpa, capacity / 8),
-        .numeric_literal_bytes = try std.ArrayList(u8).initCapacity(gpa, capacity),
+        .nodes = nodes,
+        .extra_data = extra_data,
+        .scratch_statements = scratch_statements,
+        .scratch_tokens = scratch_tokens,
+        .scratch_exprs = scratch_exprs,
+        .scratch_patterns = scratch_patterns,
+        .scratch_record_fields = scratch_record_fields,
+        .scratch_pattern_record_fields = scratch_pattern_record_fields,
+        .scratch_match_branches = scratch_match_branches,
+        .scratch_type_annos = scratch_type_annos,
+        .scratch_anno_record_fields = scratch_anno_record_fields,
+        .scratch_exposed_items = scratch_exposed_items,
+        .scratch_where_clauses = scratch_where_clauses,
+        .scratch_target_entries = scratch_target_entries,
+        .scratch_target_files = scratch_target_files,
+        .scratch_for_clause_type_aliases = scratch_for_clause_type_aliases,
+        .scratch_requires_entries = scratch_requires_entries,
+        .numeric_literals = numeric_literals,
+        .numeric_literal_bytes = numeric_literal_bytes,
     };
 
     const expected_idx = store.nodes.items.len;

@@ -177,11 +177,19 @@ pub const DeclKind = enum {
     var_anno,
 };
 
+/// Syntactic shape of a value declaration's implementation.
+pub const ValueDeclForm = enum {
+    none,
+    lambda,
+};
+
 /// Syntactic declaration record consumed by later compiler phases.
 pub const Decl = struct {
     scope: ScopeIdx,
     statement: u32,
     kind: DeclKind,
+    value_form: ValueDeclForm = .none,
+    value_arity: u32 = 0,
     name_tok: ?Token.Idx,
     name_ident: ?Ident.Idx = null,
     pattern: ?u32,

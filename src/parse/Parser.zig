@@ -32,6 +32,7 @@ store: NodeStore,
 decl_index: DeclIndex,
 scope_pending_annos: std.ArrayList(?DeclIndex.DeclIdx),
 type_path_stack: std.ArrayList(DeclIndex.TypePathIdx),
+type_path_stack_visible_start: usize,
 collect_type_dependencies: bool,
 scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
@@ -42,7 +43,11 @@ nesting_counter: u8,
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
     const estimated_node_count = tokens.tokens.len;
-    const store = try NodeStore.initCapacity(gpa, estimated_node_count);
+    var store = try NodeStore.initCapacity(gpa, estimated_node_count);
+    errdefer store.deinit();
+
+    var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
+    errdefer scratch_idents.deinit();
 
     return Parser{
         .gpa = gpa,
@@ -52,8 +57,9 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .decl_index = DeclIndex.init(gpa),
         .scope_pending_annos = .empty,
         .type_path_stack = .empty,
+        .type_path_stack_visible_start = 0,
         .collect_type_dependencies = false,
-        .scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa),
+        .scratch_idents = scratch_idents,
         .scratch_nodes = .{},
         .diagnostics = .{},
         .cached_malformed_node = null,
@@ -240,7 +246,7 @@ fn currentPendingAnno(self: *Parser) ?*?DeclIndex.DeclIdx {
 }
 
 fn currentTypePath(self: *const Parser) ?DeclIndex.TypePathIdx {
-    if (self.type_path_stack.items.len == 0) return null;
+    if (self.type_path_stack.items.len <= self.type_path_stack_visible_start) return null;
     return self.type_path_stack.items[self.type_path_stack.items.len - 1];
 }
 
@@ -276,10 +282,20 @@ fn recordStatementDecl(
                 pattern.ident.ident_tok
             else
                 null;
+            const body = self.store.getExpr(decl.body);
+            const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = switch (body) {
+                .lambda => |lambda| .{
+                    .lambda,
+                    @intCast(self.store.patternSlice(lambda.args).len),
+                },
+                else => .{ .none, 0 },
+            };
             break :blk DeclIndex.Decl{
                 .scope = scope_idx,
                 .statement = @intFromEnum(statement_idx),
                 .kind = .value,
+                .value_form = value_form,
+                .value_arity = value_arity,
                 .name_tok = name_tok,
                 .owner_type_path = owner_type_path,
                 .pattern = @intFromEnum(decl.pattern),
@@ -4117,6 +4133,10 @@ pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
 ///     <stmtN>
 /// }
 pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
+    const previous_type_path_visible_start = self.type_path_stack_visible_start;
+    self.type_path_stack_visible_start = self.type_path_stack.items.len;
+    defer self.type_path_stack_visible_start = previous_type_path_visible_start;
+
     const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
     const scratch_top = self.store.scratchStatementTop();
 

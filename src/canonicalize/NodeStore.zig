@@ -159,23 +159,55 @@ const Scratch = struct {
 
     fn init(gpa: Allocator) Allocator.Error!*@This() {
         const ptr = try gpa.create(Scratch);
+        errdefer gpa.destroy(ptr);
+
+        var statements = try base.Scratch(CIR.Statement.Idx).init(gpa);
+        errdefer statements.deinit();
+        var exprs = try base.Scratch(CIR.Expr.Idx).init(gpa);
+        errdefer exprs.deinit();
+        var record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa);
+        errdefer record_fields.deinit();
+        var match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa);
+        errdefer match_branches.deinit();
+        var match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa);
+        errdefer match_branch_patterns.deinit();
+        var if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa);
+        errdefer if_branches.deinit();
+        var where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa);
+        errdefer where_clauses.deinit();
+        var patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa);
+        errdefer patterns.deinit();
+        var record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa);
+        errdefer record_destructs.deinit();
+        var type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa);
+        errdefer type_annos.deinit();
+        var anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa);
+        errdefer anno_record_fields.deinit();
+        var exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(gpa);
+        errdefer exposed_items.deinit();
+        var defs = try base.Scratch(CIR.Def.Idx).init(gpa);
+        errdefer defs.deinit();
+        var diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(gpa);
+        errdefer diagnostics.deinit();
+        var captures = try base.Scratch(CIR.Expr.Capture.Idx).init(gpa);
+        errdefer captures.deinit();
 
         ptr.* = .{
-            .statements = try base.Scratch(CIR.Statement.Idx).init(gpa),
-            .exprs = try base.Scratch(CIR.Expr.Idx).init(gpa),
-            .record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa),
-            .match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
-            .match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
-            .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
-            .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
-            .patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
-            .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
-            .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
-            .anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
-            .exposed_items = try base.Scratch(CIR.ExposedItem.Idx).init(gpa),
-            .defs = try base.Scratch(CIR.Def.Idx).init(gpa),
-            .diagnostics = try base.Scratch(CIR.Diagnostic.Idx).init(gpa),
-            .captures = try base.Scratch(CIR.Expr.Capture.Idx).init(gpa),
+            .statements = statements,
+            .exprs = exprs,
+            .record_fields = record_fields,
+            .match_branches = match_branches,
+            .match_branch_patterns = match_branch_patterns,
+            .if_branches = if_branches,
+            .where_clauses = where_clauses,
+            .patterns = patterns,
+            .record_destructs = record_destructs,
+            .type_annos = type_annos,
+            .anno_record_fields = anno_record_fields,
+            .exposed_items = exposed_items,
+            .defs = defs,
+            .diagnostics = diagnostics,
+            .captures = captures,
         };
 
         return ptr;
@@ -210,24 +242,57 @@ pub fn init(gpa: Allocator) Allocator.Error!NodeStore {
 
 /// Initializes the NodeStore with a specified capacity.
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
+    var nodes = try Node.List.initCapacity(gpa, capacity);
+    errdefer nodes.deinit(gpa);
+    var regions = try Region.List.initCapacity(gpa, capacity);
+    errdefer regions.deinit(gpa);
+    var int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8);
+    errdefer int128_values.deinit(gpa);
+    var span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4);
+    errdefer span2_data.deinit(gpa);
+    var span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4);
+    errdefer span_with_node_data.deinit(gpa);
+    var method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8);
+    errdefer method_call_data.deinit(gpa);
+    var match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8);
+    errdefer match_data.deinit(gpa);
+    var match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8);
+    errdefer match_branch_data.deinit(gpa);
+    var closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16);
+    errdefer closure_data.deinit(gpa);
+    var zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16);
+    errdefer zero_arg_tag_data.deinit(gpa);
+    var def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8);
+    errdefer def_data.deinit(gpa);
+    var import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16);
+    errdefer import_data.deinit(gpa);
+    var type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16);
+    errdefer type_apply_data.deinit(gpa);
+    var pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16);
+    errdefer pattern_list_data.deinit(gpa);
+    var index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4);
+    errdefer index_data.deinit(gpa);
+    const scratch = try Scratch.init(gpa);
+    errdefer scratch.deinit(gpa);
+
     return .{
         .gpa = gpa,
-        .nodes = try Node.List.initCapacity(gpa, capacity),
-        .regions = try Region.List.initCapacity(gpa, capacity),
-        .int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8),
-        .span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4),
-        .span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4),
-        .method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8),
-        .match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8),
-        .match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8),
-        .closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16),
-        .zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16),
-        .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8),
-        .import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16),
-        .type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16),
-        .pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16),
-        .index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4),
-        .scratch = try Scratch.init(gpa),
+        .nodes = nodes,
+        .regions = regions,
+        .int128_values = int128_values,
+        .span2_data = span2_data,
+        .span_with_node_data = span_with_node_data,
+        .method_call_data = method_call_data,
+        .match_data = match_data,
+        .match_branch_data = match_branch_data,
+        .closure_data = closure_data,
+        .zero_arg_tag_data = zero_arg_tag_data,
+        .def_data = def_data,
+        .import_data = import_data,
+        .type_apply_data = type_apply_data,
+        .pattern_list_data = pattern_list_data,
+        .index_data = index_data,
+        .scratch = scratch,
     };
 }
 
