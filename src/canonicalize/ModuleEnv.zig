@@ -406,15 +406,18 @@ pub const CommonIdents = extern struct {
     }
 };
 
-/// Key for method identifier lookup: (type_ident, method_ident) pair.
+/// Key for method lookup: (owner type declaration, method_ident) pair.
 pub const MethodKey = packed struct(u64) {
-    type_ident: Ident.Idx,
+    owner: CIR.Statement.Idx,
     method_ident: Ident.Idx,
 };
 
-/// Mapping from (type_ident, method_ident) pairs to their qualified method ident.
-/// This enables O(log n) index-based method lookup instead of O(n) string comparison.
-/// The value is the qualified method ident (e.g., "Bool.is_eq" for type "Bool" and method "is_eq").
+/// Mapping from visible type spellings to their associated method owner
+/// declaration.
+pub const MethodOwnerAliases = SortedArrayBuilder(Ident.Idx, CIR.Statement.Idx);
+
+/// Mapping from (owner declaration, method_ident) pairs to their qualified
+/// method ident.
 ///
 /// This is populated during canonicalization when methods are defined in associated blocks.
 pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
@@ -426,7 +429,7 @@ pub const MethodBinding = extern struct {
     def_idx: CIR.Def.Idx,
 };
 
-/// Mapping from (type_ident, method_ident) pairs to the method binding.
+/// Mapping from (owner declaration, method_ident) pairs to the method binding.
 /// This keeps method implementation lookup explicit without requiring local
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
@@ -595,11 +598,12 @@ idents: CommonIdents,
 /// Example: "MyModule.Foo" -> "F" if user has `import MyModule exposing [Foo as F]`
 import_mapping: types_mod.import_mapping.ImportMapping,
 
-/// Mapping from (type_ident, method_ident) pairs to qualified method idents.
-/// Enables O(1) index-based method lookup during type checking and evaluation.
+/// Mapping from type spellings to explicit method owner declarations.
+method_owner_aliases: MethodOwnerAliases,
+/// Mapping from (owner declaration, method_ident) pairs to qualified method idents.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
-/// Mapping from (type_ident, method_ident) pairs to defining def indices.
+/// Mapping from (owner declaration, method_ident) pairs to defining def indices.
 method_defs: MethodDefs,
 
 /// Dispatch plans attached by checking to source `for` loop nodes.
@@ -668,6 +672,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provides_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
+    self.method_owner_aliases.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
@@ -743,6 +748,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .evaluation_order = null, // Will be set after canonicalization completes
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+        .method_owner_aliases = MethodOwnerAliases.init(),
         .method_idents = MethodIdents.init(),
         .method_defs = MethodDefs.init(),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
@@ -763,6 +769,7 @@ pub fn deinit(self: *Self) void {
     self.provides_entries.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
+    self.method_owner_aliases.deinit(self.gpa);
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
@@ -2787,6 +2794,7 @@ pub const Serialized = extern struct {
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
+    method_owner_aliases: MethodOwnerAliases.Serialized,
     method_idents: MethodIdents.Serialized,
     method_defs: MethodDefs.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
@@ -2842,9 +2850,18 @@ pub const Serialized = extern struct {
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
-        // Serialize method_idents map
-        try self.method_idents.serialize(&env.method_idents, allocator, writer);
-        try self.method_defs.serialize(&env.method_defs, allocator, writer);
+        var method_owner_aliases = try env.method_owner_aliases.clone(allocator);
+        defer method_owner_aliases.deinit(allocator);
+        var method_idents = try env.method_idents.clone(allocator);
+        defer method_idents.deinit(allocator);
+        var method_defs = try env.method_defs.clone(allocator);
+        defer method_defs.deinit(allocator);
+        method_owner_aliases.ensureSorted(allocator);
+        method_idents.ensureSorted(allocator);
+        method_defs.ensureSorted(allocator);
+        try self.method_owner_aliases.serialize(&method_owner_aliases, allocator, writer);
+        try self.method_idents.serialize(&method_idents, allocator, writer);
+        try self.method_defs.serialize(&method_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
@@ -2895,6 +2912,7 @@ pub const Serialized = extern struct {
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_owner_aliases = self.method_owner_aliases.deserializeInto(base_addr),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
@@ -2950,6 +2968,7 @@ pub const Serialized = extern struct {
             .evaluation_order = null,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_owner_aliases = self.method_owner_aliases.deserializeInto(base_addr),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
@@ -3741,57 +3760,87 @@ pub fn insertQualifiedIdent(
     return try self.insertIdent(Ident.for_text(qualified));
 }
 
-/// Registers a method identifier mapping for fast index-based lookup.
-/// This should be called during canonicalization when a method is defined in an associated block.
-///
-/// Parameters:
-/// - type_ident: The type's identifier index (e.g., the ident for "Bool")
-/// - method_ident: The method's identifier index (e.g., the ident for "is_eq")
-/// - qualified_ident: The qualified method ident (e.g., "Bool.is_eq")
-pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+pub fn registerMethodOwnerAlias(self: *Self, type_ident: Ident.Idx, owner: CIR.Statement.Idx) !void {
+    try self.method_owner_aliases.put(self.gpa, type_ident, owner);
+}
+
+fn methodOwnerForTypeIdent(self: *Self, type_ident: Ident.Idx) CIR.Statement.Idx {
+    return self.method_owner_aliases.get(self.gpa, type_ident) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "method owner invariant violated: type ident {d} has no explicit method owner alias",
+                .{@as(u32, @bitCast(type_ident))},
+            );
+        }
+        unreachable;
+    };
+}
+
+fn methodOwnerForTypeIdentConst(self: *const Self, type_ident: Ident.Idx) ?CIR.Statement.Idx {
+    return self.method_owner_aliases.getFinalized(type_ident);
+}
+
+/// Registers a method identifier mapping for an explicit owner declaration.
+pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
+    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
-/// Registers a method definition mapping for fast index-based lookup.
-pub fn registerMethodDef(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+/// Registers a method definition mapping for an explicit owner declaration.
+pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
+    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
     try self.method_defs.put(self.gpa, key, binding);
 }
 
-/// Registers both name and definition metadata for a method.
-pub fn registerMethod(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx, binding: MethodBinding) !void {
-    try self.registerMethodIdent(type_ident, method_ident, qualified_ident);
-    try self.registerMethodDef(type_ident, method_ident, binding);
+/// Backwards-compatible registration by type spelling. Real canonicalization
+/// registers owner aliases first, so this resolves to an explicit owner.
+pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
+    try self.registerMethodIdentForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident, qualified_ident);
 }
 
-/// Looks up a method identifier by type and method ident indices.
-/// This is the fast O(log n) index-based lookup that avoids string comparison.
-///
-/// Parameters:
-/// - type_ident: The type's identifier index (must be in this module's ident store)
-/// - method_ident: The method's identifier index (must be in this module's ident store)
-///
-/// Returns the qualified method's ident index if found, or null if not registered.
-pub fn lookupMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+pub fn registerMethodDef(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
+    try self.registerMethodDefForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident, binding);
+}
+
+pub fn registerMethod(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx, binding: MethodBinding) !void {
+    const owner = self.methodOwnerForTypeIdent(type_ident);
+    try self.registerMethodIdentForOwner(owner, method_ident, qualified_ident);
+    try self.registerMethodDefForOwner(owner, method_ident, binding);
+}
+
+pub fn lookupMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
     return self.method_idents.get(self.gpa, key);
 }
 
-/// Looks up a method identifier by type and method ident indices (const version).
-/// This is the fast O(log n) index-based lookup that avoids string comparison.
-pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
-    // Cast away const for the get operation (it doesn't modify the structure, just ensures sorted)
-    const mutable_self = @constCast(self);
-    return mutable_self.method_idents.get(self.gpa, key);
+pub fn lookupMethodIdentForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    return self.method_idents.getFinalized(key);
 }
 
-/// Looks up a method binding by type and method ident indices (const version).
+pub fn lookupMethodBindingForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?MethodBinding {
+    const key = MethodKey{ .owner = owner, .method_ident = method_ident };
+    return self.method_defs.getFinalized(key);
+}
+
+pub fn lookupMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    return self.lookupMethodIdentForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident);
+}
+
+pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const owner = self.methodOwnerForTypeIdentConst(type_ident) orelse return null;
+    return self.lookupMethodIdentForOwnerConst(owner, method_ident);
+}
+
 pub fn lookupMethodBindingConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
-    const mutable_self = @constCast(self);
-    return mutable_self.method_defs.get(self.gpa, key);
+    const owner = self.methodOwnerForTypeIdentConst(type_ident) orelse return null;
+    return self.lookupMethodBindingForOwnerConst(owner, method_ident);
+}
+
+pub fn finalizeMethodTables(self: *Self) void {
+    self.method_owner_aliases.ensureSorted(self.gpa);
+    self.method_idents.ensureSorted(self.gpa);
+    self.method_defs.ensureSorted(self.gpa);
 }
 
 /// Looks up a method identifier by translating idents from a source environment.
@@ -3831,13 +3880,23 @@ pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self,
 
 /// Looks up a method binding by translating idents from a source environment.
 pub fn lookupMethodBindingFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
+    return self.lookupMethodBindingFromEnvAndDeclConst(source_env, type_ident, null, method_ident);
+}
+
+pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
     const type_name = source_env.getIdent(type_ident);
     const method_name = source_env.getIdent(method_ident);
 
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    return self.lookupMethodBindingConst(local_type_ident, local_method_ident);
+    const owner: CIR.Statement.Idx = if (source_decl) |decl|
+        @enumFromInt(decl)
+    else blk: {
+        const local_type_ident = self.common.findIdent(type_name) orelse return null;
+        break :blk self.methodOwnerForTypeIdentConst(local_type_ident) orelse return null;
+    };
+
+    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
 /// Looks up a method identifier when the type and method idents come from different source environments.
@@ -3868,13 +3927,30 @@ pub fn lookupMethodBindingFromTwoEnvsConst(
     method_source_env: *const Self,
     method_ident: Ident.Idx,
 ) ?MethodBinding {
+    return self.lookupMethodBindingFromTwoEnvsAndDeclConst(type_source_env, type_ident, null, method_source_env, method_ident);
+}
+
+pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
+    self: *const Self,
+    type_source_env: *const Self,
+    type_ident: Ident.Idx,
+    source_decl: ?u32,
+    method_source_env: *const Self,
+    method_ident: Ident.Idx,
+) ?MethodBinding {
     const type_name = type_source_env.getIdent(type_ident);
     const method_name = method_source_env.getIdent(method_ident);
 
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
 
-    return self.lookupMethodBindingConst(local_type_ident, local_method_ident);
+    const owner: CIR.Statement.Idx = if (source_decl) |decl|
+        @enumFromInt(decl)
+    else blk: {
+        const local_type_ident = self.common.findIdent(type_name) orelse return null;
+        break :blk self.methodOwnerForTypeIdentConst(local_type_ident) orelse return null;
+    };
+
+    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

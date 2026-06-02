@@ -12,6 +12,7 @@
 //! - Minimal memory overhead
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
@@ -110,7 +111,16 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Get value by key (requires sorting first if not already sorted)
         pub fn get(self: *Self, allocator: Allocator, key: K) ?V {
             self.ensureSorted(allocator);
+            return self.getFinalized(key);
+        }
 
+        /// Get value by key without mutating. The builder must already be sorted
+        /// and deduplicated.
+        pub fn getFinalized(self: *const Self, key: K) ?V {
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.sorted);
+                std.debug.assert(self.deduplicated);
+            }
             var left: usize = 0;
             var right: usize = self.entries.items.len;
 

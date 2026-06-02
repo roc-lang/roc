@@ -645,6 +645,7 @@ fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Err
 /// so static dispatch resolves regardless of which view the caller has.
 fn registerAssociatedMethodIdent(
     self: *Self,
+    owner_stmt_idx: Statement.Idx,
     parent_name: Ident.Idx,
     relative_parent_name: ?Ident.Idx,
     type_name: Ident.Idx,
@@ -652,27 +653,31 @@ fn registerAssociatedMethodIdent(
     qualified_ident: Ident.Idx,
     binding: ModuleEnv.MethodBinding,
 ) std.mem.Allocator.Error!void {
-    try self.env.registerMethod(parent_name, method_ident, qualified_ident, binding);
+    try self.env.registerMethodOwnerAlias(parent_name, owner_stmt_idx);
 
     if (relative_parent_name) |relative_name| {
         if (!relative_name.eql(parent_name)) {
-            try self.env.registerMethod(relative_name, method_ident, qualified_ident, binding);
+            try self.env.registerMethodOwnerAlias(relative_name, owner_stmt_idx);
         }
     }
 
     if (!type_name.eql(parent_name) and
         (relative_parent_name == null or !type_name.eql(relative_parent_name.?)))
     {
-        try self.env.registerMethod(type_name, method_ident, qualified_ident, binding);
+        try self.env.registerMethodOwnerAlias(type_name, owner_stmt_idx);
     }
 
-    const builtin_numeric_alias = self.builtinNumericMethodAlias(type_name) orelse return;
-    if (!builtin_numeric_alias.eql(parent_name) and
-        (relative_parent_name == null or !builtin_numeric_alias.eql(relative_parent_name.?)) and
-        !builtin_numeric_alias.eql(type_name))
-    {
-        try self.env.registerMethod(builtin_numeric_alias, method_ident, qualified_ident, binding);
+    if (self.builtinNumericMethodAlias(type_name)) |builtin_numeric_alias| {
+        if (!builtin_numeric_alias.eql(parent_name) and
+            (relative_parent_name == null or !builtin_numeric_alias.eql(relative_parent_name.?)) and
+            !builtin_numeric_alias.eql(type_name))
+        {
+            try self.env.registerMethodOwnerAlias(builtin_numeric_alias, owner_stmt_idx);
+        }
     }
+
+    try self.env.registerMethodIdentForOwner(owner_stmt_idx, method_ident, qualified_ident);
+    try self.env.registerMethodDefForOwner(owner_stmt_idx, method_ident, binding);
 }
 
 /// For builtin numeric types in the Builtin module, return the type name itself
@@ -2287,11 +2292,20 @@ fn processAssociatedBlock(
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     current_scope.associated_type_name = type_name;
 
-    if (try self.scopeLookupTypeDecl(qualified_name_idx)) |parent_type_decl_idx| {
-        try current_scope.introduceTypeAlias(self.env.gpa, type_name, parent_type_decl_idx);
+    const owner_stmt_idx = (try self.scopeLookupTypeDecl(qualified_name_idx)) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("associated block invariant violated: owner type declaration was not in scope", .{});
+        }
+        unreachable;
+    };
+    try current_scope.introduceTypeAlias(self.env.gpa, type_name, owner_stmt_idx);
+    try self.env.registerMethodOwnerAlias(qualified_name_idx, owner_stmt_idx);
+    if (relative_name_idx) |relative_name| {
+        try self.env.registerMethodOwnerAlias(relative_name, owner_stmt_idx);
     }
+    try self.env.registerMethodOwnerAlias(type_name, owner_stmt_idx);
 
-    try self.canonicalizeAssociatedItems(qualified_name_idx, relative_name_idx, type_name, assoc.scope, assoc.statements, block_context);
+    try self.canonicalizeAssociatedItems(owner_stmt_idx, qualified_name_idx, relative_name_idx, type_name, assoc.scope, assoc.statements, block_context);
 }
 
 /// Resolve an associated-block item to a single pattern, materializing one if
@@ -2781,6 +2795,7 @@ fn recordAssociatedValue(
 
 fn canonicalizeAssociatedItems(
     self: *Self,
+    owner_stmt_idx: Statement.Idx,
     parent_name: Ident.Idx,
     relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
@@ -2916,7 +2931,7 @@ fn canonicalizeAssociatedItems(
                                     if (owner_is_module_visible) {
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
                                     }
-                                    try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, decl_ident, qualified_idx, method_binding);
+                                    try self.registerAssociatedMethodIdent(owner_stmt_idx, parent_name, relative_name_idx, type_name, decl_ident, qualified_idx, method_binding);
 
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(associated_def.def_idx);
@@ -3021,7 +3036,7 @@ fn canonicalizeAssociatedItems(
                         owner_is_module_visible,
                         block_context,
                     );
-                    try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, name_ident, qualified_idx, method_binding);
+                    try self.registerAssociatedMethodIdent(owner_stmt_idx, parent_name, relative_name_idx, type_name, name_ident, qualified_idx, method_binding);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
                     const anno_pattern_idx = def_cir_anno.pattern;
@@ -3095,7 +3110,7 @@ fn canonicalizeAssociatedItems(
                         if (owner_is_module_visible) {
                             try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
                         }
-                        try self.registerAssociatedMethodIdent(parent_name, relative_name_idx, type_name, decl_ident, qualified_idx, method_binding);
+                        try self.registerAssociatedMethodIdent(owner_stmt_idx, parent_name, relative_name_idx, type_name, decl_ident, qualified_idx, method_binding);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names
@@ -3615,6 +3630,8 @@ pub fn canonicalizeFile(
     const eval_order_ptr = try self.env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
     self.env.evaluation_order = eval_order_ptr;
+
+    self.env.finalizeMethodTables();
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
@@ -6269,9 +6286,14 @@ pub fn canonicalizeExpr(
                                     .pattern_idx = pattern_idx,
                                 } }, region);
 
+                                const free_vars = if (self.associatedOwnerIsModuleVisible(owner_path))
+                                    DataSpan.empty()
+                                else
+                                    try self.freeVarsForLocalLookup(pattern_idx);
+
                                 return CanonicalizedExpr{
                                     .idx = expr_idx,
-                                    .free_vars = DataSpan.empty(),
+                                    .free_vars = free_vars,
                                 };
                             }
                         }

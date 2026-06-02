@@ -90,6 +90,49 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 }
 
+test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
+    const gpa = std.testing.allocator;
+    const source = "module []\n";
+
+    var original = try ModuleEnv.init(gpa, source);
+    defer original.deinit();
+
+    try original.initCIRFields("Test");
+    try original.common.calcLineStarts(gpa);
+
+    const type_ident = try original.insertIdent(Ident.for_text("Local"));
+    const method_ident = try original.insertIdent(Ident.for_text("get"));
+    const first_qualified = try original.insertIdent(Ident.for_text("First.Local.get"));
+    const second_qualified = try original.insertIdent(Ident.for_text("Second.Local.get"));
+
+    try original.registerMethod(type_ident, method_ident, first_qualified, .{
+        .type_node_idx = @enumFromInt(1),
+        .def_idx = @enumFromInt(1),
+    });
+    try original.registerMethod(type_ident, method_ident, second_qualified, .{
+        .type_node_idx = @enumFromInt(2),
+        .def_idx = @enumFromInt(2),
+    });
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_alloc);
+
+    const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+    try serialized.serialize(&original, arena_alloc, &writer);
+
+    try std.testing.expect(serialized.method_idents.sorted);
+    try std.testing.expect(serialized.method_idents.deduplicated);
+    try std.testing.expectEqual(@as(u64, 1), serialized.method_idents.entries_len);
+
+    try std.testing.expect(serialized.method_defs.sorted);
+    try std.testing.expect(serialized.method_defs.deduplicated);
+    try std.testing.expectEqual(@as(u64, 1), serialized.method_defs.entries_len);
+}
+
 test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const gpa = std.testing.allocator;
 

@@ -2,6 +2,8 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
+const base = @import("base");
+const can = @import("can");
 const TestEnv = @import("./TestEnv.zig");
 const canonical = @import("../canonical_names.zig");
 const checked_ids = @import("../checked_ids.zig");
@@ -9,6 +11,8 @@ const static_dispatch = @import("../static_dispatch_registry.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const types = @import("types");
 
+const Ident = base.Ident;
+const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
@@ -1358,6 +1362,35 @@ test "checked artifact method registry skips nominal associated values" {
     defer registry.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 0), registry.entries.len);
+}
+
+test "typed method definition entries expose finalized owner-method keys" {
+    const gpa = testing.allocator;
+
+    var env = try ModuleEnv.init(gpa, "module []\n");
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    try env.common.calcLineStarts(gpa);
+
+    const type_ident = try env.insertIdent(Ident.for_text("Local"));
+    const method_ident = try env.insertIdent(Ident.for_text("get"));
+
+    try env.registerMethodDef(type_ident, method_ident, .{
+        .type_node_idx = @enumFromInt(1),
+        .def_idx = @enumFromInt(1),
+    });
+    try env.registerMethodDef(type_ident, method_ident, .{
+        .type_node_idx = @enumFromInt(2),
+        .def_idx = @enumFromInt(2),
+    });
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = &env },
+    };
+    var modules = try TypedCIR.Modules.init(gpa, &source_modules);
+    defer modules.deinit();
+
+    try testing.expectEqual(@as(usize, 1), modules.module(0).methodDefEntries().len);
 }
 
 test "check type - nominal with tag arg" {

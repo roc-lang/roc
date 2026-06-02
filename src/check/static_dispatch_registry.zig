@@ -35,6 +35,10 @@ pub const ProcedureTemplateLookup = struct {
 /// Public `MethodOwner` declaration.
 pub const MethodOwner = union(enum) {
     nominal: canonical.NominalTypeKey,
+    source_decl: struct {
+        module_name: canonical.ModuleNameId,
+        statement: u32,
+    },
     builtin: BuiltinOwner,
 };
 
@@ -122,11 +126,11 @@ pub const MethodRegistry = struct {
         const module_name = try names.internModuleIdent(idents, module.qualifiedModuleIdent());
 
         for (module.methodDefEntries()) |entry| {
-            const method_ident = module_env.lookupMethodIdentConst(entry.key.type_ident, entry.key.method_ident) orelse {
+            const method_ident = module_env.lookupMethodIdentForOwnerConst(entry.key.owner, entry.key.method_ident) orelse {
                 if (@import("builtin").mode == .Debug) {
                     std.debug.panic(
-                        "checked static dispatch registry invariant violated: method def for type {d} method {d} has no method ident",
-                        .{ @as(u32, @bitCast(entry.key.type_ident)), @as(u32, @bitCast(entry.key.method_ident)) },
+                        "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
+                        .{ @intFromEnum(entry.key.owner), @as(u32, @bitCast(entry.key.method_ident)) },
                     );
                 }
                 unreachable;
@@ -150,7 +154,7 @@ pub const MethodRegistry = struct {
 
             try entries.append(allocator, .{
                 .key = .{
-                    .owner = try methodOwnerForRegistryEntry(module, names, module_name, entry.key.type_ident),
+                    .owner = try methodOwnerForRegistryEntry(module, module_name, entry.key.owner),
                     .method = try names.internMethodIdent(idents, entry.key.method_ident),
                 },
                 .target = .{
@@ -169,41 +173,35 @@ pub const MethodRegistry = struct {
 
 fn methodOwnerForRegistryEntry(
     module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
     module_name: canonical.ModuleNameId,
-    type_ident: Ident.Idx,
+    owner_stmt: CIR.Statement.Idx,
 ) Allocator.Error!MethodOwner {
-    if (builtinOwnerForRegistryEntry(module, type_ident)) |owner| {
+    if (builtinOwnerForRegistryEntry(module, owner_stmt)) |owner| {
         return .{ .builtin = owner };
     }
-    const owner_type_ident = registryNominalOwnerIdent(module, type_ident);
-    return .{ .nominal = .{
+    return .{ .source_decl = .{
         .module_name = module_name,
-        .type_name = try names.internTypeIdent(module.identStoreConst(), owner_type_ident),
+        .statement = @intFromEnum(owner_stmt),
     } };
-}
-
-fn registryNominalOwnerIdent(module: TypedCIR.Module, type_ident: Ident.Idx) Ident.Idx {
-    const module_env = module.moduleEnvConst();
-    const node_idx = module_env.getExposedNodeIndexById(type_ident) orelse return type_ident;
-    const stmt_idx: CIR.Statement.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
-    const stmt = module_env.store.getStatement(stmt_idx);
-    return switch (stmt) {
-        .s_nominal_decl => |nominal| module_env.store.getTypeHeader(nominal.header).relative_name,
-        .s_alias_decl => |alias| module_env.store.getTypeHeader(alias.header).relative_name,
-        else => type_ident,
-    };
 }
 
 fn builtinOwnerForRegistryEntry(
     module: TypedCIR.Module,
-    type_ident: Ident.Idx,
+    owner_stmt: CIR.Statement.Idx,
 ) ?BuiltinOwner {
-    const common = module.moduleEnvConst().idents;
+    const module_env = module.moduleEnvConst();
+    const common = module_env.idents;
     const module_ident = module.qualifiedModuleIdent();
     const is_builtin_module = module_ident.eql(common.builtin_module) or
         module.identStoreConst().idxTextEql(module_ident, common.builtin_module);
     if (!is_builtin_module) return null;
+
+    const stmt = module_env.store.getStatement(owner_stmt);
+    const type_ident = switch (stmt) {
+        .s_nominal_decl => |nominal| module_env.store.getTypeHeader(nominal.header).name,
+        .s_alias_decl => |alias| module_env.store.getTypeHeader(alias.header).name,
+        else => return null,
+    };
 
     if (type_ident.eql(common.bool) or type_ident.eql(common.bool_type)) return .bool;
     if (type_ident.eql(common.str) or type_ident.eql(common.builtin_str)) return .str;
@@ -233,7 +231,12 @@ fn methodOwnerEql(a: MethodOwner, b: MethodOwner) bool {
     return switch (a) {
         .nominal => |a_nominal| switch (b) {
             .nominal => |b_nominal| a_nominal.module_name == b_nominal.module_name and
-                a_nominal.type_name == b_nominal.type_name,
+                a_nominal.type_name == b_nominal.type_name and
+                a_nominal.source_decl == b_nominal.source_decl,
+            else => false,
+        },
+        .source_decl => |a_decl| switch (b) {
+            .source_decl => |b_decl| a_decl.module_name == b_decl.module_name and a_decl.statement == b_decl.statement,
             else => false,
         },
         .builtin => |a_builtin| switch (b) {

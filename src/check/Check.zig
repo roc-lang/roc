@@ -2409,11 +2409,12 @@ fn predeclareAliasDecl(
 
     try self.unifyWithTargetRank(
         decl_var,
-        try self.types.mkAlias(
+        try self.types.mkAliasWithSourceDecl(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
             self.aliasOriginModule(),
+            @intFromEnum(decl_var),
         ),
         env,
     );
@@ -2432,11 +2433,12 @@ fn predeclareNominalDecl(
 
     try self.unifyWithTargetRank(
         decl_var,
-        try self.types.mkNominal(
+        try self.types.mkNominalWithSourceDecl(
             .{ .ident_idx = header.relative_name },
             backing_var,
             header_vars,
             self.builtin_ctx.module_name,
+            @intFromEnum(decl_var),
             nominal.is_opaque,
         ),
         env,
@@ -2476,11 +2478,12 @@ fn generateAliasDecl(
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
-            try self.types.mkAlias(
+            try self.types.mkAliasWithSourceDecl(
                 .{ .ident_idx = header.relative_name },
                 ModuleEnv.varFrom(alias.anno),
                 header_vars,
                 self.aliasOriginModule(),
+                @intFromEnum(decl_idx),
             ),
             env,
         );
@@ -2535,11 +2538,12 @@ fn generateNominalDecl(
     if (predeclared_header_vars == null) {
         try self.unifyWithTargetRank(
             decl_var,
-            try self.types.mkNominal(
+            try self.types.mkNominalWithSourceDecl(
                 .{ .ident_idx = header.relative_name },
                 ModuleEnv.varFrom(nominal.anno),
                 header_vars,
                 self.builtin_ctx.module_name,
+                @intFromEnum(decl_idx),
                 nominal.is_opaque,
             ),
             env,
@@ -5978,9 +5982,10 @@ fn toInspectMethodVarForNominal(
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
     const original_env, const is_this_module = try self.methodOwnerEnv(nominal.origin_module);
-    const method_binding = original_env.lookupMethodBindingFromEnvConst(
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
         nominal.ident.ident_idx,
+        nominal.source_decl,
         self.cir.idents.to_inspect,
     ) orelse return null;
     return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, nominal.ident.ident_idx, env, region);
@@ -5993,9 +5998,10 @@ fn toInspectMethodVarForAlias(
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
     const original_env, const is_this_module = try self.methodOwnerEnv(alias.origin_module);
-    const method_binding = original_env.lookupMethodBindingFromTwoEnvsConst(
+    const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
         original_env,
         alias.ident.ident_idx,
+        alias.source_decl,
         self.cir,
         self.cir.idents.to_inspect,
     ) orelse return null;
@@ -7217,7 +7223,7 @@ fn reportMissingNominalMethodForBinop(
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
-    if (original_env.lookupMethodBindingFromEnvConst(self.cir, nominal_type.ident.ident_idx, method_name) == null) {
+    if (original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.ident.ident_idx, nominal_type.source_decl, method_name) == null) {
         try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     }
@@ -8095,9 +8101,10 @@ fn staticDispatchConstraintAcceptsCandidate(
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
     const original_env = self.getNominalOriginEnv(nominal_type);
 
-    const method_binding = original_env.lookupMethodBindingFromEnvConst(
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
         nominal_type.ident.ident_idx,
+        nominal_type.source_decl,
         constraint.fn_name,
     ) orelse return false;
     const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
@@ -8438,9 +8445,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
-                        const exact_method_binding = original_env.lookupMethodBindingFromEnvConst(
+                        const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
                             nominal_type.ident.ident_idx,
+                            nominal_type.source_decl,
                             constraint.fn_name,
                         );
                         if (exact_method_binding == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
@@ -8470,7 +8478,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         constraint,
                         env,
                         region,
-                    )) orelse original_env.lookupMethodBindingFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
+                    )) orelse original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.ident.ident_idx, nominal_type.source_decl, constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -8636,9 +8644,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     }
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsConst(
+                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
                             original_env,
                             alias.ident.ident_idx,
+                            alias.source_decl,
                             self.cir,
                             constraint.fn_name,
                         );
@@ -8663,9 +8672,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    const method_binding = original_env.lookupMethodBindingFromTwoEnvsConst(
+                    const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
                         original_env,
                         alias.ident.ident_idx,
+                        alias.source_decl,
                         self.cir,
                         constraint.fn_name,
                     ) orelse {

@@ -306,10 +306,17 @@ const Builder = struct {
         return self.program.names.internTagLabel(view.names.tagLabelText(id));
     }
 
-    fn typeDef(self: *Builder, view: ModuleView, module_name: names.ModuleNameId, type_name: names.TypeNameId) Allocator.Error!Type.TypeDef {
+    fn typeDef(
+        self: *Builder,
+        view: ModuleView,
+        module_name: names.ModuleNameId,
+        type_name: names.TypeNameId,
+        source_decl: ?u32,
+    ) Allocator.Error!Type.TypeDef {
         return .{
             .module_name = try self.moduleName(view, module_name),
             .type_name = try self.typeName(view, type_name),
+            .source_decl = source_decl,
         };
     }
 
@@ -836,7 +843,7 @@ const Builder = struct {
                 defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.declaredModuleForAlias(view, alias), .ty = checked_ty },
-                    .def = try self.typeDef(view, alias.origin_module, alias.name),
+                    .def = try self.typeDef(view, alias.origin_module, alias.name, alias.source_decl),
                     .kind = .alias,
                     .args = try self.program.types.addSpan(args),
                     .backing = .{
@@ -867,7 +874,7 @@ const Builder = struct {
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = checked_ty },
-                    .def = try self.typeDef(view, nominal.origin_module, nominal.name),
+                    .def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl),
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
                     .args = try self.program.types.addSpan(args),
@@ -1213,10 +1220,21 @@ const Builder = struct {
     fn methodOwnerForView(self: *Builder, owner: static_dispatch.MethodOwner, view: ModuleView) ?static_dispatch.MethodOwner {
         return switch (owner) {
             .builtin => |builtin| .{ .builtin = builtin },
+            .source_decl => |decl| blk: {
+                const module_name = view.names.lookupModuleName(self.program.names.moduleNameText(decl.module_name)) orelse return null;
+                break :blk .{ .source_decl = .{
+                    .module_name = module_name,
+                    .statement = decl.statement,
+                } };
+            },
             .nominal => |nominal| blk: {
                 const module_name = view.names.lookupModuleName(self.program.names.moduleNameText(nominal.module_name)) orelse return null;
                 const type_name = view.names.lookupTypeName(self.program.names.typeNameText(nominal.type_name)) orelse return null;
-                break :blk .{ .nominal = .{ .module_name = module_name, .type_name = type_name } };
+                break :blk .{ .nominal = .{
+                    .module_name = module_name,
+                    .type_name = type_name,
+                    .source_decl = nominal.source_decl,
+                } };
             },
         };
     }
@@ -3429,7 +3447,7 @@ const BodyContext = struct {
         const args = try self.reserveTypeSlice(alias.args);
         defer self.allocator.free(args);
         const backing = try self.reserveType(alias.backing);
-        const def = try self.builder.typeDef(self.view, alias.origin_module, alias.name);
+        const def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl);
         const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
@@ -3487,7 +3505,7 @@ const BodyContext = struct {
                 .use = backing_use,
             },
         };
-        const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name);
+        const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
@@ -3637,7 +3655,7 @@ const BodyContext = struct {
                 defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-                    .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name),
+                    .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
                     .kind = .alias,
                     .args = try self.builder.program.types.addSpan(args),
                     .backing = .{
@@ -3668,7 +3686,7 @@ const BodyContext = struct {
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
-                    .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name),
+                    .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl),
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
                     .args = try self.builder.program.types.addSpan(args),
@@ -6201,7 +6219,7 @@ const BodyContext = struct {
     ) ?MethodLookup {
         switch (owner) {
             .builtin => |builtin| if (builtin != .list) return null,
-            .nominal => return null,
+            .source_decl, .nominal => return null,
         }
         if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "join_with")) return null;
         if (!self.dispatchArgsAreListJoinWithListItems(dispatcher_ty, arg_tys)) return null;
@@ -9236,10 +9254,16 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
     return switch (types.ownerHead(ty)) {
         .none => null,
         .builtin => |owner| .{ .builtin = owner },
-        .named_type => |def| .{ .nominal = .{
-            .module_name = def.module_name,
-            .type_name = def.type_name,
-        } },
+        .named_type => |def| if (def.source_decl) |source_decl|
+            .{ .source_decl = .{
+                .module_name = def.module_name,
+                .statement = source_decl,
+            } }
+        else
+            .{ .nominal = .{
+                .module_name = def.module_name,
+                .type_name = def.type_name,
+            } },
     };
 }
 

@@ -1525,6 +1525,7 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
 pub const CheckedAliasType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
+    source_decl: ?u32 = null,
     backing: CheckedTypeId,
     args: []const CheckedTypeId = &.{},
 };
@@ -1575,6 +1576,7 @@ pub const CheckedNominalRepresentationRef = union(enum) {
 pub const CheckedNominalType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
+    source_decl: ?u32 = null,
     builtin: ?CheckedBuiltinNominal = null,
     is_opaque: bool,
     backing: CheckedTypeId,
@@ -2376,6 +2378,7 @@ pub const CheckedTypeStore = struct {
             .alias => |alias| .{ .alias = .{
                 .name = alias.name,
                 .origin_module = alias.origin_module,
+                .source_decl = alias.source_decl,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, alias.backing, formals, actuals, active),
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, alias.args, formals, actuals, active),
             } },
@@ -2392,6 +2395,7 @@ pub const CheckedTypeStore = struct {
             .nominal => |nominal| .{ .nominal = .{
                 .name = nominal.name,
                 .origin_module = nominal.origin_module,
+                .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, nominal.backing, formals, actuals, active),
@@ -2608,10 +2612,15 @@ pub const CheckedTypeStore = struct {
 };
 
 const LocalTypeDeclarationIndex = struct {
-    finalized_by_relative_name: std.AutoHashMap(Ident.Idx, CIR.Statement.Idx),
+    const FinalizedRelativeName = union(enum) {
+        unique: CIR.Statement.Idx,
+        ambiguous,
+    };
+
+    finalized_by_relative_name: std.AutoHashMap(Ident.Idx, FinalizedRelativeName),
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalTypeDeclarationIndex {
-        var finalized_by_relative_name = std.AutoHashMap(Ident.Idx, CIR.Statement.Idx).init(allocator);
+        var finalized_by_relative_name = std.AutoHashMap(Ident.Idx, FinalizedRelativeName).init(allocator);
         errdefer finalized_by_relative_name.deinit();
 
         var node_idx: u32 = 0;
@@ -2629,13 +2638,16 @@ const LocalTypeDeclarationIndex = struct {
             if (anno_idx == .placeholder) continue;
 
             const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
-            if (finalized_by_relative_name.get(header.relative_name)) |existing| {
-                if (existing != statement_idx) {
-                    checkedArtifactInvariant("checked artifact found duplicate finalized type declarations for one relative name", .{});
+            if (finalized_by_relative_name.getPtr(header.relative_name)) |existing| {
+                switch (existing.*) {
+                    .unique => |existing_stmt| if (existing_stmt != statement_idx) {
+                        existing.* = .ambiguous;
+                    },
+                    .ambiguous => {},
                 }
-                continue;
+            } else {
+                try finalized_by_relative_name.put(header.relative_name, .{ .unique = statement_idx });
             }
-            try finalized_by_relative_name.put(header.relative_name, statement_idx);
         }
 
         return .{ .finalized_by_relative_name = finalized_by_relative_name };
@@ -2659,8 +2671,11 @@ const LocalTypeDeclarationIndex = struct {
         if (anno_idx != .placeholder) return statement_idx;
 
         const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
-        return self.finalized_by_relative_name.get(header.relative_name) orelse {
+        return switch (self.finalized_by_relative_name.get(header.relative_name) orelse {
             checkedArtifactInvariant("checked declaration template lookup referenced an unfinalized associated type placeholder", .{});
+        }) {
+            .unique => |finalized| finalized,
+            .ambiguous => checkedArtifactInvariant("checked declaration template lookup referenced an ambiguous associated type placeholder", .{}),
         };
     }
 };
@@ -2759,6 +2774,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     const nominal_payload = CheckedTypePayload{ .nominal = .{
         .name = statement_nominal.name,
         .origin_module = statement_nominal.origin_module,
+        .source_decl = @intFromEnum(statement_idx),
         .builtin = statement_nominal.builtin,
         .is_opaque = statement_nominal.is_opaque,
         .backing = backing,
@@ -3303,6 +3319,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     const nominal_key = canonical.NominalTypeKey{
         .module_name = nominal.origin_module,
         .type_name = nominal.name,
+        .source_decl = nominal.source_decl,
     };
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
@@ -3454,8 +3471,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             => checkedArtifactInvariant("checked type substitution key reached identity payload without root identity", .{}),
             .alias => |alias| {
                 self.writeTag("alias");
-                self.writeBytes(self.names.typeNameText(alias.name));
-                self.writeBytes(self.names.moduleNameText(alias.origin_module));
+                self.writeNamedSourceIdentity(alias.origin_module, alias.name, alias.source_decl);
                 try self.writeType(alias.backing);
                 self.writeU32(@intCast(alias.args.len));
                 for (alias.args) |arg| try self.writeType(arg);
@@ -3472,8 +3488,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             },
             .nominal => |nominal| {
                 self.writeTag("nominal");
-                self.writeBytes(self.names.typeNameText(nominal.name));
-                self.writeBytes(self.names.moduleNameText(nominal.origin_module));
+                self.writeNamedSourceIdentity(nominal.origin_module, nominal.name, nominal.source_decl);
                 self.writeBool(nominal.is_opaque);
                 self.writeU32(@intCast(nominal.args.len));
                 for (nominal.args) |arg| try self.writeType(arg);
@@ -3821,6 +3836,19 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         self.hasher.update(std.mem.asBytes(&byte));
     }
 
+    fn writeOptionalU32(self: *SubstitutedCheckedTypeKeyBuilder, value: ?u32) void {
+        self.writeBool(value != null);
+        if (value) |v| self.writeU32(v);
+    }
+
+    fn writeNamedSourceIdentity(self: *SubstitutedCheckedTypeKeyBuilder, origin_module: canonical.ModuleNameId, name: canonical.TypeNameId, source_decl: ?u32) void {
+        self.writeBytes(self.names.moduleNameText(origin_module));
+        self.writeOptionalU32(source_decl);
+        if (source_decl == null) {
+            self.writeBytes(self.names.typeNameText(name));
+        }
+    }
+
     fn writeU32(self: *SubstitutedCheckedTypeKeyBuilder, value: u32) void {
         self.hasher.update(&.{
             @as(u8, @truncate(value)),
@@ -4057,6 +4085,7 @@ fn copyCheckedTypePayload(
         .alias => |alias| .{ .alias = .{
             .name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx),
             .origin_module = try names.internModuleIdent(module.identStoreConst(), alias.origin_module),
+            .source_decl = alias.source_decl,
             .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getAliasBackingVar(alias)),
             .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceAliasArgs(alias)),
         } },
@@ -4128,6 +4157,7 @@ fn copyCheckedFlatType(
             break :blk .{ .nominal = .{
                 .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
                 .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
+                .source_decl = nominal.source_decl,
                 .builtin = builtin_nominal,
                 .is_opaque = nominal.is_opaque,
                 .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
@@ -4309,7 +4339,9 @@ fn checkedNominalRepresentationForSourceNominal(
     const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
     const current_module = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
     if (origin_module == current_module) {
-        return .{ .local_declaration = localNominalDeclarationIdForIdent(module, nominal.ident.ident_idx) };
+        const source_decl = nominal.source_decl orelse
+            checkedArtifactInvariant("checked local nominal representation had no source declaration", .{});
+        return .{ .local_declaration = localNominalDeclarationIdForStatement(module, @enumFromInt(source_decl)) };
     }
 
     return .{ .imported_declaration = importedNominalDeclarationRefForSourceNominal(
@@ -4317,6 +4349,7 @@ fn checkedNominalRepresentationForSourceNominal(
         imports,
         origin_module,
         type_name,
+        nominal.source_decl,
     ) };
 }
 
@@ -4325,15 +4358,22 @@ fn importedNominalDeclarationRefForSourceNominal(
     imports: CheckedImportViews,
     origin_module: canonical.ModuleNameId,
     type_name: canonical.TypeNameId,
+    source_decl: ?u32,
 ) ImportedNominalDeclarationRef {
     const origin_text = names.moduleNameText(origin_module);
     const type_text = names.typeNameText(type_name);
+    const nominal_key = canonical.NominalTypeKey{
+        .module_name = origin_module,
+        .type_name = type_name,
+        .source_decl = source_decl,
+    };
     var found: ?ImportedNominalDeclarationRef = null;
 
     for (imports.direct) |import| {
         if (!importedViewModuleNameMatches(import.view, origin_text)) continue;
         for (import.view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            if (declaration.nominal.source_decl != nominal_key.source_decl) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = import.key,
                 .declaration = declaration.id,
@@ -4351,6 +4391,7 @@ fn importedNominalDeclarationRefForSourceNominal(
         if (!importedViewModuleNameMatches(view, origin_text)) continue;
         for (view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            if (declaration.nominal.source_decl != nominal_key.source_decl) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = view.key,
                 .declaration = declaration.id,
@@ -4366,29 +4407,6 @@ fn importedNominalDeclarationRefForSourceNominal(
     }
 
     return found orelse checkedArtifactInvariant("checked nominal representation referenced a missing imported nominal declaration", .{});
-}
-
-fn localNominalDeclarationIdForIdent(
-    module: TypedCIR.Module,
-    ident: Ident.Idx,
-) CheckedNominalDeclarationId {
-    var next_id: u32 = 0;
-    var node_idx: u32 = 0;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        const node: CIR.Node.Idx = @enumFromInt(node_idx);
-        if (!isStatementNodeTag(module.nodeTag(node))) continue;
-        const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
-        const nominal = switch (module.getStatement(statement_idx)) {
-            .s_nominal_decl => |nominal| nominal,
-            else => continue,
-        };
-        if (nominal.anno == .placeholder) continue;
-        const header = module.moduleEnvConst().store.getTypeHeader(nominal.header);
-        const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
-        next_id += 1;
-        if (header.relative_name.eql(ident) or module.identStoreConst().idxTextEql(header.relative_name, ident)) return id;
-    }
-    checkedArtifactInvariant("checked nominal representation referenced a missing local nominal declaration", .{});
 }
 
 fn localNominalDeclarationIdForStatement(
@@ -10065,6 +10083,7 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         };
         if (expected_nominal.name != actual_nominal.name) return false;
         if (expected_nominal.origin_module != actual_nominal.origin_module) return false;
+        if (expected_nominal.source_decl != actual_nominal.source_decl) return false;
         if (expected_nominal.builtin != actual_nominal.builtin) return false;
         if (expected_nominal.is_opaque != actual_nominal.is_opaque) return false;
         if (expected_nominal.args.len != actual_nominal.args.len) return false;
@@ -10482,6 +10501,7 @@ const PlatformAppRelationTypeResolver = struct {
                 break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .alias = .{
                     .name = alias.name,
                     .origin_module = alias.origin_module,
+                    .source_decl = alias.source_decl,
                     .backing = backing,
                     .args = args,
                 } });
@@ -10519,6 +10539,7 @@ const PlatformAppRelationTypeResolver = struct {
                 break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
                     .name = nominal.name,
                     .origin_module = nominal.origin_module,
+                    .source_decl = nominal.source_decl,
                     .builtin = nominal.builtin,
                     .is_opaque = nominal.is_opaque,
                     .backing = backing,
@@ -10545,6 +10566,7 @@ const PlatformAppRelationTypeResolver = struct {
         return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .alias = .{
             .name = platform_alias.name,
             .origin_module = platform_alias.origin_module,
+            .source_decl = platform_alias.source_decl,
             .backing = backing,
             .args = args,
         } });
@@ -10569,6 +10591,7 @@ const PlatformAppRelationTypeResolver = struct {
         };
         if (platform_nominal.name != app_nominal.name or
             platform_nominal.origin_module != app_nominal.origin_module or
+            platform_nominal.source_decl != app_nominal.source_decl or
             platform_nominal.is_opaque != app_nominal.is_opaque or
             platform_nominal.args.len != app_nominal.args.len)
         {
@@ -10580,6 +10603,7 @@ const PlatformAppRelationTypeResolver = struct {
         return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
             .name = platform_nominal.name,
             .origin_module = platform_nominal.origin_module,
+            .source_decl = platform_nominal.source_decl,
             .builtin = platform_nominal.builtin,
             .is_opaque = platform_nominal.is_opaque,
             .backing = backing,
@@ -11353,6 +11377,7 @@ pub const ModuleInterfaceCapabilities = struct {
             const nominal_key = canonical.NominalTypeKey{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
+                .source_decl = nominal.source_decl,
             };
             const seen_key = NominalCapabilitySeenKey{
                 .source_ty = source_key,
@@ -11551,7 +11576,7 @@ fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalType
 }
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
-    return a.module_name == b.module_name and a.type_name == b.type_name;
+    return a.module_name == b.module_name and a.type_name == b.type_name and a.source_decl == b.source_decl;
 }
 
 fn checkedTypeKeyForId(
@@ -14865,6 +14890,7 @@ pub const CheckedTypeProjector = struct {
             .alias => |alias| .{ .alias = .{
                 .name = try self.remapViewTypeName(source_names, alias.name),
                 .origin_module = try self.remapViewModuleName(source_names, alias.origin_module),
+                .source_decl = alias.source_decl,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, alias.backing, active),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, alias.args, active),
             } },
@@ -14879,6 +14905,7 @@ pub const CheckedTypeProjector = struct {
             .nominal => |nominal| .{ .nominal = .{
                 .name = try self.remapViewTypeName(source_names, nominal.name),
                 .origin_module = try self.remapViewModuleName(source_names, nominal.origin_module),
+                .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, nominal.backing, active),
@@ -15206,6 +15233,7 @@ pub const CheckedTypeProjector = struct {
         return .{ .alias = .{
             .name = try self.remapTypeName(imported, alias.name),
             .origin_module = try self.remapModuleName(imported, alias.origin_module),
+            .source_decl = alias.source_decl,
             .backing = try self.projectImportedCheckedType(imported, alias.backing),
             .args = args,
         } };
@@ -15221,6 +15249,7 @@ pub const CheckedTypeProjector = struct {
         return .{ .nominal = .{
             .name = try self.remapTypeName(imported, nominal.name),
             .origin_module = try self.remapModuleName(imported, nominal.origin_module),
+            .source_decl = nominal.source_decl,
             .builtin = nominal.builtin,
             .is_opaque = nominal.is_opaque,
             .backing = try self.projectImportedCheckedType(imported, nominal.backing),
@@ -15334,9 +15363,14 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error!static_dispatch.MethodOwner {
         return switch (owner) {
             .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .source_decl => |decl| .{ .source_decl = .{
+                .module_name = try self.remapModuleName(imported, decl.module_name),
+                .statement = decl.statement,
+            } },
             .nominal => |nominal| .{ .nominal = .{
                 .module_name = try self.remapModuleName(imported, nominal.module_name),
                 .type_name = try self.remapTypeName(imported, nominal.type_name),
+                .source_decl = nominal.source_decl,
             } },
         };
     }
@@ -15418,6 +15452,7 @@ const CheckedTypeStoreImportProjector = struct {
             .alias => |alias| .{ .alias = .{
                 .name = try self.remapTypeName(alias.name),
                 .origin_module = try self.remapModuleName(alias.origin_module),
+                .source_decl = alias.source_decl,
                 .backing = try self.project(alias.backing),
                 .args = try self.projectIds(alias.args),
             } },
@@ -15432,6 +15467,7 @@ const CheckedTypeStoreImportProjector = struct {
             .nominal => |nominal| .{ .nominal = .{
                 .name = try self.remapTypeName(nominal.name),
                 .origin_module = try self.remapModuleName(nominal.origin_module),
+                .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.project(nominal.backing),
@@ -15564,9 +15600,14 @@ const CheckedTypeStoreImportProjector = struct {
     ) Allocator.Error!static_dispatch.MethodOwner {
         return switch (owner) {
             .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .source_decl => |decl| .{ .source_decl = .{
+                .module_name = try self.remapModuleName(decl.module_name),
+                .statement = decl.statement,
+            } },
             .nominal => |nominal| .{ .nominal = .{
                 .module_name = try self.remapModuleName(nominal.module_name),
                 .type_name = try self.remapTypeName(nominal.type_name),
+                .source_decl = nominal.source_decl,
             } },
         };
     }

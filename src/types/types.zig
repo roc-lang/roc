@@ -290,6 +290,9 @@ pub const Alias = struct {
     /// The full module path where this alias type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
+    /// CIR statement index of the source declaration in origin_module, when
+    /// this alias came from a concrete source declaration.
+    source_decl: ?u32 = null,
 };
 
 /// Represents an ident of a type
@@ -534,6 +537,9 @@ pub const NominalType = struct {
     /// The full module path where this nominal type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
+    /// CIR statement index of the source declaration in origin_module, when
+    /// this nominal came from a concrete source declaration.
+    source_decl: ?u32 = null,
     /// True if this type was declared with :: (opaque), false if declared with := (nominal)
     is_opaque: bool,
 

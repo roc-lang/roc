@@ -141,6 +141,13 @@ fn countValueLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnos
     return count;
 }
 
+fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) !void {
+    if (std.mem.indexOf(u8, source, needle)) |_| {
+        std.debug.print("Source still contains forbidden canonicalization structure: {s}\n", .{needle});
+        return error.TestUnexpectedResult;
+    }
+}
+
 test "canonicalization records explicit type declaration tables" {
     const allocator = testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -403,6 +410,20 @@ test "block-local associated value does not leak after owner scope exits" {
             }
         }
     }.check);
+}
+
+test "canonicalization has no separate nested associated item alias traversal" {
+    const can_source = @embedFile("../Can.zig");
+
+    try expectSourceDoesNotContain(can_source, "fn introduceNestedItemAliases");
+    try expectSourceDoesNotContain(can_source, "statementSlice(assoc_statements)");
+}
+
+test "package header auto imports consume parser inventory instead of scanning statements" {
+    const can_source = @embedFile("../Can.zig");
+
+    try expectSourceDoesNotContain(can_source, "fn collectPackageHeaderAutoImports");
+    try expectSourceDoesNotContain(can_source, "collectPackageHeaderAutoImports(header.package.exposes, file.statements");
 }
 
 test "block-local recursive nominal type can reference itself in its declaration" {

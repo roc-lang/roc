@@ -244,6 +244,7 @@ pub const ProcBaseKey = struct {
 pub const NominalTypeKey = struct {
     module_name: ModuleNameId,
     type_name: TypeNameId,
+    source_decl: ?u32 = null,
 };
 
 /// Public `CanonicalNameStore` declaration.

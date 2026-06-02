@@ -410,6 +410,17 @@ pub const Store = struct {
         args: []const Var,
         origin_module: base.Ident.Idx,
     ) std.mem.Allocator.Error!Content {
+        return self.mkAliasWithSourceDecl(ident, backing_var, args, origin_module, null);
+    }
+
+    pub fn mkAliasWithSourceDecl(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+    ) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -422,6 +433,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
+                .source_decl = source_decl,
             },
         };
     }
@@ -436,6 +448,18 @@ pub const Store = struct {
         origin_module: base.Ident.Idx,
         is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
+        return self.mkNominalWithSourceDecl(ident, backing_var, args, origin_module, null, is_opaque);
+    }
+
+    pub fn mkNominalWithSourceDecl(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+        is_opaque: bool,
+    ) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -448,6 +472,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
+                .source_decl = source_decl,
                 .is_opaque = is_opaque,
             },
         } };

@@ -208,8 +208,7 @@ const Builder = struct {
             },
             .alias => |alias| {
                 self.writeTag("alias");
-                self.writeIdent(alias.ident.ident_idx);
-                self.writeIdent(alias.origin_module);
+                self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl);
                 try self.writeVar(self.store.getAliasBackingVar(alias));
                 const args = self.store.sliceAliasArgs(alias);
                 self.writeU32(@intCast(args.len));
@@ -233,6 +232,7 @@ const Builder = struct {
         self.writeTag("nominal");
         self.writeIdent(builtinDecTypeIdent(self.idents));
         self.writeIdent(builtinModuleIdent(self.idents));
+        self.writeOptionalU32(null);
         self.writeBool(true);
         self.writeU32(0);
     }
@@ -252,8 +252,7 @@ const Builder = struct {
             },
             .nominal_type => |nominal| {
                 self.writeTag("nominal");
-                self.writeIdent(nominal.ident.ident_idx);
-                self.writeIdent(nominal.origin_module);
+                self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.source_decl);
                 self.writeBool(nominal.is_opaque);
                 const args = self.store.sliceNominalArgs(nominal);
                 self.writeU32(@intCast(args.len));
@@ -528,6 +527,21 @@ const Builder = struct {
     fn writeOptionalIdent(self: *Builder, maybe_ident: ?Ident.Idx) Allocator.Error!void {
         self.writeBool(maybe_ident != null);
         if (maybe_ident) |ident| {
+            self.writeIdent(ident);
+        }
+    }
+
+    fn writeOptionalU32(self: *Builder, maybe_value: ?u32) void {
+        self.writeBool(maybe_value != null);
+        if (maybe_value) |value| {
+            self.writeU32(value);
+        }
+    }
+
+    fn writeNamedSourceIdentity(self: *Builder, origin_module: Ident.Idx, ident: Ident.Idx, source_decl: ?u32) void {
+        self.writeIdent(origin_module);
+        self.writeOptionalU32(source_decl);
+        if (source_decl == null) {
             self.writeIdent(ident);
         }
     }

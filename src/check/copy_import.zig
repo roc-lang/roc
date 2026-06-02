@@ -194,6 +194,7 @@ fn copyAlias(
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
         .origin_module = translated_module_ident,
+        .source_decl = source_alias.source_decl,
     };
 }
 
@@ -394,6 +395,7 @@ fn copyNominalType(
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
         .origin_module = translated_origin,
+        .source_decl = source_nominal.source_decl,
         .is_opaque = source_nominal.is_opaque,
     };
 }

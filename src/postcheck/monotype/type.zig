@@ -37,6 +37,7 @@ pub const OwnerHead = union(enum) {
 pub const TypeDef = struct {
     module_name: names.ModuleNameId,
     type_name: names.TypeNameId,
+    source_decl: ?u32 = null,
 };
 
 /// Named checked type instance.
@@ -203,7 +204,10 @@ pub const Store = struct {
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
                 writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
-                writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+                writeOptionalU32(hasher, named.def.source_decl);
+                if (named.def.source_decl == null) {
+                    writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+                }
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -278,6 +282,12 @@ fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
+}
+
+fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+    const present: u8 = if (value == null) 0 else 1;
+    hasher.update(std.mem.asBytes(&present));
+    if (value) |v| writeU32(hasher, v);
 }
 
 fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
