@@ -2208,6 +2208,34 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : U8, U8 -> U8
 
+			## Returns the bitwise AND of two [U8] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect U8.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : U8, U8 -> U8
+
+			## Returns the bitwise OR of two [U8] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect U8.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : U8, U8 -> U8
+
+			## Returns the bitwise XOR of two [U8] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect U8.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : U8, U8 -> U8
+
+			## Returns the bitwise NOT of a [U8] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`.
+			## ```roc
+			## expect U8.bitwise_not(0) == 255
+			## ```
+			bitwise_not : U8 -> U8
+
 			## Build a [U8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
@@ -2623,6 +2651,35 @@ Builtin :: [].{
 			## expect I8.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
 			## ```
 			shift_right_zf_by : I8, U8 -> I8
+
+			## Returns the bitwise AND of two [I8] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect I8.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : I8, I8 -> I8
+
+			## Returns the bitwise OR of two [I8] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect I8.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : I8, I8 -> I8
+
+			## Returns the bitwise XOR of two [I8] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect I8.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : I8, I8 -> I8
+
+			## Returns the bitwise NOT of an [I8] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
+			## this is equivalent to `-value - 1`.
+			## ```roc
+			## expect I8.bitwise_not(5) == -6
+			## ```
+			bitwise_not : I8 -> I8
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
@@ -3069,6 +3126,34 @@ Builtin :: [].{
 			## expect U16.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
 			## ```
 			shift_right_zf_by : U16, U8 -> U16
+
+			## Returns the bitwise AND of two [U16] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect U16.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : U16, U16 -> U16
+
+			## Returns the bitwise OR of two [U16] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect U16.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : U16, U16 -> U16
+
+			## Returns the bitwise XOR of two [U16] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect U16.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : U16, U16 -> U16
+
+			## Returns the bitwise NOT of a [U16] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`.
+			## ```roc
+			## expect U16.bitwise_not(0) == 65535
+			## ```
+			bitwise_not : U16 -> U16
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
@@ -3523,6 +3608,35 @@ Builtin :: [].{
 			## expect I16.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
 			## ```
 			shift_right_zf_by : I16, U8 -> I16
+
+			## Returns the bitwise AND of two [I16] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect I16.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : I16, I16 -> I16
+
+			## Returns the bitwise OR of two [I16] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect I16.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : I16, I16 -> I16
+
+			## Returns the bitwise XOR of two [I16] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect I16.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : I16, I16 -> I16
+
+			## Returns the bitwise NOT of an [I16] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
+			## this is equivalent to `-value - 1`.
+			## ```roc
+			## expect I16.bitwise_not(5) == -6
+			## ```
+			bitwise_not : I16 -> I16
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
@@ -3986,6 +4100,34 @@ Builtin :: [].{
 			## expect U32.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
 			## ```
 			shift_right_zf_by : U32, U8 -> U32
+
+			## Returns the bitwise AND of two [U32] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect U32.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : U32, U32 -> U32
+
+			## Returns the bitwise OR of two [U32] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect U32.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : U32, U32 -> U32
+
+			## Returns the bitwise XOR of two [U32] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect U32.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : U32, U32 -> U32
+
+			## Returns the bitwise NOT of a [U32] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`.
+			## ```roc
+			## expect U32.bitwise_not(0) == 4294967295
+			## ```
+			bitwise_not : U32 -> U32
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
@@ -4479,6 +4621,35 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I32, U8 -> I32
 
+			## Returns the bitwise AND of two [I32] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect I32.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : I32, I32 -> I32
+
+			## Returns the bitwise OR of two [I32] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect I32.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : I32, I32 -> I32
+
+			## Returns the bitwise XOR of two [I32] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect I32.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : I32, I32 -> I32
+
+			## Returns the bitwise NOT of an [I32] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
+			## this is equivalent to `-value - 1`.
+			## ```roc
+			## expect I32.bitwise_not(5) == -6
+			## ```
+			bitwise_not : I32 -> I32
+
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty iterator if this `I32` is greater than the other.
@@ -4961,6 +5132,34 @@ Builtin :: [].{
 			## expect U64.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
 			## ```
 			shift_right_zf_by : U64, U8 -> U64
+
+			## Returns the bitwise AND of two [U64] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect U64.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : U64, U64 -> U64
+
+			## Returns the bitwise OR of two [U64] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect U64.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : U64, U64 -> U64
+
+			## Returns the bitwise XOR of two [U64] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect U64.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : U64, U64 -> U64
+
+			## Returns the bitwise NOT of a [U64] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`.
+			## ```roc
+			## expect U64.bitwise_not(0) == 18446744073709551615
+			## ```
+			bitwise_not : U64 -> U64
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
@@ -5499,6 +5698,35 @@ Builtin :: [].{
 			## ```
 			shift_right_zf_by : I64, U8 -> I64
 
+			## Returns the bitwise AND of two [I64] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect I64.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : I64, I64 -> I64
+
+			## Returns the bitwise OR of two [I64] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect I64.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : I64, I64 -> I64
+
+			## Returns the bitwise XOR of two [I64] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect I64.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : I64, I64 -> I64
+
+			## Returns the bitwise NOT of an [I64] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
+			## this is equivalent to `-value - 1`.
+			## ```roc
+			## expect I64.bitwise_not(5) == -6
+			## ```
+			bitwise_not : I64 -> I64
+
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty iterator if this `I64` is greater than the other.
@@ -6006,6 +6234,34 @@ Builtin :: [].{
 			## expect U128.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
 			## ```
 			shift_right_zf_by : U128, U8 -> U128
+
+			## Returns the bitwise AND of two [U128] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect U128.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : U128, U128 -> U128
+
+			## Returns the bitwise OR of two [U128] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect U128.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : U128, U128 -> U128
+
+			## Returns the bitwise XOR of two [U128] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect U128.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : U128, U128 -> U128
+
+			## Returns the bitwise NOT of a [U128] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`.
+			## ```roc
+			## expect U128.bitwise_not(0) == 340282366920938463463374607431768211455
+			## ```
+			bitwise_not : U128 -> U128
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
@@ -6589,6 +6845,35 @@ Builtin :: [].{
 			## expect I128.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
 			## ```
 			shift_right_zf_by : I128, U8 -> I128
+
+			## Returns the bitwise AND of two [I128] values. Each bit in the result is
+			## `1` only when the corresponding bit is `1` in both inputs.
+			## ```roc
+			## expect I128.bitwise_and(0b1100, 0b1010) == 0b1000
+			## ```
+			bitwise_and : I128, I128 -> I128
+
+			## Returns the bitwise OR of two [I128] values. Each bit in the result is
+			## `1` when the corresponding bit is `1` in either input.
+			## ```roc
+			## expect I128.bitwise_or(0b1100, 0b1010) == 0b1110
+			## ```
+			bitwise_or : I128, I128 -> I128
+
+			## Returns the bitwise XOR of two [I128] values. Each bit in the result is
+			## `1` only when the corresponding bits of the inputs differ.
+			## ```roc
+			## expect I128.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## ```
+			bitwise_xor : I128, I128 -> I128
+
+			## Returns the bitwise NOT of an [I128] value, flipping every bit so that
+			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
+			## this is equivalent to `-value - 1`.
+			## ```roc
+			## expect I128.bitwise_not(5) == -6
+			## ```
+			bitwise_not : I128 -> I128
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)

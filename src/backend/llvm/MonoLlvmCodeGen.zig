@@ -15,6 +15,7 @@ const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
 
+const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("Builder.zig");
 
 const Allocator = std.mem.Allocator;
@@ -460,7 +461,13 @@ pub const MonoLlvmCodeGen = struct {
         };
         if (environ.getAlloc(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
             defer self.allocator.free(keep_path);
-            builder.printToFilePath(std.Options.debug_io, keep_path) catch return error.CompilationFailed;
+            // Render the IR into a buffer and write it through the CoreCtx
+            // filesystem abstraction rather than reaching into the cwd directory
+            // handle directly, keeping compiler-core decoupled from the OS I/O layer.
+            var ir_text: std.Io.Writer.Allocating = .init(self.allocator);
+            defer ir_text.deinit();
+            builder.print(&ir_text.writer) catch return error.CompilationFailed;
+            CoreCtx.writeFileCwd(std.Options.debug_io, keep_path, ir_text.written()) catch return error.CompilationFailed;
         } else |_| {}
         return builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
     }
@@ -870,7 +877,8 @@ pub const MonoLlvmCodeGen = struct {
             },
             .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(arg_locals[0]).ptr, self.slot(arg_locals[1]).ptr, self.localLayout(arg_locals[0]))),
             .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
-            .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => try self.emitNumericBinary(target, op, arg_locals),
+            .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor => try self.emitNumericBinary(target, op, arg_locals),
+            .num_bitwise_not => try self.emitNumericBitwiseNot(target, arg_locals[0]),
             .num_negate => try self.emitNumericNegate(target, arg_locals[0]),
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
@@ -1001,6 +1009,9 @@ pub const MonoLlvmCodeGen = struct {
                 .num_times => .mul,
                 .num_div_by, .num_div_trunc_by => if (signed) .sdiv else .udiv,
                 .num_rem_by, .num_mod_by => if (signed) .srem else .urem,
+                .num_bitwise_and => .@"and",
+                .num_bitwise_or => .@"or",
+                .num_bitwise_xor => .xor,
                 else => return error.UnsupportedLowLevel,
             };
             const raw = wip.bin(tag, lhs, rhs, "") catch return error.CompilationFailed;
@@ -1127,6 +1138,14 @@ pub const MonoLlvmCodeGen = struct {
             wip.un(.fneg, value, "") catch return error.CompilationFailed
         else
             wip.neg(value, "") catch return error.CompilationFailed;
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
+    fn emitNumericBitwiseNot(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const result = wip.not(value, "") catch return error.CompilationFailed;
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
@@ -1409,7 +1428,7 @@ pub const MonoLlvmCodeGen = struct {
         const name = builder.strtabStringFmt(".roc.bytes.{d}", .{self.string_counter}) catch return error.OutOfMemory;
         self.string_counter += 1;
         const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
-        variable.setLinkage(.internal, builder);
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
         variable.setMutability(.constant, builder);
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
         return variable.toValue(builder);

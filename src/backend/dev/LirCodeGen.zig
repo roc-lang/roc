@@ -3039,6 +3039,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
+                .num_bitwise_and,
+                .num_bitwise_or,
+                .num_bitwise_xor,
                 .num_is_eq,
                 .num_is_gt,
                 .num_is_gte,
@@ -3137,6 +3140,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const src_reg = try self.ensureInGeneralReg(inner_loc);
                         const result_reg = try self.allocTempGeneral();
                         try self.codegen.emitNeg(.w64, result_reg, src_reg);
+                        self.codegen.freeGeneral(src_reg);
+                        return .{ .general_reg = result_reg };
+                    }
+                },
+
+                .num_bitwise_not => {
+                    const inner_loc = try self.emitValueLocal(args[0]);
+                    const is_i128 = ll.ret_layout == .i128 or ll.ret_layout == .u128;
+
+                    if (is_i128) {
+                        const signedness: std.builtin.Signedness = if (ll.ret_layout == .u128) .unsigned else .signed;
+                        const parts = try self.getI128Parts(inner_loc, signedness);
+                        const result_low = try self.allocTempGeneral();
+                        const result_high = try self.allocTempGeneral();
+
+                        try self.codegen.emitNot(.w64, result_low, parts.low);
+                        try self.codegen.emitNot(.w64, result_high, parts.high);
+
+                        self.codegen.freeGeneral(parts.low);
+                        self.codegen.freeGeneral(parts.high);
+
+                        const stack_offset = self.codegen.allocStackSlot(16);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+                        self.codegen.freeGeneral(result_low);
+                        self.codegen.freeGeneral(result_high);
+
+                        return .{ .stack_i128 = stack_offset };
+                    } else {
+                        const src_reg = try self.ensureInGeneralReg(inner_loc);
+                        const result_reg = try self.allocTempGeneral();
+                        try self.codegen.emitNot(.w64, result_reg, src_reg);
                         self.codegen.freeGeneral(src_reg);
                         return .{ .general_reg = result_reg };
                     }
@@ -5033,6 +5069,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_left_by => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_shift_right_by => try self.emitAsrReg(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_shift_right_zf_by => try self.emitLsrReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_bitwise_and => try self.codegen.emitAnd(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_bitwise_or => try self.codegen.emitOr(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_bitwise_xor => try self.codegen.emitXor(.w64, result_reg, lhs_reg, rhs_reg),
                 // Comparison operations
                 .num_is_eq => {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
@@ -5284,6 +5323,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_rem_by, .num_mod_by => {
                     // 128-bit integer remainder/modulo: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
+                },
+                // Bitwise operations: apply independently to each 64-bit word.
+                .num_bitwise_and => {
+                    try self.codegen.emitAnd(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitAnd(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                },
+                .num_bitwise_or => {
+                    try self.codegen.emitOr(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitOr(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                },
+                .num_bitwise_xor => {
+                    try self.codegen.emitXor(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitXor(.w64, result_high, lhs_parts.high, rhs_parts.high);
                 },
                 // Comparison operations for i128/Dec
                 .num_is_eq => {

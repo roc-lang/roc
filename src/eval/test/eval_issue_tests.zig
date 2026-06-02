@@ -1,9 +1,26 @@
-//! Focused regression repros for GitHub issues #9389-#9396.
+//! Focused regression repros for GitHub issues.
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 8949: wasm evaluates to_str after boxed closure allocation",
+        .source_kind = .module,
+        .source =
+        \\State : { count : I64 }
+        \\
+        \\main = {
+        \\    initialState : State
+        \\    initialState = { count: 42 }
+        \\    _updater = Box.box(|state| { count: state.count + 1 })
+        \\    countStr = initialState.count.to_str()
+        \\
+        \\    "Count: ${countStr}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Count: 42\"" },
+    },
     .{
         .name = "issue 9389: non-existent list method reports a problem instead of crashing",
         .source_kind = .module,
@@ -111,5 +128,24 @@ pub const tests = [_]TestCase{
         \\main = Min.foo(0)
         ,
         .expected = .{ .problem = {} },
+    },
+    .{
+        // Calling `Foo.inspect(Baz)` leaves the nominal type parameter `a`
+        // unconstrained: `Baz` carries no `a`, so the `where [a.inspect : a -> Str]`
+        // clause has nothing to bind `a` to. Earlier this panicked in mono
+        // specialization ("constrained variable matched multiple checked method
+        // owners"). The body never invokes the constraint, so the owner is
+        // irrelevant and the call simply evaluates to "ok".
+        .name = "issue 9502: static dispatch on no-payload variant of polymorphic nominal evaluates",
+        .source_kind = .module,
+        .source =
+        \\Foo(a) := [Bar(a), Baz].{
+        \\    inspect : Foo(a) -> Str where [a.inspect : a -> Str]
+        \\    inspect = |_foo| "ok"
+        \\}
+        \\
+        \\main = Foo.inspect(Baz)
+        ,
+        .expected = .{ .inspect_str = "\"ok\"" },
     },
 };

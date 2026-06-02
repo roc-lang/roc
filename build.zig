@@ -494,6 +494,14 @@ const CheckTypeCheckerPatternsStep = struct {
     }
 };
 
+/// Header marker present in files vendored from the Zig compiler. Such files
+/// are exempt from Roc's architecture-style checks (the @enumFromInt(0) and
+/// unused-suppression bans below): their idioms — e.g. zero-valued enum
+/// constants like `AddrSpace = @enumFromInt(0)` and `_ =` suppressions in
+/// upstream TODO stubs — are correct at the source and rewriting them would
+/// only diverge from upstream. This mirrors how ci/tidy.zig skips crates/.
+const vendored_zig_marker = "Adapted from the Zig compiler";
+
 /// Build step that checks for @enumFromInt(0) usage in all .zig files.
 ///
 /// We forbid @enumFromInt(0) because it hides bugs and makes them harder to debug.
@@ -610,6 +618,11 @@ const CheckEnumFromIntZeroStep = struct {
 
             const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
+
+            // Vendored Zig-compiler files use upstream idioms this check would
+            // flag (e.g. zero-valued enum constants like `AddrSpace = @enumFromInt(0)`);
+            // exempt them, mirroring how ci/tidy.zig skips crates/.
+            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;
             var line_start: usize = 0;
@@ -739,6 +752,11 @@ const CheckUnusedSuppressionStep = struct {
 
             const content = dir.readFileAlloc(io, entry.path, allocator, .limited(10 * 1024 * 1024)) catch continue;
             defer allocator.free(content);
+
+            // Vendored Zig-compiler files carry upstream idioms this check would
+            // flag (e.g. `_ =` suppressions in unimplemented TODO stubs whose
+            // signatures are fixed by their callers); exempt them.
+            if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;
             var line_start: usize = 0;
@@ -2261,9 +2279,27 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
-    const compiler_version = getCompilerVersion(b, optimize);
-    build_options.addOption([]const u8, "compiler_version", compiler_version);
-    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version));
+    const compiler_version_git = getCompilerVersionGit(b);
+    build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
+    build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
+    // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
+    // build_options module so its build-mode prefix comes from @import("builtin").mode — the
+    // actual optimization level of each compiled binary. The prefix can't be baked here because
+    // build_options is shared between the dev `roc` exe (whose mode follows -Doptimize) and the
+    // `release` exe (always built ReleaseFast); a single build-time value can't be right for both.
+    build_options.contents.appendSlice(b.allocator,
+        \\
+        \\pub const compiler_version = @import("std").fmt.comptimePrint("{s}-{s}", .{
+        \\    switch (@import("builtin").mode) {
+        \\        .Debug => "debug",
+        \\        .ReleaseSafe => "release-safe",
+        \\        .ReleaseFast => "release-fast",
+        \\        .ReleaseSmall => "release-small",
+        \\    },
+        \\    compiler_version_git,
+        \\});
+        \\
+    ) catch @panic("OOM");
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
@@ -2489,8 +2525,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(test_runner_exe);
 
-    // Store glue test step reference so we can add glue host dependency later
+    // Store glue test step references so we can add glue host dependency later.
     var run_glue_test_step: ?*std.Build.Step = null;
+    var run_glue_test_cli_step: ?*std.Build.Step = null;
 
     // CLI integration tests - parallel test runner replaces 5 sequential
     // test_runner invocations with a single fork-based parallel runner.
@@ -2553,9 +2590,6 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
-        if (run_args.len != 0) {
-            run_roc_subcommands_test.addArgs(run_args);
-        }
         run_roc_subcommands_test.step.dependOn(&install.step);
         run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
         test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
@@ -2574,9 +2608,6 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_echo_tests = b.addRunArtifact(echo_tests);
-        if (run_args.len != 0) {
-            run_echo_tests.addArgs(run_args);
-        }
         run_echo_tests.step.dependOn(&install.step);
         run_echo_tests.step.dependOn(build_test_hosts_step);
 
@@ -2599,18 +2630,49 @@ pub fn build(b: *std.Build) void {
         });
 
         const run_glue_test = b.addRunArtifact(glue_test);
-        if (run_args.len != 0) {
-            run_glue_test.addArgs(run_args);
-        }
         run_glue_test.step.dependOn(&install.step);
         run_glue_test_step = &run_glue_test.step;
         test_glue_step.dependOn(&run_glue_test.step);
 
-        // test-cli: umbrella depending on all four
-        test_cli_step.dependOn(test_platforms_step);
-        test_cli_step.dependOn(test_subcommands_step);
-        test_cli_step.dependOn(test_echo_step);
-        test_cli_step.dependOn(test_glue_step);
+        // test-cli: umbrella depending on all four. On Windows, use separate
+        // aggregate run steps so focused steps like `test-echo` stay focused,
+        // while the umbrella avoids Zig 0.16 test-runner IPC timeouts caused
+        // by starting the heavy platform runner and Zig test binaries together.
+        if (builtin.os.tag == .windows) {
+            const run_parallel_cli_for_cli = b.addRunArtifact(parallel_cli_runner_exe);
+            run_parallel_cli_for_cli.addArg("zig-out/bin/roc");
+            for (test_filters) |f| {
+                run_parallel_cli_for_cli.addArg("--filter");
+                run_parallel_cli_for_cli.addArg(f);
+            }
+            if (run_args.len != 0) {
+                run_parallel_cli_for_cli.addArgs(run_args);
+            }
+            run_parallel_cli_for_cli.step.dependOn(&install.step);
+            run_parallel_cli_for_cli.step.dependOn(build_test_hosts_step);
+
+            const run_roc_subcommands_test_for_cli = b.addRunArtifact(roc_subcommands_test);
+            run_roc_subcommands_test_for_cli.step.dependOn(&install.step);
+            run_roc_subcommands_test_for_cli.step.dependOn(build_test_hosts_step);
+            run_roc_subcommands_test_for_cli.step.dependOn(&run_parallel_cli_for_cli.step);
+
+            const run_echo_tests_for_cli = b.addRunArtifact(echo_tests);
+            run_echo_tests_for_cli.step.dependOn(&install.step);
+            run_echo_tests_for_cli.step.dependOn(build_test_hosts_step);
+            run_echo_tests_for_cli.step.dependOn(&run_roc_subcommands_test_for_cli.step);
+
+            const run_glue_test_for_cli = b.addRunArtifact(glue_test);
+            run_glue_test_for_cli.step.dependOn(&install.step);
+            run_glue_test_for_cli.step.dependOn(&run_echo_tests_for_cli.step);
+            run_glue_test_cli_step = &run_glue_test_for_cli.step;
+
+            test_cli_step.dependOn(&run_glue_test_for_cli.step);
+        } else {
+            test_cli_step.dependOn(test_platforms_step);
+            test_cli_step.dependOn(test_subcommands_step);
+            test_cli_step.dependOn(test_echo_step);
+            test_cli_step.dependOn(test_glue_step);
+        }
 
         // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
         // stays out of test-cli because these tests document currently failing
@@ -3829,7 +3891,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Build glue platform host at runtime for the native platform.
-    if (run_glue_test_step) |glue_test_step| {
+    if (run_glue_test_step != null or run_glue_test_cli_step != null) {
         if (isNativeishOrMusl(target)) {
             // Determine the appropriate target for the glue platform host library.
             // On Linux, we need to use musl explicitly because the platform's
@@ -3891,7 +3953,12 @@ pub fn build(b: *std.Build) void {
                     break :blk &fix_target.step;
                 } else &copy_glue_host.step;
 
-                glue_test_step.dependOn(final_step);
+                if (run_glue_test_step) |glue_test_step| {
+                    glue_test_step.dependOn(final_step);
+                }
+                if (run_glue_test_cli_step) |glue_test_cli_step| {
+                    glue_test_cli_step.dependOn(final_step);
+                }
             }
         }
     }
@@ -4745,38 +4812,31 @@ const llvm_libs = [_][]const u8{
     "LLVMDemangle",
 };
 
-/// Get the compiler version string for cache versioning.
-/// Returns a string like "debug-abc12345" where abc12345 is the git commit SHA.
-/// If git is not available, falls back to "debug-no-git" format.
-fn getCompilerVersion(b: *std.Build, optimize: OptimizeMode) []const u8 {
-    const build_mode = switch (optimize) {
-        .Debug => "debug",
-        .ReleaseSafe => "release-safe",
-        .ReleaseFast => "release-fast",
-        .ReleaseSmall => "release-small",
-    };
-
-    // Try to get git commit SHA
+/// Get the git-commit component of the compiler version (e.g. "abc12345"), used for cache
+/// versioning. Falls back to "no-git" when git is unavailable. The human-readable build-mode
+/// prefix (e.g. "release-fast-") is prepended at the binary's compile time from
+/// @import("builtin").mode — see where `compiler_version` is assembled in build().
+fn getCompilerVersionGit(b: *std.Build) []const u8 {
+    // Try to get git commit SHA using std.process.run
     const result = std.process.run(b.allocator, b.graph.io, .{
         .argv = &[_][]const u8{ "git", "rev-parse", "--short=8", "HEAD" },
     }) catch {
         // Git command failed, use fallback
-        return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+        return "no-git";
     };
     defer b.allocator.free(result.stdout);
     defer b.allocator.free(result.stderr);
 
     if (result.term == .exited and result.term.exited == 0) {
-        // Git succeeded, use the commit SHA
+        // Git succeeded, use the commit SHA (dupe it since result.stdout is freed above)
         const commit_sha = std.mem.trim(u8, result.stdout, " \n\r\t");
         if (commit_sha.len > 0) {
-            return std.fmt.allocPrint(b.allocator, "{s}-{s}", .{ build_mode, commit_sha }) catch
-                std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+            return b.allocator.dupe(u8, commit_sha) catch "no-git";
         }
     }
 
     // Git not available or failed, use fallback
-    return std.fmt.allocPrint(b.allocator, "{s}-no-git", .{build_mode}) catch build_mode;
+    return "no-git";
 }
 
 /// Return the semantic checked-artifact compiler hash.

@@ -380,9 +380,13 @@ fn tidyBannedIndexOf(file: SourceFile, errors: *Errors) void {
     if (std.mem.endsWith(u8, file.path, "ci/tidy.zig")) return;
 
     const banned_index_patterns: []const struct { []const u8, []const u8 } = &.{
-        // Longest patterns first so substrings don't shadow them.
+        // Longest patterns first so substrings don't shadow them. The bare
+        // `lastIndexOf` must stay last in this group, otherwise it would shadow
+        // its `...None`/`...Linear` suffixes and emit the wrong replacement.
         .{ "std.mem.lastIndexOfScalar", "std.mem.findScalarLast" },
         .{ "std.mem.lastIndexOfAny", "std.mem.findLastAny" },
+        .{ "std.mem.lastIndexOfNone", "std.mem.findLastNone" },
+        .{ "std.mem.lastIndexOfLinear", "std.mem.findLastLinear" },
         .{ "std.mem.lastIndexOf", "std.mem.findLast" },
         .{ "std.mem.indexOfScalarPos", "std.mem.findScalarPos" },
         .{ "std.mem.indexOfScalar", "std.mem.findScalar" },

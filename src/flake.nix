@@ -90,7 +90,7 @@
             pname = "roc";
             version = "0.0.0";
             src = gitignore.lib.gitignoreSource ./..;
-            deps = pkgs.callPackage ../build.zig.zon.nix { };
+            deps = pkgs.callPackage ../build.zig.zon.nix { inherit zig; };
             nativeBuildInputs = [
               zig.hook
               pkgs.pkg-config
