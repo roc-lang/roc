@@ -2779,16 +2779,18 @@ pub const Scratch = struct {
 
 fn sameAliasIdentity(a: Alias, b: Alias) bool {
     if (!a.origin_module.eql(b.origin_module)) return false;
-    if (a.source_decl != null or b.source_decl != null) {
-        return a.source_decl == b.source_decl;
+    if (a.source_decl.present or b.source_decl.present) {
+        return a.source_decl.eql(b.source_decl);
     }
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
 fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
     if (!a.origin_module.eql(b.origin_module)) return false;
-    if (a.source_decl != null or b.source_decl != null) {
-        return a.source_decl == b.source_decl;
+    const a_source_decl = a.sourceDecl();
+    const b_source_decl = b.sourceDecl();
+    if (a_source_decl.present or b_source_decl.present) {
+        return a_source_decl.eql(b_source_decl);
     }
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }

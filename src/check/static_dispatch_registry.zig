@@ -19,6 +19,7 @@ const CIR = can.CIR;
 const Var = types.Var;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const CheckedExprId = checked_ids.CheckedExprId;
+const PatternBinderId = checked_ids.PatternBinderId;
 
 /// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
@@ -69,12 +70,29 @@ pub const MethodKey = struct {
     method: canonical.MethodNameId,
 };
 
+/// Public `ProcedureMethodTarget` declaration.
+pub const ProcedureMethodTarget = struct {
+    proc: canonical.ProcedureValueRef,
+    template: canonical.ProcedureTemplateRef,
+};
+
+/// Public `LocalProcedureMethodTarget` declaration.
+pub const LocalProcedureMethodTarget = struct {
+    binder: PatternBinderId,
+    expr: CheckedExprId,
+};
+
+/// Public `MethodTargetKind` declaration.
+pub const MethodTargetKind = union(enum) {
+    procedure: ProcedureMethodTarget,
+    local_proc: LocalProcedureMethodTarget,
+};
+
 /// Public `MethodTarget` declaration.
 pub const MethodTarget = struct {
     module_idx: u32,
     def_idx: CIR.Def.Idx,
-    proc: canonical.ProcedureValueRef,
-    template: ?canonical.ProcedureTemplateRef,
+    kind: MethodTargetKind,
     callable_ty: CheckedTypeId,
 };
 
@@ -106,6 +124,7 @@ pub const MethodRegistry = struct {
         names: *canonical.CanonicalNameStore,
         local_templates: *const ProcedureTemplateLookup,
         checked_types: anytype,
+        checked_bodies: anytype,
     ) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
@@ -136,21 +155,28 @@ pub const MethodRegistry = struct {
                 unreachable;
             };
             const def_idx = entry.value.def_idx;
-            const template = local_templates.templateForDef(def_idx) orelse {
+            const target_kind: MethodTargetKind = if (local_templates.templateForDef(def_idx)) |template| blk: {
+                const export_name = try names.internExportIdent(idents, method_ident);
+                const proc_base = try names.internProcBase(.{
+                    .module_name = module_name,
+                    .export_name = export_name,
+                    .kind = .checked_source,
+                    .ordinal = @intFromEnum(def_idx),
+                    .source_def_idx = @intFromEnum(def_idx),
+                });
+                break :blk .{ .procedure = .{
+                    .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
+                    .template = template,
+                } };
+            } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.value)) |local|
+                .{ .local_proc = local }
+            else
                 // Associated values without arguments are checked field access,
                 // not static-dispatch call targets. The method registry is a
                 // procedure-target table for Monotype static dispatch lowering,
                 // so only procedure-backed entries belong here.
                 continue;
-            };
-            const export_name = try names.internExportIdent(idents, method_ident);
-            const proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = export_name,
-                .kind = .checked_source,
-                .ordinal = @intFromEnum(def_idx),
-                .source_def_idx = @intFromEnum(def_idx),
-            });
+            const callable_var = methodTargetCallableVar(module, def_idx, entry.value, target_kind);
 
             try entries.append(allocator, .{
                 .key = .{
@@ -160,9 +186,8 @@ pub const MethodRegistry = struct {
                 .target = .{
                     .module_idx = module_idx,
                     .def_idx = def_idx,
-                    .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
-                    .template = template,
-                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.defType(def_idx)),
+                    .kind = target_kind,
+                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, callable_var),
                 },
             });
         }
@@ -170,6 +195,80 @@ pub const MethodRegistry = struct {
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 };
+
+fn methodTargetCallableVar(
+    module: TypedCIR.Module,
+    def_idx: CIR.Def.Idx,
+    binding: ModuleEnv.MethodBinding,
+    target_kind: MethodTargetKind,
+) Var {
+    return switch (target_kind) {
+        .procedure => module.defType(def_idx),
+        .local_proc => blk: {
+            const raw_node = @intFromEnum(binding.type_node_idx);
+            const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
+            const decl = switch (module.getStatement(statement)) {
+                .s_decl => |decl| decl,
+                else => unreachable,
+            };
+            break :blk module.exprType(decl.expr);
+        },
+    };
+}
+
+fn localProcedureTargetForMethodBinding(
+    module: TypedCIR.Module,
+    checked_bodies: anytype,
+    binding: ModuleEnv.MethodBinding,
+) ?LocalProcedureMethodTarget {
+    const raw_node = @intFromEnum(binding.type_node_idx);
+    if (raw_node >= module.nodeCount()) {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+                .{raw_node},
+            );
+        }
+        unreachable;
+    }
+    if (module.nodeTag(binding.type_node_idx) != .statement_decl) return null;
+
+    const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
+    const decl = switch (module.getStatement(statement)) {
+        .s_decl => |decl| decl,
+        else => return null,
+    };
+
+    if (!localProcedureExpr(module, decl.expr)) return null;
+
+    const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
+                .{@intFromEnum(decl.pattern)},
+            );
+        }
+        unreachable;
+    };
+    const expr = checked_bodies.exprIdForSource(decl.expr) orelse {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "checked static dispatch registry invariant violated: local method expression {d} has no checked expression id",
+                .{@intFromEnum(decl.expr)},
+            );
+        }
+        unreachable;
+    };
+
+    return .{ .binder = binder, .expr = expr };
+}
+
+fn localProcedureExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
+    return switch (module.expr(expr_idx).data) {
+        .e_lambda, .e_closure => true,
+        else => false,
+    };
+}
 
 fn methodOwnerForRegistryEntry(
     module: TypedCIR.Module,
@@ -219,9 +318,8 @@ fn builtinOwnerForRegistryEntry(
     if (type_ident.eql(common.f64) or type_ident.eql(common.f64_type)) return .f64;
     if (type_ident.eql(common.dec) or type_ident.eql(common.dec_type)) return .dec;
 
-    const type_text = module_env.getIdentText(type_ident);
-    if (type_ident.eql(common.list) or std.mem.eql(u8, type_text, "Builtin.List")) return .list;
-    if (type_ident.eql(common.box) or std.mem.eql(u8, type_text, "Builtin.Box")) return .box;
+    if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
+    if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     return null;
 }
 

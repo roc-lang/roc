@@ -1783,8 +1783,11 @@ const Builder = struct {
     fn toInspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?Ast.ExprId {
         const owner = methodOwnerFromType(&self.program.types, value_ty) orelse return null;
         const lookup = self.lookupMethodTargetByName(owner, "to_inspect") orelse return null;
-        const template = lookup.target.template orelse
-            Common.invariant("checked to_inspect target was not backed by a procedure template");
+        const procedure = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc => return null,
+        };
+        const template = procedure.template;
 
         var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template);
         defer target_ctx.deinit();
@@ -5920,12 +5923,7 @@ const BodyContext = struct {
             return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self);
         }
         const resolved = lookup.?;
-        const template = resolved.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
-
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, expected_ret_ty);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked dispatch plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
@@ -5937,7 +5935,7 @@ const BodyContext = struct {
         }
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
         return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
     }
@@ -5981,12 +5979,8 @@ const BodyContext = struct {
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
         const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
-        const template = resolved.target.template orelse
-            Common.invariant("checked from_numeral target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
 
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, try_ty);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, try_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked from_numeral plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked from_numeral target callable type differed from dispatch plan callable type");
@@ -5995,7 +5989,7 @@ const BodyContext = struct {
         const fn_data = self.builder.functionShape(target_mono_ty, "checked from_numeral target had a non-function type");
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
         return try self.unwrapNumeralResult(call_expr, fn_data.ret, target_ty);
     }
@@ -6170,17 +6164,12 @@ const BodyContext = struct {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
             return plan_ret_ty;
         };
-        const template = resolved.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
-
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, null);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, null);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked dispatch plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
         }
-        const ret_ty = target_ctx.functionReturnType(target_mono_ty);
+        const ret_ty = self.functionReturnType(target_mono_ty);
         try self.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
         return ret_ty;
     }
@@ -6252,6 +6241,85 @@ const BodyContext = struct {
         };
     }
 
+    fn methodTargetContext(
+        self: *BodyContext,
+        lookup: MethodLookup,
+    ) Allocator.Error!BodyContext {
+        const owner_template = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure.template,
+            .local_proc => blk: {
+                self.requireLocalMethodTargetInCurrentView(lookup);
+                break :blk self.owner_template;
+            },
+        };
+        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template);
+    }
+
+    fn requireLocalMethodTargetInCurrentView(self: *BodyContext, lookup: MethodLookup) void {
+        if (!moduleBytesEqual(lookup.view.key.bytes, self.view.key.bytes)) {
+            Common.invariant("local method dispatch target belonged to a different checked module view");
+        }
+    }
+
+    fn methodTargetMonoTypeFromPlan(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        plan_ctx: *BodyContext,
+        plan_callable_ty: checked.CheckedTypeId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        return try target_ctx.instantiateTargetFromPlan(lookup.target.callable_ty, plan_ctx, plan_callable_ty, expected_ret_ty);
+    }
+
+    fn methodTargetMonoTypeFromArgs(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
+    }
+
+    fn methodTargetCalleeWithMono(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        callable_mono_ty: Type.TypeId,
+    ) Allocator.Error!Ast.FnTemplate {
+        const source_fn_ty = lookup.target.callable_ty;
+        const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        return switch (lookup.target.kind) {
+            .procedure => |procedure| blk: {
+                _ = try self.builder.lowerTemplateWithMono(
+                    procedure.template,
+                    lookup.view,
+                    source_fn_ty,
+                    source_fn_key,
+                    callable_mono_ty,
+                );
+                break :blk self.builder.fnDefForTemplate(
+                    lookup.view,
+                    procedure.template,
+                    source_fn_ty,
+                    source_fn_key,
+                    callable_mono_ty,
+                );
+            },
+            .local_proc => |local| blk: {
+                self.requireLocalMethodTargetInCurrentView(lookup);
+                break :blk try self.fnTemplateForLocalProcWithMono(
+                    .{ .binder = local.binder, .expr = local.expr },
+                    source_fn_ty,
+                    source_fn_key,
+                    callable_mono_ty,
+                );
+            },
+        };
+    }
+
     fn lowerResolvedDispatch(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -6259,26 +6327,10 @@ const BodyContext = struct {
         callable_mono_ty: Type.TypeId,
         arg_ctx: *BodyContext,
     ) Allocator.Error!Ast.ExprData {
-        const template = lookup.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        _ = try self.builder.lowerTemplateWithMono(
-            template,
-            lookup.view,
-            lookup.target.callable_ty,
-            lookup.view.types.rootKey(lookup.target.callable_ty),
-            callable_mono_ty,
-        );
-
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
         return .{ .call_proc = .{
-            .callee = self.builder.fnDefForTemplate(
-                lookup.view,
-                template,
-                lookup.target.callable_ty,
-                lookup.view.types.rootKey(lookup.target.callable_ty),
-                callable_mono_ty,
-            ),
+            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
             .args = args,
         } };
     }
@@ -6484,31 +6536,12 @@ const BodyContext = struct {
             Common.invariant("owned equality call requested for a type without a method owner");
         const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse
             Common.invariant("checked method registry is missing owned equality target");
-        const template = lookup.target.template orelse
-            Common.invariant("checked equality target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, template);
-        defer target_ctx.deinit();
-        target_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        target_ctx.current_fn_key = self.current_fn_key;
 
         const arg_tys = [_]Type.TypeId{ ty, ty };
-        const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, &arg_tys, bool_ty);
-        _ = try self.builder.lowerTemplateWithMono(
-            template,
-            lookup.view,
-            lookup.target.callable_ty,
-            lookup.view.types.rootKey(lookup.target.callable_ty),
-            callable_mono_ty,
-        );
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
         const args = [_]Ast.ExprId{ lhs, rhs };
         return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-            .callee = self.builder.fnDefForTemplate(
-                lookup.view,
-                template,
-                lookup.target.callable_ty,
-                lookup.view.types.rootKey(lookup.target.callable_ty),
-                callable_mono_ty,
-            ),
+            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
             .args = try self.builder.program.addExprSpan(&args),
         } } });
     }
@@ -8172,17 +8205,12 @@ const BodyContext = struct {
             Common.invariant("iterator dispatch plan had no method owner");
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse
             Common.invariant("checked iterator dispatch method registry is missing resolved target");
-        const template = lookup.target.template orelse
-            Common.invariant("checked iterator dispatch target was not backed by a procedure template");
 
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, template);
-        defer target_ctx.deinit();
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(lookup.target.callable_ty, &call_ctx, plan.callable_ty, expected_ret_ty);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(lookup, &call_ctx, plan.callable_ty, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked iterator dispatch plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked iterator dispatch target callable type differed from dispatch plan callable type");
         }
-        _ = try self.builder.lowerTemplateWithMono(template, lookup.view, lookup.target.callable_ty, lookup.view.types.rootKey(lookup.target.callable_ty), target_mono_ty);
 
         const fn_data = self.builder.functionShape(target_mono_ty, "checked iterator dispatch target had a non-function type");
         if (expected_ret_ty) |expected| {
@@ -8200,7 +8228,7 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = self.builder.fnDefForTemplate(lookup.view, template, lookup.target.callable_ty, lookup.view.types.rootKey(lookup.target.callable_ty), target_mono_ty),
+                .callee = try self.methodTargetCalleeWithMono(lookup, target_mono_ty),
                 .args = try self.builder.program.addExprSpan(args),
             } },
         });

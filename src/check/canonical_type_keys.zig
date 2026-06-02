@@ -208,7 +208,7 @@ const Builder = struct {
             },
             .alias => |alias| {
                 self.writeTag("alias");
-                self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl);
+                self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
                 try self.writeVar(self.store.getAliasBackingVar(alias));
                 const args = self.store.sliceAliasArgs(alias);
                 self.writeU32(@intCast(args.len));
@@ -252,8 +252,8 @@ const Builder = struct {
             },
             .nominal_type => |nominal| {
                 self.writeTag("nominal");
-                self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.source_decl);
-                self.writeBool(nominal.is_opaque);
+                self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
+                self.writeBool(nominal.isOpaque());
                 const args = self.store.sliceNominalArgs(nominal);
                 self.writeU32(@intCast(args.len));
                 for (args) |arg| {

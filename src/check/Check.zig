@@ -976,6 +976,10 @@ fn builtinOriginModule(self: *const Self) Ident.Idx {
         self.builtin_ctx.module_name;
 }
 
+fn isCheckingBuiltinModuleDirectly(self: *const Self) bool {
+    return self.cir.module_role == .builtin;
+}
+
 fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
     return switch (num_kind) {
         .u8 => self.cir.idents.u8_type,
@@ -1016,8 +1020,8 @@ fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind)
 
 fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
     return switch (decl) {
-        .list => self.cir.idents.list,
-        .box => self.cir.idents.box,
+        .list => self.cir.idents.builtin_list,
+        .box => self.cir.idents.builtin_box,
         .try_type => self.cir.idents.builtin_try,
         .numeral => self.cir.idents.builtin_numeral,
         .num => |num_kind| self.builtinNumTypeIdent(num_kind),
@@ -1049,8 +1053,39 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
     };
 }
 
+const SourceDeclKind = enum {
+    alias,
+    nominal,
+};
+
+fn debugAssertSourceDeclKind(self: *const Self, source_decl: u32, kind: SourceDeclKind) void {
+    debugAssertSourceDeclKindInEnv(self.cir, source_decl, kind);
+}
+
+fn debugAssertSourceDeclKindInEnv(env: *const ModuleEnv, source_decl: u32, kind: SourceDeclKind) void {
+    if (builtin.mode != .Debug) return;
+
+    if (source_decl >= env.store.nodes.len()) {
+        std.debug.panic("type checker invariant violated: source declaration {} is outside node store", .{source_decl});
+    }
+
+    const node = env.store.nodes.get(@enumFromInt(source_decl));
+    const ok = switch (kind) {
+        .alias => node.tag == .statement_alias_decl,
+        .nominal => node.tag == .statement_nominal_decl,
+    };
+    if (!ok) {
+        std.debug.panic("type checker invariant violated: source declaration {} has tag {}, expected {s}", .{
+            source_decl,
+            node.tag,
+            @tagName(kind),
+        });
+    }
+}
+
 fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 {
-    if (self.builtin_ctx.builtin_indices) |indices| {
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
+        const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
             .list => indices.list_type,
             .box => indices.box_type,
@@ -1058,25 +1093,25 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
             .numeral => indices.numeral_type,
             .num => |num_kind| builtinNumStmtFromIndices(indices, num_kind),
         };
+        const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
+        debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
         return @intFromEnum(stmt_idx);
     }
 
-    if (self.builtin_ctx.builtin_module != null) {
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
         if (builtin.mode == .Debug) {
             std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
     }
 
-    const stmt_idx = switch (decl) {
-        .try_type => self.builtin_ctx.try_stmt,
-        else => self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
-            }
-            unreachable;
-        },
+    const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
+        }
+        unreachable;
     };
+    self.debugAssertSourceDeclKind(@intFromEnum(stmt_idx), .nominal);
     return @intFromEnum(stmt_idx);
 }
 
@@ -1704,10 +1739,28 @@ fn copyBuiltinTypes(self: *Self) !void {
 
     if (self.builtin_types_copied) return;
 
-    const bool_stmt_idx = self.builtin_ctx.bool_stmt;
-    const str_stmt_idx = self.builtin_ctx.str_stmt;
+    const checking_builtin_directly = self.isCheckingBuiltinModuleDirectly();
+    const bool_stmt_idx = if (checking_builtin_directly)
+        self.findLocalTypeDeclByName(self.cir.idents.bool_type) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        }
+    else
+        self.builtin_ctx.bool_stmt;
+    const str_stmt_idx = if (checking_builtin_directly)
+        self.findLocalTypeDeclByName(self.cir.idents.builtin_str) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        }
+    else
+        self.builtin_ctx.str_stmt;
 
-    if (self.builtin_ctx.builtin_module) |builtin_env| {
+    if (!checking_builtin_directly and self.builtin_ctx.builtin_module != null) {
+        const builtin_env = self.builtin_ctx.builtin_module.?;
         // Copy Bool type from Builtin module using the direct reference
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
@@ -1750,9 +1803,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // for all its types. This causes type mismatches when locally-defined types (using
     // "module.Builtin") are unified with types from the pre-compiled module (using "Builtin").
     // Fix: use the unqualified "Builtin" to match the pre-compiled module's convention.
-    if (self.builtin_ctx.builtin_module != null and
-        self.cir.display_module_name_idx.eql(self.cir.idents.builtin_module))
-    {
+    if (self.builtin_ctx.builtin_module != null and self.isCheckingBuiltinModuleDirectly()) {
         self.builtin_ctx.module_name = self.cir.idents.builtin_module;
         // Also update qualified_module_ident so that opaque type checks
         // (canLiftInner) allow pattern matching on types defined in this module.
@@ -6579,8 +6630,7 @@ fn toInspectMethodVarForNominal(
     const original_env, const is_this_module = try self.methodOwnerEnv(nominal.origin_module);
     const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
-        nominal.ident.ident_idx,
-        nominal.source_decl,
+        nominal.sourceDeclOptional(),
         self.cir.idents.to_inspect,
     ) orelse return null;
     return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, nominal.ident.ident_idx, env, region);
@@ -6594,9 +6644,7 @@ fn toInspectMethodVarForAlias(
 ) Allocator.Error!?ToInspectMethodVar {
     const original_env, const is_this_module = try self.methodOwnerEnv(alias.origin_module);
     const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-        original_env,
-        alias.ident.ident_idx,
-        alias.source_decl,
+        alias.source_decl.toOptional(),
         self.cir,
         self.cir.idents.to_inspect,
     ) orelse return null;
@@ -7818,7 +7866,7 @@ fn reportMissingNominalMethodForBinop(
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
-    if (original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.ident.ident_idx, nominal_type.source_decl, method_name) == null) {
+    if (original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), method_name) == null) {
         try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     }
@@ -8702,8 +8750,7 @@ fn staticDispatchConstraintAcceptsCandidate(
 
     const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
-        nominal_type.ident.ident_idx,
-        nominal_type.source_decl,
+        nominal_type.sourceDeclOptional(),
         constraint.fn_name,
     ) orelse return false;
     const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
@@ -9042,8 +9089,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
-                            nominal_type.ident.ident_idx,
-                            nominal_type.source_decl,
+                            nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
                         if (exact_method_binding == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
@@ -9073,7 +9119,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         constraint,
                         env,
                         region,
-                    )) orelse original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.ident.ident_idx, nominal_type.source_decl, constraint.fn_name) orelse {
+                    )) orelse original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -9240,9 +9286,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-                            original_env,
-                            alias.ident.ident_idx,
-                            alias.source_decl,
+                            alias.source_decl.toOptional(),
                             self.cir,
                             constraint.fn_name,
                         );
@@ -9268,9 +9312,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     }
 
                     const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-                        original_env,
-                        alias.ident.ident_idx,
-                        alias.source_decl,
+                        alias.source_decl.toOptional(),
                         self.cir,
                         constraint.fn_name,
                     ) orelse {
@@ -9942,8 +9984,6 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
 
             // Check if Dec has this method
             const method_binding = builtin_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-                builtin_env,
-                indices.dec_ident,
                 @intFromEnum(indices.dec_type),
                 self.cir,
                 constraint.fn_name,

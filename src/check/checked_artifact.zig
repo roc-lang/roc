@@ -4085,7 +4085,7 @@ fn copyCheckedTypePayload(
         .alias => |alias| .{ .alias = .{
             .name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx),
             .origin_module = try names.internModuleIdent(module.identStoreConst(), alias.origin_module),
-            .source_decl = alias.source_decl,
+            .source_decl = alias.source_decl.toOptional(),
             .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getAliasBackingVar(alias)),
             .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceAliasArgs(alias)),
         } },
@@ -4157,9 +4157,9 @@ fn copyCheckedFlatType(
             break :blk .{ .nominal = .{
                 .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
                 .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
-                .source_decl = nominal.source_decl,
+                .source_decl = nominal.sourceDeclOptional(),
                 .builtin = builtin_nominal,
-                .is_opaque = nominal.is_opaque,
+                .is_opaque = nominal.isOpaque(),
                 .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
                 .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
                 .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceNominalArgs(nominal)),
@@ -4338,10 +4338,11 @@ fn checkedNominalRepresentationForSourceNominal(
     const origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module);
     const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
     const current_module = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+    const source_decl = nominal.sourceDeclOptional();
     if (origin_module == current_module) {
-        const source_decl = nominal.source_decl orelse
+        const statement = source_decl orelse
             checkedArtifactInvariant("checked local nominal representation had no source declaration", .{});
-        return .{ .local_declaration = localNominalDeclarationIdForStatement(module, @enumFromInt(source_decl)) };
+        return .{ .local_declaration = localNominalDeclarationIdForStatement(module, @enumFromInt(statement)) };
     }
 
     return .{ .imported_declaration = importedNominalDeclarationRefForSourceNominal(
@@ -4349,7 +4350,7 @@ fn checkedNominalRepresentationForSourceNominal(
         imports,
         origin_module,
         type_name,
-        nominal.source_decl,
+        source_decl,
     ) };
 }
 
@@ -16033,7 +16034,7 @@ pub fn publishFromTypedModule(
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication);
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication, &checked_bodies);
     errdefer method_registry.deinit(allocator);
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);

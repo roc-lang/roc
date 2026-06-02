@@ -25,6 +25,22 @@ const MethodRegistryTestCheckedTypes = struct {
     }
 };
 
+const MethodRegistryTestCheckedBodies = struct {
+    pub fn patternBinderForSource(
+        _: *const @This(),
+        _: can.CIR.Pattern.Idx,
+    ) ?checked_ids.PatternBinderId {
+        unreachable;
+    }
+
+    pub fn exprIdForSource(
+        _: *const @This(),
+        _: can.CIR.Expr.Idx,
+    ) ?checked_ids.CheckedExprId {
+        unreachable;
+    }
+};
+
 // primitives - nums //
 
 test "check type - num - unbound" {
@@ -1348,6 +1364,7 @@ test "checked artifact method registry skips nominal associated values" {
         .by_def = by_def,
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
+    const checked_bodies = MethodRegistryTestCheckedBodies{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -1358,6 +1375,7 @@ test "checked artifact method registry skips nominal associated values" {
         &names,
         &template_lookup,
         &checked_types,
+        &checked_bodies,
     );
     defer registry.deinit(testing.allocator);
 

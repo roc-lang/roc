@@ -5959,7 +5959,7 @@ test "user project src/build/roc/Builtin.roc is not compiler-owned builtin" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const user_project_root = try tmp.dir.realpathAlloc(allocator, ".");
+    const user_project_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
     defer allocator.free(user_project_root);
 
     const classified_as_compiler_builtin = try isCompilerOwnedBuiltinSourcePath(

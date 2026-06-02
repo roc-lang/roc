@@ -28,6 +28,7 @@ const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
+const SourceDecl = types.SourceDecl;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -444,7 +445,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
-                .source_decl = source_decl,
+                .source_decl = SourceDecl.fromOptional(source_decl),
             },
         };
     }
@@ -483,8 +484,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
-                .source_decl = source_decl,
-                .is_opaque = is_opaque,
+                .source = NominalType.Source.init(SourceDecl.fromOptional(source_decl), is_opaque),
             },
         } };
     }

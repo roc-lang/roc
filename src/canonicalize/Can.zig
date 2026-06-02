@@ -191,6 +191,10 @@ alias_cycle_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void) = .{}
 assoc_value_patterns: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx) = .{},
 /// Qualified associated value references created before their definitions.
 assoc_forward_references: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Scope.ForwardReference) = .{},
+/// Reverse lookup from associated forward-reference patterns to their parser key.
+assoc_forward_pattern_keys: std.AutoHashMapUnmanaged(Pattern.Idx, AST.DeclIndex.AssocValue) = .{},
+/// Local associated value statements parked before a later definition fills them.
+assoc_local_statement_placeholders: std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Statement.Idx) = .{},
 /// Parser structural owner path for each canonical type-declaration statement.
 type_decl_paths: std.AutoHashMapUnmanaged(Statement.Idx, AST.DeclIndex.TypePathIdx) = .{},
 /// Interned identifier cache for parser type paths.
@@ -457,6 +461,8 @@ pub fn deinit(
         forward_ref.reference_regions.deinit(gpa);
     }
     self.assoc_forward_references.deinit(gpa);
+    self.assoc_forward_pattern_keys.deinit(gpa);
+    self.assoc_local_statement_placeholders.deinit(gpa);
     self.type_decl_paths.deinit(gpa);
     self.type_path_names.deinit(gpa);
     self.type_anno_owner_path_stack.deinit(gpa);
@@ -528,6 +534,8 @@ fn initInternal(
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
         .assoc_value_patterns = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx){},
         .assoc_forward_references = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Scope.ForwardReference){},
+        .assoc_forward_pattern_keys = std.AutoHashMapUnmanaged(Pattern.Idx, AST.DeclIndex.AssocValue){},
+        .assoc_local_statement_placeholders = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Statement.Idx){},
         .type_decl_paths = std.AutoHashMapUnmanaged(Statement.Idx, AST.DeclIndex.TypePathIdx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
@@ -555,13 +563,15 @@ fn initInternal(
     try result.scopeEnter(gpa, false);
 
     if (maybe_context) |context| {
-        try result.populateBuiltinAutoImportedTypes(
-            env,
-            gpa,
-            context.builtin_types.builtin_module_env,
-            context.builtin_types.builtin_indices,
-        );
-        try result.setupAutoImportedBuiltinTypes(env, gpa);
+        if (env.module_role != .builtin) {
+            try result.populateBuiltinAutoImportedTypes(
+                env,
+                gpa,
+                context.builtin_types.builtin_module_env,
+                context.builtin_types.builtin_indices,
+            );
+            try result.setupAutoImportedBuiltinTypes(env, gpa);
+        }
     }
 
     const scratch_statements_start = result.env.store.scratch.?.statements.top();
@@ -1362,6 +1372,7 @@ fn getOrCreateAssocForwardPattern(
     if (globally_resolvable) {
         try self.markGloballyResolvablePattern(pattern_idx);
     }
+    try self.assoc_forward_pattern_keys.put(self.env.gpa, pattern_idx, key);
     try self.used_patterns.put(self.env.gpa, pattern_idx, {});
     return pattern_idx;
 }
@@ -2753,6 +2764,44 @@ fn localAssociatedContext(
     };
 }
 
+fn propagateBlockStatementFreeVars(
+    self: *Self,
+    context: BlockStatementContext,
+    free_vars: DataSpan,
+) std.mem.Allocator.Error!void {
+    const stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(free_vars);
+    for (stmt_free_vars_slice) |fv| {
+        try self.appendPropagatedFreeVarExcludingBound(context.captures_top, context.bound_vars_top, fv);
+    }
+}
+
+fn ensureLocalAssociatedForwardPlaceholders(
+    self: *Self,
+    free_vars: DataSpan,
+    block_context: ?BlockStatementContext,
+) std.mem.Allocator.Error!void {
+    const context = self.localAssociatedContext(block_context);
+    const free_vars_slice = self.scratch_free_vars.sliceFromSpan(free_vars);
+    for (free_vars_slice) |pattern_idx| {
+        const key = self.assoc_forward_pattern_keys.get(pattern_idx) orelse continue;
+        if (!self.assoc_forward_references.contains(key)) continue;
+        if (self.assoc_local_statement_placeholders.contains(key)) continue;
+
+        const region = self.env.store.getPatternRegion(pattern_idx);
+        const expr_idx = try self.env.addExpr(Expr{ .e_ellipsis = .{} }, region);
+        const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+            .pattern = pattern_idx,
+            .expr = expr_idx,
+            .anno = null,
+        } }, region);
+        try self.addBlockStatement(
+            context,
+            CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() },
+        );
+        try self.assoc_local_statement_placeholders.put(self.env.gpa, key, stmt_idx);
+    }
+}
+
 const AssociatedValueDef = struct {
     def_idx: CIR.Def.Idx,
     free_vars: DataSpan,
@@ -2777,16 +2826,30 @@ fn recordAssociatedValue(
         };
     }
 
+    try self.ensureLocalAssociatedForwardPlaceholders(associated_def.free_vars, block_context);
+
     const region = self.env.store.getNodeRegion(@enumFromInt(@intFromEnum(def_idx)));
-    const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+    const stmt = Statement{ .s_decl = .{
         .pattern = def.pattern,
         .expr = def.expr,
         .anno = def.annotation,
-    } }, region);
-    try self.addBlockStatement(
-        self.localAssociatedContext(block_context),
-        CanonicalizedStatement{ .idx = stmt_idx, .free_vars = associated_def.free_vars },
-    );
+    } };
+    const stmt_idx = blk: {
+        if (self.assoc_forward_pattern_keys.get(def.pattern)) |key| {
+            if (self.assoc_local_statement_placeholders.fetchRemove(key)) |placeholder| {
+                try self.env.store.setStatementNode(placeholder.value, stmt);
+                try self.propagateBlockStatementFreeVars(self.localAssociatedContext(block_context), associated_def.free_vars);
+                break :blk placeholder.value;
+            }
+        }
+
+        const new_stmt_idx = try self.env.addStatement(stmt, region);
+        try self.addBlockStatement(
+            self.localAssociatedContext(block_context),
+            CanonicalizedStatement{ .idx = new_stmt_idx, .free_vars = associated_def.free_vars },
+        );
+        break :blk new_stmt_idx;
+    };
     return .{
         .type_node_idx = ModuleEnv.nodeIdxFrom(stmt_idx),
         .def_idx = def_idx,
@@ -12308,10 +12371,7 @@ fn addBlockStatement(
         else => {},
     }
 
-    const stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(statement.free_vars);
-    for (stmt_free_vars_slice) |fv| {
-        try self.appendPropagatedFreeVarExcludingBound(context.captures_top, context.bound_vars_top, fv);
-    }
+    try self.propagateBlockStatementFreeVars(context, statement.free_vars);
 }
 
 /// Canonicalize a single statement within a block

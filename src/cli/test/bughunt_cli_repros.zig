@@ -2829,7 +2829,7 @@ fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
         if (std.fs.path.dirname(full_path)) |dir| {
             try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
         }
-        try std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = rendered });
+        try std.fs.cwd().writeFile(std.testing.io, .{ .sub_path = full_path, .data = rendered });
     }
 }
 

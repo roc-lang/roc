@@ -151,6 +151,8 @@ pub const CommonIdents = extern struct {
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
+    builtin_list: Ident.Idx,
+    builtin_box: Ident.Idx,
     builtin_str_inspect: Ident.Idx,
     u8_type: Ident.Idx,
     i8_type: Ident.Idx,
@@ -251,6 +253,8 @@ pub const CommonIdents = extern struct {
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
+            .builtin_list = try common.insertIdent(gpa, Ident.for_text("Builtin.List")),
+            .builtin_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box")),
             .builtin_str_inspect = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.inspect")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
@@ -352,6 +356,8 @@ pub const CommonIdents = extern struct {
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
+            .builtin_list = common.findIdent("Builtin.List") orelse unreachable,
+            .builtin_box = common.findIdent("Builtin.Box") orelse unreachable,
             .builtin_str_inspect = common.findIdent("Builtin.Str.inspect") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
@@ -3976,8 +3982,7 @@ pub fn finalizeMethodTables(self: *Self) void {
 
 /// Looks up method metadata using a type declaration owner from one environment
 /// and a method ident from the same source environment.
-pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
-    _ = type_ident;
+pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
     const method_name = source_env.getIdent(method_ident);
 
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
@@ -3990,14 +3995,10 @@ pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *co
 /// that come from different source environments.
 pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     self: *const Self,
-    type_source_env: *const Self,
-    type_ident: Ident.Idx,
     source_decl: ?u32,
     method_source_env: *const Self,
     method_ident: Ident.Idx,
 ) ?MethodBinding {
-    _ = type_source_env;
-    _ = type_ident;
     const method_name = method_source_env.getIdent(method_ident);
 
     const local_method_ident = self.common.findIdent(method_name) orelse return null;

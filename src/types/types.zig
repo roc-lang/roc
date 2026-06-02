@@ -32,10 +32,10 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
-    try std.testing.expectEqual(16, @sizeOf(Alias));
+    try std.testing.expectEqual(20, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
-    try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
+    try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
     try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
@@ -143,7 +143,7 @@ pub const Rank = enum(u8) {
 // content //
 
 /// Represents what the a type *is*
-pub const Content = union(enum) {
+pub const Content = union(enum(u8)) {
     const Self = @This();
 
     flex: Flex,
@@ -292,7 +292,7 @@ pub const Alias = struct {
     origin_module: Ident.Idx,
     /// CIR statement index of the source declaration in origin_module, when
     /// this alias came from a concrete source declaration.
-    source_decl: ?u32 = null,
+    source_decl: SourceDecl = .none,
 };
 
 /// Represents an ident of a type
@@ -303,11 +303,72 @@ pub const TypeIdent = struct {
     ident_idx: Ident.Idx,
 };
 
+/// Source statement identity for a local nominal/alias declaration.
+///
+/// This is stored in hot type payloads, so it deliberately uses one u32 slot
+/// instead of Zig's larger `?u32` representation on 0.16.
+pub const SourceDecl = packed struct(u32) {
+    statement: u31,
+    present: bool,
+
+    pub const none: SourceDecl = .{ .statement = 0, .present = false };
+
+    pub fn fromOptional(source_decl: ?u32) SourceDecl {
+        const statement = source_decl orelse return .none;
+        return fromStatement(statement);
+    }
+
+    pub fn fromStatement(statement: u32) SourceDecl {
+        std.debug.assert(statement <= std.math.maxInt(u31));
+        return .{ .statement = @intCast(statement), .present = true };
+    }
+
+    pub fn toOptional(self: SourceDecl) ?u32 {
+        return if (self.present) self.statement else null;
+    }
+
+    pub fn eql(self: SourceDecl, other: SourceDecl) bool {
+        if (self.present != other.present) return false;
+        return !self.present or self.statement == other.statement;
+    }
+};
+
+const NominalSource = packed struct(u32) {
+    statement: u30,
+    present: bool,
+    is_opaque: bool,
+
+    pub fn init(source_decl: SourceDecl, is_opaque: bool) NominalSource {
+        if (source_decl.toOptional()) |statement| {
+            std.debug.assert(statement <= std.math.maxInt(u30));
+            return .{
+                .statement = @intCast(statement),
+                .present = true,
+                .is_opaque = is_opaque,
+            };
+        }
+
+        return .{
+            .statement = 0,
+            .present = false,
+            .is_opaque = is_opaque,
+        };
+    }
+
+    pub fn sourceDecl(self: NominalSource) SourceDecl {
+        return if (self.present) SourceDecl.fromStatement(self.statement) else .none;
+    }
+
+    pub fn isOpaque(self: NominalSource) bool {
+        return self.is_opaque;
+    }
+};
+
 // flat types //
 
 /// Represents type without indirection, it's the concrete form that a type
 /// takes after resolving type variables and aliases.
-pub const FlatType = union(enum) {
+pub const FlatType = union(enum(u8)) {
     record: Record,
     record_unbound: RecordField.SafeMultiList.Range,
     tuple: Tuple,
@@ -532,20 +593,31 @@ pub const FracRequirements = struct {
 
 /// A nominal user-defined type
 pub const NominalType = struct {
+    pub const Source = NominalSource;
+
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
     /// The full module path where this nominal type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
-    /// CIR statement index of the source declaration in origin_module, when
-    /// this nominal came from a concrete source declaration.
-    source_decl: ?u32 = null,
-    /// True if this type was declared with :: (opaque), false if declared with := (nominal)
-    is_opaque: bool,
+    /// Packed source-declaration and opacity bits.
+    source: NominalSource,
+
+    pub fn sourceDecl(self: NominalType) SourceDecl {
+        return self.source.sourceDecl();
+    }
+
+    pub fn sourceDeclOptional(self: NominalType) ?u32 {
+        return self.source.sourceDecl().toOptional();
+    }
+
+    pub fn isOpaque(self: NominalType) bool {
+        return self.source.isOpaque();
+    }
 
     /// Checks if backing types can unify directly with this nominal type
     pub fn canLiftInner(self: NominalType, cur_module_idx: Ident.Idx) bool {
-        if (self.is_opaque) {
+        if (self.isOpaque()) {
             // If opaque, then can only lift inner type if the current module is
             // the same
             return self.origin_module.eql(cur_module_idx);

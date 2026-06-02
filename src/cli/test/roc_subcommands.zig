@@ -314,7 +314,7 @@ test "roc check succeeds when block-local associated value captures local value"
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "Test.roc",
         .data =
         \\Test := [].{
@@ -329,7 +329,7 @@ test "roc check succeeds when block-local associated value captures local value"
         ,
     });
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    const tmp_path = try std.fs.path.join(gpa, &.{ ".zig-cache", "tmp", tmp_dir.sub_path[0..] });
     defer gpa.free(tmp_path);
 
     const test_path = try std.fs.path.join(gpa, &.{ tmp_path, "Test.roc" });
@@ -339,13 +339,13 @@ test "roc check succeeds when block-local associated value captures local value"
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("roc check failed for block-local associated capture regression: {}\n", .{result.term});
         printTruncatedOutput("stdout", result.stdout);
         printTruncatedOutput("stderr", result.stderr);
     }
 
-    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+    try testing.expect(result.term == .exited and result.term.exited == 0);
 }
 
 test "roc check generated module graph succeeds with 1 file and 1 symbol" {
