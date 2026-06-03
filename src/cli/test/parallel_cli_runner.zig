@@ -442,16 +442,11 @@ const echo_cases = [_]CliCase{
 // Glue suite cases
 
 const glue_cases = [_]CliCase{
-    .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds (interpreter)", .backend = .interpreter, .body = .{ .custom = .glue_debug } },
-    .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds (dev backend)", .backend = .dev, .skip = .{ .always = "TODO: dev backend fails with compilation failure" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header (interpreter)", .backend = .interpreter, .body = .{ .custom = .glue_c_header } },
-    .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header (dev backend)", .backend = .dev, .skip = .{ .always = "TODO: dev backend fails with compilation failure" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc (interpreter)", .backend = .interpreter, .body = .{ .custom = .glue_c_header_compiles } },
-    .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc (dev backend)", .backend = .dev, .skip = .{ .always = "TODO: dev backend fails with compilation failure" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue interpreter succeeds on fx platform", .backend = .interpreter, .body = .{ .custom = .glue_zig } },
-    .{ .id = 0, .suite = .glue, .name = "glue command with ZigGlue succeeds (dev backend)", .backend = .dev, .skip = .{ .always = "TODO: dev backend hangs during roc glue execution" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass (interpreter)", .backend = .interpreter, .body = .{ .custom = .glue_c_tests } },
-    .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass (dev backend)", .backend = .dev, .skip = .{ .always = "TODO: dev backend fails with SIGSEGV" }, .body = .{ .custom = .noop } },
+    .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds", .body = .{ .custom = .glue_debug } },
+    .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
+    .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
+    .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
 // Subcommand suite cases
@@ -1938,12 +1933,11 @@ fn runGlueCommandInEnv(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
-    opt: []const u8,
     glue_spec: []const u8,
     output_dir: []const u8,
 ) ?TestResult {
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", opt, glue_spec, output_dir, "test/fx/platform/main.roc" },
+        .args = &.{ "glue", glue_spec, output_dir, "test/fx/platform/main.roc" },
         .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
     })) |failure| return failure;
     return null;
@@ -1953,7 +1947,7 @@ fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer:
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "--opt=interpreter", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
+        .args = &.{ "glue", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "PANIC" },
@@ -1967,7 +1961,7 @@ fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer:
 fn customGlueCHeader(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "--opt=interpreter", "src/glue/src/CGlue.roc", output_dir)) |failure| return failure;
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/CGlue.roc", output_dir)) |failure| return failure;
     const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.h" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate generated header path: {}", .{err});
     const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
@@ -1983,7 +1977,7 @@ fn customGlueCHeader(io: std.Io, allocator: Allocator, env: *const CaseEnv, time
 fn customGlueCHeaderCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "--opt=interpreter", "src/glue/src/CGlue.roc", output_dir)) |failure| return failure;
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/CGlue.roc", output_dir)) |failure| return failure;
     const test_c_content =
         \\#include "roc_platform_abi.h"
         \\
@@ -2023,7 +2017,7 @@ fn customGlueCHeaderCompiles(io: std.Io, allocator: Allocator, env: *const CaseE
 fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
-    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "--opt=interpreter", "src/glue/src/ZigGlue.roc", output_dir)) |failure| return failure;
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/ZigGlue.roc", output_dir)) |failure| return failure;
     const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
     const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|

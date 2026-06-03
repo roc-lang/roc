@@ -2113,6 +2113,8 @@ pub fn build(b: *std.Build) void {
     const run_test_cli_bughunt_step = b.step("run-test-cli-bughunt", "Run opt-in CLI compiler-bug repros");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
+    const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
@@ -2130,7 +2132,7 @@ pub fn build(b: *std.Build) void {
     const playground_test_step = b.step("test-playground", "Alias for run-test-playground");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const serialization_size_step = b.step("test-serialization-sizes", "Alias for run-test-serialization-sizes");
-    const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
+    const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Alias for run-test-wasm-static-lib");
     const test_cli_step = b.step("test-cli", "Alias for run-test-cli");
     const test_bughunt_cli_step = b.step("test-bughunt-cli", "Alias for run-test-cli-bughunt");
 
@@ -3098,14 +3100,15 @@ pub fn build(b: *std.Build) void {
         wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
 
         const install = b.addInstallArtifact(wasm_test_exe, .{});
-        wasm_static_lib_test_step.dependOn(&install.step);
+        build_test_wasm_static_lib_runner_step.dependOn(&install.step);
 
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         }
-        run_wasm_test.step.dependOn(&install.step);
-        wasm_static_lib_test_step.dependOn(&run_wasm_test.step);
+        run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+        run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
+        wasm_static_lib_test_step.dependOn(run_test_wasm_static_lib_step);
     }
 
     // Check fx platform test coverage convenience step
@@ -3716,6 +3719,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);
     build_ci_step.dependOn(build_test_serialization_sizes_step);
+    build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
     build_ci_step.dependOn(build_coverage_tools_step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;

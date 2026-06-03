@@ -76,6 +76,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-playground", .kind = .harness, .skip_reason = "Skipped until #9518 is resolved" },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
+    .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-coverage-parser" },
 };
 
