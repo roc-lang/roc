@@ -54,13 +54,13 @@ Try it with `zig build -Dno-bin -fincremental --watch`
 To run only the LSP-related tests, use:
 
 ```sh
-zig build test-lsp
+zig build run-test-zig-module-lsp
 ```
 
 For faster iteration with incremental compilation and watch mode:
 
 ```sh
-zig build test-lsp -fincremental --watch
+zig build run-test-zig-module-lsp -fincremental --watch
 ```
 
 This is useful when working on LSP features like syntax checking, completions, semantic tokens, etc.

@@ -4,7 +4,7 @@
 //! can be properly invoked from Roc applications.
 //!
 //! NOTE: These tests depend on the roc binary being built via build.zig. The test step
-//! has a dependency on roc_step, so the binary will be built automatically before tests run.
+//! has a dependency on build-roc, so the binary will be built automatically before tests run.
 //!
 //! IMPORTANT: Do NOT use --no-cache when running roc. The interpreted host doesn't change between
 //! tests (we're testing app behaviour, not the platform), so using --no-cache would force unnecessary

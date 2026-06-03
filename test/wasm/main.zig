@@ -3,7 +3,7 @@
 //! This test compiles a Roc WASM app and verifies it produces the expected output.
 //! It follows the pattern from test/playground-integration/main.zig.
 //!
-//! Run with: zig build test-wasm-static-lib
+//! Run with: zig build run-test-wasm-static-lib
 
 const std = @import("std");
 const bytebox = @import("bytebox");
@@ -230,7 +230,7 @@ pub fn main(init: std.process.Init) !void {
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--help")) {
-            std.debug.print("Usage: test-wasm-static-lib [options]\n", .{});
+            std.debug.print("Usage: zig build run-test-wasm-static-lib -- [options]\n", .{});
             std.debug.print("Options:\n", .{});
             std.debug.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
             std.debug.print("  --expected OUTPUT    Expected output string\n", .{});
@@ -272,7 +272,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "wasm static lib - hello world" {
-    // This test is run via `zig build test-wasm-static-lib`
+    // This test is run via `zig build run-test-wasm-static-lib`
     // It requires the WASM file to be built first
     const gpa = std.testing.allocator;
     var arena_impl = std.heap.ArenaAllocator.init(gpa);

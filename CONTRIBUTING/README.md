@@ -23,6 +23,19 @@ independent research, or just valuable projects to learn from and improve Roc wi
 
 Check [Building from source](../BUILDING_FROM_SOURCE.md) for instructions.
 
+## Build Step Names
+
+Build steps follow a build/run split:
+
+- `build-*` steps compile, install, generate files, or prepare inputs.
+- `run-*` steps execute tools after their build inputs are ready.
+- `run-check-*` steps run checks.
+- `run-test-*` steps run tests.
+
+Do not add duplicate alias steps. When adding CI or MiniCI coverage, wire prep
+work into a `build-*` step and add that step to `build-ci`; add the executable
+test or check as a leaf `run-*` step.
+
 ## Running Tests
 
 Most contributors execute the following commands before pushing their code:

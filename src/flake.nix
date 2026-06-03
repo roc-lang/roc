@@ -57,7 +57,7 @@
 
         shellFunctions = ''
           buildcmd() {
-            zig build roc
+            zig build build-roc
           }
           export -f buildcmd
 
@@ -67,7 +67,7 @@
           export -f testcmd
 
           fmtcmd() {
-            zig build fmt
+            zig build run-fmt-zig
           }
           export -f fmtcmd
 
@@ -77,7 +77,7 @@
           export -f covcmd
 
           cicmd() {
-            zig build fmt && zig build run-check-zig-lints && zig build build-roc && zig build run-check-snapshots && zig build run-test-zig && zig build run-test-playground && zig build run-coverage-parser
+            zig build run-fmt-zig && zig build run-check-zig-lints && zig build build-roc && zig build run-check-snapshots && zig build run-test-zig && zig build run-test-playground && zig build run-coverage-parser
           }
           export -f cicmd
         '';
