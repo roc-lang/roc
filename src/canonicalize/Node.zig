@@ -188,6 +188,8 @@ pub const Tag = enum {
     diag_ident_not_in_scope,
     diag_self_referential_definition,
     diag_circular_value_definition,
+    diag_local_reference_before_definition,
+    diag_mutually_recursive_local_definitions,
     diag_erroneous_value_use,
     diag_erroneous_value_expr,
     diag_qualified_ident_does_not_exist,

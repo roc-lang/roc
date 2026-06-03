@@ -117,6 +117,29 @@ expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 current_expect_region: ?Region,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Local block-statement (`s_decl`) function patterns whose body is currently
+/// being type-checked. Used to detect self-recursion (and references to an
+/// enclosing in-flight def) of LOCAL function defs so their recursive references
+/// defer unification (fresh flex + a pending `local_recursive_refs` entry)
+/// instead of lowering the pattern var's rank, which would prevent
+/// generalization of the def's rigid type variables. Analogous to
+/// `top_level_ptrns` but for block-local defs.
+///
+/// Presence == "currently being checked" (defer); absence == normal
+/// lookup/instantiate. A reference can only resolve to the current def or an
+/// enclosing in-flight one: forward references to a *later* sibling, and local
+/// mutual recursion, are rejected during canonicalization (local defs are
+/// sequentially scoped), so this is always a single self/enclosing chain.
+local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
+/// Recursive references recorded while checking a LOCAL block def's body (a
+/// self-reference, or a reference to an enclosing in-flight local def), pending
+/// validation once the def's lambda has generalized. Kept in a dedicated stack
+/// rather than the shared `constraints` list because sequential scoping
+/// guarantees local recursion is a single self/enclosing chain — never a mutual
+/// group — so these need no cycle machinery, no per-use instantiation, and no
+/// entanglement with the other constraint kinds (notably early-return / `?`
+/// constraints, which `processReturnConstraints` compacts mid-body).
+local_recursive_refs: std.ArrayListUnmanaged(LocalRecursiveRef) = .empty,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
@@ -198,6 +221,23 @@ const InstantiationDispatcher = struct {
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
 
+/// A local block-statement (`s_decl`) function def whose body is currently being
+/// checked. Block defs are `s_decl` statements (not `CIR.Def`), so there is no
+/// `Def.Idx` — only the name (for error context) and pattern are tracked.
+const LocalDefProcessed = struct {
+    def_name: ?Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
+/// A recursive reference made inside a LOCAL block def's body, pending
+/// validation once the def's lambda has generalized. `pat_var` is the def's
+/// (eventually generalized) pattern var; `expr_var` is the reference's flex var.
+const LocalRecursiveRef = struct {
+    pat_var: Var,
+    expr_var: Var,
+    def_name: ?Ident.Idx,
+};
+
 /// A deferred def-level unification (def_var = ptrn_var = expr_var).
 const DeferredDefUnification = struct {
     def_var: Var,
@@ -221,7 +261,19 @@ const ScratchStaticDispatchConstraint = struct {
 /// In most cases, we don't defer constraint checking and unify things
 /// immediately. However, there are some cases where it's necessary.
 const Constraint = union(enum) {
-    eql: struct { expected: Var, actual: Var, ctx: problem.Context },
+    eql: struct {
+        expected: Var,
+        actual: Var,
+        ctx: problem.Context,
+        /// True when this is a `recursive_def` cross-reference to a *different*,
+        /// annotated member of a recursive group (mutual recursion). Such a
+        /// reference is instantiated per use-site at validation time so each
+        /// member keeps its own rigid type parameters; a self-reference (or an
+        /// unannotated target) stays monomorphic. Drives resolution, not the
+        /// error message — kept here rather than in `ctx` (which is purely
+        /// diagnostic) so it doesn't have to ride inside the problem context.
+        is_cross_reference: bool = false,
+    },
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -477,6 +529,8 @@ pub fn deinit(self: *Self) void {
     self.constraint_expr_by_fn_var.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
+    self.local_processing_ptrns.deinit(self.gpa);
+    self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
     self.instantiation_dispatchers.deinit(self.gpa);
@@ -5291,14 +5345,34 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Cycle detected: store env for merge at cycle root.
                             _ = try self.deferred_cycle_envs.append(self.gpa, sub_env);
 
-                            // Use the def's closure/expr var directly. After
-                            // checkDef, e_closure rank elevation has already run,
-                            // so the closure var is at rank 2 — safe for
-                            // unification without pulling body vars below the
-                            // generalization rank.
                             const def = self.cir.store.getDef(processing_def.def_idx);
                             const def_expr_var = ModuleEnv.varFrom(def.expr);
-                            _ = try self.unify(expr_var, def_expr_var, env);
+                            if (def.annotation != null) {
+                                // Forward reference to an ANNOTATED member of the
+                                // recursive group (mutual recursion). Decouple the
+                                // reference with a flex var and defer a
+                                // cross-reference constraint to the cycle root,
+                                // where the target is generalized and instantiated
+                                // per use-site. Unifying directly with the target's
+                                // (not-yet-generalized) type would force the two
+                                // members' rigid type parameters to coincide,
+                                // producing a spurious `T(k)` != `T(k)`.
+                                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                    .expected = def_expr_var,
+                                    .actual = expr_var,
+                                    .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                                    .is_cross_reference = true,
+                                } });
+                            } else {
+                                // Unannotated member: the group is inferred together
+                                // and shares type variables, so link monomorphically.
+                                // After checkDef, e_closure rank elevation has run,
+                                // so the closure var is at rank 2 — safe to unify
+                                // without pulling body vars below the generalization
+                                // rank.
+                                _ = try self.unify(expr_var, def_expr_var, env);
+                            }
 
                             break :blk;
                         } else {
@@ -5322,11 +5396,36 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // Set the expr to be a flex
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
+                        // A reference to a *different*, ANNOTATED def in the cycle
+                        // (mutual recursion) is instantiated per use-site at
+                        // validation time, so the members' rigid type parameters
+                        // don't clash. A self-reference, or a reference to an
+                        // unannotated member, stays monomorphic: unannotated
+                        // mutually-recursive functions are inferred as a group and
+                        // must share their (not-yet-generalized) type variables.
+                        const is_cross_reference = (referenced_def.annotation != null) and
+                            if (self.current_processing_def) |current_def|
+                                current_def != processing_def.def_idx
+                            else
+                                false;
+
+                        // For a cross-reference, target the callee's expr var
+                        // rather than its pattern var: at the cycle root the
+                        // root's pattern var is not yet linked to its generalized
+                        // type (that def-level unification happens after the body
+                        // is checked), but every participant's expr var has been
+                        // generalized by then — so instantiation can find it.
+                        const constraint_expected = if (is_cross_reference)
+                            ModuleEnv.varFrom(referenced_def.expr)
+                        else
+                            pat_var;
+
                         // Write down this constraint for later validation
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
-                            .expected = pat_var,
+                            .expected = constraint_expected,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                            .is_cross_reference = is_cross_reference,
                         } });
 
                         // Detect mutual recursion through local lookups. If the
@@ -5350,6 +5449,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processed => {},
                 }
+            }
+
+            // Local block-def recursion. If this lookup targets a local `s_decl`
+            // function whose body is currently being checked, it's a recursive
+            // reference (to the def itself, or to an enclosing in-flight def).
+            // Defer unification — fresh flex now + a pending `local_recursive_refs`
+            // entry validated after the def generalizes — so we don't unify with
+            // the not-yet-generalized pattern var, which would lower its rank and
+            // prevent generalization of the def's rigid type parameters.
+            //
+            // A reference to an already-finished sibling local def is NOT in this
+            // map (removed after it generalizes), so it falls through to the tail
+            // below and instantiates normally.
+            if (self.local_processing_ptrns.get(lookup.pattern_idx)) |local_def| {
+                // The pattern is mid-check, so it must not be generalized yet.
+                std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                // Set the expr to be a flex
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                // Record for validation once the def's lambda has generalized.
+                // A dedicated stack, not the shared constraints list (sequential
+                // scoping makes this a single self/enclosing chain — see the
+                // `local_recursive_refs` field doc).
+                try self.local_recursive_refs.append(self.gpa, .{
+                    .pat_var = pat_var,
+                    .expr_var = expr_var,
+                    .def_name = local_def.def_name,
+                });
+
+                break :blk;
             }
 
             // Instantiate if generalized, otherwise just use the pattern var
@@ -6549,6 +6679,22 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
+                // Register function defs as "currently processing" so recursive
+                // references in their own body defer unification (see the local
+                // recursion branch in `e_lookup_local`). Only function defs can
+                // legitimately be self-recursive; value defs (`x = x`) keep their
+                // existing diagnostics. Snapshot the pending-recursive-ref stack
+                // so we only validate the references recorded while checking THIS
+                // def's body.
+                const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
+                const local_recursive_refs_top = self.local_recursive_refs.items.len;
+                if (decl_is_fn) {
+                    try self.local_processing_ptrns.put(self.gpa, decl_stmt.pattern, .{
+                        .def_name = self.getPatternIdent(decl_stmt.pattern),
+                        .pattern_idx = decl_stmt.pattern,
+                    });
+                }
+
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -6556,6 +6702,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
+
+                if (decl_is_fn) {
+                    // The def's lambda has generalized (inside checkExpr) and the
+                    // pattern var now carries the generalized function type, so it
+                    // is safe to validate the recursive references it recorded.
+                    try self.validateLocalRecursiveRefs(env, local_recursive_refs_top);
+                    _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
+                }
             },
             .s_var => |var_stmt| {
                 // Check the pattern
@@ -8707,6 +8861,39 @@ fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
     self.constraints.items.shrinkRetainingCapacity(write_idx);
 }
 
+/// Validate the recursive references recorded while checking a LOCAL block def's
+/// body (those at index >= `from`), now that the def's lambda has generalized
+/// and its pattern var carries the generalized type. Sequential scoping forbids
+/// local mutual recursion, so every such reference is a self/enclosing one and a
+/// plain unification suffices (no per-use instantiation). The validated refs are
+/// then popped.
+fn validateLocalRecursiveRefs(self: *Self, env: *Env, from: usize) std.mem.Allocator.Error!void {
+    // Capture the end up front: validation only unifies, it never records new
+    // local recursive refs, so the range is stable.
+    const end = self.local_recursive_refs.items.len;
+    var i = from;
+    while (i < end) : (i += 1) {
+        const ref = self.local_recursive_refs.items[i];
+        _ = try self.unifyInContext(ref.pat_var, ref.expr_var, env, .{ .recursive_def = .{ .def_name = ref.def_name } });
+    }
+    self.local_recursive_refs.shrinkRetainingCapacity(from);
+}
+
+/// Resolve one `eql` constraint. For a `recursive_def` cross-reference (mutual
+/// recursion) whose target has been generalized, instantiate the target so the
+/// reference gets fresh type parameters — otherwise the two members' rigid type
+/// variables would be forced to unify, producing a spurious `T(k)` != `T(k)`
+/// mismatch. Self-references (and any not-yet-generalized target) keep the
+/// monomorphic direct unification.
+fn resolveEqlConstraint(self: *Self, eql: anytype, env: *Env) std.mem.Allocator.Error!void {
+    if (eql.is_cross_reference and self.types.resolveVar(eql.expected).desc.rank == .generalized) {
+        const instantiated = try self.instantiateVar(eql.expected, env, .use_last_var);
+        _ = try self.unifyInContext(instantiated, eql.actual, env, eql.ctx);
+        return;
+    }
+    _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+}
+
 /// Check any accumulated constraints
 fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -8717,7 +8904,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+                try self.resolveEqlConstraint(eql, env);
             },
         }
     }

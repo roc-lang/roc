@@ -115,7 +115,7 @@ EndOfFile,
 				(p-record-destructure
 					(destructs)))
 			(e-runtime-error (tag "not_implemented"))))
-	(e-call (constraint-fn-var 57)
+	(e-call (constraint-fn-var 56)
 		(e-lookup-local
 			(p-assign (ident "launchTheNukes")))
 		(e-empty_record)))
