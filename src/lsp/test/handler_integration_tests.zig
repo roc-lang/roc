@@ -17,6 +17,22 @@ fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     return helpers.collectResponsesWithIo(allocator, test_env.io, bytes);
 }
 
+fn jsonEscape(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    errdefer escaped.deinit(allocator);
+    for (source) |c| {
+        switch (c) {
+            '"' => try escaped.appendSlice(allocator, "\\\""),
+            '\\' => try escaped.appendSlice(allocator, "\\\\"),
+            '\n' => try escaped.appendSlice(allocator, "\\n"),
+            '\r' => try escaped.appendSlice(allocator, "\\r"),
+            '\t' => try escaped.appendSlice(allocator, "\\t"),
+            else => try escaped.append(allocator, c),
+        }
+    }
+    return escaped.toOwnedSlice(allocator);
+}
+
 /// Get the path to the test platform for creating valid Roc files
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
@@ -43,24 +59,179 @@ fn hasCompletionLabel(items: std.json.Value, label: []const u8) bool {
     return false;
 }
 
+const ParsedResponse = struct {
+    parsed: std.json.Parsed(std.json.Value),
+
+    fn deinit(self: *ParsedResponse) void {
+        self.parsed.deinit();
+    }
+
+    fn result(self: *const ParsedResponse) !std.json.Value {
+        const root = self.parsed.value;
+        if (root != .object) return error.TestUnexpectedResult;
+        if (root.object.get("error") != null) return error.TestUnexpectedResult;
+        return root.object.get("result") orelse error.TestUnexpectedResult;
+    }
+};
+
+fn responseById(allocator: std.mem.Allocator, responses: [][]u8, expected_id: i64) !ParsedResponse {
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        errdefer parsed.deinit();
+
+        if (parsed.value != .object) {
+            parsed.deinit();
+            continue;
+        }
+        const id = parsed.value.object.get("id") orelse {
+            parsed.deinit();
+            continue;
+        };
+        if (id != .integer or id.integer != expected_id) {
+            parsed.deinit();
+            continue;
+        }
+
+        return .{ .parsed = parsed };
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn objectField(value: std.json.Value, name: []const u8) !std.json.Value {
+    if (value != .object) return error.TestUnexpectedResult;
+    return value.object.get(name) orelse error.TestUnexpectedResult;
+}
+
+fn integerField(value: std.json.Value, name: []const u8) !i64 {
+    const field_value = try objectField(value, name);
+    if (field_value != .integer) return error.TestUnexpectedResult;
+    return field_value.integer;
+}
+
+fn stringField(value: std.json.Value, name: []const u8) ![]const u8 {
+    const field_value = try objectField(value, name);
+    if (field_value != .string) return error.TestUnexpectedResult;
+    return field_value.string;
+}
+
+fn expectRange(
+    range: std.json.Value,
+    start_line: i64,
+    start_character: i64,
+    end_line: i64,
+    end_character: i64,
+) !void {
+    const start = try objectField(range, "start");
+    const end = try objectField(range, "end");
+    try std.testing.expectEqual(start_line, try integerField(start, "line"));
+    try std.testing.expectEqual(start_character, try integerField(start, "character"));
+    try std.testing.expectEqual(end_line, try integerField(end, "line"));
+    try std.testing.expectEqual(end_character, try integerField(end, "character"));
+}
+
+fn expectLocation(
+    result: std.json.Value,
+    expected_uri: []const u8,
+    start_line: i64,
+    start_character: i64,
+    end_line: i64,
+    end_character: i64,
+) !void {
+    try std.testing.expect(result == .object);
+    try std.testing.expectEqualStrings(expected_uri, try stringField(result, "uri"));
+    try expectRange(try objectField(result, "range"), start_line, start_character, end_line, end_character);
+}
+
+fn expectNullOrLocation(
+    result: std.json.Value,
+    expected_uri: []const u8,
+    start_line: i64,
+    start_character: i64,
+    end_line: i64,
+    end_character: i64,
+) !void {
+    if (result == .null) return;
+    try expectLocation(result, expected_uri, start_line, start_character, end_line, end_character);
+}
+
+fn hasHighlightRange(
+    highlights: std.json.Value,
+    start_line: i64,
+    start_character: i64,
+    end_line: i64,
+    end_character: i64,
+) !bool {
+    if (highlights != .array) return error.TestUnexpectedResult;
+    for (highlights.array.items) |highlight| {
+        const range = try objectField(highlight, "range");
+        const start = try objectField(range, "start");
+        const end = try objectField(range, "end");
+        if ((try integerField(start, "line")) == start_line and
+            (try integerField(start, "character")) == start_character and
+            (try integerField(end, "line")) == end_line and
+            (try integerField(end, "character")) == end_character)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn expectSymbolNames(result: std.json.Value, expected_names: []const []const u8) !void {
+    try std.testing.expect(result == .array);
+    try std.testing.expect(result.array.items.len >= expected_names.len);
+
+    for (expected_names) |expected_name| {
+        var found = false;
+        for (result.array.items) |symbol| {
+            const name = try stringField(symbol, "name");
+            if (std.mem.eql(u8, name, expected_name)) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+fn completionItems(result: std.json.Value) !std.json.Value {
+    try std.testing.expect(result == .object);
+    const is_incomplete = try objectField(result, "isIncomplete");
+    try std.testing.expect(is_incomplete == .bool);
+    const items = try objectField(result, "items");
+    try std.testing.expect(items == .array);
+    return items;
+}
+
+fn expectCompletionLabels(items: std.json.Value, labels: []const []const u8) !void {
+    for (labels) |label| {
+        try std.testing.expect(hasCompletionLabel(items, label));
+    }
+}
+
+fn expectNonEmptyCompletionItems(items: std.json.Value) !void {
+    try std.testing.expect(items == .array);
+    try std.testing.expect(items.array.items.len > 0);
+}
+
 pub const specs = [_]integration_spec.Spec{
     .{ .name = "document symbol handler extracts function declarations", .run = documentSymbolHandlerExtractsFunctionDeclarations },
     .{ .name = "document highlight handler finds variable occurrences", .run = documentHighlightHandlerFindsVariableOccurrences },
     .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
-    .{ .name = "hover handler returns type info for type annotation", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
-    .{ .name = "definition handler navigates to builtin type from type annotation", .run = definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation },
+    .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
+    .{ .name = "definition handler handles builtin type annotation request", .run = definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation },
     .{ .name = "document symbols works after goto definition (regression test)", .run = documentSymbolsWorksAfterGotoDefinitionRegressionTest },
     .{ .name = "multiple goto definition calls don't break document symbols", .run = multipleGotoDefinitionCallsDontBreakDocumentSymbols },
     .{ .name = "document symbol handler returns symbols with correct names", .run = documentSymbolHandlerReturnsSymbolsWithCorrectNames },
     .{ .name = "document symbol handler works independently of check", .run = documentSymbolHandlerWorksIndependentlyOfCheck },
-    .{ .name = "completion handler returns module definitions", .run = completionHandlerReturnsModuleDefinitions },
+    .{ .name = "completion handler returns completion list for module definitions", .run = completionHandlerReturnsModuleDefinitions },
     .{ .name = "completion handler returns module members after dot", .run = completionHandlerReturnsModuleMembersAfterDot },
     .{ .name = "completion handler returns module names in expression context", .run = completionHandlerReturnsModuleNamesInExpressionContext },
     .{ .name = "completion handler returns types after colon", .run = completionHandlerReturnsTypesAfterColon },
     .{ .name = "completion handler returns List module members after List dot", .run = completionHandlerReturnsListModuleMembersAfterListDot },
-    .{ .name = "completion handler returns local variables in block scope", .run = completionHandlerReturnsLocalVariablesInBlockScope },
-    .{ .name = "completion handler returns lambda parameters", .run = completionHandlerReturnsLambdaParameters },
+    .{ .name = "completion handler returns completion list in block scope", .run = completionHandlerReturnsLocalVariablesInBlockScope },
+    .{ .name = "completion handler returns completion list in lambda body", .run = completionHandlerReturnsLambdaParameters },
     .{ .name = "completion handler returns top-level definitions", .run = completionHandlerReturnsTopLevelDefinitions },
     .{ .name = "completion handler returns record fields after dot", .run = completionHandlerReturnsRecordFieldsAfterDot },
 };
@@ -75,9 +246,18 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-
     const platform_path = try platformPath(allocator);
     defer allocator.free(platform_path);
+
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\myVar = 42
+        \\
+        \\main = myVar + 1
+    , .{platform_path});
+    defer allocator.free(roc_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "symbols.roc", .data = roc_source });
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -136,7 +316,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -146,26 +326,25 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
         allocator.free(responses);
     }
 
-    // Find the document symbol response (id: 2)
-    var found_symbols_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .array);
+    try std.testing.expect(result.array.items.len >= 2);
 
-        const result = parsed.value.object.get("result") orelse continue;
-        try std.testing.expect(result == .array);
-        // Verify structure of any symbols returned (SymbolInformation format)
-        for (result.array.items) |symbol| {
-            try std.testing.expect(symbol.object.get("name") != null);
-            try std.testing.expect(symbol.object.get("kind") != null);
-            try std.testing.expect(symbol.object.get("location") != null);
-        }
-        found_symbols_response = true;
-        break;
+    var found_my_var = false;
+    var found_main = false;
+    for (result.array.items) |symbol| {
+        try std.testing.expect(symbol == .object);
+        const name = symbol.object.get("name") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(name == .string);
+        try std.testing.expect(symbol.object.get("kind") != null);
+        try std.testing.expect(symbol.object.get("location") != null);
+        if (std.mem.eql(u8, name.string, "myVar")) found_my_var = true;
+        if (std.mem.eql(u8, name.string, "main")) found_main = true;
     }
-    try std.testing.expect(found_symbols_response);
+    try std.testing.expect(found_my_var);
+    try std.testing.expect(found_main);
 }
 
 pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
@@ -191,15 +370,15 @@ pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document where 'x' appears twice (use \\n for JSON-escaped newline)
+    // Document where 'x' appears twice.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"x = 1\\ny = x"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"x = x"}}}}}}
     , .{file_uri});
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Position on first 'x' (line 0, character 0)
+    // Position on first 'x' (line 0, character 0).
     const highlight_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":0}}}}}}
     , .{file_uri});
@@ -237,7 +416,7 @@ pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -247,24 +426,12 @@ pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
         allocator.free(responses);
     }
 
-    // Find the document highlight response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        try std.testing.expect(result == .array);
-        // Verify structure of any highlights returned
-        for (result.array.items) |highlight| {
-            try std.testing.expect(highlight.object.get("range") != null);
-        }
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .array);
+    try std.testing.expect(result.array.items.len > 0);
+    try std.testing.expect(try hasHighlightRange(result, 0, 0, 0, 1));
 }
 
 pub fn definitionHandlerFindsLocalVariableDefinition() !void {
@@ -277,6 +444,19 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\myVar = 42
+        \\
+        \\main = myVar + 1
+    , .{platform_path});
+    defer allocator.free(roc_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "definition.roc", .data = roc_source });
+    const escaped_source = try jsonEscape(allocator, roc_source);
+    defer allocator.free(escaped_source);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -290,18 +470,17 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with a variable defined on line 0, used on line 1
-    // "myVar = 42\nresult = myVar + 1"
+    // Document with a variable defined on line 2, used on line 4.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"myVar = 42\\nresult = myVar + 1"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ file_uri, escaped_source });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for 'myVar' on line 1, character 9 (the usage)
+    // Request definition for 'myVar' on line 4, character 8 (inside the usage).
     const definition_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":9}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":8}}}}}}
     , .{file_uri});
     defer allocator.free(definition_body);
     const definition_msg = try frame(allocator, definition_body);
@@ -337,7 +516,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -347,34 +526,9 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
         allocator.free(responses);
     }
 
-    // Find the definition response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        // We should get a result (could be null if definition not found, or Location object)
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-
-        // If result is an object (Location), verify it has uri and range
-        if (result.? == .object) {
-            const result_obj = result.?.object;
-            try std.testing.expect(result_obj.get("uri") != null);
-            try std.testing.expect(result_obj.get("range") != null);
-
-            // Verify the range points to line 0 (where myVar is defined)
-            const range = result_obj.get("range").?.object;
-            const start = range.get("start").?.object;
-            const start_line = start.get("line").?.integer;
-            try std.testing.expectEqual(@as(i64, 0), start_line);
-        }
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    try expectLocation(try response.result(), file_uri, 2, 0, 2, 5);
 }
 
 pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
@@ -387,6 +541,8 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -402,15 +558,15 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
 
     // Document with undefined variable usage
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"x = undefined_var"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [x] {{ pf: platform \"{s}\" }}\\n\\nx = undefined_var"}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for undefined variable (character 4)
+    // Request definition for undefined variable (line 2, character 4).
     const definition_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":4}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":4}}}}}}
     , .{file_uri});
     defer allocator.free(definition_body);
     const definition_msg = try frame(allocator, definition_body);
@@ -446,7 +602,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -456,21 +612,10 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
         allocator.free(responses);
     }
 
-    // Find the definition response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        // Should have a result field (can be null or valid response)
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .null);
 }
 
 pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
@@ -484,6 +629,8 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -497,18 +644,17 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with type annotation followed by declaration
-    // "dog : Str\ndog = \"Fido\""
+    // Document with type annotation followed by declaration.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"dog : Str\\ndog = \"Fido\""}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [dog] {{ pf: platform \"{s}\" }}\\n\\ndog : Str\\ndog = \"Fido\""}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Hover on 'dog' in the type annotation line (line 0, character 0)
+    // Hover on 'dog' in the type annotation line (line 2, character 0).
     const hover_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":0}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":0}}}}}}
     , .{file_uri});
     defer allocator.free(hover_body);
     const hover_msg = try frame(allocator, hover_body);
@@ -544,7 +690,7 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -554,25 +700,18 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
         allocator.free(responses);
     }
 
-    // Find the hover response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        // We should get a result (not an error)
-        // Before the fix, hovering on the type annotation returned null or strange results
-        // After the fix, we should get valid hover info from the corresponding declaration
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-        // Result can be null (if type info unavailable) or an object with contents/range
-        // The key fix is that we don't crash and we find the right declaration
-        found_response = true;
-        break;
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    if (result == .object) {
+        const contents = try objectField(result, "contents");
+        try std.testing.expectEqualStrings("markdown", try stringField(contents, "kind"));
+        const value = try stringField(contents, "value");
+        try std.testing.expect(std.mem.find(u8, value, "Str") != null);
+        try expectRange(try objectField(result, "range"), 2, 0, 2, 3);
+    } else {
+        try std.testing.expect(result == .null);
     }
-    try std.testing.expect(found_response);
 }
 
 pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
@@ -586,6 +725,8 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -599,18 +740,17 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with type annotation: "x : U64\nx = 42"
-    // Position (0, 4) is on the 'U' of 'U64'
+    // Document with type annotation. Position (2, 4) is on the 'U' of 'U64'.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"x : U64\\nx = 42"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [x] {{ pf: platform \"{s}\" }}\\n\\nx : U64\\nx = 42"}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for 'U64' on line 0, character 4 (the type in the annotation)
+    // Request definition for 'U64' on line 2, character 4 (the type in the annotation).
     const definition_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":4}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":4}}}}}}
     , .{file_uri});
     defer allocator.free(definition_body);
     const definition_msg = try frame(allocator, definition_body);
@@ -646,7 +786,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -656,37 +796,21 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
         allocator.free(responses);
     }
 
-    // Find the definition response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        // We should get a result (could be null if definition not found, or Location object)
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-
-        // If result is an object (Location), verify it has uri pointing to Builtin.roc
-        if (result.? == .object) {
-            const result_obj = result.?.object;
-            const uri_val = result_obj.get("uri");
-            try std.testing.expect(uri_val != null);
-            const uri_str = uri_val.?.string;
-            // The URI should point to Builtin.roc in the cache
-            try std.testing.expect(std.mem.endsWith(u8, uri_str, "Builtin.roc"));
-        }
-        found_response = true;
-        break;
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    if (result == .object) {
+        const uri = try stringField(result, "uri");
+        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
+        try expectRange(try objectField(result, "range"), 0, 0, 0, 0);
+    } else {
+        try std.testing.expect(result == .null);
     }
-    try std.testing.expect(found_response);
 }
 
 pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     // Regression test: getDocumentSymbols should use getModuleLookupEnv()
-    // for proper fallback to previous_build_env after getDefinitionAtPosition
-    // creates a fresh build env.
+    // after getDefinitionAtPosition creates a fresh build env.
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
@@ -696,6 +820,19 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [result] {{ pf: platform "{s}" }}
+        \\
+        \\myFunc = |x| x + 1
+        \\
+        \\result = myFunc(42)
+    , .{platform_path});
+    defer allocator.free(roc_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "regression.roc", .data = roc_source });
+    const escaped_source = try jsonEscape(allocator, roc_source);
+    defer allocator.free(escaped_source);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -709,24 +846,23 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with a function definition and a usage
-    // "myFunc = |x| x + 1\nresult = myFunc(42)"
+    // Document with a function definition and a usage.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"myFunc = |x| x + 1\\nresult = myFunc(42)"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ file_uri, escaped_source });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // First request goto definition on myFunc usage (line 1, character 9)
+    // First request goto definition on myFunc usage (line 4, character 9).
     const definition_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":9}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":9}}}}}}
     , .{file_uri});
     defer allocator.free(definition_body);
     const definition_msg = try frame(allocator, definition_body);
     defer allocator.free(definition_msg);
 
-    // Then request document symbols (this should use fallback to previous build env)
+    // Then request document symbols from the updated module lookup environment.
     const symbols_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/documentSymbol","params":{{"textDocument":{{"uri":"{s}"}}}}}}
     , .{file_uri});
@@ -765,7 +901,7 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -775,31 +911,13 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
         allocator.free(responses);
     }
 
-    // Verify we got both responses
-    var found_definition_response = false;
-    var found_symbols_response = false;
+    var definition_response = try responseById(allocator, responses, 2);
+    defer definition_response.deinit();
+    try expectNullOrLocation(try definition_response.result(), file_uri, 2, 0, 2, 6);
 
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer) continue;
-
-        if (id.integer == 2) {
-            // Definition response
-            const result = parsed.value.object.get("result");
-            try std.testing.expect(result != null);
-            found_definition_response = true;
-        } else if (id.integer == 3) {
-            // Document symbols response - should return an array (possibly empty, but not an error)
-            const result = parsed.value.object.get("result");
-            try std.testing.expect(result != null);
-            try std.testing.expect(result.? == .array);
-            found_symbols_response = true;
-        }
-    }
-    try std.testing.expect(found_definition_response);
-    try std.testing.expect(found_symbols_response);
+    var symbols_response = try responseById(allocator, responses, 3);
+    defer symbols_response.deinit();
+    try expectSymbolNames(try symbols_response.result(), &.{ "myFunc", "result" });
 }
 
 pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
@@ -814,6 +932,21 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [baz] {{ pf: platform "{s}" }}
+        \\
+        \\foo = 1
+        \\
+        \\bar = foo
+        \\
+        \\baz = bar
+    , .{platform_path});
+    defer allocator.free(roc_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "multi_def.roc", .data = roc_source });
+    const escaped_source = try jsonEscape(allocator, roc_source);
+    defer allocator.free(escaped_source);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -827,26 +960,25 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with multiple definitions
-    // "foo = 1\nbar = foo\nbaz = bar"
+    // Document with multiple definitions.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"foo = 1\\nbar = foo\\nbaz = bar"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ file_uri, escaped_source });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // First definition request on 'foo' in bar's definition (line 1, char 6)
+    // First definition request on 'foo' in bar's definition (line 4, char 6).
     const def1_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":6}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":6}}}}}}
     , .{file_uri});
     defer allocator.free(def1_body);
     const def1_msg = try frame(allocator, def1_body);
     defer allocator.free(def1_msg);
 
-    // Second definition request on 'bar' in baz's definition (line 2, char 6)
+    // Second definition request on 'bar' in baz's definition (line 6, char 6).
     const def2_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":6}}}}}}
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":6,"character":6}}}}}}
     , .{file_uri});
     defer allocator.free(def2_body);
     const def2_msg = try frame(allocator, def2_body);
@@ -892,7 +1024,7 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -902,32 +1034,17 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
         allocator.free(responses);
     }
 
-    // Verify all responses
-    var found_def1 = false;
-    var found_def2 = false;
-    var found_symbols = false;
+    var def1_response = try responseById(allocator, responses, 2);
+    defer def1_response.deinit();
+    try expectNullOrLocation(try def1_response.result(), file_uri, 2, 0, 2, 3);
 
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer) continue;
+    var def2_response = try responseById(allocator, responses, 3);
+    defer def2_response.deinit();
+    try expectNullOrLocation(try def2_response.result(), file_uri, 4, 0, 4, 3);
 
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-
-        if (id.integer == 2) {
-            found_def1 = true;
-        } else if (id.integer == 3) {
-            found_def2 = true;
-        } else if (id.integer == 4) {
-            try std.testing.expect(result.? == .array);
-            found_symbols = true;
-        }
-    }
-    try std.testing.expect(found_def1);
-    try std.testing.expect(found_def2);
-    try std.testing.expect(found_symbols);
+    var symbols_response = try responseById(allocator, responses, 4);
+    defer symbols_response.deinit();
+    try expectSymbolNames(try symbols_response.result(), &.{ "foo", "bar", "baz" });
 }
 
 pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() !void {
@@ -1032,7 +1149,7 @@ pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1042,38 +1159,9 @@ pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() !void {
         allocator.free(responses);
     }
 
-    // Find the document symbol response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        try std.testing.expect(result == .array);
-
-        // Collect symbol names
-        var found_add = false;
-        var found_myConst = false;
-        var found_main = false;
-
-        for (result.array.items) |symbol| {
-            const name = symbol.object.get("name") orelse continue;
-            if (name != .string) continue;
-
-            if (std.mem.eql(u8, name.string, "add")) found_add = true;
-            if (std.mem.eql(u8, name.string, "myConst")) found_myConst = true;
-            if (std.mem.eql(u8, name.string, "main")) found_main = true;
-        }
-
-        // Verify that we found the exposed symbols
-        // The Roc build pipeline should return symbols for exposed definitions
-        try std.testing.expect(found_main or found_add or found_myConst);
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    try expectSymbolNames(try response.result(), &.{ "add", "myConst", "main" });
 }
 
 pub fn documentSymbolHandlerWorksIndependentlyOfCheck() !void {
@@ -1177,7 +1265,7 @@ pub fn documentSymbolHandlerWorksIndependentlyOfCheck() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1187,32 +1275,9 @@ pub fn documentSymbolHandlerWorksIndependentlyOfCheck() !void {
         allocator.free(responses);
     }
 
-    // Find the document symbol response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        // Should get a valid response (array), not an error
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-        try std.testing.expect(result.? == .array);
-
-        // Check for the "hello" symbol
-        var found_hello = false;
-        for (result.?.array.items) |symbol| {
-            const name = symbol.object.get("name") orelse continue;
-            if (name != .string) continue;
-            if (std.mem.eql(u8, name.string, "hello")) found_hello = true;
-        }
-        try std.testing.expect(found_hello);
-
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    try expectSymbolNames(try response.result(), &.{"hello"});
 }
 
 pub fn completionHandlerReturnsModuleDefinitions() !void {
@@ -1225,6 +1290,8 @@ pub fn completionHandlerReturnsModuleDefinitions() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1238,17 +1305,17 @@ pub fn completionHandlerReturnsModuleDefinitions() !void {
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with two definitions
+    // Document with two definitions and a completion site.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\\n\\nfoo = 42\\nbar = |x| x + 1"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [result] {{ pf: platform \"{s}\" }}\\n\\nfoo = 42\\nbar = |x| x + 1\\nresult = foo"}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request completion at position 3,0 (beginning of second definition line)
+    // Request completion at the expression position after `result = `.
     const completion_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":0}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":9}}}}}}
     , .{file_uri});
     defer allocator.free(completion_body);
     const completion_msg = try frame(allocator, completion_body);
@@ -1284,6 +1351,7 @@ pub fn completionHandlerReturnsModuleDefinitions() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1293,33 +1361,10 @@ pub fn completionHandlerReturnsModuleDefinitions() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        // Result should be a completion list with items
-        const result = parsed.value.object.get("result");
-        try std.testing.expect(result != null);
-
-        // Should have isIncomplete field
-        const is_incomplete = result.?.object.get("isIncomplete");
-        try std.testing.expect(is_incomplete != null);
-
-        // Should have items array
-        const items = result.?.object.get("items");
-        try std.testing.expect(items != null);
-
-        // Verify items is an array (may be empty on parse failure, or contain definitions)
-        try std.testing.expect(items.? == .array);
-
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectNonEmptyCompletionItems(items);
 }
 
 pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
@@ -1333,9 +1378,9 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
-
     const platform_path = try platformPath(allocator);
     defer allocator.free(platform_path);
+
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
@@ -1395,6 +1440,7 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1404,35 +1450,10 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-
-        // Should have Str module members like concat, isEmpty, etc.
-        var found_concat = false;
-        var found_isEmpty = false;
-        for (items.array.items) |item| {
-            const label = item.object.get("label") orelse continue;
-            if (label == .string) {
-                if (std.mem.eql(u8, label.string, "concat")) found_concat = true;
-                if (std.mem.eql(u8, label.string, "isEmpty")) found_isEmpty = true;
-            }
-        }
-
-        // At least one Str function should be present
-        try std.testing.expect(found_concat or found_isEmpty);
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectCompletionLabels(items, &.{"concat"});
 }
 
 pub fn completionHandlerReturnsModuleNamesInExpressionContext() !void {
@@ -1505,6 +1526,7 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1514,39 +1536,10 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-
-        // Should have builtin module names like Str, List, Num
-        var found_str = false;
-        var found_list = false;
-        var found_num = false;
-        for (items.array.items) |item| {
-            const label = item.object.get("label") orelse continue;
-            if (label == .string) {
-                if (std.mem.eql(u8, label.string, "Str")) found_str = true;
-                if (std.mem.eql(u8, label.string, "List")) found_list = true;
-                if (std.mem.eql(u8, label.string, "Num")) found_num = true;
-            }
-        }
-
-        // Builtin modules should be present
-        try std.testing.expect(found_str);
-        try std.testing.expect(found_list);
-        try std.testing.expect(found_num);
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectCompletionLabels(items, &.{ "Str", "List", "Num" });
 }
 
 pub fn completionHandlerReturnsTypesAfterColon() !void {
@@ -1622,6 +1615,7 @@ pub fn completionHandlerReturnsTypesAfterColon() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1631,41 +1625,10 @@ pub fn completionHandlerReturnsTypesAfterColon() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-
-        // Should have builtin types like Str, U64, Bool
-        var found_str = false;
-        var found_u64 = false;
-        var found_bool = false;
-        var found_my_list = false;
-        for (items.array.items) |item| {
-            const label = item.object.get("label") orelse continue;
-            if (label == .string) {
-                if (std.mem.eql(u8, label.string, "Str")) found_str = true;
-                if (std.mem.eql(u8, label.string, "MyList")) found_my_list = true;
-                if (std.mem.eql(u8, label.string, "U64")) found_u64 = true;
-                if (std.mem.eql(u8, label.string, "Bool")) found_bool = true;
-            }
-        }
-
-        // Builtin types should be present in type context
-        try std.testing.expect(found_str);
-        try std.testing.expect(found_u64);
-        try std.testing.expect(found_bool);
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectCompletionLabels(items, &.{ "Str", "U64", "Bool" });
 }
 
 pub fn completionHandlerReturnsListModuleMembersAfterListDot() !void {
@@ -1745,6 +1708,7 @@ pub fn completionHandlerReturnsListModuleMembersAfterListDot() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1754,37 +1718,10 @@ pub fn completionHandlerReturnsListModuleMembersAfterListDot() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-
-        // Should have List module members like map, append, get, etc.
-        var found_map = false;
-        var found_append = false;
-        var found_get = false;
-        for (items.array.items) |item| {
-            const label = item.object.get("label") orelse continue;
-            if (label == .string) {
-                if (std.mem.eql(u8, label.string, "map")) found_map = true;
-                if (std.mem.eql(u8, label.string, "append")) found_append = true;
-                if (std.mem.eql(u8, label.string, "get")) found_get = true;
-            }
-        }
-
-        // At least some List functions should be present
-        try std.testing.expect(found_map or found_append or found_get);
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectCompletionLabels(items, &.{"map"});
 }
 
 pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
@@ -1799,6 +1736,8 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1815,16 +1754,16 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
     // Document with local variable in a block:
     // main = {
     //     local_var = 42
-    //     <cursor here>
+    //     local_var
     // }
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\\n\\nmain = {{{{\\n    local_var = 42\\n    \\n}}}}"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\\n\\nmain = {{{{\\n    local_var = 42\\n    local_var\\n}}}}"}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request completion at line 4, character 4 (inside the block, after local_var is defined)
+    // Request completion at line 4, character 4 (inside the block, after local_var is defined).
     const completion_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":4}}}}}}
     , .{file_uri});
@@ -1862,6 +1801,7 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1871,25 +1811,10 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-        try std.testing.expect(items.array.items.len > 0);
-        // TODO: assert hasCompletionLabel(items, "local_var") once scope
-        // resolution produces local bindings in the integration test context.
-        // Scope binding visibility is tested directly in scope_map unit tests.
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectNonEmptyCompletionItems(items);
 }
 
 pub fn completionHandlerReturnsLambdaParameters() !void {
@@ -1903,6 +1828,8 @@ pub fn completionHandlerReturnsLambdaParameters() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1920,15 +1847,15 @@ pub fn completionHandlerReturnsLambdaParameters() !void {
     // add = |first, second| first + second
     // Cursor position should be inside the lambda body
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\\n\\nadd = |first, second| first + second"}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [add] {{ pf: platform \"{s}\" }}\\n\\nadd = |first, second| first + second"}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request completion at line 2, character 22 (right after the |, inside lambda body)
+    // Request completion at line 2, character 30 (inside lambda body, before `second`).
     const completion_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":22}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":30}}}}}}
     , .{file_uri});
     defer allocator.free(completion_body);
     const completion_msg = try frame(allocator, completion_body);
@@ -1964,6 +1891,7 @@ pub fn completionHandlerReturnsLambdaParameters() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -1973,25 +1901,10 @@ pub fn completionHandlerReturnsLambdaParameters() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-        try std.testing.expect(items.array.items.len > 0);
-        // TODO: assert hasCompletionLabel(items, "first") and "second" once
-        // lambda param resolution works in the integration test context.
-        // Lambda param visibility is tested directly in scope_map unit tests.
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectNonEmptyCompletionItems(items);
 }
 
 pub fn completionHandlerReturnsTopLevelDefinitions() !void {
@@ -2065,6 +1978,7 @@ pub fn completionHandlerReturnsTopLevelDefinitions() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -2074,24 +1988,10 @@ pub fn completionHandlerReturnsTopLevelDefinitions() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-        try std.testing.expect(items.array.items.len > 0);
-        try std.testing.expect(hasCompletionLabel(items, "my_constant"));
-        try std.testing.expect(hasCompletionLabel(items, "my_function"));
-        found_response = true;
-        break;
-    }
-    try std.testing.expect(found_response);
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try expectCompletionLabels(items, &.{ "my_constant", "my_function" });
 }
 
 pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
@@ -2105,6 +2005,8 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
     defer allocator.free(file_path);
     const file_uri = try uriFromPath(allocator, file_path);
     defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -2120,15 +2022,22 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
 
     // Document with a record variable and field access
     // rec = { name: "hello", age: 42 }
-    // x = rec.
+    // x = rec.name
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\n\nrec = {{ name: \"hello\", age: 42 }}\nx = rec."}}}}}}
-    , .{file_uri});
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [x] {{ pf: platform \"{s}\" }}\n\nrec = {{ name: \"hello\", age: 42 }}\nx = rec.name"}}}}}}
+    , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request completion right after "rec." (line 3, character 8)
+    const change_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":2}},"contentChanges":[{{"text":"app [x] {{ pf: platform \"{s}\" }}\n\nrec = {{ name: \"hello\", age: 42 }}\nx = rec."}}]}}}}
+    , .{ file_uri, platform_path });
+    defer allocator.free(change_body);
+    const change_msg = try frame(allocator, change_body);
+    defer allocator.free(change_msg);
+
+    // Request completion right after "rec." (line 3, character 8).
     const completion_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":8}}}}}}
     , .{file_uri});
@@ -2153,6 +2062,7 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
     try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, change_msg);
     try builder.appendSlice(allocator, completion_msg);
     try builder.appendSlice(allocator, shutdown_msg);
     try builder.appendSlice(allocator, exit_msg);
@@ -2166,6 +2076,7 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
     defer server.deinit();
     try server.run();
 
@@ -2175,35 +2086,14 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
         allocator.free(responses);
     }
 
-    // Find the completion response (id: 2)
-    var found_record_response = false;
-    for (responses) |response| {
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
-        defer parsed.deinit();
-        const id = parsed.value.object.get("id") orelse continue;
-        if (id != .integer or id.integer != 2) continue;
-
-        const result = parsed.value.object.get("result") orelse continue;
-        const items = result.object.get("items") orelse continue;
-        try std.testing.expect(items == .array);
-
-        // Check for record field completions - should have "name" and "age" fields
-        // Note: This requires successful type checking which may not always work in test environments
-        for (items.array.items) |item| {
-            const label = item.object.get("label") orelse continue;
-            if (label == .string) {
-                // Verify field items have the correct kind (5 = field)
-                if (std.mem.eql(u8, label.string, "name") or std.mem.eql(u8, label.string, "age")) {
-                    if (item.object.get("kind")) |kind| {
-                        try std.testing.expectEqual(@as(i64, 5), kind.integer);
-                    }
-                }
-            }
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const items = try completionItems(try response.result());
+    try std.testing.expect(items.array.items.len > 0);
+    for (items.array.items) |item| {
+        const label = try stringField(item, "label");
+        if (std.mem.eql(u8, label, "name") or std.mem.eql(u8, label, "age")) {
+            try std.testing.expectEqual(@as(i64, 5), try integerField(item, "kind"));
         }
-
-        // The test succeeds if we got a valid completion response
-        found_record_response = true;
-        break;
     }
-    try std.testing.expect(found_record_response);
 }

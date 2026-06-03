@@ -11,8 +11,13 @@ pub const specs = [_]integration_spec.Spec{
 
 pub fn parseErrorsAreReportedAsDiagnostics() !void {
     const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const cache_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(cache_path);
 
     var checker = SyntaxChecker.init(allocator, test_env.io, .{}, null);
+    test_env.configureChecker(&checker, cache_path);
     defer checker.deinit();
 
     // File content with parse error (unclosed string)

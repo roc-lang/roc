@@ -1,6 +1,7 @@
 //! Runtime test environment for the LSP integration harness.
 
 const std = @import("std");
+const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
 
 pub var allocator: std.mem.Allocator = undefined;
 pub var io: std.Io = undefined;
@@ -8,6 +9,11 @@ pub var io: std.Io = undefined;
 pub fn init(new_allocator: std.mem.Allocator, new_io: std.Io) void {
     allocator = new_allocator;
     io = new_io;
+}
+
+pub fn configureChecker(checker: *SyntaxChecker, cache_root: []const u8) void {
+    checker.cache_config.enabled = false;
+    checker.cache_config.cache_dir = cache_root;
 }
 
 pub const TmpDir = struct {
