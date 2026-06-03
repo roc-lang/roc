@@ -7190,8 +7190,9 @@ fn checkMatchExpr(
     const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
     const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
-    // Skip pattern checking if we already know the condition isn't a Try type
-    // This prevents confusing cascading errors about pattern incompatibility
+    // Check each of the first branch's patterns and unify it with the
+    // condition type. (A failed unify poisons cond_var to .err, so subsequent
+    // pattern unifications short-circuit rather than cascading.)
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
@@ -7480,7 +7481,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     // This function attaches the dispatch fn to the not_arg
     try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
-    // Redirect the result to the boolean type
+    // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
     return does_fx;
@@ -7509,7 +7510,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     // This function attaches the dispatch fn to the not_arg
     try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
-    // Redirect the result to the boolean type
+    // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
     return does_fx;
@@ -7606,7 +7607,6 @@ fn checkBinopExpr(
                     .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
                     .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
                     .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
-                    .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
                     else => unreachable,
                 };
 
@@ -8711,6 +8711,13 @@ fn builtinNumericCandidateSatisfiesStaticDispatchConstraints(
     return true;
 }
 
+/// PRECONDITION: the caller MUST have an active type-store snapshot in scope.
+/// This speculatively mutates the real stores (copyVar/instantiateVar append
+/// vars and regions, probeUnifyWithoutRecordingProblems unifies) and does NOT
+/// roll them back itself — it relies on the caller's snapshot rollback. The only
+/// caller, builtinNumericCandidateSatisfiesStaticDispatchConstraints, wraps its
+/// loop in such a snapshot. A new caller without one would leak speculative vars
+/// into the live store and corrupt subsequent solving.
 fn staticDispatchConstraintAcceptsCandidate(
     self: *Self,
     constraint: StaticDispatchConstraint,
