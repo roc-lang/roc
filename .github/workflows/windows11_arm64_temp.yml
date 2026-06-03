@@ -1,0 +1,111 @@
+name: Debug Win11 ARM64 build
+
+on: [pull_request]
+
+# This is a temporary workflow to localize the access-violation (0xC0000005,
+# exit code -1073741819) that started on win11 arm64 after the zig 0.15 -> 0.16
+# upgrade. On this target everything is compiled with zig's self-hosted
+# aarch64-windows backend (build.zig `mustUseLlvm` is false), so a backend
+# miscompile or a std-build-system bug are both plausible.
+#
+# The steps below are ordered to answer, in a single CI run:
+#   1. Does the build runner itself crash? (--help / -l: pure graph config)
+#   2. Is the crash ReleaseFast-specific?  (Debug vs ReleaseFast)
+#   3. Is -Dfuzz required to trigger it?   (ReleaseFast with/without fuzz)
+#   4. Which exact sub-command crashes?    (--verbose -j1 -> linear output)
+# Every step continues on error and captures full stderr so we collect all
+# signals at once. Builds share the zig cache, so total cost ~= one ReleaseFast
+# build.
+
+jobs:
+  debug:
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Environment info
+        shell: pwsh
+        run: |
+          zig version
+          zig env
+          Write-Host "--- system ---"
+          Write-Host "PROCESSOR_ARCHITECTURE = $env:PROCESSOR_ARCHITECTURE"
+          systeminfo | Select-String 'OS Name','OS Version','System Type'
+
+      # (1) Pure build-runner sanity: configures the build graph and prints help
+      # WITHOUT compiling or running any step. A crash here means the build
+      # runner (compiled build.zig + std build system) is itself broken.
+      - name: build runner sanity -- zig build --help
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          zig build --help 2>&1 | tee help.log
+          code=${PIPESTATUS[0]}
+          echo "===== zig build --help exit code: $code ====="
+
+      # Also exercises full graph construction (discoverBuiltinRocFiles etc).
+      - name: build runner sanity -- zig build -l
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          zig build -l 2>&1 | tee list.log
+          code=${PIPESTATUS[0]}
+          echo "===== zig build -l exit code: $code ====="
+
+      # (2) Default Debug build (also runs the builtin_compiler at build time).
+      # If this succeeds but ReleaseFast crashes, the crash is optimizer/codegen
+      # specific to ReleaseFast.
+      - name: full Debug build -- zig build
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          zig build 2>&1 | tee debug-build.log
+          code=${PIPESTATUS[0]}
+          echo "===== zig build (Debug) exit code: $code ====="
+          echo "--- tail ---"
+          tail -n 150 debug-build.log
+
+      # (3) ReleaseFast WITHOUT -Dfuzz. Isolates whether the fuzz-specific
+      # targets are required to trigger the crash.
+      - name: ReleaseFast without fuzz -- zig build -Doptimize=ReleaseFast
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          zig build -Doptimize=ReleaseFast 2>&1 | tee releasefast-nofuzz.log
+          code=${PIPESTATUS[0]}
+          echo "===== zig build -Doptimize=ReleaseFast exit code: $code ====="
+          echo "--- tail ---"
+          tail -n 150 releasefast-nofuzz.log
+
+      # (4) The exact failing command, verbose and single-threaded so the
+      # compiler sub-commands print in order. With -j1 the LAST printed
+      # `zig build-obj`/`build-exe` before the crash is the offending unit, and
+      # any segfault handler stack trace lands on stderr.
+      - name: failing command (verbose, -j1) -- the real repro
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast --verbose -j1 2>&1 | tee full-build.log
+          code=${PIPESTATUS[0]}
+          echo "===== failing command exit code: $code ====="
+          echo "--- last 200 lines (crash region) ---"
+          tail -n 200 full-build.log
+
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4.6.2
+        with:
+          name: win11-arm64-debug-logs
+          path: |
+            *.log
+          if-no-files-found: warn
