@@ -2071,15 +2071,16 @@ pub fn build(b: *std.Build) void {
     // - `run-*` steps own execution of checks/tests/tools after prep is done.
     // - If a `run-*` step needs a binary or generated input, wire that work into
     //   a `build-*` step and add it to `build-ci`.
+    // - The user-facing step for building the Roc CLI is `roc`.
     // - Do not add duplicate alias steps. References should use the exact
-    //   `build-*`, `run-*`, `run-check-*`, or `run-test-*` step name.
+    //   `roc`, `build-*`, `run-*`, `run-check-*`, or `run-test-*` step name.
     // - MiniCI runs `build-ci` once and then runs leaf `run-*` jobs. Keep
     //   aggregate steps out of MiniCI so each job remains independently
     //   reportable and re-runnable.
     // MiniCI intentionally does not parse Zig summaries to detect misplaced
     // build work; this convention is the source of truth.
     const build_ci_step = b.step("build-ci", "Build all binaries used by MiniCI");
-    const build_roc_step = b.step("build-roc", "Build the roc compiler without running it");
+    const build_roc_step = b.step("roc", "Build the roc compiler without running it");
     const run_roc_step = b.step("run-roc", "Build and run the roc cli");
     const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
     const run_check_zig_format_step = b.step("run-check-zig-format", "Check formatting of all zig code");
