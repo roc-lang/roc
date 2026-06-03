@@ -9786,7 +9786,11 @@ fn validateUnsignedFromNumeralLiteral(
     num_literal: types_mod.NumeralInfo,
 ) ?BuiltinFromNumeralLiteralProblem {
     if (num_literal.is_fractional) return .fractional_integer;
-    if (num_literal.is_negative) return .negative_unsigned;
+    // `is_negative` is a syntactic flag (a leading `-`); guard on the actual
+    // magnitude so `-0` (a valid unsigned value) is not rejected. Real
+    // negatives have a nonzero magnitude, and a large negative whose i128
+    // representation overflowed is still nonzero, so this stays correct.
+    if (num_literal.is_negative and num_literal.toI128() != 0) return .negative_unsigned;
 
     const value = if (num_literal.is_u128) blk: {
         break :blk num_literal.toU128();

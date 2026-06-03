@@ -1723,6 +1723,16 @@ test "check type - if else - different branch types 3" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - negative zero is valid for unsigned type" {
+    // `-0` carries the syntactic is_negative flag but has magnitude zero, which
+    // is a valid unsigned value and must not be rejected as a negative.
+    const source =
+        \\x : U8
+        \\x = -0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+}
+
 test "check type - tuple access on non-tuple does not cascade" {
     // Accessing `.0` on a record is a tuple access against a non-tuple
     // structure: a single mismatch. The result expression must be poisoned to
