@@ -5545,6 +5545,10 @@ pub const CheckedBodyStore = struct {
         allocator.free(self.bodies);
         self.* = .{};
     }
+
+    pub fn discardSourceNodeMap(self: *CheckedBodyStore, allocator: Allocator) void {
+        self.source_node_map.deinit(allocator);
+    }
 };
 
 const DivergenceVisitState = enum { fresh, active, done };
@@ -16966,6 +16970,8 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
     );
     errdefer public_api_dependencies.deinit(allocator);
+
+    checked_bodies.discardSourceNodeMap(allocator);
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
