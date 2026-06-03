@@ -89,19 +89,52 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
 
 /// Resolves a canonical absolute path, allocating the result.
 ///
-/// Equivalent to `std.Io.Dir.cwd().realPathFileAlloc(...)` except the working
-/// buffer is zero-initialized before the syscall. The stdlib helper passes an
-/// `undefined` stack buffer to libc's `realpath`, then locates the null
-/// terminator with `indexOfScalar`. Valgrind has no interceptor for musl's
-/// `realpath`, so under our musl Linux builds it never marks the written bytes
-/// as defined; the scan then taints the returned length and every downstream
-/// allocator/free that touches the resulting slice. Pre-zeroing the buffer
-/// keeps the search reading only defined bytes, eliminating the cascade of
-/// false-positive `uninitialised value` reports.
-fn realPathFileAllocSafe(io: std.Io, sub_path: []const u8, allocator: Allocator) std.Io.Dir.RealPathFileAllocError![:0]u8 {
-    var buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
-    const n = try std.Io.Dir.cwd().realPathFile(io, sub_path, &buffer);
-    return allocator.dupeSentinel(u8, buffer[0..n], 0);
+/// On POSIX this calls libc's `realpath` directly with zero-initialized input
+/// and output buffers instead of going through `std.Io.Dir.realPathFile`. The
+/// stdlib helper copies `sub_path` into an `undefined` stack buffer (leaving
+/// the tail past the path uninitialized) and writes the result into a second
+/// `undefined` buffer. Valgrind ships no interceptor for musl's `realpath`, so
+/// under our static-musl Linux builds its word-at-a-time string routines read
+/// a few bytes past the logical end of either buffer; Valgrind then taints the
+/// resolved length and every downstream allocator/free that touches the
+/// result, producing a large cascade of false-positive `uninitialised value`
+/// reports. Starting from defined (zero) bytes keeps those reads — and the
+/// terminator scan — clean. With `dir == .cwd()` this is exactly what
+/// `realPathFile` does internally, so behavior is unchanged.
+///
+/// Windows has no libc `realpath` (and is not affected by the musl/Valgrind
+/// issue), so there we fall back to the stdlib helper, which has a proper
+/// Windows implementation.
+fn realPathFileAllocSafe(io: std.Io, sub_path: []const u8, allocator: Allocator) ![:0]u8 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        var buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+        const n = try std.Io.Dir.cwd().realPathFile(io, sub_path, &buffer);
+        return allocator.dupeSentinel(u8, buffer[0..n], 0);
+    } else {
+        // realpath requires the input to fit in PATH_MAX with room for the null
+        // terminator; reject anything longer up front.
+        if (sub_path.len >= std.Io.Dir.max_path_bytes) return error.NameTooLong;
+
+        var in_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+        @memcpy(in_buffer[0..sub_path.len], sub_path);
+
+        var out_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+        if (std.c.realpath(in_buffer[0..sub_path.len :0].ptr, &out_buffer) == null) {
+            return switch (@as(std.posix.E, @enumFromInt(std.c._errno().*))) {
+                .ACCES => error.AccessDenied,
+                .NOENT => error.FileNotFound,
+                .NOTDIR => error.NotDir,
+                .NAMETOOLONG => error.NameTooLong,
+                .LOOP => error.SymLinkLoop,
+                .IO => error.InputOutput,
+                .OPNOTSUPP => error.OperationUnsupported,
+                else => error.Unexpected,
+            };
+        }
+
+        const n = std.mem.findScalar(u8, &out_buffer, 0) orelse out_buffer.len;
+        return allocator.dupeSentinel(u8, out_buffer[0..n], 0);
+    }
 }
 
 /// Always logs a warning message.
