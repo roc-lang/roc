@@ -70,7 +70,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-builtin-doc" },
     .{ .name = "run-test-zig-cli-main", .skip_reason = "Skipped until #9516 is resolved" },
     .{ .name = "run-test-zig-watch-cli" },
-    .{ .name = "run-test-zig-fx-platform", .skip_reason = "Skipped until #9517 is resolved" },
+    .{ .name = "run-test-zig-fx-platform" },
     .{ .name = "run-test-eval", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness, .skip_reason = "Skipped until #9518 is resolved" },
