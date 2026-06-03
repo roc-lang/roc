@@ -188,6 +188,8 @@ pub const Tag = enum {
     diag_ident_not_in_scope,
     diag_self_referential_definition,
     diag_circular_value_definition,
+    diag_local_reference_before_definition,
+    diag_mutually_recursive_local_definitions,
     diag_erroneous_value_use,
     diag_erroneous_value_expr,
     diag_qualified_ident_does_not_exist,
@@ -229,6 +231,8 @@ pub const Tag = enum {
     diag_module_not_found,
     diag_value_not_exposed,
     diag_type_not_exposed,
+    diag_private_type_in_exposed_type,
+    diag_private_type_in_exposed_field,
     diag_type_from_missing_module,
     diag_module_not_imported,
     diag_nested_type_not_found,
@@ -371,6 +375,7 @@ pub const Payload = extern union {
     diag_single_ident: DiagSingleIdent,
     diag_single_value: DiagSingleValue,
     diag_two_idents: DiagTwoIdents,
+    diag_three_idents: DiagThreeIdents,
     diag_ident_with_region: DiagIdentWithRegion,
     diag_two_idents_extra: DiagTwoIdentsExtra,
     diag_single_ident_extra: DiagSingleIdentExtra,
@@ -999,6 +1004,14 @@ pub const Payload = extern union {
         ident1: u32, // @bitCast(Ident.Idx)
         ident2: u32, // @bitCast(Ident.Idx)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    /// Diagnostics with three identifiers.
+    /// Used by: diag_private_type_in_exposed_field
+    pub const DiagThreeIdents = extern struct {
+        ident1: u32, // @bitCast(Ident.Idx)
+        ident2: u32, // @bitCast(Ident.Idx)
+        ident3: u32, // @bitCast(Ident.Idx)
     };
 
     /// Diagnostics with an identifier and inline region offsets.

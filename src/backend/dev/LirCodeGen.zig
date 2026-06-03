@@ -173,6 +173,7 @@ pub const BuiltinFn = enum {
     list_incref,
     list_drop_at,
     list_replace,
+    list_swap,
     list_reserve,
     list_release_excess_capacity,
     list_decref_str,
@@ -268,6 +269,7 @@ pub const BuiltinFn = enum {
             .list_incref => "roc_builtins_list_incref",
             .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
+            .list_swap => "roc_builtins_list_swap",
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
             .list_decref_str => "roc_builtins_list_decref_str",
@@ -2770,6 +2772,88 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // ── Remaining list low-level operations ──
 
+                .list_replace_unsafe => {
+                    // list_replace_unsafe(list, index, element) -> { list : List(a), value : a }
+                    // The result is a 2-field record. Reuse the same roc_builtins_list_replace
+                    // wrapper but aim the (out_list, out_element) outputs directly at the
+                    // list and value fields of the result record.
+                    if (args.len != 3) unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+                    const elem_loc = try self.emitValueLocal(args[2]);
+
+                    const ls = self.layout_store;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    // The list ABI must come from the INPUT list layout (args[0]); ll.ret_layout
+                    // here is the result record, not a list.
+                    const arg_list_layout = self.valueLayout(args[0]);
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_replace_unsafe.builtin_list_abi", arg_list_layout);
+
+                    // Resolve the result record's field offsets. The record has exactly two
+                    // fields; one is a list, the other is the element. Disambiguate by tag.
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+                    if (ret_layout_val.tag != .struct_) unreachable;
+                    const rec_idx = ret_layout_val.getStruct().idx;
+                    const f0_layout_idx = ls.getStructFieldLayoutByOriginalIndex(rec_idx, 0);
+                    const f0_layout = ls.getLayout(f0_layout_idx);
+                    const f0_offset: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(rec_idx, 0));
+                    const f1_offset: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(rec_idx, 1));
+                    const f0_is_list = f0_layout.tag == .list or f0_layout.tag == .list_of_zst;
+                    const list_field_offset: i32 = if (f0_is_list) f0_offset else f1_offset;
+                    const value_field_offset: i32 = if (f0_is_list) f1_offset else f0_offset;
+
+                    const result_size = ls.layoutSizeAlign(ret_layout_val).size;
+                    const result_offset = self.codegen.allocStackSlot(result_size);
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const index_off = try self.ensureOnStack(index_loc, 8);
+                    const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
+
+                    // For ZST elements, listReplace would dereference a NULL element pointer.
+                    // Copy the input list bytes into the result's list field directly; the
+                    // value field is zero-sized and needs no write.
+                    if (list_abi.elem_size_align.size == 0) {
+                        const tmp = try self.allocTempGeneral();
+                        defer self.codegen.freeGeneral(tmp);
+                        var off: i32 = 0;
+                        while (off < roc_list_size) : (off += 8) {
+                            try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
+                            try self.emitStore(.w64, frame_ptr, result_offset + list_field_offset + off, tmp);
+                        }
+                        return .{ .stack = .{ .offset = result_offset } };
+                    }
+
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
+                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+
+                    {
+                        // wrapListReplace(out_list, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, element_incref, element_decref, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, result_offset + list_field_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addMemArg(base_reg, index_off);
+                        try builder.addLeaArg(base_reg, elem_off);
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addLeaArg(base_reg, result_offset + value_field_offset);
+                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBuiltin(&builder, fn_addr, .list_replace);
+                    }
+
+                    return .{ .stack = .{ .offset = result_offset } };
+                },
                 .list_set => {
                     // list_set(list, index, element) -> List
                     if (args.len != 3) unreachable;
@@ -2814,6 +2898,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addRegArg(roc_ops_reg);
 
                         try self.callBuiltin(&builder, fn_addr, .list_replace);
+                    }
+
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_swap => {
+                    // list_swap(list, index_1, index_2) -> List
+                    if (args.len != 3) unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_1_loc = try self.emitValueLocal(args[1]);
+                    const index_2_loc = try self.emitValueLocal(args[2]);
+
+                    const ls = self.layout_store;
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const list_abi = builtinInternalListAbi(ls, "dev.list_swap.builtin_list_abi", ll.ret_layout);
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const index_1_off = try self.ensureOnStack(index_1_loc, 8);
+                    const index_2_off = try self.ensureOnStack(index_2_loc, 8);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_swap);
+                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+
+                    {
+                        // wrapListSwap(out, list_bytes, list_len, list_cap, alignment, element_width, index_1, index_2, elements_refcounted, element_incref, element_decref, roc_ops)
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_off);
+                        try builder.addMemArg(base_reg, list_off + 8);
+                        try builder.addMemArg(base_reg, list_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addMemArg(base_reg, index_1_off);
+                        try builder.addMemArg(base_reg, index_2_off);
+                        try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
+                        if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBuiltin(&builder, fn_addr, .list_swap);
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -3039,6 +3168,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_left_by,
                 .num_shift_right_by,
                 .num_shift_right_zf_by,
+                .num_bitwise_and,
+                .num_bitwise_or,
+                .num_bitwise_xor,
                 .num_is_eq,
                 .num_is_gt,
                 .num_is_gte,
@@ -3137,6 +3269,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const src_reg = try self.ensureInGeneralReg(inner_loc);
                         const result_reg = try self.allocTempGeneral();
                         try self.codegen.emitNeg(.w64, result_reg, src_reg);
+                        self.codegen.freeGeneral(src_reg);
+                        return .{ .general_reg = result_reg };
+                    }
+                },
+
+                .num_bitwise_not => {
+                    const inner_loc = try self.emitValueLocal(args[0]);
+                    const is_i128 = ll.ret_layout == .i128 or ll.ret_layout == .u128;
+
+                    if (is_i128) {
+                        const signedness: std.builtin.Signedness = if (ll.ret_layout == .u128) .unsigned else .signed;
+                        const parts = try self.getI128Parts(inner_loc, signedness);
+                        const result_low = try self.allocTempGeneral();
+                        const result_high = try self.allocTempGeneral();
+
+                        try self.codegen.emitNot(.w64, result_low, parts.low);
+                        try self.codegen.emitNot(.w64, result_high, parts.high);
+
+                        self.codegen.freeGeneral(parts.low);
+                        self.codegen.freeGeneral(parts.high);
+
+                        const stack_offset = self.codegen.allocStackSlot(16);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+                        self.codegen.freeGeneral(result_low);
+                        self.codegen.freeGeneral(result_high);
+
+                        return .{ .stack_i128 = stack_offset };
+                    } else {
+                        const src_reg = try self.ensureInGeneralReg(inner_loc);
+                        const result_reg = try self.allocTempGeneral();
+                        try self.codegen.emitNot(.w64, result_reg, src_reg);
                         self.codegen.freeGeneral(src_reg);
                         return .{ .general_reg = result_reg };
                     }
@@ -5033,6 +5198,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_shift_left_by => try self.emitShlReg(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_shift_right_by => try self.emitAsrReg(.w64, result_reg, lhs_reg, rhs_reg),
                 .num_shift_right_zf_by => try self.emitLsrReg(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_bitwise_and => try self.codegen.emitAnd(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_bitwise_or => try self.codegen.emitOr(.w64, result_reg, lhs_reg, rhs_reg),
+                .num_bitwise_xor => try self.codegen.emitXor(.w64, result_reg, lhs_reg, rhs_reg),
                 // Comparison operations
                 .num_is_eq => {
                     try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual());
@@ -5284,6 +5452,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_rem_by, .num_mod_by => {
                     // 128-bit integer remainder/modulo: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
+                },
+                // Bitwise operations: apply independently to each 64-bit word.
+                .num_bitwise_and => {
+                    try self.codegen.emitAnd(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitAnd(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                },
+                .num_bitwise_or => {
+                    try self.codegen.emitOr(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitOr(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                },
+                .num_bitwise_xor => {
+                    try self.codegen.emitXor(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitXor(.w64, result_high, lhs_parts.high, rhs_parts.high);
                 },
                 // Comparison operations for i128/Dec
                 .num_is_eq => {

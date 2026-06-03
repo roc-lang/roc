@@ -583,6 +583,22 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// ORN reg, reg, reg (OR NOT: dst = src1 | ~src2)
+        /// With src1 = XZR this computes dst = ~src2 (the MVN alias).
+        pub fn ornRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+            // ORN <Xd>, <Xn>, <Xm> — same as ORR but with the N (negate) bit set.
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b0101010 << 24) |
+                (0b00 << 22) |
+                (1 << 21) |
+                (@as(u32, src2.enc()) << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src1.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// EOR reg, reg, reg (exclusive OR)
         pub fn eorRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
             // EOR <Xd>, <Xn>, <Xm>

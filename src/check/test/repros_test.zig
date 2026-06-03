@@ -398,3 +398,312 @@ test "check - repro - using dbg in a function does not make it effectful" {
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+test "check - repro - issue 9500 - equality on tag-union alias" {
+    const src =
+        \\Color : [Red, Green, Blue]
+        \\
+        \\pick : U8 -> Color
+        \\pick = |n| match n {
+        \\    0 => Red
+        \\    1 => Green
+        \\    _ => Blue
+        \\}
+        \\
+        \\is_red : Bool
+        \\is_red = pick(0) == Red
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - inequality on tag-union alias" {
+    const src =
+        \\Color : [Red, Green, Blue]
+        \\
+        \\pick : U8 -> Color
+        \\pick = |n| match n {
+        \\    0 => Red
+        \\    1 => Green
+        \\    _ => Blue
+        \\}
+        \\
+        \\not_red : Bool
+        \\not_red = pick(0) != Red
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - equality on record alias" {
+    const src =
+        \\Point : { x : U8, y : U8 }
+        \\
+        \\origin : Point
+        \\origin = { x: 0, y: 0 }
+        \\
+        \\is_origin : Bool
+        \\is_origin = origin == { x: 0, y: 0 }
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9500 - equality on record alias of tag-union aliases" {
+    const src =
+        \\Palette : [None, Color1, Color2, Color3, Color4]
+        \\
+        \\DrawColors : {
+        \\    primary : Palette,
+        \\    secondary : Palette,
+        \\}
+        \\
+        \\from_flags : U8 -> DrawColors
+        \\from_flags = |flags| match flags {
+        \\    0 => { primary: None, secondary: None }
+        \\    _ => { primary: Color2, secondary: Color4 }
+        \\}
+        \\
+        \\is_match : Bool
+        \\is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9491 - local recursive def generalizes rigid type param" {
+    // A local, self-recursive annotated function on a parametric recursive
+    // nominal type, called through a separate annotated local helper, used to
+    // produce a spurious `RBTree(k)` != `RBTree(k)` mismatch because the
+    // recursive function's rigid type parameter was never generalized.
+    const src =
+        \\main! = |_args| {}
+        \\
+        \\RBTree(k) := [
+        \\    Empty,
+        \\    Node(RBTree(k)),
+        \\].{
+        \\    delete = |tree| {
+        \\        delRBTree : RBTree(k) -> RBTree(k)
+        \\        delRBTree = |inner| {
+        \\            match inner {
+        \\                RBTree.Node(Empty) => Empty
+        \\                RBTree.Node(RBTree.Node(x)) => RBTree.Node(x)->delRBTree()
+        \\                Empty => Empty
+        \\            }
+        \\        }
+        \\        delCurr : RBTree(k) -> RBTree(k)
+        \\        delCurr = |t| {
+        \\            match t {
+        \\                RBTree.Node(inner) => inner->delRBTree()
+        \\                _ => t
+        \\            }
+        \\        }
+        \\        tree->delCurr()
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9491 - distinct type param names still unify" {
+    // Same as above, but the helper uses a differently-named type parameter.
+    // Before the fix this surfaced as `RBTree(j)` != `RBTree(k)`, proving the
+    // two sides were distinct ungeneralized rigids.
+    const src =
+        \\main! = |_args| {}
+        \\
+        \\RBTree(k) := [
+        \\    Empty,
+        \\    Node(RBTree(k)),
+        \\].{
+        \\    delete = |tree| {
+        \\        delRBTree : RBTree(k) -> RBTree(k)
+        \\        delRBTree = |inner| {
+        \\            match inner {
+        \\                RBTree.Node(Empty) => Empty
+        \\                RBTree.Node(RBTree.Node(x)) => RBTree.Node(x)->delRBTree()
+        \\                Empty => Empty
+        \\            }
+        \\        }
+        \\        delCurr : RBTree(j) -> RBTree(j)
+        \\        delCurr = |t| {
+        \\            match t {
+        \\                RBTree.Node(inner) => inner->delRBTree()
+        \\                _ => t
+        \\            }
+        \\        }
+        \\        tree->delCurr()
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9491 - self-recursive local fn generalizes (no nominal)" {
+    // A self-recursive local annotated function with a rigid type parameter,
+    // called by a separate annotated local helper, must generalize so each call
+    // site instantiates a fresh type parameter.
+    const src =
+        \\main! = |_args| {
+        \\    loop : a -> a
+        \\    loop = |z| loop(z)
+        \\    caller : b -> b
+        \\    caller = |w| loop(w)
+        \\    _ = caller
+        \\    {}
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - issue 9491 - nested self-recursive local fns generalize" {
+    // The self-recursion generalization fix must work for local defs nested
+    // arbitrarily deep inside other function bodies, not just one level down.
+    const src =
+        \\main! = |_args| {}
+        \\
+        \\RBTree(k) := [
+        \\    Empty,
+        \\    Node(RBTree(k)),
+        \\].{
+        \\    delete = |tree| {
+        \\        outer = |o| {
+        \\            delRBTree : RBTree(k) -> RBTree(k)
+        \\            delRBTree = |inner| {
+        \\                match inner {
+        \\                    RBTree.Node(Empty) => Empty
+        \\                    RBTree.Node(RBTree.Node(x)) => RBTree.Node(x)->delRBTree()
+        \\                    Empty => Empty
+        \\                }
+        \\            }
+        \\            delCurr : RBTree(k) -> RBTree(k)
+        \\            delCurr = |t| {
+        \\                match t {
+        \\                    RBTree.Node(i2) => i2->delRBTree()
+        \\                    _ => t
+        \\                }
+        \\            }
+        \\            o->delCurr()
+        \\        }
+        \\        tree->outer()
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - self-recursive local fn after early return in enclosing body" {
+    // An early `return` in the enclosing function body records an early-return
+    // constraint that `processReturnConstraints` later compacts out of the
+    // shared constraint list while checking the local def's lambda. The local
+    // def's recursive reference is tracked in a dedicated stack (NOT that shared
+    // list), so the compaction cannot affect its validation. Well-typed: no
+    // spurious errors.
+    const src =
+        \\main! = |_args| {
+        \\    f : U64 -> U64
+        \\    f = |n| {
+        \\        if n == 0 {
+        \\            return 0
+        \\        }
+        \\        loop : a -> a
+        \\        loop = |z| loop(z)
+        \\        _ = loop
+        \\        n
+        \\    }
+        \\    _ = f
+        \\    {}
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "check - repro - self-recursive local fn recursive use still type-checked after early return" {
+    // Companion to the well-typed case above: the self-recursive local def's
+    // recursive reference must STILL be validated after the early-return
+    // compaction, so an ill-typed recursive use is caught. Here the recursive
+    // call result is forced to `Str`, contradicting the rigid `a` in
+    // `loop : a -> a`. If the reference were dropped, no error would be reported.
+    const src =
+        \\use_str : Str -> Str
+        \\use_str = |s| s
+        \\
+        \\main! = |_args| {
+        \\    f : U64 -> U64
+        \\    f = |n| {
+        \\        if n == 0 {
+        \\            return 0
+        \\        }
+        \\        loop : a -> a
+        \\        loop = |z| {
+        \\            r = loop(z)
+        \\            _ = use_str(r)
+        \\            z
+        \\        }
+        \\        _ = loop
+        \\        n
+        \\    }
+        \\    _ = f
+        \\    {}
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+}
+
+test "check - repro - issue 9491 follow-up - top-level mutually recursive parametric fns" {
+    // Mutually recursive functions over a parametric recursive nominal type must
+    // type-check: each cross-call instantiates the callee, so the two members'
+    // rigid type parameters don't clash into a spurious `T(k)` != `T(k)`.
+    const src =
+        \\RBMut(k) := [
+        \\    Empty,
+        \\    Node(RBMut(k)),
+        \\]
+        \\
+        \\delA : RBMut(k) -> RBMut(k)
+        \\delA = |inner| match inner {
+        \\    RBMut.Node(x) => x->delB()
+        \\    Empty => Empty
+        \\}
+        \\
+        \\delB : RBMut(k) -> RBMut(k)
+        \\delB = |t| match t {
+        \\    RBMut.Node(inner) => inner->delA()
+        \\    _ => t
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}

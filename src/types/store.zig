@@ -355,6 +355,17 @@ pub const Store = struct {
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
         // Self-redirects cause infinite loops in resolveVar
         std.debug.assert(target_var != redirect_to);
+        if (std.debug.runtime_safety) {
+            // Redirecting a root var into a transparent alias whose backing resolves
+            // back to that same root creates a self-referential (infinite) alias.
+            // Recursive transparent aliases are illegal, so this is always a bug;
+            // catch it loudly rather than silently producing an INFINITE TYPE later.
+            const redirect_resolved = self.resolveVar(redirect_to);
+            if (redirect_resolved.desc.content == .alias) {
+                const backing_root = self.resolveVar(self.getAliasBackingVar(redirect_resolved.desc.content.alias)).var_;
+                std.debug.assert(backing_root != target_var);
+            }
+        }
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
     }
@@ -850,9 +861,9 @@ pub const Store = struct {
     /// * redirect a -> b
     ///
     /// The merge direction (a -> b) is load-bearing and must not be changed.
-    /// Multiple parts of the unification algorithm depend on this specific order:
-    /// - When unifying aliases with structures, we rely on this order to ensure
-    ///   that we don't lose alias context
+    /// Multiple parts of the unification algorithm depend on this specific order.
+    /// Alias spelling is not preserved by choosing an alias representative; source
+    /// alias views stay separate from the concrete solved backing variable.
     ///
     // NOTE: The elm & the roc compiler do this step differently
     // * The elm compiler sets b to redirect to a

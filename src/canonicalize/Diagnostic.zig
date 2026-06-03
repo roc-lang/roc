@@ -52,6 +52,21 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A local (block) definition references a name that is defined LATER in the
+    /// same block. Local definitions are sequential: they may reference
+    /// themselves or earlier definitions, but not later ones.
+    local_reference_before_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    /// Two local (block) definitions are mutually recursive, which is not
+    /// supported for local definitions (only top-level definitions may be
+    /// mutually recursive).
+    mutually_recursive_local_definitions: struct {
+        ident1: Ident.Idx,
+        ident2: Ident.Idx,
+        region: Region,
+    },
     /// This use-site was rewritten to crash because the referenced top-level
     /// non-function value failed type checking earlier in the pipeline.
     erroneous_value_use: struct {
@@ -152,6 +167,17 @@ pub const Diagnostic = union(enum) {
     type_not_exposed: struct {
         module_name: Ident.Idx,
         type_name: Ident.Idx,
+        region: Region,
+    },
+    private_type_in_exposed_type: struct {
+        exposed_type: Ident.Idx,
+        private_type: Ident.Idx,
+        region: Region,
+    },
+    private_type_in_exposed_field: struct {
+        exposed_type: Ident.Idx,
+        field_name: Ident.Idx,
+        private_type: Ident.Idx,
         region: Region,
     },
     type_from_missing_module: struct {
@@ -340,6 +366,8 @@ pub const Diagnostic = union(enum) {
             .ident_not_in_scope => |d| d.region,
             .self_referential_definition => |d| d.region,
             .circular_value_definition => |d| d.region,
+            .local_reference_before_definition => |d| d.region,
+            .mutually_recursive_local_definitions => |d| d.region,
             .erroneous_value_use => |d| d.region,
             .erroneous_value_expr => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
@@ -367,6 +395,8 @@ pub const Diagnostic = union(enum) {
             .module_not_found => |d| d.region,
             .value_not_exposed => |d| d.region,
             .type_not_exposed => |d| d.region,
+            .private_type_in_exposed_type => |d| d.region,
+            .private_type_in_exposed_field => |d| d.region,
             .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
             .nested_type_not_found => |d| d.region,

@@ -77,6 +77,7 @@ comptime {
     @export(&dw.roc_builtins_list_incref, .{ .name = "roc_builtins_list_incref" });
     @export(&dw.roc_builtins_list_drop_at, .{ .name = "roc_builtins_list_drop_at" });
     @export(&dw.roc_builtins_list_replace, .{ .name = "roc_builtins_list_replace" });
+    @export(&dw.roc_builtins_list_swap, .{ .name = "roc_builtins_list_swap" });
     @export(&dw.roc_builtins_list_reserve, .{ .name = "roc_builtins_list_reserve" });
     @export(&dw.roc_builtins_list_release_excess_capacity, .{ .name = "roc_builtins_list_release_excess_capacity" });
     @export(&dw.roc_builtins_list_decref_str, .{ .name = "roc_builtins_list_decref_str" });
@@ -131,4 +132,18 @@ comptime {
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
     @export(&dw.roc_builtins_float_from_str, .{ .name = "roc_builtins_float_from_str" });
+    // List equality and reverse wrappers
+    @export(&dw.roc_builtins_list_eq, .{ .name = "roc_builtins_list_eq" });
+    @export(&dw.roc_builtins_list_str_eq, .{ .name = "roc_builtins_list_str_eq" });
+    @export(&dw.roc_builtins_list_list_eq, .{ .name = "roc_builtins_list_list_eq" });
+    @export(&dw.roc_builtins_list_reverse, .{ .name = "roc_builtins_list_reverse" });
+    // Integer modulo wrappers
+    @export(&dw.roc_builtins_i8_mod_by, .{ .name = "roc_builtins_i8_mod_by" });
+    @export(&dw.roc_builtins_u8_mod_by, .{ .name = "roc_builtins_u8_mod_by" });
+    @export(&dw.roc_builtins_i16_mod_by, .{ .name = "roc_builtins_i16_mod_by" });
+    @export(&dw.roc_builtins_u16_mod_by, .{ .name = "roc_builtins_u16_mod_by" });
+    @export(&dw.roc_builtins_i32_mod_by, .{ .name = "roc_builtins_i32_mod_by" });
+    @export(&dw.roc_builtins_u32_mod_by, .{ .name = "roc_builtins_u32_mod_by" });
+    @export(&dw.roc_builtins_i64_mod_by, .{ .name = "roc_builtins_i64_mod_by" });
+    @export(&dw.roc_builtins_u64_mod_by, .{ .name = "roc_builtins_u64_mod_by" });
 }

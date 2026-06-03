@@ -303,7 +303,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 73;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 77;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 51;
 /// Count of the statement nodes in the ModuleEnv
@@ -3496,6 +3496,17 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!CIR.Diagnostic.Idx {
+    const diag_idx = try store.addDiagnosticUnregistered(reason);
+    // append to our scratch so we can get a span later of all our diagnostics
+    try store.addScratch("diagnostics", diag_idx);
+    return diag_idx;
+}
+
+/// Create a diagnostic node WITHOUT registering it in the reported-diagnostics
+/// scratch list. Used when a malformed/runtime-error node needs a diagnostic to
+/// reference, but the diagnostic that should actually be reported is decided and
+/// pushed later (e.g. deferred forward-ref vs mutual-recursion classification).
+pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!CIR.Diagnostic.Idx {
     var node = Node.init(undefined);
     var region = base.Region.zero();
 
@@ -3547,6 +3558,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_circular_value_definition;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
+        .local_reference_before_definition => |r| {
+            node.tag = .diag_local_reference_before_definition;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
+        .mutually_recursive_local_definitions => |r| {
+            node.tag = .diag_mutually_recursive_local_definitions;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.ident1), .ident2 = @bitCast(r.ident2) } });
         },
         .erroneous_value_use => |r| {
             node.tag = .diag_erroneous_value_use;
@@ -3739,6 +3760,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
+        .private_type_in_exposed_type => |r| {
+            node.tag = .diag_private_type_in_exposed_type;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.private_type) } });
+        },
+        .private_type_in_exposed_field => |r| {
+            node.tag = .diag_private_type_in_exposed_field;
+            region = r.region;
+            node.setPayload(.{ .diag_three_idents = .{ .ident1 = @bitCast(r.exposed_type), .ident2 = @bitCast(r.field_name), .ident3 = @bitCast(r.private_type) } });
+        },
         .type_from_missing_module => |r| {
             node.tag = .diag_type_from_missing_module;
             region = r.region;
@@ -3866,9 +3897,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
     _ = try store.regions.append(store.gpa, region);
 
-    // append to our scratch so we can get a span later of all our diagnostics
-    try store.addScratch("diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
-
     return @enumFromInt(nid);
 }
 
@@ -3948,6 +3976,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_local_reference_before_definition => return CIR.Diagnostic{ .local_reference_before_definition = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_mutually_recursive_local_definitions => return CIR.Diagnostic{ .mutually_recursive_local_definitions = .{
+            .ident1 = @bitCast(payload.diag_two_idents.ident1),
+            .ident2 = @bitCast(payload.diag_two_idents.ident2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
@@ -4060,6 +4097,23 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .type_not_exposed = .{
                 .module_name = @as(base.Ident.Idx, @bitCast(p.ident1)),
                 .type_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_type => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_type = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_private_type_in_exposed_field => {
+            const p = payload.diag_three_idents;
+            return CIR.Diagnostic{ .private_type_in_exposed_field = .{
+                .exposed_type = @as(base.Ident.Idx, @bitCast(p.ident1)),
+                .field_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .private_type = @as(base.Ident.Idx, @bitCast(p.ident3)),
                 .region = store.getRegionAt(node_idx),
             } };
         },

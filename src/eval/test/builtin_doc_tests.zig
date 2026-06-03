@@ -798,11 +798,9 @@ test "Builtin.roc doc code blocks check and evaluate" {
     }
 
     var phantom_failures: usize = 0;
-    var skipped_effectful: usize = 0;
 
     for (blocks, 0..) |*block, i| {
         if (containsEffectfulCall(block.source)) {
-            skipped_effectful += 1;
             continue;
         }
         const result = try processBlock(allocator, block);
@@ -837,13 +835,6 @@ test "Builtin.roc doc code blocks check and evaluate" {
                 });
             },
         }
-    }
-
-    if (skipped_effectful != 0) {
-        std.debug.print(
-            "[builtin-doc-tests] skipped {d} block(s) that contain effectful calls (functions ending with `!`).\n",
-            .{skipped_effectful},
-        );
     }
 
     if (failures.items.len != 0) {

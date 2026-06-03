@@ -492,6 +492,8 @@ POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:388:5:388:9
 POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:392:1:392:5
 POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:393:1:393:5
 POLYMORPHIC VALUE - associated_items_truly_comprehensive.md:394:1:394:5
+MISSING METHOD - associated_items_truly_comprehensive.md:382:20:382:24
+MISSING METHOD - associated_items_truly_comprehensive.md:388:12:388:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -664,6 +666,26 @@ Its type is:
 e where [e.plus : e, Dec -> e]
 ```
 Add an annotation or use this value in a way that fixes its concrete type.
+
+**MISSING METHOD**
+This is trying to use the `+` operator on a value whose type is an unresolved type variable, which has no methods.
+**associated_items_truly_comprehensive.md:382:20:382:24:**
+```roc
+            val3 = val4 + 1                                 # Unqualified
+```
+                   ^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+
+**MISSING METHOD**
+This is trying to use the `+` operator on a value whose type is an unresolved type variable, which has no methods.
+**associated_items_truly_comprehensive.md:388:12:388:16:**
+```roc
+    val1 = val2 + 1                                         # Unqualified
+```
+           ^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -3108,8 +3130,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.L2.L3.val3"))
 		(e-dispatch-call (method "plus") (constraint-fn-var 2713)
 			(receiver
-				(e-lookup-local
-					(p-assign (ident "val4"))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
 				(e-num (value "1")))))
 	(d-let
@@ -3124,8 +3145,7 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(p-assign (ident "associated_items_truly_comprehensive.D5_Pattern2.val1"))
 		(e-dispatch-call (method "plus") (constraint-fn-var 2777)
 			(receiver
-				(e-lookup-local
-					(p-assign (ident "val2"))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
 				(e-num (value "1")))))
 	(d-let

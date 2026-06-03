@@ -397,6 +397,7 @@ pub const RocModules = struct {
     echo_platform: *Module,
     docs: *Module,
     glue: *Module,
+    embedded_lld: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -441,6 +442,7 @@ pub const RocModules = struct {
             .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
+            .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -536,6 +538,7 @@ pub const RocModules = struct {
         step.root_module.addImport("docs", self.docs);
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
+        step.root_module.addImport("embedded_lld", self.embedded_lld);
 
         // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {

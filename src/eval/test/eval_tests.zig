@@ -5,8 +5,7 @@ const bughunt_repros = @import("eval_bughunt_repros.zig");
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
 const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
-const issue_89xx_tests = @import("eval_issue_89xx_tests.zig");
-const issue_93xx_tests = @import("eval_issue_93xx_tests.zig");
+const issue_tests = @import("eval_issue_tests.zig");
 const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
 const low_level_tests = @import("eval_low_level_tests.zig");
 const polymorphism_tests = @import("eval_polymorphism_tests.zig");
@@ -1246,7 +1245,10 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "120.0" },
     },
     .{
-        .name = "inspect: mutual recursion in local lambdas",
+        // Mutual recursion between local definitions is not supported: local
+        // definitions are sequential (self-reference and backward references
+        // only). This must be reported as an error rather than evaluated.
+        .name = "problem: mutual recursion in local lambdas",
         .source =
         \\{
         \\    is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
@@ -1254,16 +1256,39 @@ const core_tests = [_]TestCase{
         \\    is_even(6.I64)
         \\}
         ,
-        .expected = .{ .inspect_str = "True" },
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "inspect: mutual recursion in untyped closures",
+        .name = "problem: mutual recursion in untyped closures",
         .source =
         \\{
         \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
         \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
         \\    if (is_even(4)) 1 else 0
         \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        // Coverage migrated from the (now-disallowed) local mutual-recursion
+        // cases above: mutual recursion is supported at the top level and must
+        // still evaluate to the same results.
+        .name = "inspect: mutual recursion at top level (typed)",
+        .source_kind = .module,
+        .source =
+        \\is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
+        \\is_odd = |n| if (n == 0.I64) False else is_even(n - 1.I64)
+        \\main = is_even(6.I64)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: mutual recursion at top level (untyped)",
+        .source_kind = .module,
+        .source =
+        \\is_even = |n| if (n == 0) True else is_odd(n - 1)
+        \\is_odd = |n| if (n == 0) False else is_even(n - 1)
+        \\main = if (is_even(4)) 1 else 0
         ,
         .expected = .{ .inspect_str = "1.0" },
     },
@@ -3444,4 +3469,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_89xx_tests.tests ++ issue_93xx_tests.tests ++ interpreter_style_tests.tests ++ bughunt_repros.tests;
+pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ bughunt_repros.tests;

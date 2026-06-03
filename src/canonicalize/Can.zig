@@ -142,6 +142,12 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// Local function declaration patterns that are visible as direct local
 /// procedures in the current canonicalization context.
 scratch_local_function_patterns: base.Scratch(Pattern.Idx),
+/// Names declared in the current (and enclosing) block bodies, recorded by a
+/// pre-scan so a lookup miss can tell "used before its local definition" apart
+/// from a genuinely unknown identifier. Each entry also carries the
+/// forward-reference markers used to classify use-before-definition vs mutual
+/// recursion at block end. Snapshot/rollback per block.
+scratch_block_local_defs: base.Scratch(BlockLocalDef),
 /// Local type declarations found inside function bodies.
 /// Collected during canonicalization, then added to all_statements at the end.
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
@@ -175,6 +181,17 @@ defining_patterns_start: ?u32 = null,
 /// was created in a first pass, or for simple ident patterns).
 /// Used to detect self-referential definitions like `a = a`.
 defining_pattern: ?Pattern.Idx = null,
+/// The identifier of the block-local definition whose body is currently being
+/// canonicalized, if any. Saved/restored around each local decl body so that
+/// references can be attributed to the def that made them (for sequential
+/// local-let scoping: detecting forward references and mutual recursion).
+current_local_def_ident: ?Ident.Idx = null,
+/// Index into `scratch_block_local_defs` of the def whose body is currently
+/// being canonicalized (paired with `current_local_def_ident`). Lets the
+/// lookup-hit path mark `refs_back` on that entry in O(1) when the def
+/// references its forward-referencer back. null when not in a local def body
+/// or the def has no resolvable name.
+current_local_def_index: ?usize = null,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
@@ -193,6 +210,28 @@ source_dir: ?[]const u8 = null,
 roc_ctx: CoreCtx,
 const Ident = base.Ident;
 const Region = base.Region;
+
+/// A name declared in a block body (for sequential local-let scoping). Recorded
+/// by a per-block pre-scan; used to recognize "used before its local definition".
+const BlockLocalDef = struct {
+    ident: Ident.Idx,
+    region: Region,
+    /// Whether the definition's body is a function (lambda). Only function
+    /// definitions can be "mutually recursive"; a cycle through a non-function
+    /// value is reported as a plain use-before-definition instead.
+    is_fn: bool,
+    /// Set when an earlier sibling references this def before it is defined (a
+    /// forward reference). Holds the use-site region for the diagnostic, which
+    /// is deferred to block end. First writer wins, so repeated forward uses of
+    /// the same name produce a single diagnostic.
+    fwd_ref_region: ?Region = null,
+    /// The sibling that made the first forward reference to this def. Together
+    /// with `refs_back` this identifies a mutual-recursion pair.
+    fwd_ref_from: ?Ident.Idx = null,
+    /// Set while canonicalizing THIS def's body if it references its
+    /// forward-referencer back — completing a 2-cycle (mutual recursion).
+    refs_back: bool = false,
+};
 // ModuleEnv is already imported at the top
 const CalledVia = base.CalledVia;
 
@@ -298,6 +337,7 @@ pub fn deinit(
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
     self.scratch_local_function_patterns.deinit();
+    self.scratch_block_local_defs.deinit();
     self.scratch_local_type_decls.deinit(gpa);
     self.scratch_global_value_defs.deinit(gpa);
 }
@@ -354,6 +394,7 @@ fn initInternal(
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_local_function_patterns = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_block_local_defs = try base.Scratch(BlockLocalDef).init(gpa),
         .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
         .scratch_global_value_defs = try std.ArrayList(CIR.Def.Idx).initCapacity(gpa, 0),
     };
@@ -985,10 +1026,15 @@ fn processTypeDeclFirstPass(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        var associated_type_scope_entered = false;
+        defer if (associated_type_scope_entered) {
+            self.scopeExit(self.env.gpa) catch unreachable;
+        };
+
         if (type_decl.associated) |assoc| {
             try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
             try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch unreachable;
+            associated_type_scope_entered = true;
             try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
         }
 
@@ -1105,10 +1151,15 @@ fn processTypeDeclFirstPassWithExisting(
 
     // Process type parameters and annotation in a separate scope
     const anno_idx = blk: {
+        var associated_type_scope_entered = false;
+        defer if (associated_type_scope_entered) {
+            self.scopeExit(self.env.gpa) catch unreachable;
+        };
+
         if (type_decl.associated) |assoc| {
             try self.predeclareAssociatedTypePlaceholders(qualified_name_idx, relative_name_idx, assoc.statements);
             try self.scopeEnter(self.env.gpa, false);
-            defer self.scopeExit(self.env.gpa) catch unreachable;
+            associated_type_scope_entered = true;
             try self.introduceImmediateAssociatedTypeAliases(qualified_name_idx, relative_name_idx, assoc.statements);
         }
 
@@ -3255,6 +3306,7 @@ pub fn canonicalizeFile(
 
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
+    try self.checkExposedTypeSurfaces();
 
     // Add local type declarations to all_statements
     for (self.scratch_local_type_decls.items) |stmt_idx| {
@@ -4174,6 +4226,368 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
             .ident = ident_idx,
             .region = region,
         } });
+    }
+}
+
+const TypeSurfaceFrame = struct {
+    anno: TypeAnno.Idx,
+    field_name: ?Ident.Idx,
+    surface_region: ?Region,
+};
+
+const TypeSurfaceAliasUse = struct {
+    decl_idx: Statement.Idx,
+    surface_start: u32,
+    surface_end: u32,
+};
+
+const PublicTypeRoot = struct {
+    stmt_idx: Statement.Idx,
+    relative_name: Ident.Idx,
+};
+
+fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    var public_type_decls: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
+    defer public_type_decls.deinit(gpa);
+
+    var public_roots = std.ArrayList(PublicTypeRoot).empty;
+    defer public_roots.deinit(gpa);
+
+    var exposed_type_iter = self.exposed_types.iterator();
+    while (exposed_type_iter.next()) |entry| {
+        try self.addPublicTypeRoot(entry.key_ptr.*, &public_roots, &public_type_decls);
+    }
+
+    switch (self.env.module_kind) {
+        .type_module => |main_type| try self.addPublicTypeRoot(main_type, &public_roots, &public_type_decls),
+        else => {},
+    }
+
+    if (public_roots.items.len == 0) return;
+
+    var exposed_iter = self.env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const stmt_idx = self.exposedTypeDeclStatementIdx(entry.node_idx) orelse continue;
+        const header = self.typeDeclHeader(stmt_idx) orelse continue;
+        if (!self.typeIsAtOrUnderPublicRoot(header.relative_name, public_roots.items)) continue;
+
+        try public_type_decls.put(gpa, stmt_idx, {});
+    }
+
+    var checked_public_nominals: std.AutoHashMapUnmanaged(Statement.Idx, void) = .{};
+    defer checked_public_nominals.deinit(gpa);
+
+    exposed_iter = self.env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const stmt_idx = self.exposedTypeDeclStatementIdx(entry.node_idx) orelse continue;
+        if (!public_type_decls.contains(stmt_idx)) continue;
+
+        try self.checkPublicNominalStatementSurface(
+            stmt_idx,
+            &public_type_decls,
+            &checked_public_nominals,
+        );
+    }
+
+    for (public_roots.items) |root| {
+        try self.checkPublicNominalStatementSurface(
+            root.stmt_idx,
+            &public_type_decls,
+            &checked_public_nominals,
+        );
+    }
+}
+
+fn addPublicTypeRoot(
+    self: *Self,
+    type_name: Ident.Idx,
+    public_roots: *std.ArrayList(PublicTypeRoot),
+    public_type_decls: *std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    const stmt_idx = blk: {
+        if (self.env.getExposedNodeIndexById(type_name)) |node_idx| {
+            if (self.exposedTypeDeclStatementIdx(node_idx)) |stmt_idx| break :blk stmt_idx;
+        }
+        break :blk self.scopeLookupTypeDecl(type_name) orelse return;
+    };
+
+    const header = self.typeDeclHeader(stmt_idx) orelse return;
+    if (public_type_decls.contains(stmt_idx)) return;
+
+    try public_type_decls.put(self.env.gpa, stmt_idx, {});
+    try public_roots.append(self.env.gpa, .{
+        .stmt_idx = stmt_idx,
+        .relative_name = header.relative_name,
+    });
+}
+
+fn exposedTypeDeclStatementIdx(self: *Self, node_idx_u32: u32) ?Statement.Idx {
+    if (node_idx_u32 == 0 or node_idx_u32 >= self.env.store.nodes.len()) return null;
+
+    const node_idx: Node.Idx = @enumFromInt(node_idx_u32);
+    return switch (self.env.store.nodes.get(node_idx).tag) {
+        .statement_alias_decl, .statement_nominal_decl => @enumFromInt(node_idx_u32),
+        else => null,
+    };
+}
+
+fn typeDeclHeader(self: *Self, stmt_idx: Statement.Idx) ?CIR.TypeHeader {
+    return switch (self.env.store.getStatement(stmt_idx)) {
+        .s_alias_decl => |alias| self.env.store.getTypeHeader(alias.header),
+        .s_nominal_decl => |nominal| self.env.store.getTypeHeader(nominal.header),
+        else => null,
+    };
+}
+
+fn typeIsAtOrUnderPublicRoot(
+    self: *Self,
+    relative_name: Ident.Idx,
+    public_roots: []const PublicTypeRoot,
+) bool {
+    const relative_text = self.env.getIdent(relative_name);
+
+    for (public_roots) |root| {
+        if (relative_name.eql(root.relative_name)) return true;
+
+        const root_text = self.env.getIdent(root.relative_name);
+        if (relative_text.len > root_text.len and
+            relative_text[root_text.len] == '.' and
+            std.mem.startsWith(u8, relative_text, root_text))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn checkPublicNominalStatementSurface(
+    self: *Self,
+    stmt_idx: Statement.Idx,
+    public_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    checked_public_nominals: *std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    if (checked_public_nominals.contains(stmt_idx)) return;
+    try checked_public_nominals.put(self.env.gpa, stmt_idx, {});
+
+    const nominal = switch (self.env.store.getStatement(stmt_idx)) {
+        .s_nominal_decl => |decl| decl,
+        else => return,
+    };
+    if (nominal.is_opaque) return;
+
+    const header = self.env.store.getTypeHeader(nominal.header);
+    try self.checkPublicNominalTypeSurface(header.name, nominal.anno, public_type_decls);
+}
+
+fn checkPublicNominalTypeSurface(
+    self: *Self,
+    exposed_type: Ident.Idx,
+    root_anno: TypeAnno.Idx,
+    exposed_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    var stack = std.ArrayList(TypeSurfaceFrame).empty;
+    defer stack.deinit(gpa);
+    try stack.append(gpa, .{
+        .anno = root_anno,
+        .field_name = null,
+        .surface_region = null,
+    });
+
+    var visited_alias_uses: std.AutoHashMapUnmanaged(TypeSurfaceAliasUse, void) = .{};
+    defer visited_alias_uses.deinit(gpa);
+
+    while (stack.pop()) |frame| {
+        switch (self.env.store.getTypeAnno(frame.anno)) {
+            .lookup => |lookup| {
+                const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
+                try self.checkPublicTypeSurfaceBase(
+                    exposed_type,
+                    lookup.base,
+                    frame.field_name,
+                    frame.surface_region,
+                    lookup_region,
+                    exposed_type_decls,
+                    &visited_alias_uses,
+                    &stack,
+                );
+            },
+            .apply => |apply| {
+                const lookup_region = self.env.store.getTypeAnnoRegion(frame.anno);
+                const args = self.env.store.sliceTypeAnnos(apply.args);
+                var i = args.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = args[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+                try self.checkPublicTypeSurfaceBase(
+                    exposed_type,
+                    apply.base,
+                    frame.field_name,
+                    frame.surface_region,
+                    lookup_region,
+                    exposed_type_decls,
+                    &visited_alias_uses,
+                    &stack,
+                );
+            },
+            .record => |record| {
+                if (record.ext) |ext| {
+                    try stack.append(gpa, .{
+                        .anno = ext,
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+
+                const fields = self.env.store.sliceAnnoRecordFields(record.fields);
+                var i = fields.len;
+                while (i > 0) {
+                    i -= 1;
+                    const field = self.env.store.getAnnoRecordField(fields[i]);
+                    try stack.append(gpa, .{
+                        .anno = field.ty,
+                        .field_name = field.name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.ext) |ext| {
+                    try stack.append(gpa, .{
+                        .anno = ext,
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+
+                const tags = self.env.store.sliceTypeAnnos(tag_union.tags);
+                var i = tags.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = tags[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .tag => |tag| {
+                const args = self.env.store.sliceTypeAnnos(tag.args);
+                var i = args.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = args[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .tuple => |tuple| {
+                const elems = self.env.store.sliceTypeAnnos(tuple.elems);
+                var i = elems.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = elems[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .@"fn" => |func| {
+                try stack.append(gpa, .{
+                    .anno = func.ret,
+                    .field_name = frame.field_name,
+                    .surface_region = frame.surface_region,
+                });
+
+                const args = self.env.store.sliceTypeAnnos(func.args);
+                var i = args.len;
+                while (i > 0) {
+                    i -= 1;
+                    try stack.append(gpa, .{
+                        .anno = args[i],
+                        .field_name = frame.field_name,
+                        .surface_region = frame.surface_region,
+                    });
+                }
+            },
+            .parens => |parens| {
+                try stack.append(gpa, .{
+                    .anno = parens.anno,
+                    .field_name = frame.field_name,
+                    .surface_region = frame.surface_region,
+                });
+            },
+            .rigid_var, .rigid_var_lookup, .underscore, .malformed => {},
+        }
+    }
+}
+
+fn checkPublicTypeSurfaceBase(
+    self: *Self,
+    exposed_type: Ident.Idx,
+    type_base: TypeAnno.LocalOrExternal,
+    field_name: ?Ident.Idx,
+    surface_region: ?Region,
+    lookup_region: Region,
+    exposed_type_decls: *const std.AutoHashMapUnmanaged(Statement.Idx, void),
+    visited_alias_uses: *std.AutoHashMapUnmanaged(TypeSurfaceAliasUse, void),
+    stack: *std.ArrayList(TypeSurfaceFrame),
+) std.mem.Allocator.Error!void {
+    const local = switch (type_base) {
+        .local => |local| local,
+        .builtin, .external, .pending => return,
+    };
+
+    const stmt = self.env.store.getStatement(local.decl_idx);
+    switch (stmt) {
+        .s_nominal_decl => |nominal| {
+            if (exposed_type_decls.contains(local.decl_idx)) return;
+
+            const private_header = self.env.store.getTypeHeader(nominal.header);
+            const diagnostic_region = surface_region orelse lookup_region;
+            if (field_name) |field| {
+                try self.env.pushDiagnostic(.{ .private_type_in_exposed_field = .{
+                    .exposed_type = exposed_type,
+                    .field_name = field,
+                    .private_type = private_header.name,
+                    .region = diagnostic_region,
+                } });
+            } else {
+                try self.env.pushDiagnostic(.{ .private_type_in_exposed_type = .{
+                    .exposed_type = exposed_type,
+                    .private_type = private_header.name,
+                    .region = diagnostic_region,
+                } });
+            }
+        },
+        .s_alias_decl => |alias| {
+            const alias_surface_region = surface_region orelse lookup_region;
+            const alias_use = TypeSurfaceAliasUse{
+                .decl_idx = local.decl_idx,
+                .surface_start = alias_surface_region.start.offset,
+                .surface_end = alias_surface_region.end.offset,
+            };
+            if (visited_alias_uses.contains(alias_use)) return;
+            try visited_alias_uses.put(self.env.gpa, alias_use, {});
+            try stack.append(self.env.gpa, .{
+                .anno = alias.anno,
+                .field_name = field_name,
+                .surface_region = alias_surface_region,
+            });
+        },
+        else => {},
     }
 }
 
@@ -5881,6 +6295,18 @@ pub fn canonicalizeExpr(
                         // Check if this is a used underscore variable
                         try self.checkUsedUnderscoreVariable(ident, region);
 
+                        // Mutual-recursion detection (sequential local-let scoping):
+                        // if the def whose body we're in was itself forward-referenced
+                        // by an earlier sibling, and it now references that sibling
+                        // back, the two form a 2-cycle. Gated on the current def having
+                        // been forward-referenced, so the common case does no work.
+                        if (self.current_local_def_index) |idx| {
+                            const entry = &self.scratch_block_local_defs.items.items[idx];
+                            if (entry.fwd_ref_from) |fwd_from| {
+                                if (fwd_from.eql(ident)) entry.refs_back = true;
+                            }
+                        }
+
                         // We found the ident in scope, create a lookup to reference the pattern
                         // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
                         const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
@@ -5945,6 +6371,35 @@ pub fn canonicalizeExpr(
                                     };
                                 }
                                 // Module doesn't exist, fall through to ident_not_in_scope error below
+                            }
+                        }
+
+                        // Sequential local-let scoping: if this name is declared
+                        // later in the current (or an enclosing) block body, it's
+                        // being used before its definition. This takes precedence
+                        // over the associated-block forward-reference allowance
+                        // below, so local block defs are always sequential even
+                        // inside associated method bodies. The diagnostic is
+                        // deferred to block end, where it is classified as a plain
+                        // use-before-definition or as mutual recursion.
+                        if (self.current_local_def_ident) |from_ident| {
+                            if (self.blockLocalDefIndex(ident)) |idx| {
+                                // Record the forward reference on the target's entry
+                                // (first writer wins, so repeated uses of the same
+                                // name yield a single diagnostic). Classified at block
+                                // end as use-before-definition or mutual recursion.
+                                const entry = &self.scratch_block_local_defs.items.items[idx];
+                                if (entry.fwd_ref_region == null) {
+                                    entry.fwd_ref_region = region;
+                                    entry.fwd_ref_from = from_ident;
+                                }
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushRuntimeErrorExpr(Expr.Idx, Diagnostic{ .local_reference_before_definition = .{
+                                        .ident = ident,
+                                        .region = region,
+                                    } }),
+                                    .free_vars = DataSpan.empty(),
+                                };
                             }
                         }
 
@@ -11640,37 +12095,43 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const local_functions_top = self.scratch_local_function_patterns.top();
     defer self.scratch_local_function_patterns.clearFrom(local_functions_top);
 
+    // Sequential local-let scoping bookkeeping. We record this block's declared
+    // names (without making them resolvable) so a lookup miss can distinguish
+    // "used before its local definition" from a genuinely unknown identifier.
+    // Forward-reference markers are written onto these same entries while the
+    // def bodies are canonicalized, then classified at block end. The list is
+    // snapshot/rollback per block, which also scopes the markers per block.
+    const block_defs_top = self.scratch_block_local_defs.top();
+    defer self.scratch_block_local_defs.clearFrom(block_defs_top);
+
     const free_vars_top = self.scratch_free_vars.top();
 
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
 
-    // Pre-pass: Create forward references for lambda declaration patterns.
-    // This enables mutual recursion between closures in the same block by
-    // making all lambda-bound names visible before any bodies are canonicalized.
+    // Pre-scan: record the names declared in this block. Unlike the previous
+    // forward-declaration pre-pass, this does NOT introduce the names into
+    // scope, so local definitions are sequential: a definition is in scope only
+    // after itself (self-reference) and earlier siblings (backward reference).
+    // Forward references and mutual recursion are reported at block end.
     for (ast_stmt_idxs) |ast_stmt_idx| {
         const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
-        if (ast_stmt != .decl) continue;
-        const d = ast_stmt.decl;
-        const ast_body_expr = self.parse_ir.store.getExpr(d.body);
-        if (ast_body_expr != .lambda) continue;
-        const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
-        if (ast_pattern != .ident) continue;
-        const ident_idx = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse continue;
-        // Skip if already in scope (from outer scope or duplicate)
-        if (self.scopeLookup(.ident, ident_idx) == .found) continue;
-        const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region);
-        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-            .ident = ident_idx,
-        } }, region);
-        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-        try current_scope.forward_references.put(self.env.gpa, ident_idx, .{
-            .pattern_idx = pattern_idx,
-            .reference_regions = .empty,
-        });
-        try current_scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
-        try self.scratch_local_function_patterns.append(pattern_idx);
-        try self.scratch_bound_vars.append(pattern_idx);
+        switch (ast_stmt) {
+            .decl => |d| {
+                const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
+                if (ast_pattern != .ident) continue;
+                const ident_idx = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse continue;
+                const region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region);
+                const is_fn = self.parse_ir.store.getExpr(d.body) == .lambda;
+                try self.scratch_block_local_defs.append(.{ .ident = ident_idx, .region = region, .is_fn = is_fn });
+            },
+            .@"var" => |v| {
+                const ident_idx = self.parse_ir.tokens.resolveIdentifier(v.name) orelse continue;
+                const region = self.parse_ir.tokenizedRegionToRegion(v.region);
+                try self.scratch_block_local_defs.append(.{ .ident = ident_idx, .region = region, .is_fn = false });
+            },
+            else => continue,
+        }
     }
 
     var last_expr: ?CanonicalizedExpr = null;
@@ -11799,6 +12260,14 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
         }
     }
 
+    // Sequential local-let scoping: classify the forward references discovered
+    // while canonicalizing this block's definition bodies. A forward reference
+    // that is part of a reference cycle is mutual recursion (unsupported for
+    // local defs); otherwise it is a plain use-before-definition. This is done
+    // at block end because mutual recursion depends on a later sibling's
+    // references, which are only known once the whole block is canonicalized.
+    try self.classifyBlockLocalForwardRefs(block_defs_top);
+
     // Determine the final expression
     const final_expr = if (last_expr) |can_expr| can_expr else blk: {
         // Empty block - create empty record
@@ -11840,6 +12309,60 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const block_idx = try self.env.addExpr(block_expr, block_region);
 
     return CanonicalizedExpr{ .idx = block_idx, .free_vars = block_free_vars };
+}
+
+/// Classify and report the forward references targeting this block's
+/// definitions (the names from `block_defs_top` onward). A forward-referenced
+/// function definition that references its forward-referencer back is mutual
+/// recursion between local definitions; otherwise it is a plain
+/// use-before-definition. The forward-reference markers live on the per-block
+/// `scratch_block_local_defs` entries (snapshot/rollback per block), so no
+/// separate edge state or cross-block bookkeeping is needed: a cross-block
+/// forward reference (an inner def naming an outer-later def) lands on the outer
+/// entry and is classified — never as mutual, since the inner def isn't visible
+/// to the outer one — when the outer block runs this pass.
+fn classifyBlockLocalForwardRefs(self: *Self, block_defs_top: u32) std.mem.Allocator.Error!void {
+    const this_defs = self.scratch_block_local_defs.slice(block_defs_top, self.scratch_block_local_defs.top());
+    for (this_defs) |d| {
+        const region = d.fwd_ref_region orelse continue;
+        // Mutual recursion only applies between function definitions; a cycle
+        // through a non-function value is reported as use-before-definition.
+        if (d.is_fn and d.refs_back and blockLocalIsFn(this_defs, d.fwd_ref_from.?)) {
+            try self.env.pushDiagnostic(Diagnostic{ .mutually_recursive_local_definitions = .{
+                .ident1 = d.fwd_ref_from.?,
+                .ident2 = d.ident,
+                .region = region,
+            } });
+        } else {
+            try self.env.pushDiagnostic(Diagnostic{ .local_reference_before_definition = .{
+                .ident = d.ident,
+                .region = region,
+            } });
+        }
+    }
+}
+
+fn blockLocalIsFn(defs: []const BlockLocalDef, target: Ident.Idx) bool {
+    for (defs) |d| {
+        if (d.ident.eql(target)) return d.is_fn;
+    }
+    return false;
+}
+
+/// The index in `scratch_block_local_defs` of the definition named `ident` in
+/// the current or an enclosing block body (recorded by the per-block pre-scan),
+/// or null if there is none. A lookup miss on such a name means it is used
+/// before its (sequential) definition. Scans from the end so a name shadowed
+/// across nested blocks resolves to the nearest (innermost) declaration, since
+/// the pre-scan appends outer entries before inner ones.
+fn blockLocalDefIndex(self: *const Self, ident: Ident.Idx) ?usize {
+    const defs = self.scratch_block_local_defs.items.items;
+    var i: usize = defs.len;
+    while (i > 0) {
+        i -= 1;
+        if (defs[i].ident.eql(ident)) return i;
+    }
+    return null;
 }
 
 const StatementResult = struct {
@@ -12781,6 +13304,38 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     const ast_body_expr = self.parse_ir.store.getExpr(d.body);
     const is_lambda = ast_body_expr == .lambda;
 
+    // A local function definition must be recognized as a direct local
+    // procedure (excluded from closure captures) during its OWN body so that a
+    // recursive self-reference is looked up directly rather than captured. The
+    // previous block pre-pass registered all block lambdas up front; with
+    // sequential scoping we register each one just before its body instead.
+    if (is_lambda) {
+        try self.scratch_local_function_patterns.append(pattern_idx);
+    }
+
+    // Track which block-local definition's body we're canonicalizing, so that
+    // references it makes can be attributed to it for sequential local-let
+    // scoping (forward-reference / mutual-recursion detection).
+    const saved_current_local_def_ident = self.current_local_def_ident;
+    const saved_current_local_def_index = self.current_local_def_index;
+    const ast_decl_pattern = self.parse_ir.store.getPattern(d.pattern);
+    if (ast_decl_pattern == .ident) {
+        const decl_ident = self.parse_ir.tokens.resolveIdentifier(ast_decl_pattern.ident.ident_tok);
+        self.current_local_def_ident = decl_ident;
+        self.current_local_def_index = if (decl_ident) |di| self.blockLocalDefIndex(di) else null;
+        // If this definition's name was already forward-referenced earlier in
+        // the block (an error we report at block end), mark it used so it does
+        // not also produce a misleading "unused variable" warning.
+        if (self.current_local_def_index) |idx| {
+            if (self.scratch_block_local_defs.items.items[idx].fwd_ref_region != null) {
+                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            }
+        }
+    } else {
+        self.current_local_def_ident = null;
+        self.current_local_def_index = null;
+    }
+
     // Save and set self-reference tracking for issues #8831, #9043:
     // - defining_pattern: the main pattern (handles `a = a`)
     // - defining_patterns_start: node index for new patterns (handles tuple cases)
@@ -12797,6 +13352,8 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     // Restore self-reference tracking
     self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
+    self.current_local_def_ident = saved_current_local_def_ident;
+    self.current_local_def_index = saved_current_local_def_index;
 
     const stmt_idx = if (pattern_reused_existing_var)
         try self.env.addStatement(Statement{ .s_reassign = .{

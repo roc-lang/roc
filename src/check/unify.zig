@@ -499,7 +499,13 @@ const Unifier = struct {
                 self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
-            .alias => return error.TypeMismatch,
+            .alias => |b_alias| {
+                // Aliases are transparent, so expand to the backing var and
+                // unify that against the rigid. This mirrors the `.rigid` branch
+                // of `unifyAlias`, keeping unification commutative.
+                const backing_var = self.types_store.getAliasBackingVar(b_alias);
+                try self.unifyGuarded(backing_var, vars.a.var_);
+            },
             .structure => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
@@ -537,25 +543,10 @@ const Unifier = struct {
                 }
             },
             .structure => {
-                // When unifying an alias with a concrete structure, we
-                // want to preserve the alias for display while ensuring the
-                // types are compatible.
-
-                // First, we unify the concrete var with the alias backing var
-                // IMPORTANT: The arg order here is important! Unifying
-                // updates the second var to hold the type, and the first
-                // var to redirect to the second
+                // Structural aliases are transparent. The concrete structure
+                // constrains the alias backing; alias spelling is checked
+                // presentation data, not union-find representative shape.
                 try self.unifyGuarded(vars.b.var_, backing_var);
-
-                // Next, we create a fresh alias (which internally points to `backing_var`),
-                // then we redirect both a & b to the new alias.
-                const fresh_alias_var = try self.fresh(vars, .{ .alias = a_alias });
-
-                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
-                // Because of this, we do not loose any rank information.
-                // This is essentially a custom `self.merge` strategy
-                try self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var);
-                try self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var);
             },
             .err => self.merge(vars, .err),
         }
@@ -634,27 +625,11 @@ const Unifier = struct {
             },
             .rigid => return error.TypeMismatch,
             .alias => |b_alias| {
-                // When unifying an alias with a concrete structure, we
-                // want to preserve the alias for display while ensuring the
-                // types are compatible.
-
                 const backing_var = self.types_store.getAliasBackingVar(b_alias);
-
-                // First, we unify the concrete var with the alias backing var
-                // IMPORTANT: The arg order here is important! Unifying
-                // updates the second var to hold the type, and the first
-                // var to redirect to the second
+                // Structural aliases are transparent. The concrete structure
+                // constrains the alias backing; alias spelling is checked
+                // presentation data, not union-find representative shape.
                 try self.unifyGuarded(vars.a.var_, backing_var);
-
-                // Next, we create a fresh alias (which internally points to `backing_var`),
-                // then we redirect both a & b to the new alias.
-                const fresh_alias_var = try self.fresh(vars, .{ .alias = b_alias });
-
-                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
-                // Because of this, we do not loose any rank information.
-                // This is essentially a custom `self.merge` strategy
-                try self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var);
-                try self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var);
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);

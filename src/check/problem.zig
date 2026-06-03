@@ -31,6 +31,7 @@ pub const StaticDispatch = types.StaticDispatch;
 pub const DispatcherNotNominal = types.DispatcherNotNominal;
 pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
+pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;

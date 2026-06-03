@@ -234,6 +234,8 @@ MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:153:1:153:25
+MISSING METHOD - fuzz_crash_027.md:142:10:142:24
+MISSING METHOD - fuzz_crash_027.md:142:10:142:34
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -1097,6 +1099,26 @@ tuple : Value((a, b, c))
 
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `statod` on an unresolved type variable, but unresolved type variables have no methods.
+**fuzz_crash_027.md:142:10:142:24:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	        ^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
+
+**MISSING METHOD**
+This is trying to dispatch a method named `ned` on an unresolved type variable, but unresolved type variables have no methods.
+**fuzz_crash_027.md:142:10:142:34:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Hint:** You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -2237,7 +2259,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2725)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2723)
 									(receiver
 										(e-match
 											(match
@@ -2262,7 +2284,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2720)
+										(e-dispatch-call (method "times") (constraint-fn-var 2718)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2277,18 +2299,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2833)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2831)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2798)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2796)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2933)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2931)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2898)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2896)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2303,11 +2325,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3043)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3041)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3038)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3036)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2322,12 +2344,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3109)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3107)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 3076)
+																		(e-dispatch-call (method "statod") (constraint-fn-var 3074)
 																			(receiver
 																				(e-match
 																					(match
@@ -2342,8 +2364,7 @@ expect {
 																										(p-nominal-external (builtin)
 																											(p-applied-tag))))
 																								(value
-																									(e-lookup-local
-																										(p-assign (ident "#ok")))))
+																									(e-runtime-error (tag "erroneous_value_expr"))))
 																							(branch
 																								(patterns
 																									(pattern (degenerate false)
@@ -2365,8 +2386,7 @@ expect {
 																					(p-nominal-external (builtin)
 																						(p-applied-tag))))
 																			(value
-																				(e-lookup-local
-																					(p-assign (ident "#ok")))))
+																				(e-runtime-error (tag "erroneous_value_expr"))))
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)

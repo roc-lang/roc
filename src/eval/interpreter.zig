@@ -4126,9 +4126,6 @@ pub const Interpreter = struct {
                     .interp = self,
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
-                const copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void = &(struct {
-                    fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
-                }).f;
                 const result = builtins.list.listPrepend(
                     list_val,
                     info.alignment,
@@ -4137,7 +4134,40 @@ pub const Interpreter = struct {
                     elems_rc,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-                    copy_fn,
+                    &builtins.list.copy_fallback,
+                    &self.roc_ops,
+                );
+                break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_swap => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                if (info.width == 0) {
+                    // ZST elements: swap is a no-op on observable contents; length unchanged.
+                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                }
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+                const result = builtins.list.listSwap(
+                    list_val,
+                    info.alignment,
+                    info.width,
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    builtins.utils.UpdateMode.Immutable,
+                    &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -4219,17 +4249,76 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_replace_unsafe => blk: {
+                const info = self.listElemInfo(arg_layout);
+                const elems_rc = self.builtinListElemRc(arg_layout);
+
+                // The return layout is a 2-field record { list : List(a), value : a }.
+                // Disambiguate the two fields by their layout tag (one is a list, one is the element).
+                const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
+                if (ret_layout_val.tag != .struct_) return self.runtimeError("list_replace_unsafe: expected struct return layout");
+                const rec_idx = ret_layout_val.getStruct().idx;
+                const f0_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 0);
+                const f0_layout_val = self.layout_store.getLayout(f0_layout);
+                const f0_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+                const f1_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+                const f1_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 1);
+                const f0_is_list = f0_layout_val.tag == .list or f0_layout_val.tag == .list_of_zst;
+                const list_field_off = if (f0_is_list) f0_offset else f1_offset;
+                const value_field_off = if (f0_is_list) f1_offset else f0_offset;
+                const list_field_layout = if (f0_is_list) f0_layout else f1_layout;
+
+                const val = try self.alloc(ll.ret_layout);
+
+                if (info.width == 0) {
+                    // ZST element: list is unchanged, value field is zero-sized so we don't write to it.
+                    const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                    const list_val_inner = try self.rocListToValue(canonicalZstList(source_list.len()), list_field_layout);
+                    @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], list_val_inner.ptr[0..@sizeOf(RocList)]);
+                    break :blk val;
+                }
+
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                var elem_rc_ctx = ListElementRcContext{
+                    .interp = self,
+                    .elem_layout = self.listElemLayout(arg_layout),
+                };
+
+                // listReplace writes the displaced (old) element into the out_element slot.
+                // Aim that slot directly at the value field of the result record.
+                const value_dest_ptr: [*]u8 = @ptrCast(val.offset(value_field_off).ptr);
+
+                const result_list = builtins.list.listReplace(
+                    self.valueToRocListForLayout(args[0], arg_layout),
+                    info.alignment,
+                    args[1].read(u64),
+                    @ptrCast(args[2].ptr),
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    value_dest_ptr,
+                    &builtins.list.copy_fallback,
+                    &self.roc_ops,
+                );
+
+                // Write the resulting list into the list field of the record.
+                const list_val_inner = try self.rocListToValue(result_list, list_field_layout);
+                @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], list_val_inner.ptr[0..@sizeOf(RocList)]);
+
+                break :blk val;
+            },
             .list_set => blk: {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
                 if (info.width == 0) {
-                    const val = try self.alloc(ll.ret_layout);
-                    const pair = self.resolveListElementPairStruct(ll.ret_layout);
                     const source_list = self.valueToRocListForLayout(args[0], arg_layout);
-                    const result_value = try self.rocListToValue(canonicalZstList(source_list.len()), pair.list_layout);
-                    try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, result_value, pair.list_layout);
-                    try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, self.listElemLayout(arg_layout));
-                    break :blk val;
+                    break :blk self.rocListToValue(canonicalZstList(source_list.len()), ll.ret_layout);
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -4239,10 +4328,8 @@ pub const Interpreter = struct {
                     .interp = self,
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
-                const copy_fn: *const fn (?[*]u8, ?[*]u8) callconv(.c) void = &(struct {
-                    fn f(_: ?[*]u8, _: ?[*]u8) callconv(.c) void {}
-                }).f;
-                // listReplace writes old element into out_element
+                // listReplace requires a scratch slot for the old element; we discard it here
+                // because list_set returns only the new list (replace semantics return a pair).
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
                 const result = builtins.list.listReplace(
                     self.valueToRocListForLayout(args[0], arg_layout),
@@ -4256,15 +4343,10 @@ pub const Interpreter = struct {
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     @ptrCast(old_elem.ptr),
-                    copy_fn,
+                    &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
-                const val = try self.alloc(ll.ret_layout);
-                const pair = self.resolveListElementPairStruct(ll.ret_layout);
-                const result_value = try self.rocListToValue(result, pair.list_layout);
-                try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, result_value, pair.list_layout);
-                try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, old_elem, self.listElemLayout(arg_layout));
-                break :blk val;
+                break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_with_capacity => blk: {
                 const elem_layout = self.listElemLayout(ll.ret_layout);
@@ -4377,6 +4459,12 @@ pub const Interpreter = struct {
             .num_shift_left_by => self.numShiftOp(args[0], args[1], ll.ret_layout, arg_layout, .shl),
             .num_shift_right_by => self.numShiftOp(args[0], args[1], ll.ret_layout, arg_layout, .shr),
             .num_shift_right_zf_by => self.numShiftOp(args[0], args[1], ll.ret_layout, arg_layout, .shr_zf),
+
+            // ── Bitwise logical ──
+            .num_bitwise_and => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .@"and"),
+            .num_bitwise_or => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .@"or"),
+            .num_bitwise_xor => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .xor),
+            .num_bitwise_not => self.numBitwiseOp(args[0], args[0], ll.ret_layout, arg_layout, .not),
 
             // ── Comparison ──
             .num_is_eq => self.numCmpOp(args[0], args[1], arg_layout, .eq),
@@ -4812,6 +4900,7 @@ pub const Interpreter = struct {
     const NumOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
     const CmpOp = enum { eq, lt, lte, gt, gte };
     const ShiftOp = enum { shl, shr, shr_zf };
+    const BitwiseOp = enum { @"and", @"or", xor, not };
     const NumericOperandKind = union(enum) {
         unsigned_int: u16,
         signed_int: u16,
@@ -5113,6 +5202,33 @@ pub const Interpreter = struct {
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: shift used non-integer layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        }
+        return val;
+    }
+
+    fn numBitwiseOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: BitwiseOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => val.write(u8, bitwiseOp(u8, a.read(u8), b.read(u8), op)),
+                16 => val.write(u16, bitwiseOp(u16, a.read(u16), b.read(u16), op)),
+                32 => val.write(u32, bitwiseOp(u32, a.read(u32), b.read(u32), op)),
+                64 => val.write(u64, bitwiseOp(u64, a.read(u64), b.read(u64), op)),
+                128 => val.write(u128, bitwiseOp(u128, a.read(u128), b.read(u128), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer bitwise width {d}", .{bits}),
+            },
+            .signed_int => |bits| switch (bits) {
+                8 => val.write(i8, bitwiseOp(i8, a.read(i8), b.read(i8), op)),
+                16 => val.write(i16, bitwiseOp(i16, a.read(i16), b.read(i16), op)),
+                32 => val.write(i32, bitwiseOp(i32, a.read(i32), b.read(i32), op)),
+                64 => val.write(i64, bitwiseOp(i64, a.read(i64), b.read(i64), op)),
+                128 => val.write(i128, bitwiseOp(i128, a.read(i128), b.read(i128), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer bitwise width {d}", .{bits}),
+            },
+            .float, .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: bitwise used non-integer layout {d}",
                 .{@intFromEnum(arg_layout)},
             ),
         }
@@ -6275,6 +6391,15 @@ pub const Interpreter = struct {
                 const U = std.meta.Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
+        };
+    }
+
+    fn bitwiseOp(comptime T: type, av: T, bv: T, op: BitwiseOp) T {
+        return switch (op) {
+            .@"and" => av & bv,
+            .@"or" => av | bv,
+            .xor => av ^ bv,
+            .not => ~av,
         };
     }
 

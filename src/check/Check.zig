@@ -98,9 +98,6 @@ scratch_record_fields: base.Scratch(types_mod.RecordField),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
-/// Stack of type variables currently being constraint-checked, used to detect recursive constraints
-/// When a var appears in this stack while we're checking its constraints, we've detected recursion
-constraint_check_stack: std.ArrayList(Var),
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -120,6 +117,29 @@ expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 current_expect_region: ?Region,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Local block-statement (`s_decl`) function patterns whose body is currently
+/// being type-checked. Used to detect self-recursion (and references to an
+/// enclosing in-flight def) of LOCAL function defs so their recursive references
+/// defer unification (fresh flex + a pending `local_recursive_refs` entry)
+/// instead of lowering the pattern var's rank, which would prevent
+/// generalization of the def's rigid type variables. Analogous to
+/// `top_level_ptrns` but for block-local defs.
+///
+/// Presence == "currently being checked" (defer); absence == normal
+/// lookup/instantiate. A reference can only resolve to the current def or an
+/// enclosing in-flight one: forward references to a *later* sibling, and local
+/// mutual recursion, are rejected during canonicalization (local defs are
+/// sequentially scoped), so this is always a single self/enclosing chain.
+local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
+/// Recursive references recorded while checking a LOCAL block def's body (a
+/// self-reference, or a reference to an enclosing in-flight local def), pending
+/// validation once the def's lambda has generalized. Kept in a dedicated stack
+/// rather than the shared `constraints` list because sequential scoping
+/// guarantees local recursion is a single self/enclosing chain — never a mutual
+/// group — so these need no cycle machinery, no per-use instantiation, and no
+/// entanglement with the other constraint kinds (notably early-return / `?`
+/// constraints, which `processReturnConstraints` compacts mid-body).
+local_recursive_refs: std.ArrayListUnmanaged(LocalRecursiveRef) = .empty,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
@@ -172,6 +192,15 @@ erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// In that case, we avoid adding "erroneous value" diagnostics during checking
 /// to prevent cascading errors from malformed nodes.
 has_can_diagnostics: bool,
+/// Per-instantiation static-dispatch receivers, recorded so the end-of-check
+/// ambiguity sweep can revisit dispatches hidden inside polymorphic helpers — the
+/// expression-keyed def-site sweep never sees these instantiated receiver vars.
+/// Every time a generalized scheme carrying a non-`from_numeral` static-dispatch
+/// constraint is instantiated, the freshly created receiver var is recorded here.
+/// After all solving, a recorded receiver that is still flex/rigid, carries a real
+/// (non-`from_numeral`, non-`is_eq`) dispatch constraint, and does not resolve into
+/// the pinnable set can never be pinned, so its dispatch is reported as ambiguous.
+instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
 /// A def + processing data
 const DefProcessed = struct {
     def_idx: CIR.Def.Idx,
@@ -179,8 +208,35 @@ const DefProcessed = struct {
     status: HasProcessed,
 };
 
+/// A static-dispatch receiver var created by instantiating a constrained scheme.
+/// The end-of-check ambiguity sweep revisits each such receiver: if it is still a
+/// flex/rigid var carrying a real (non-`from_numeral`, non-`is_eq`) dispatch
+/// constraint and does not resolve into the pinnable set, no caller can ever pin
+/// it, so its dispatch is ambiguous.
+const InstantiationDispatcher = struct {
+    /// The freshly instantiated receiver (dispatcher) var.
+    dispatcher_var: Var,
+};
+
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
+
+/// A local block-statement (`s_decl`) function def whose body is currently being
+/// checked. Block defs are `s_decl` statements (not `CIR.Def`), so there is no
+/// `Def.Idx` — only the name (for error context) and pattern are tracked.
+const LocalDefProcessed = struct {
+    def_name: ?Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
+/// A recursive reference made inside a LOCAL block def's body, pending
+/// validation once the def's lambda has generalized. `pat_var` is the def's
+/// (eventually generalized) pattern var; `expr_var` is the reference's flex var.
+const LocalRecursiveRef = struct {
+    pat_var: Var,
+    expr_var: Var,
+    def_name: ?Ident.Idx,
+};
 
 /// A deferred def-level unification (def_var = ptrn_var = expr_var).
 const DeferredDefUnification = struct {
@@ -205,7 +261,19 @@ const ScratchStaticDispatchConstraint = struct {
 /// In most cases, we don't defer constraint checking and unify things
 /// immediately. However, there are some cases where it's necessary.
 const Constraint = union(enum) {
-    eql: struct { expected: Var, actual: Var, ctx: problem.Context },
+    eql: struct {
+        expected: Var,
+        actual: Var,
+        ctx: problem.Context,
+        /// True when this is a `recursive_def` cross-reference to a *different*,
+        /// annotated member of a recursive group (mutual recursion). Such a
+        /// reference is instantiated per use-site at validation time so each
+        /// member keeps its own rigid type parameters; a self-reference (or an
+        /// unannotated target) stays monomorphic. Drives resolution, not the
+        /// error message — kept here rather than in `ctx` (which is purely
+        /// diagnostic) so it doesn't have to ride inside the problem context.
+        is_cross_reference: bool = false,
+    },
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -358,7 +426,6 @@ fn initAssumePrepared(
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
-        .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .bool_var = undefined,
         .str_var = undefined,
@@ -377,6 +444,7 @@ fn initAssumePrepared(
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
+        .instantiation_dispatchers = .empty,
     };
 
     return self;
@@ -456,14 +524,16 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
-    self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
+    self.local_processing_ptrns.deinit(self.gpa);
+    self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
+    self.instantiation_dispatchers.deinit(self.gpa);
 }
 
 /// Assert that type vars and regions in sync
@@ -810,16 +880,36 @@ fn instantiateVarHelp(
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
             // Track newly instantiated from_numeral flex vars so
-            // finalizeNumericDefaults knows about them.
+            // finalizeNumericDefaults knows about them. Separately, a fresh flex
+            // receiver that carries a non-`from_numeral` static-dispatch constraint
+            // is a per-instantiation dispatcher: record it so the end-of-check sweep
+            // can decide its ambiguity per-instantiation. This is the hook that
+            // closes the holes where a polymorphic helper hides an ambiguous
+            // dispatch that only manifests at an unpinned call site. We only RECORD
+            // here (rather than also enqueuing a deferred re-check): the normal
+            // constraint solver already validates the receiver once this call's
+            // arguments unify, so an extra enqueue would only double-process and
+            // shift error attribution.
             if (fresh_resolved.desc.content == .flex) {
                 const flex = fresh_resolved.desc.content.flex;
                 if (flex.constraints.len() > 0) {
                     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                    var has_from_numeral = false;
+                    var has_non_from_numeral = false;
                     for (constraints) |c| {
                         if (c.origin == .from_numeral) {
-                            self.types.from_numeral_flex_count += 1;
-                            break;
+                            has_from_numeral = true;
+                        } else {
+                            has_non_from_numeral = true;
                         }
+                    }
+                    if (has_from_numeral) {
+                        self.types.from_numeral_flex_count += 1;
+                    }
+                    if (has_non_from_numeral) {
+                        try self.instantiation_dispatchers.append(self.gpa, .{
+                            .dispatcher_var = fresh_var,
+                        });
                     }
                 }
             }
@@ -1756,6 +1846,477 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     }
 
     try self.reportPolymorphicTopLevelValues();
+
+    // Two coordinated ambiguity sweeps share a `reported` set keyed by resolved
+    // dispatcher var so a receiver caught per-instantiation is not also reported
+    // by the def-site sweep. The per-instantiation sweep runs first because it
+    // produces the more informative two-region diagnostic; the def-site sweep then
+    // covers the direct cases (`poly().to_i128()`, `poly() == poly()`) where the
+    // dispatch is created at the use site rather than copied by an instantiation.
+    var reported_dispatch_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer reported_dispatch_vars.deinit();
+
+    // The pinnable set: every resolved var that some instantiation can supply a
+    // concrete value for — reachable through a function ARGUMENT position of a
+    // top-level def, or reachable from any lambda parameter (nested lambdas
+    // included). A dispatch receiver that resolves INTO this set is pinnable
+    // (a caller, at some level, can pin it), so neither sweep reports it.
+    var pinnable = std.AutoHashMap(Var, void).init(self.gpa);
+    defer pinnable.deinit();
+    try self.collectPinnableVars(&pinnable);
+
+    try self.reportAmbiguousStaticDispatchPerInstantiation(&reported_dispatch_vars, &pinnable);
+    try self.reportAmbiguousStaticDispatch(&reported_dispatch_vars, &pinnable);
+}
+
+/// Populate `pinnable` with every resolved var that some instantiation can pin:
+/// (a) every var reachable through an ARGUMENT position of a top-level def's
+/// generalized type, and (b) every var reachable from a lambda parameter pattern
+/// (local/nested lambdas included). A static-dispatch receiver that resolves into
+/// this set can be pinned by a caller at some level, so it is not ambiguous.
+fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable);
+    }
+
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const args: ?CIR.Pattern.Span = switch (self.cir.store.getExpr(expr_idx)) {
+            .e_lambda => |lambda| lambda.args,
+            .e_hosted_lambda => |lambda| lambda.args,
+            else => null,
+        };
+        if (args) |arg_span| {
+            for (self.cir.store.slicePatterns(arg_span)) |pattern_idx| {
+                try self.collectReachableVars(ModuleEnv.varFrom(pattern_idx), pinnable);
+            }
+        }
+    }
+}
+
+/// Detect ambiguous static dispatch on a per-INSTANTIATION basis. Every time a
+/// generalized scheme carrying a non-`from_numeral` static-dispatch constraint
+/// is instantiated, `instantiateVarHelp` recorded the freshly created receiver
+/// var here. After all solving, a recorded receiver that is still flex/rigid,
+/// carries a real (non-`from_numeral`, non-`is_eq`) dispatch constraint, and does
+/// not resolve into the `pinnable` set can never be pinned by any caller — its
+/// dispatch is genuinely ambiguous and would reach the lowering `dispatchTarget`
+/// invariant. We report it (`MISSING METHOD`) and mark the offending call
+/// expression a runtime error so lowering never reaches that invariant.
+///
+/// This is the per-instantiation companion to `reportAmbiguousStaticDispatch`:
+/// the latter catches direct/def-site dispatches (the receiver appears directly
+/// in a checked expression's type), while this catches dispatches hidden inside a
+/// polymorphic helper that only become ambiguous at an unpinned call site.
+///
+/// An uncalled helper is never instantiated, so nothing is recorded for it and it
+/// stays clean. A helper instantiated at a concrete type has its recorded receiver
+/// resolved (no longer flex/rigid) by the time this runs, so it stays clean too.
+fn reportAmbiguousStaticDispatchPerInstantiation(
+    self: *Self,
+    reported: *std.AutoHashMap(Var, void),
+    pinnable: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    if (self.instantiation_dispatchers.items.len == 0) return;
+
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const resolved = self.types.resolveVar(dispatcher.dispatcher_var);
+        const constraints_range = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            else => continue,
+        };
+        if (constraints_range.len() == 0) continue;
+        if (reported.contains(resolved.var_)) continue;
+
+        // Pick the constraint to report, skipping constraints that monomorphization
+        // can resolve WITHOUT a nominal owner — those are never an ambiguous dead
+        // end and would produce false positives on valid code:
+        //
+        //  - `from_numeral`: a numeric literal. Numeric defaulting and
+        //    `checkAllFromNumeralFlexConstraintCompatibility` own it; it is resolved
+        //    (e.g. defaulted to `Dec`) at monomorphization. A receiver carrying ANY
+        //    `from_numeral` constraint is skipped entirely, matching the def-site
+        //    sweep. Essential for numeric helpers like `|x| x + y` whose receiver
+        //    carries `desugared_binop` (`+`) plus `from_numeral`.
+        //  - `is_eq`: structural equality. Lowering compares records/tuples/tag
+        //    unions/lists structurally with no owner needed, so a flex `is_eq`
+        //    receiver placeholder (left at check time by valid code such as
+        //    `[1] == [1]` or `Try.Ok(1) == Try.Ok(1)`, whose real value is concrete)
+        //    is not a dead end. A genuinely ambiguous equality on a bare flex value
+        //    (`poly() == poly()`) is still caught by the def-site sweep, which keys
+        //    on an expression whose OWN type is the bare-flex receiver.
+        //
+        // What remains — and is reported — is a real method dispatch
+        // (`method_call`/`desugared_unaryop`, or a non-equality
+        // `desugared_binop`) that requires a nominal owner the instantiation never
+        // supplied. `where_clause` records an explicit polymorphic signature
+        // contract; if the instantiated body actually uses that contract, the use
+        // contributes a normal dispatch constraint that is reported here.
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        var first_constraint: ?StaticDispatchConstraint = null;
+        var skip_receiver = false;
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) {
+                skip_receiver = true;
+            } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
+                continue;
+            } else if (c.origin == .where_clause) {
+                continue;
+            } else if (first_constraint == null) {
+                first_constraint = c;
+            }
+        }
+        if (skip_receiver) continue;
+        const constraint = first_constraint orelse continue;
+
+        // If the receiver resolves INTO the pinnable set, some caller — at this
+        // call's level or an enclosing one — can pin it, so it is not a dead end.
+        // The receiver of a hidden helper dispatch that the call DID pin unifies
+        // with a lambda parameter (e.g. `outer`'s `x` in `outer = |x| inner(x)`,
+        // pinned at `outer(10)`); the receiver of a genuine hole (`get(none({}))`)
+        // is a fresh instantiated var that unifies with nothing concrete, so it is
+        // absent from the set and reported. This is the same pinnability test the
+        // def-site sweep uses, applied to the instantiated receiver.
+        if (pinnable.contains(resolved.var_)) continue;
+
+        // Locate the call site that left this receiver undetermined. The receiver
+        // var is internal to the instantiated callee type, so no expression's own
+        // type IS the receiver — instead it flows into one of a call's ARGUMENTS,
+        // whose type structurally CONTAINS it in a DATA position (a tag payload,
+        // record field, tuple element, or nominal argument) — never inside a
+        // function type. The data-position requirement is what distinguishes a
+        // genuine hole from a polymorphic function passed as a value: in
+        // `get(none({}))` the receiver is the tag payload of the `FfiOption`
+        // argument (data) and is genuinely undetermined; in `Str.inspect(f)` where
+        // `f = |x| x + 1`, the receiver is `f`'s parameter — an uncalled function
+        // value whose parameter a future call would pin, which is not ambiguous.
+        // (Such a higher-order constraint that IS applied, like the `e_higher_order`
+        // corpus case, is caught by the def-site sweep instead.) The call expression
+        // is the dispatch use (primary region, marked a runtime error so lowering
+        // never reaches the `dispatchTarget` invariant); the argument is what left
+        // the type undetermined (secondary region). Marking the specific call — not
+        // the helper's shared body — leaves the helper's concrete call sites
+        // untouched.
+        var primary: ?Region = null;
+        var secondary: ?Region = null;
+        var raw_node_idx: u32 = 0;
+        while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+            const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+            if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+            if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+            const call = switch (self.cir.store.getExpr(expr_idx)) {
+                .e_call => |c| c,
+                else => continue,
+            };
+
+            var arg_region: ?Region = null;
+            for (self.cir.store.sliceExpr(call.args)) |arg_idx| {
+                self.var_set.clearRetainingCapacity();
+                try self.collectDataReachableVars(ModuleEnv.varFrom(arg_idx), &self.var_set);
+                if (self.var_set.contains(resolved.var_)) {
+                    arg_region = self.cir.store.getExprRegion(arg_idx);
+                    break;
+                }
+            }
+            if (arg_region == null) continue;
+
+            if (primary == null) {
+                primary = self.cir.store.getExprRegion(expr_idx);
+                secondary = arg_region;
+            }
+
+            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                .region = self.cir.store.getExprRegion(expr_idx),
+            } });
+            self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+        }
+
+        // No call passes the receiver as data: it is a polymorphic function value's
+        // own parameter (or otherwise not a real dispatch dead end) — not ambiguous.
+        if (primary == null) continue;
+
+        try reported.put(resolved.var_, {});
+
+        const primary_region = primary.?;
+        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
+        const is_binop = constraint.origin == .desugared_binop;
+
+        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+            .region = primary_region,
+            .secondary_region = secondary,
+            .dispatcher_snapshot = snapshot,
+            .method_name = constraint.fn_name,
+            .is_binop = is_binop,
+            .binop_negated = constraint.binop_negated,
+        } } });
+    }
+}
+
+/// Detect ambiguous static dispatch: a static-dispatch-constrained type variable
+/// that is reachable through no function ARGUMENT position and is no lambda
+/// parameter, so no instantiation can ever pin it down. Such a variable reaches
+/// monomorphization as an unresolved flex/rigid dispatcher, which the lowering
+/// `dispatchTarget` invariant forbids. We catch it here, emit a `MISSING METHOD`
+/// diagnostic, and mark the offending expression a runtime error so lowering
+/// never reaches that invariant.
+///
+/// This runs at the very end of checking, once numeric defaulting, generalization,
+/// recursive-cycle resolution, constraint solving, and the poison passes have all
+/// settled — the same settled-state invariant `reportPolymorphicTopLevelValues`
+/// relies on.
+fn reportAmbiguousStaticDispatch(
+    self: *Self,
+    reported: *std.AutoHashMap(Var, void),
+    pinnable: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    // `pinnable` (built by `collectPinnableVars`) holds every resolved var id that
+    // some instantiation can pin: every var reachable through an ARGUMENT position
+    // of a top-level def's generalized type, and every var reachable from a lambda
+    // parameter pattern (local/nested lambdas included).
+    //
+    // Sweep every expression. Flag any whose own type var is a flex/rigid var with
+    // a non-`from_numeral` static-dispatch constraint and whose resolved id is not
+    // pinnable. Dedup by resolved var id (using the set shared with the
+    // per-instantiation sweep) so a value flowing through multiple expressions — or
+    // already reported per-instantiation — is reported once, preferring the first
+    // (innermost node-order) occurrence, which lands the underline on the dispatch
+    // use.
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+
+        const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
+        const constraints_range = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            else => continue,
+        };
+        if (constraints_range.len() == 0) continue;
+        if (pinnable.contains(resolved.var_)) continue;
+        if (reported.contains(resolved.var_)) continue;
+
+        // Decide whether to flag based on the constraint origins.
+        //
+        // - `from_numeral`: the var is a numeric literal. Numeric defaulting
+        //   resolves it (to `Dec` when otherwise unconstrained) and reports any
+        //   unsatisfiable conversion separately, so it is never flagged here —
+        //   even when it also carries other constraints (e.g. a literal operand
+        //   of `+` also has a `desugared_binop` constraint).
+        // - `where_clause`: the dispatch is part of an explicit polymorphic
+        //   signature (`f : a -> a where [a.method : ...]`). That is a declared
+        //   contract pinned when callers instantiate the signature, so it is
+        //   legitimate and never flagged.
+        //
+        // Only the remaining un-annotated dispatch origins (`method_call`,
+        // `desugared_binop`, `desugared_unaryop`) can produce an unpinnable flex
+        // dispatcher at monomorphization. Flag using the first such constraint.
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        var has_excluded_origin = false;
+        var first_constraint: ?StaticDispatchConstraint = null;
+        for (constraints) |c| {
+            switch (c.origin) {
+                .from_numeral, .where_clause => {
+                    has_excluded_origin = true;
+                },
+                .method_call, .desugared_binop, .desugared_unaryop => {
+                    if (first_constraint == null) first_constraint = c;
+                },
+            }
+        }
+        if (has_excluded_origin) continue;
+        const constraint = first_constraint orelse continue;
+
+        try reported.put(resolved.var_, {});
+
+        const region = self.cir.store.getExprRegion(expr_idx);
+        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
+
+        const is_binop = constraint.origin == .desugared_binop;
+
+        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+            .region = region,
+            .secondary_region = null,
+            .dispatcher_snapshot = snapshot,
+            .method_name = constraint.fn_name,
+            .is_binop = is_binop,
+            .binop_negated = constraint.binop_negated,
+        } } });
+
+        // Mark the expression a runtime error so lowering skips it and never
+        // reaches the `dispatchTarget` invariant.
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = region,
+        } });
+        self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    }
+}
+
+/// Collect, into `out`, every resolved var id reachable through a function
+/// ARGUMENT position of `var_`. Argument structure is recursed fully (records,
+/// tuples, tag payloads, nested function args AND rets). Return positions of the
+/// outer function are NOT collected (a return-only var is not parameter-pinnable),
+/// but once inside an argument every nested position counts.
+fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out),
+        .structure => |flat| switch (flat) {
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    try self.collectReachableVars(arg, out);
+                }
+                // Recurse into the return type: a curried function returns more
+                // functions whose own arguments are still parameter-pinnable.
+                try self.collectArgPositionVars(func.ret, out);
+            },
+            else => {},
+        },
+        else => {},
+    }
+}
+
+/// Collect, into `out`, `var_`'s resolved id and every resolved var id
+/// structurally reachable from it (tuples, records, tag payloads, function args
+/// and rets). Used to mark whole argument-position type structures as pinnable.
+fn collectReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (out.contains(resolved.var_)) return;
+    try out.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .err => {},
+        // A constrained type variable's `where` constraints relate it to other
+        // type variables through the constraint method's signature. For example
+        // `c.is_eq : c, d -> f` makes `d` and `f` reachable from `c`; following
+        // `f.not : f -> e` then reaches `e`. When `c` is parameter-pinnable, every
+        // variable reachable through its constraint signatures is pinnable too,
+        // because instantiating the parameter instantiates the whole constraint
+        // chain. (This is the spec's "recurse fully into arg structure".)
+        .flex, .rigid => {
+            const constraints_range = switch (resolved.desc.content) {
+                .flex => |flex| flex.constraints,
+                .rigid => |rigid| rigid.constraints,
+                else => unreachable,
+            };
+            const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+            for (constraints) |constraint| {
+                try self.collectReachableVars(constraint.fn_var, out);
+            }
+        },
+        .alias => |alias| try self.collectReachableVars(self.types.getAliasBackingVar(alias), out),
+        .structure => |flat| switch (flat) {
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    try self.collectReachableVars(elem, out);
+                }
+            },
+            .nominal_type => |nominal| {
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    try self.collectReachableVars(arg, out);
+                }
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    try self.collectReachableVars(arg, out);
+                }
+                try self.collectReachableVars(func.ret, out);
+            },
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectReachableVars(field_var, out);
+                }
+                try self.collectReachableVars(record.ext, out);
+            },
+            .record_unbound => |fields_range| {
+                const fields = self.types.getRecordFieldsSlice(fields_range);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectReachableVars(field_var, out);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| {
+                        try self.collectReachableVars(arg, out);
+                    }
+                }
+                try self.collectReachableVars(tag_union.ext, out);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+    }
+}
+
+/// Like `collectReachableVars`, but does NOT descend into FUNCTION types at all —
+/// only into data positions (tag payloads, record fields, tuple elements, nominal
+/// args). A var reachable this way is part of the actual data flowing through
+/// `var_`, not a parameter or result of a function value carried by `var_`. The
+/// per-instantiation ambiguity sweep uses this to distinguish a genuinely
+/// undetermined dispatch receiver passed as data (report) from a parameter of an
+/// uncalled polymorphic function value (do not report) — e.g. in `Str.inspect(f)`
+/// where `f = |x| x + 1`, the receiver is `f`'s parameter and the `+`-preserving
+/// return both live inside the function type, so neither is reached here.
+fn collectDataReachableVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (out.contains(resolved.var_)) return;
+    try out.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .alias => |alias| try self.collectDataReachableVars(self.types.getAliasBackingVar(alias), out),
+        .structure => |flat| switch (flat) {
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    try self.collectDataReachableVars(elem, out);
+                }
+            },
+            .nominal_type => |nominal| {
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    try self.collectDataReachableVars(arg, out);
+                }
+            },
+            // A function value is not data: its parameters and result are
+            // determined by a future call, not by the value passed here, so we do
+            // not descend into it at all.
+            .fn_pure, .fn_effectful, .fn_unbound => {},
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectDataReachableVars(field_var, out);
+                }
+                try self.collectDataReachableVars(record.ext, out);
+            },
+            .record_unbound => |fields_range| {
+                const fields = self.types.getRecordFieldsSlice(fields_range);
+                for (fields.items(.var_)) |field_var| {
+                    try self.collectDataReachableVars(field_var, out);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    for (self.types.sliceVars(tag_args)) |arg| {
+                        try self.collectDataReachableVars(arg, out);
+                    }
+                }
+                try self.collectDataReachableVars(tag_union.ext, out);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        else => {},
+    }
 }
 
 fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
@@ -4784,14 +5345,34 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Cycle detected: store env for merge at cycle root.
                             _ = try self.deferred_cycle_envs.append(self.gpa, sub_env);
 
-                            // Use the def's closure/expr var directly. After
-                            // checkDef, e_closure rank elevation has already run,
-                            // so the closure var is at rank 2 — safe for
-                            // unification without pulling body vars below the
-                            // generalization rank.
                             const def = self.cir.store.getDef(processing_def.def_idx);
                             const def_expr_var = ModuleEnv.varFrom(def.expr);
-                            _ = try self.unify(expr_var, def_expr_var, env);
+                            if (def.annotation != null) {
+                                // Forward reference to an ANNOTATED member of the
+                                // recursive group (mutual recursion). Decouple the
+                                // reference with a flex var and defer a
+                                // cross-reference constraint to the cycle root,
+                                // where the target is generalized and instantiated
+                                // per use-site. Unifying directly with the target's
+                                // (not-yet-generalized) type would force the two
+                                // members' rigid type parameters to coincide,
+                                // producing a spurious `T(k)` != `T(k)`.
+                                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                    .expected = def_expr_var,
+                                    .actual = expr_var,
+                                    .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                                    .is_cross_reference = true,
+                                } });
+                            } else {
+                                // Unannotated member: the group is inferred together
+                                // and shares type variables, so link monomorphically.
+                                // After checkDef, e_closure rank elevation has run,
+                                // so the closure var is at rank 2 — safe to unify
+                                // without pulling body vars below the generalization
+                                // rank.
+                                _ = try self.unify(expr_var, def_expr_var, env);
+                            }
 
                             break :blk;
                         } else {
@@ -4815,11 +5396,36 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // Set the expr to be a flex
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
+                        // A reference to a *different*, ANNOTATED def in the cycle
+                        // (mutual recursion) is instantiated per use-site at
+                        // validation time, so the members' rigid type parameters
+                        // don't clash. A self-reference, or a reference to an
+                        // unannotated member, stays monomorphic: unannotated
+                        // mutually-recursive functions are inferred as a group and
+                        // must share their (not-yet-generalized) type variables.
+                        const is_cross_reference = (referenced_def.annotation != null) and
+                            if (self.current_processing_def) |current_def|
+                                current_def != processing_def.def_idx
+                            else
+                                false;
+
+                        // For a cross-reference, target the callee's expr var
+                        // rather than its pattern var: at the cycle root the
+                        // root's pattern var is not yet linked to its generalized
+                        // type (that def-level unification happens after the body
+                        // is checked), but every participant's expr var has been
+                        // generalized by then — so instantiation can find it.
+                        const constraint_expected = if (is_cross_reference)
+                            ModuleEnv.varFrom(referenced_def.expr)
+                        else
+                            pat_var;
+
                         // Write down this constraint for later validation
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
-                            .expected = pat_var,
+                            .expected = constraint_expected,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                            .is_cross_reference = is_cross_reference,
                         } });
 
                         // Detect mutual recursion through local lookups. If the
@@ -4843,6 +5449,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processed => {},
                 }
+            }
+
+            // Local block-def recursion. If this lookup targets a local `s_decl`
+            // function whose body is currently being checked, it's a recursive
+            // reference (to the def itself, or to an enclosing in-flight def).
+            // Defer unification — fresh flex now + a pending `local_recursive_refs`
+            // entry validated after the def generalizes — so we don't unify with
+            // the not-yet-generalized pattern var, which would lower its rank and
+            // prevent generalization of the def's rigid type parameters.
+            //
+            // A reference to an already-finished sibling local def is NOT in this
+            // map (removed after it generalizes), so it falls through to the tail
+            // below and instantiates normally.
+            if (self.local_processing_ptrns.get(lookup.pattern_idx)) |local_def| {
+                // The pattern is mid-check, so it must not be generalized yet.
+                std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                // Set the expr to be a flex
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                // Record for validation once the def's lambda has generalized.
+                // A dedicated stack, not the shared constraints list (sequential
+                // scoping makes this a single self/enclosing chain — see the
+                // `local_recursive_refs` field doc).
+                try self.local_recursive_refs.append(self.gpa, .{
+                    .pat_var = pat_var,
+                    .expr_var = expr_var,
+                    .def_name = local_def.def_name,
+                });
+
+                break :blk;
             }
 
             // Instantiate if generalized, otherwise just use the pattern var
@@ -5651,8 +6288,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
         } else {
-            // Otherwise, unify the raw var with the intermediate var
-            _ = try self.unify(expr_var_raw, expr_var, env);
+            // Otherwise, make the explicit annotation the checked root for
+            // this expression. The body has already constrained the
+            // annotation's backing and any underscore variables above.
+            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
         }
     }
 
@@ -6040,6 +6679,22 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
+                // Register function defs as "currently processing" so recursive
+                // references in their own body defer unification (see the local
+                // recursion branch in `e_lookup_local`). Only function defs can
+                // legitimately be self-recursive; value defs (`x = x`) keep their
+                // existing diagnostics. Snapshot the pending-recursive-ref stack
+                // so we only validate the references recorded while checking THIS
+                // def's body.
+                const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
+                const local_recursive_refs_top = self.local_recursive_refs.items.len;
+                if (decl_is_fn) {
+                    try self.local_processing_ptrns.put(self.gpa, decl_stmt.pattern, .{
+                        .def_name = self.getPatternIdent(decl_stmt.pattern),
+                        .pattern_idx = decl_stmt.pattern,
+                    });
+                }
+
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -6047,6 +6702,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
+
+                if (decl_is_fn) {
+                    // The def's lambda has generalized (inside checkExpr) and the
+                    // pattern var now carries the generalized function type, so it
+                    // is safe to validate the recursive references it recorded.
+                    try self.validateLocalRecursiveRefs(env, local_recursive_refs_top);
+                    _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
+                }
             },
             .s_var => |var_stmt| {
                 // Check the pattern
@@ -7965,11 +8628,15 @@ fn builtinNumericCandidateSatisfiesStaticDispatchConstraints(
 
     const from_numeral_count = self.types.from_numeral_flex_count;
     const regions_len = self.regions.items.items.len;
+    const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     var store_snapshot = try self.types.snapshot();
     defer {
         self.types.rollbackTo(&store_snapshot);
         self.types.from_numeral_flex_count = from_numeral_count;
         self.regions.items.shrinkRetainingCapacity(regions_len);
+        // Drop any per-instantiation dispatchers recorded during this speculative
+        // probe; their fresh receiver vars are rolled back with the type store.
+        self.instantiation_dispatchers.shrinkRetainingCapacity(instantiation_dispatchers_len);
         store_snapshot.deinit(self.gpa);
     }
 
@@ -8051,11 +8718,15 @@ fn listJoinWithListItemsMethodIdent(
 
     const from_numeral_count = self.types.from_numeral_flex_count;
     const regions_len = self.regions.items.items.len;
+    const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     var store_snapshot = try self.types.snapshot();
     defer {
         self.types.rollbackTo(&store_snapshot);
         self.types.from_numeral_flex_count = from_numeral_count;
         self.regions.items.shrinkRetainingCapacity(regions_len);
+        // Drop any per-instantiation dispatchers recorded during this speculative
+        // probe; their fresh receiver vars are rolled back with the type store.
+        self.instantiation_dispatchers.shrinkRetainingCapacity(instantiation_dispatchers_len);
         store_snapshot.deinit(self.gpa);
     }
 
@@ -8190,6 +8861,39 @@ fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
     self.constraints.items.shrinkRetainingCapacity(write_idx);
 }
 
+/// Validate the recursive references recorded while checking a LOCAL block def's
+/// body (those at index >= `from`), now that the def's lambda has generalized
+/// and its pattern var carries the generalized type. Sequential scoping forbids
+/// local mutual recursion, so every such reference is a self/enclosing one and a
+/// plain unification suffices (no per-use instantiation). The validated refs are
+/// then popped.
+fn validateLocalRecursiveRefs(self: *Self, env: *Env, from: usize) std.mem.Allocator.Error!void {
+    // Capture the end up front: validation only unifies, it never records new
+    // local recursive refs, so the range is stable.
+    const end = self.local_recursive_refs.items.len;
+    var i = from;
+    while (i < end) : (i += 1) {
+        const ref = self.local_recursive_refs.items[i];
+        _ = try self.unifyInContext(ref.pat_var, ref.expr_var, env, .{ .recursive_def = .{ .def_name = ref.def_name } });
+    }
+    self.local_recursive_refs.shrinkRetainingCapacity(from);
+}
+
+/// Resolve one `eql` constraint. For a `recursive_def` cross-reference (mutual
+/// recursion) whose target has been generalized, instantiate the target so the
+/// reference gets fresh type parameters — otherwise the two members' rigid type
+/// variables would be forced to unify, producing a spurious `T(k)` != `T(k)`
+/// mismatch. Self-references (and any not-yet-generalized target) keep the
+/// monomorphic direct unification.
+fn resolveEqlConstraint(self: *Self, eql: anytype, env: *Env) std.mem.Allocator.Error!void {
+    if (eql.is_cross_reference and self.types.resolveVar(eql.expected).desc.rank == .generalized) {
+        const instantiated = try self.instantiateVar(eql.expected, env, .use_last_var);
+        _ = try self.unifyInContext(instantiated, eql.actual, env, eql.ctx);
+        return;
+    }
+    _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+}
+
 /// Check any accumulated constraints
 fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -8200,7 +8904,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+                try self.resolveEqlConstraint(eql, env);
             },
         }
     }
@@ -8233,14 +8937,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
-        // Verify no recursive constraints - recursion should be handled through
-        // nominal types which break the cycle naturally.
-        for (self.constraint_check_stack.items) |stack_var| {
-            std.debug.assert(stack_var != dispatcher_resolved.var_);
-        }
-
-        try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
-        defer _ = self.constraint_check_stack.pop();
 
         dispatch_resolution: while (true) {
             if (dispatcher_content == .err) {
@@ -9326,10 +10022,14 @@ fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: 
     if (body.desc.content == .err or expected.desc.content == .err) return true;
 
     const from_numeral_count = self.types.from_numeral_flex_count;
+    const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     var store_snapshot = self.types.snapshot() catch return true;
     defer {
         self.types.rollbackTo(&store_snapshot);
         self.types.from_numeral_flex_count = from_numeral_count;
+        // Drop any per-instantiation dispatchers recorded during this speculative
+        // probe; their fresh receiver vars are rolled back with the type store.
+        self.instantiation_dispatchers.shrinkRetainingCapacity(instantiation_dispatchers_len);
         store_snapshot.deinit(self.cir.gpa);
     }
 
