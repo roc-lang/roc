@@ -38,15 +38,40 @@ test or check as a leaf `run-*` step.
 
 ## Running Tests
 
-Most contributors execute the following commands before pushing their code:
+Most contributors should run MiniCI before pushing their code:
 
 ```sh
-# This actually runs the tests, it doesn't just build them.
-zig build run-test-zig
-zig build run-check-zig-format
+zig build minici
 ```
 
-To run a specific test:
+MiniCI is the local orchestrator for the CI-shaped set of checks and tests. It
+first builds the inputs behind `build-ci`, then runs the leaf `run-check-*` and
+`run-test-*` jobs with separate logs and report entries. It actually runs the
+tests; it does not just build them.
+
+After each run, MiniCI writes a report directory:
+
+- `zig-out/minici/index.html` is a static dashboard you can open directly in a
+  browser. It shows the run timeline, failures, job details, slowest harness
+  cases, and per-case timing for harness-backed tests.
+- `zig-out/minici/report.json` is the machine-readable run summary. It contains
+  `schema_version`, `run_started_unix_ms`, `build_ci`, and `jobs`. Each result
+  includes `status`, `start_ns`, `end_ns`, `duration_ns`, `log_path`, `command`,
+  and `stats_path`.
+- `zig-out/minici/logs/*.txt` contains captured stdout and stderr for each
+  build, check, and test job.
+- `zig-out/minici/raw/*.json` contains harness runner statistics for jobs with a
+  `stats_path`. These files include `runner`, `summary`, and `events` with case
+  names, statuses, timings, worker indexes, parent ids, and per-stage details.
+
+Agents and scripts should read `zig-out/minici/report.json` first, then follow
+`log_path` for raw command output and `stats_path` for per-case statistics. If a
+job fails, rerun the failed command from the report or from MiniCI's terminal
+hint.
+
+For focused local iteration, run an exact leaf step. To run a specific Zig unit
+test:
+
 ```sh
 zig build run-test-zig -- --test-filter "name of test"
 ```
