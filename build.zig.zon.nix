@@ -14,8 +14,10 @@ let
   unpackZigArtifact =
     { name, artifact }:
     runCommandLocal name { nativeBuildInputs = [ zig ]; } ''
+      touch build.zig
       hash="$(zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
-      mv "$TMPDIR/p/$hash" "$out"
+      mkdir -p "$out"
+      tar -xzf "$TMPDIR/p/$hash.tar.gz" -C "$out" --strip-components=1
       chmod 755 "$out"
     '';
 
