@@ -5156,11 +5156,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .tuple = .{ .elems = elem_vars },
                         } }, env, expr_region);
 
+                        // A non-tuple structure can never satisfy a tuple access,
+                        // so this unify reports the mismatch. Poison the result to
+                        // `.err` (like the out-of-bounds branch above) rather than
+                        // leaving it a fresh flex var, so conflicting downstream
+                        // uses of the result don't produce cascading errors.
                         _ = try self.unify(tuple_var, expected_tuple_var, env);
-
-                        // The result type is the element at the index
-                        const result_var = self.types.sliceVars(elem_vars)[tuple_access.elem_index];
-                        _ = try self.unify(expr_var, result_var, env);
+                        try self.unifyWith(expr_var, .err, env);
                     },
                 },
                 .flex => {

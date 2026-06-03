@@ -1723,6 +1723,25 @@ test "check type - if else - different branch types 3" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - tuple access on non-tuple does not cascade" {
+    // Accessing `.0` on a record is a tuple access against a non-tuple
+    // structure: a single mismatch. The result expression must be poisoned to
+    // `.err` so that conflicting downstream uses do not produce additional,
+    // cascading errors. Without poisoning, the result is a fresh flex var that
+    // unifies with the first use (Str) and then conflicts with the second
+    // (U64), yielding a spurious second TYPE MISMATCH.
+    const source =
+        \\r : { a : Str }
+        \\r = { a: "hello" }
+        \\x = r.0
+        \\y : Str
+        \\y = x
+        \\z : U64
+        \\z = x
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
 test "check type - if else - annotated branch mismatch reports error" {
     // Exercises the expected-return-type path in checkIfElseExpr (the
     // isCompatibleWithExpected probe). The else branch (a number) does not
