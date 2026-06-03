@@ -10,8 +10,8 @@
 //! tests (we're testing app behaviour, not the platform), so using --no-cache would force unnecessary
 //! re-linking on every test, making the test run much slower than is necessary.
 //!
-//! Test specs for IO-based tests are defined in fx_test_specs.zig and shared with
-//! the cross-compilation test runner.
+//! The shared IO-spec matrix is owned by the parallel CLI platform runner.
+//! This file keeps fx-specific tests that are not covered by that matrix.
 
 const std = @import("std");
 const testing = std.testing;
@@ -64,7 +64,6 @@ fn runDevBackendHostSelfTest(
         util.roc_binary_path,
         "build",
         "--opt=dev",
-        "--no-cache",
         output_arg,
         roc_file,
     }, .{
@@ -141,7 +140,6 @@ fn buildAndRunDevBackendApp(
         util.roc_binary_path,
         "build",
         "--opt=dev",
-        "--no-cache",
         output_arg,
         roc_file,
     }, .{
@@ -301,13 +299,8 @@ fn expectDevRuntimeDivisionByZero() !void {
     }
 }
 
-// IO Spec Tests (using shared specs from fx_test_specs.zig)
-// These tests use the --test mode with IO specifications to verify that
-// roc applications produce the expected stdout/stderr output for given stdin.
-// The specs are defined in fx_test_specs.zig and shared with the cross-compile
-// test runner.
-
-/// Shared body for IO spec tests with a specific backend.
+// IO spec helper for narrow fx-only Zig tests. The broad shared IO-spec matrix
+// runs through the parallel CLI platform runner.
 fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !void {
     const allocator = testing.allocator;
 
@@ -325,38 +318,6 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !v
         }
         return err;
     };
-}
-
-fn runIoSpecTests(comptime opt_flag: []const u8) !void {
-    var passed: usize = 0;
-    var failed: usize = 0;
-
-    for (fx_test_specs.io_spec_tests) |spec| {
-        if (spec.skip) continue;
-        if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
-
-        runIoSpecTest(opt_flag, spec) catch {
-            failed += 1;
-            continue;
-        };
-
-        passed += 1;
-    }
-
-    // Print summary
-    const total = passed + failed;
-    if (failed > 0) {
-        std.debug.print("\n{}/{} IO spec tests passed ({} failed) [opt={s}]\n", .{ passed, total, failed, opt_flag });
-        return error.SomeTestsFailed;
-    }
-}
-
-test "fx platform IO spec tests (interpreter)" {
-    try runIoSpecTests("--opt=interpreter");
-}
-
-test "fx platform IO spec tests (dev backend)" {
-    try runIoSpecTests("--opt=dev");
 }
 
 test "fx platform boxed erased callable host boundary (interpreter)" {
