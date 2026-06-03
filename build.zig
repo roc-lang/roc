@@ -3272,6 +3272,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    add_tracy(b, roc_modules.build_options, lsp_integration_runner_exe, target, false, flag_enable_tracy);
     lsp_integration_runner_exe.step.dependOn(&write_compiled_builtins.step);
     build_test_lsp_integration_runner_step.dependOn(&lsp_integration_runner_exe.step);
 
