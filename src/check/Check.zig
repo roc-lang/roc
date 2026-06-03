@@ -1875,9 +1875,17 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 /// (local/nested lambdas included). A static-dispatch receiver that resolves into
 /// this set can be pinned by a caller at some level, so it is not ambiguous.
 fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    // Shared across all defs in this one-shot, end-of-check pass (not per
+    // expression), so it bounds memory by the largest type spine walked rather
+    // than growing as more of the program is checked. Guards the function-ret /
+    // alias spine in collectArgPositionVars against unbounded recursion; arg
+    // structure is already deduped via `pinnable` inside collectReachableVars.
+    var spine_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer spine_visited.deinit();
+
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable);
+        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable, &spine_visited);
     }
 
     var raw_node_idx: u32 = 0;
@@ -2168,10 +2176,21 @@ fn reportAmbiguousStaticDispatch(
 /// tuples, tag payloads, nested function args AND rets). Return positions of the
 /// outer function are NOT collected (a return-only var is not parameter-pinnable),
 /// but once inside an argument every nested position counts.
-fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectArgPositionVars(
+    self: *Self,
+    var_: Var,
+    out: *std.AutoHashMap(Var, void),
+    spine_visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
+    // Guard the function-ret / alias spine against cycles. Cyclic spines are
+    // currently pre-broken (infinite types are poisoned to .err before this
+    // pass, recursive aliases are rejected during generation), but the guard
+    // keeps this robust if that ever changes.
+    if (spine_visited.contains(resolved.var_)) return;
+    try spine_visited.put(resolved.var_, {});
     switch (resolved.desc.content) {
-        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out),
+        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out, spine_visited),
         .structure => |flat| switch (flat) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 for (self.types.sliceVars(func.args)) |arg| {
@@ -2179,7 +2198,7 @@ fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, voi
                 }
                 // Recurse into the return type: a curried function returns more
                 // functions whose own arguments are still parameter-pinnable.
-                try self.collectArgPositionVars(func.ret, out);
+                try self.collectArgPositionVars(func.ret, out, spine_visited);
             },
             else => {},
         },
