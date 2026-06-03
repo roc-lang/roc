@@ -3667,7 +3667,7 @@ pub const Coordinator = struct {
             }
             discovered_local_imports.deinit(worker_alloc);
         }
-        const local_import_names = try module_discovery.extractImportsFromAST(parse_ast, task_allocs.scratch);
+        const local_import_names = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
         const module_dir = std.fs.path.dirname(task.path) orelse "";
         for (local_import_names) |module_name| {
             const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
@@ -3685,7 +3685,7 @@ pub const Coordinator = struct {
             for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
             discovered_external_imports.deinit(worker_alloc);
         }
-        const qualified_import_names = try module_discovery.extractQualifiedImportsFromAST(parse_ast, task_allocs.scratch);
+        const qualified_import_names = try module_discovery.extractQualifiedImportsFromDeclIndex(parse_ast, task_allocs.scratch);
         for (qualified_import_names) |import_name| {
             const owned_name = try worker_alloc.dupe(u8, import_name);
             errdefer worker_alloc.free(owned_name);
@@ -3736,7 +3736,7 @@ pub const Coordinator = struct {
 
         // Build KnownModule entries for qualified imports (e.g. platform-exposed
         // `pf.Stdout`) so canonicalization has explicit module names.
-        const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, task_allocs.scratch) catch &[_][]const u8{};
+        const qualified_imports = try module_discovery.extractQualifiedImportsFromDeclIndex(ast, task_allocs.scratch);
         defer {
             for (qualified_imports) |qi| task_allocs.scratch.free(qi);
             task_allocs.scratch.free(qualified_imports);
@@ -3744,10 +3744,10 @@ pub const Coordinator = struct {
         var known_modules = std.ArrayList(compile_package.PackageEnv.KnownModule).empty;
         defer known_modules.deinit(task_allocs.scratch);
         for (qualified_imports) |qi| {
-            known_modules.append(task_allocs.scratch, .{
+            try known_modules.append(task_allocs.scratch, .{
                 .qualified_name = qi,
                 .import_name = qi,
-            }) catch {};
+            });
         }
 
         try compile_package.PackageEnv.canonicalizeModuleWithSiblings(

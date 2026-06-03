@@ -668,71 +668,16 @@ fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Err
     try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
 }
 
-/// Register a method on a nominal type under every name the type can be
-/// looked up by — the qualified module/parent name, the relative parent name,
-/// the bare type name, and (for builtin numerics) the type-name alias —
-/// so static dispatch resolves regardless of which view the caller has.
+/// Register a method on its explicit owner declaration.
 fn registerAssociatedMethodIdent(
     self: *Self,
     owner_stmt_idx: Statement.Idx,
-    parent_name: Ident.Idx,
-    relative_parent_name: ?Ident.Idx,
-    type_name: Ident.Idx,
     method_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
     binding: ModuleEnv.MethodBinding,
 ) std.mem.Allocator.Error!void {
-    try self.env.registerMethodOwnerAlias(parent_name, owner_stmt_idx);
-
-    if (relative_parent_name) |relative_name| {
-        if (!relative_name.eql(parent_name)) {
-            try self.env.registerMethodOwnerAlias(relative_name, owner_stmt_idx);
-        }
-    }
-
-    if (!type_name.eql(parent_name) and
-        (relative_parent_name == null or !type_name.eql(relative_parent_name.?)))
-    {
-        try self.env.registerMethodOwnerAlias(type_name, owner_stmt_idx);
-    }
-
-    if (self.builtinNumericMethodAlias(type_name)) |builtin_numeric_alias| {
-        if (!builtin_numeric_alias.eql(parent_name) and
-            (relative_parent_name == null or !builtin_numeric_alias.eql(relative_parent_name.?)) and
-            !builtin_numeric_alias.eql(type_name))
-        {
-            try self.env.registerMethodOwnerAlias(builtin_numeric_alias, owner_stmt_idx);
-        }
-    }
-
     try self.env.registerMethodIdentForOwner(owner_stmt_idx, method_ident, qualified_ident);
     try self.env.registerMethodDefForOwner(owner_stmt_idx, method_ident, binding);
-}
-
-/// For builtin numeric types in the Builtin module, return the type name itself
-/// as an alias under which methods should also be registered so dispatch from
-/// other modules (using the bare type name) finds them.
-fn builtinNumericMethodAlias(self: *Self, type_name: Ident.Idx) ?Ident.Idx {
-    if (self.env.module_role != .builtin) return null;
-
-    if (type_name.eql(self.env.idents.u8) or
-        type_name.eql(self.env.idents.i8) or
-        type_name.eql(self.env.idents.u16) or
-        type_name.eql(self.env.idents.i16) or
-        type_name.eql(self.env.idents.u32) or
-        type_name.eql(self.env.idents.i32) or
-        type_name.eql(self.env.idents.u64) or
-        type_name.eql(self.env.idents.i64) or
-        type_name.eql(self.env.idents.u128) or
-        type_name.eql(self.env.idents.i128) or
-        type_name.eql(self.env.idents.dec) or
-        type_name.eql(self.env.idents.f32) or
-        type_name.eql(self.env.idents.f64))
-    {
-        return type_name;
-    }
-
-    return null;
 }
 
 fn hasAvailableModuleEnv(self: *const Self, ident: Ident.Idx) bool {
@@ -2268,13 +2213,6 @@ fn processAssociatedBlock(
     current_scope.associated_type_name = type_name;
 
     try current_scope.introduceTypeAlias(self.env.gpa, type_name, owner_stmt_idx);
-    if (!owner_is_redeclaration) {
-        try self.env.registerMethodOwnerAlias(qualified_name_idx, owner_stmt_idx);
-        if (relative_name_idx) |relative_name| {
-            try self.env.registerMethodOwnerAlias(relative_name, owner_stmt_idx);
-        }
-        try self.env.registerMethodOwnerAlias(type_name, owner_stmt_idx);
-    }
 
     try self.canonicalizeAssociatedItems(owner_stmt_idx, qualified_name_idx, relative_name_idx, type_name, assoc.scope, assoc.statements, alias_sinks, block_context, owner_is_redeclaration);
 }
@@ -3005,7 +2943,7 @@ fn canonicalizeAssociatedItems(
                                     if (owner_is_module_visible) {
                                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
                                     }
-                                    try self.registerAssociatedMethodIdent(owner_stmt_idx, parent_name, relative_name_idx, type_name, decl_ident, qualified_idx, method_binding);
+                                    try self.registerAssociatedMethodIdent(owner_stmt_idx, decl_ident, qualified_idx, method_binding);
 
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(associated_def.def_idx);
@@ -3111,7 +3049,7 @@ fn canonicalizeAssociatedItems(
                         owner_is_module_visible,
                         block_context,
                     );
-                    try self.registerAssociatedMethodIdent(owner_stmt_idx, parent_name, relative_name_idx, type_name, name_ident, qualified_idx, method_binding);
+                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
                     const anno_pattern_idx = def_cir_anno.pattern;
@@ -3186,7 +3124,7 @@ fn canonicalizeAssociatedItems(
                         if (owner_is_module_visible) {
                             try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u32);
                         }
-                        try self.registerAssociatedMethodIdent(owner_stmt_idx, parent_name, relative_name_idx, type_name, decl_ident, qualified_idx, method_binding);
+                        try self.registerAssociatedMethodIdent(owner_stmt_idx, decl_ident, qualified_idx, method_binding);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names

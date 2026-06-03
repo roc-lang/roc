@@ -1386,16 +1386,15 @@ test "typed method definition entries expose finalized owner-method keys" {
     try env.initCIRFields("Test");
     try env.common.calcLineStarts(gpa);
 
-    const type_ident = try env.insertIdent(Ident.for_text("Local"));
     const method_ident = try env.insertIdent(Ident.for_text("get"));
+    const other_method_ident = try env.insertIdent(Ident.for_text("set"));
     const owner: can.CIR.Statement.Idx = @enumFromInt(1);
 
-    try env.registerMethodOwnerAlias(type_ident, owner);
     try env.registerMethodDefForOwner(owner, method_ident, .{
         .type_node_idx = @enumFromInt(1),
         .def_idx = @enumFromInt(1),
     });
-    try env.registerMethodDefForOwner(owner, method_ident, .{
+    try env.registerMethodDefForOwner(owner, other_method_ident, .{
         .type_node_idx = @enumFromInt(2),
         .def_idx = @enumFromInt(2),
     });
@@ -1406,7 +1405,7 @@ test "typed method definition entries expose finalized owner-method keys" {
     var modules = try TypedCIR.Modules.init(gpa, &source_modules);
     defer modules.deinit();
 
-    try testing.expectEqual(@as(usize, 1), modules.module(0).methodDefEntries().len);
+    try testing.expectEqual(@as(usize, 2), modules.module(0).methodDefEntries().len);
 }
 
 test "check type - nominal with tag arg" {

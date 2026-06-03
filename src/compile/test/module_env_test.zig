@@ -171,20 +171,21 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     try original.initCIRFields("Test");
     try original.common.calcLineStarts(gpa);
 
-    const type_ident = try original.insertIdent(Ident.for_text("Local"));
-    const method_ident = try original.insertIdent(Ident.for_text("get"));
-    const first_qualified = try original.insertIdent(Ident.for_text("First.Local.get"));
-    const second_qualified = try original.insertIdent(Ident.for_text("Second.Local.get"));
+    const get_ident = try original.insertIdent(Ident.for_text("get"));
+    const set_ident = try original.insertIdent(Ident.for_text("set"));
+    const get_qualified = try original.insertIdent(Ident.for_text("Local.get"));
+    const set_qualified = try original.insertIdent(Ident.for_text("Local.set"));
     const owner_stmt: CIR.Statement.Idx = @enumFromInt(1);
 
-    try original.registerMethodOwnerAlias(type_ident, owner_stmt);
-    try original.registerMethod(type_ident, method_ident, first_qualified, .{
-        .type_node_idx = @enumFromInt(1),
-        .def_idx = @enumFromInt(1),
-    });
-    try original.registerMethod(type_ident, method_ident, second_qualified, .{
+    try original.registerMethodIdentForOwner(owner_stmt, set_ident, set_qualified);
+    try original.registerMethodDefForOwner(owner_stmt, set_ident, .{
         .type_node_idx = @enumFromInt(2),
         .def_idx = @enumFromInt(2),
+    });
+    try original.registerMethodIdentForOwner(owner_stmt, get_ident, get_qualified);
+    try original.registerMethodDefForOwner(owner_stmt, get_ident, .{
+        .type_node_idx = @enumFromInt(1),
+        .def_idx = @enumFromInt(1),
     });
     original.finalizeMethodTables();
 
@@ -200,11 +201,11 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
 
     try std.testing.expect(serialized.method_idents.sorted);
     try std.testing.expect(serialized.method_idents.deduplicated);
-    try std.testing.expectEqual(@as(u64, 1), serialized.method_idents.entries_len);
+    try std.testing.expectEqual(@as(u64, 2), serialized.method_idents.entries_len);
 
     try std.testing.expect(serialized.method_defs.sorted);
     try std.testing.expect(serialized.method_defs.deduplicated);
-    try std.testing.expectEqual(@as(u64, 1), serialized.method_defs.entries_len);
+    try std.testing.expectEqual(@as(u64, 2), serialized.method_defs.entries_len);
 }
 
 test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {

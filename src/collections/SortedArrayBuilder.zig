@@ -172,6 +172,27 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             }
         }
 
+        /// Ensure the array is sorted, and enforce that every key is unique.
+        /// This is for semantic tables where duplicate keys must have already
+        /// been rejected by the producing stage instead of being silently merged.
+        pub fn ensureSortedUnique(self: *Self) void {
+            if (!self.sorted) {
+                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
+                self.sorted = true;
+            }
+
+            var i: usize = 1;
+            while (i < self.entries.items.len) : (i += 1) {
+                if (!keyEql(self.entries.items[i - 1].key, self.entries.items[i].key)) continue;
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("SortedArrayBuilder invariant violated: duplicate key reached unique finalization", .{});
+                }
+                @trap();
+            }
+
+            self.deduplicated = true;
+        }
+
         /// Check for duplicates, report them, and remove duplicates keeping the last occurrence.
         /// Since the array is sorted, duplicates are adjacent - this is O(n).
         fn deduplicateAndReport(self: *Self, allocator: Allocator) void {

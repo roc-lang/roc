@@ -5048,28 +5048,29 @@ const checked_source_node_id_limit = @as(u32, 1) << checked_source_node_id_bits;
 
 const CheckedSourceNodeMap = struct {
     entries: []u32 = &.{},
+    discarded: bool = false,
 
     fn init(allocator: Allocator, node_count: usize) Allocator.Error!CheckedSourceNodeMap {
         const entries = try allocator.alloc(u32, node_count);
         @memset(entries, checked_source_node_empty);
-        return .{ .entries = entries };
+        return .{ .entries = entries, .discarded = false };
     }
 
-    fn putExpr(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedExprId) void {
-        self.put(node_idx, .expr, @intFromEnum(id));
+    fn putExpr(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedExprId) Allocator.Error!void {
+        try self.put(node_idx, .expr, @intFromEnum(id));
     }
 
-    fn putPattern(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedPatternId) void {
-        self.put(node_idx, .pattern, @intFromEnum(id));
+    fn putPattern(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedPatternId) Allocator.Error!void {
+        try self.put(node_idx, .pattern, @intFromEnum(id));
     }
 
-    fn putStatement(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedStatementId) void {
-        self.put(node_idx, .statement, @intFromEnum(id));
+    fn putStatement(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedStatementId) Allocator.Error!void {
+        try self.put(node_idx, .statement, @intFromEnum(id));
     }
 
-    fn put(self: *CheckedSourceNodeMap, node_idx: u32, kind: CheckedSourceNodeKind, id_raw: u32) void {
+    fn put(self: *CheckedSourceNodeMap, node_idx: u32, kind: CheckedSourceNodeKind, id_raw: u32) Allocator.Error!void {
         if (node_idx >= self.entries.len) checkedArtifactInvariant("checked source node map write was out of range", .{});
-        if (id_raw >= checked_source_node_id_limit) checkedArtifactInvariant("checked source id exceeded packed source-node map capacity", .{});
+        if (id_raw >= checked_source_node_id_limit) return error.OutOfMemory;
         if (builtin.mode == .Debug and self.entries[node_idx] != checked_source_node_empty) {
             std.debug.panic("checked artifact invariant violated: checked source node map wrote source node {d} twice", .{node_idx});
         }
@@ -5101,6 +5102,7 @@ const CheckedSourceNodeMap = struct {
     }
 
     fn get(self: *const CheckedSourceNodeMap, raw_node: u32, expected: CheckedSourceNodeKind) ?u32 {
+        if (self.discarded) checkedArtifactInvariant("checked source node map was used after publication", .{});
         if (raw_node >= self.entries.len) return null;
         const packed_entry = self.entries[raw_node];
         if (packed_entry == checked_source_node_empty) return null;
@@ -5113,7 +5115,17 @@ const CheckedSourceNodeMap = struct {
         allocator.free(self.entries);
         self.* = .{};
     }
+
+    fn discard(self: *CheckedSourceNodeMap, allocator: Allocator) void {
+        allocator.free(self.entries);
+        self.* = .{ .discarded = true };
+    }
 };
+
+fn checkedSourceNodeIdFromLen(len: usize) Allocator.Error!u32 {
+    if (len >= checked_source_node_id_limit) return error.OutOfMemory;
+    return @intCast(len);
+}
 
 /// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
@@ -5168,14 +5180,14 @@ pub const CheckedBodyStore = struct {
                     }
                     unreachable;
                 };
-                const id: CheckedExprId = @enumFromInt(@as(u32, @intCast(exprs.items.len)));
+                const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(exprs.items.len));
                 try exprs.append(allocator, .{
                     .id = id,
                     .ty = ty,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                source_node_map.putExpr(node_idx, id);
+                try source_node_map.putExpr(node_idx, id);
             } else if (isPatternNodeTag(tag)) {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
@@ -5184,22 +5196,22 @@ pub const CheckedBodyStore = struct {
                     }
                     unreachable;
                 };
-                const id: CheckedPatternId = @enumFromInt(@as(u32, @intCast(patterns.items.len)));
+                const id: CheckedPatternId = @enumFromInt(try checkedSourceNodeIdFromLen(patterns.items.len));
                 try patterns.append(allocator, .{
                     .id = id,
                     .ty = ty,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                source_node_map.putPattern(node_idx, id);
+                try source_node_map.putPattern(node_idx, id);
             } else if (isStatementNodeTag(tag)) {
-                const id: CheckedStatementId = @enumFromInt(@as(u32, @intCast(statements.items.len)));
+                const id: CheckedStatementId = @enumFromInt(try checkedSourceNodeIdFromLen(statements.items.len));
                 try statements.append(allocator, .{
                     .id = id,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                source_node_map.putStatement(node_idx, id);
+                try source_node_map.putStatement(node_idx, id);
             }
         }
 
@@ -5547,7 +5559,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn discardSourceNodeMap(self: *CheckedBodyStore, allocator: Allocator) void {
-        self.source_node_map.deinit(allocator);
+        self.source_node_map.discard(allocator);
     }
 };
 

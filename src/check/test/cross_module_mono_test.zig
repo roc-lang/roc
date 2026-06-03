@@ -20,6 +20,27 @@ const testing = std.testing;
 const compiled_builtins = @import("compiled_builtins");
 const collections = @import("collections");
 
+fn findTypeDeclByName(env: *const ModuleEnv, name: base.Ident.Idx) ?CIR.Statement.Idx {
+    if (findTypeDeclByNameInSpan(env, env.type_decls, name)) |stmt_idx| return stmt_idx;
+    if (findTypeDeclByNameInSpan(env, env.forward_type_decls, name)) |stmt_idx| return stmt_idx;
+    if (findTypeDeclByNameInSpan(env, env.all_statements, name)) |stmt_idx| return stmt_idx;
+    if (findTypeDeclByNameInSpan(env, env.builtin_statements, name)) |stmt_idx| return stmt_idx;
+    return null;
+}
+
+fn findTypeDeclByNameInSpan(env: *const ModuleEnv, span: CIR.Statement.Span, name: base.Ident.Idx) ?CIR.Statement.Idx {
+    for (0..span.span.len) |offset| {
+        const stmt_idx = env.store.statementAt(span, offset);
+        const header_idx = switch (env.store.getStatement(stmt_idx)) {
+            .s_nominal_decl => |nominal| nominal.header,
+            .s_alias_decl => |alias| alias.header,
+            else => continue,
+        };
+        if (env.store.getTypeHeader(header_idx).name.eql(name)) return stmt_idx;
+    }
+    return null;
+}
+
 /// Wrapper for a loaded compiled module that tracks the buffer
 const LoadedModule = struct {
     env: *ModuleEnv,
@@ -81,7 +102,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_owner_aliases = serialized_ptr.method_owner_aliases.deserializeInto(base_ptr),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
         .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
@@ -465,8 +485,9 @@ test "cross-module mono: static dispatch lookup finds method in imported module"
     const get_value_ident = env_a.module_env.common.findIdent("get_value");
     try testing.expect(get_value_ident != null);
 
-    // Check that the method is registered in method_idents
-    const method_lookup = env_a.module_env.lookupMethodIdent(a_type_ident.?, get_value_ident.?);
+    // Check that the method is registered under the source declaration owner.
+    const a_owner = findTypeDeclByName(env_a.module_env, a_type_ident.?) orelse return error.MissingATypeOwner;
+    const method_lookup = env_a.module_env.lookupMethodIdentForOwner(a_owner, get_value_ident.?);
     try testing.expect(method_lookup != null);
 }
 
@@ -530,10 +551,11 @@ test "cross-module mono: static dispatch method registration in type module" {
     try testing.expect(increment_ident != null);
     try testing.expect(get_ident != null);
 
-    // Check method lookups work
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, new_ident.?) != null);
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, increment_ident.?) != null);
-    try testing.expect(env_a.module_env.lookupMethodIdent(counter_ident.?, get_ident.?) != null);
+    // Check method lookups work under the source declaration owner.
+    const counter_owner = findTypeDeclByName(env_a.module_env, counter_ident.?) orelse return error.MissingCounterTypeOwner;
+    try testing.expect(env_a.module_env.lookupMethodIdentForOwner(counter_owner, new_ident.?) != null);
+    try testing.expect(env_a.module_env.lookupMethodIdentForOwner(counter_owner, increment_ident.?) != null);
+    try testing.expect(env_a.module_env.lookupMethodIdentForOwner(counter_owner, get_ident.?) != null);
 }
 
 test "cross-module mono: static dispatch with chained method calls" {

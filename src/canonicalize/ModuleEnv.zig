@@ -442,10 +442,6 @@ pub const MethodKey = extern struct {
     }
 };
 
-/// Mapping from visible type spellings to their associated method owner
-/// declaration.
-pub const MethodOwnerAliases = SortedArrayBuilder(Ident.Idx, CIR.Statement.Idx);
-
 /// Mapping from (owner declaration, method_ident) pairs to their qualified
 /// method ident.
 ///
@@ -628,8 +624,6 @@ idents: CommonIdents,
 /// Example: "MyModule.Foo" -> "F" if user has `import MyModule exposing [Foo as F]`
 import_mapping: types_mod.import_mapping.ImportMapping,
 
-/// Mapping from type spellings to explicit method owner declarations.
-method_owner_aliases: MethodOwnerAliases,
 /// Mapping from (owner declaration, method_ident) pairs to qualified method idents.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
@@ -702,7 +696,6 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provides_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
-    self.method_owner_aliases.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
@@ -778,7 +771,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .evaluation_order = null, // Will be set after canonicalization completes
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-        .method_owner_aliases = MethodOwnerAliases.init(),
         .method_idents = MethodIdents.init(),
         .method_defs = MethodDefs.init(),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
@@ -799,7 +791,6 @@ pub fn deinit(self: *Self) void {
     self.provides_entries.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
-    self.method_owner_aliases.deinit(self.gpa);
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
@@ -2921,7 +2912,6 @@ pub const Serialized = extern struct {
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
-    method_owner_aliases: MethodOwnerAliases.Serialized,
     method_idents: MethodIdents.Serialized,
     method_defs: MethodDefs.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
@@ -2978,14 +2968,11 @@ pub const Serialized = extern struct {
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
         if (builtin.mode == .Debug) {
-            std.debug.assert(env.method_owner_aliases.sorted);
-            std.debug.assert(env.method_owner_aliases.deduplicated);
             std.debug.assert(env.method_idents.sorted);
             std.debug.assert(env.method_idents.deduplicated);
             std.debug.assert(env.method_defs.sorted);
             std.debug.assert(env.method_defs.deduplicated);
         }
-        try self.method_owner_aliases.serialize(&env.method_owner_aliases, allocator, writer);
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
         try self.method_defs.serialize(&env.method_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
@@ -3038,7 +3025,6 @@ pub const Serialized = extern struct {
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_owner_aliases = self.method_owner_aliases.deserializeInto(base_addr),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
@@ -3094,7 +3080,6 @@ pub const Serialized = extern struct {
             .evaluation_order = null,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_owner_aliases = self.method_owner_aliases.deserializeInto(base_addr),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
@@ -3886,28 +3871,6 @@ pub fn insertQualifiedIdent(
     return try self.insertIdent(Ident.for_text(qualified));
 }
 
-/// Registers a visible type spelling as an alias for a canonical method owner.
-pub fn registerMethodOwnerAlias(self: *Self, type_ident: Ident.Idx, owner: CIR.Statement.Idx) !void {
-    try self.method_owner_aliases.put(self.gpa, type_ident, owner);
-}
-
-fn methodOwnerForTypeIdent(self: *Self, type_ident: Ident.Idx) CIR.Statement.Idx {
-    return self.method_owner_aliases.get(self.gpa, type_ident) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic(
-                "method owner invariant violated: type ident {d} has no explicit method owner alias",
-                .{@as(u32, @bitCast(type_ident))},
-            );
-        }
-        unreachable;
-    };
-}
-
-/// Looks up the canonical method owner for a finalized visible type spelling.
-pub fn methodOwnerForTypeIdentConst(self: *const Self, type_ident: Ident.Idx) ?CIR.Statement.Idx {
-    return self.method_owner_aliases.getFinalized(type_ident);
-}
-
 /// Registers a method identifier mapping for an explicit owner declaration.
 pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
     const key = MethodKey.init(owner, method_ident);
@@ -3918,24 +3881,6 @@ pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method
 pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_defs.put(self.gpa, key, binding);
-}
-
-/// Backwards-compatible registration by type spelling. Real canonicalization
-/// registers owner aliases first, so this resolves to an explicit owner.
-pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
-    try self.registerMethodIdentForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident, qualified_ident);
-}
-
-/// Registers method type/check metadata by resolving a visible type spelling to its owner.
-pub fn registerMethodDef(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
-    try self.registerMethodDefForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident, binding);
-}
-
-/// Registers both method identity and type/check metadata for a visible type spelling.
-pub fn registerMethod(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx, binding: MethodBinding) !void {
-    const owner = self.methodOwnerForTypeIdent(type_ident);
-    try self.registerMethodIdentForOwner(owner, method_ident, qualified_ident);
-    try self.registerMethodDefForOwner(owner, method_ident, binding);
 }
 
 /// Looks up a qualified method ident for an explicit owner declaration.
@@ -3956,28 +3901,10 @@ pub fn lookupMethodBindingForOwnerConst(self: *const Self, owner: CIR.Statement.
     return self.method_defs.getFinalized(key);
 }
 
-/// Looks up a qualified method ident by resolving a visible type spelling to its owner.
-pub fn lookupMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    return self.lookupMethodIdentForOwner(self.methodOwnerForTypeIdent(type_ident), method_ident);
-}
-
-/// Looks up a qualified method ident in finalized tables from a visible type spelling.
-pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const owner = self.methodOwnerForTypeIdentConst(type_ident) orelse return null;
-    return self.lookupMethodIdentForOwnerConst(owner, method_ident);
-}
-
-/// Looks up method type/check metadata in finalized tables from a visible type spelling.
-pub fn lookupMethodBindingConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?MethodBinding {
-    const owner = self.methodOwnerForTypeIdentConst(type_ident) orelse return null;
-    return self.lookupMethodBindingForOwnerConst(owner, method_ident);
-}
-
-/// Sorts and deduplicates method owner, ident, and definition tables.
+/// Finalizes method owner, ident, and definition tables.
 pub fn finalizeMethodTables(self: *Self) void {
-    self.method_owner_aliases.ensureSorted(self.gpa);
-    self.method_idents.ensureSorted(self.gpa);
-    self.method_defs.ensureSorted(self.gpa);
+    self.method_idents.ensureSortedUnique();
+    self.method_defs.ensureSortedUnique();
 }
 
 /// Looks up method metadata using a type declaration owner from one environment

@@ -9035,9 +9035,12 @@ fn listJoinWithListItemsMethodDef(
     if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
     if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
 
-    const list_ident = original_env.idents.list;
     const join_list_with_ident = original_env.idents.join_list_with;
-    const helper_binding = original_env.lookupMethodBindingConst(list_ident, join_list_with_ident) orelse return null;
+    const helper_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+        original_env,
+        nominal_type.sourceDeclOptional(),
+        join_list_with_ident,
+    ) orelse return null;
     const helper_def_var: Var = ModuleEnv.varFrom(helper_binding.type_node_idx);
 
     const from_numeral_count = self.types.from_numeral_flex_count;

@@ -313,14 +313,24 @@ fn recordStatementDecl(
             .anno = null,
             .region = .{ .start = v.region.start, .end = v.region.end },
         },
-        .import => |i| DeclIndex.Decl{
-            .scope = scope_idx,
-            .statement = @intFromEnum(statement_idx),
-            .kind = .import,
-            .name_tok = i.alias_tok orelse i.module_name_tok,
-            .pattern = null,
-            .anno = null,
-            .region = .{ .start = i.region.start, .end = i.region.end },
+        .import => |i| blk: {
+            if (self.tok_buf.resolveIdentifier(i.module_name_tok)) |module_name| {
+                try self.decl_index.addImport(.{
+                    .module_name = module_name,
+                    .qualifier = if (i.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
+                    .nested = i.nested_import,
+                    .region = .{ .start = i.region.start, .end = i.region.end },
+                });
+            }
+            break :blk DeclIndex.Decl{
+                .scope = scope_idx,
+                .statement = @intFromEnum(statement_idx),
+                .kind = .import,
+                .name_tok = i.alias_tok orelse i.module_name_tok,
+                .pattern = null,
+                .anno = null,
+                .region = .{ .start = i.region.start, .end = i.region.end },
+            };
         },
         .file_import => |fi| DeclIndex.Decl{
             .scope = scope_idx,

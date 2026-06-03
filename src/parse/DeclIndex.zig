@@ -159,6 +159,14 @@ pub const PackageHeaderModule = struct {
     region: TokenRegion,
 };
 
+/// Explicit source import recorded by the parser.
+pub const Import = struct {
+    module_name: Ident.Idx,
+    qualifier: ?Ident.Idx,
+    nested: bool,
+    region: TokenRegion,
+};
+
 /// Side-table tops captured before parsing a declaration annotation.
 pub const TypeDependencyMark = struct {
     dependencies_top: u32,
@@ -225,6 +233,7 @@ type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
 assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 package_header_modules: std.ArrayList(PackageHeaderModule),
+imports: std.ArrayList(Import),
 explicit_unqualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void),
 scope_stack: std.ArrayList(ScopeIdx),
 
@@ -246,6 +255,7 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .assoc_value_decls = .{},
         .assoc_owner_value_decls = .{},
         .package_header_modules = .empty,
+        .imports = .empty,
         .explicit_unqualified_imports = .{},
         .scope_stack = .empty,
     };
@@ -274,6 +284,7 @@ pub fn deinit(self: *DeclIndex) void {
     self.type_path_by_statement.deinit(self.gpa);
     deinitNameBuckets(TypePathIdx, self.gpa, &self.type_decls_by_path);
     self.package_header_modules.deinit(self.gpa);
+    self.imports.deinit(self.gpa);
     self.explicit_unqualified_imports.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
 }
@@ -459,6 +470,11 @@ pub fn addPackageHeaderModule(self: *DeclIndex, module_name: Ident.Idx, region: 
         .module_name = module_name,
         .region = region,
     });
+}
+
+/// Record an explicit source import.
+pub fn addImport(self: *DeclIndex, import: Import) std.mem.Allocator.Error!void {
+    try self.imports.append(self.gpa, import);
 }
 
 /// Record an explicit unqualified import. Package-header auto-imports with

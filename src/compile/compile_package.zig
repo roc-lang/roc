@@ -1064,12 +1064,12 @@ pub const PackageEnv = struct {
         // parse_ast is already heap-allocated by parse.parse
         st.cached_ast = parse_ast;
 
-        const local_imports = try module_discovery.extractImportsFromAST(parse_ast, self.gpa);
+        const local_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, self.gpa);
         defer {
             for (local_imports) |imp| self.gpa.free(imp);
             self.gpa.free(local_imports);
         }
-        const external_imports = try module_discovery.extractQualifiedImportsFromAST(parse_ast, self.gpa);
+        const external_imports = try module_discovery.extractQualifiedImportsFromDeclIndex(parse_ast, self.gpa);
         defer {
             for (external_imports) |imp| self.gpa.free(imp);
             self.gpa.free(external_imports);
@@ -1511,7 +1511,7 @@ pub const PackageEnv = struct {
 
         // Add sibling modules whose environments are already available.
         // Canonicalization consumes concrete exposed-node data from dependencies.
-        const sibling_imports = try module_discovery.extractImportsFromAST(parse_ast, gpa);
+        const sibling_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, gpa);
         defer {
             for (sibling_imports) |imp| gpa.free(imp);
             gpa.free(sibling_imports);
