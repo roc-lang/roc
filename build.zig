@@ -3087,9 +3087,17 @@ pub fn build(b: *std.Build) void {
         run_test_serialization_sizes_step.dependOn(&run_native.step);
     }
 
-    // Build WASM static library test runner with bytebox
-    // This test requires the WASM file to be built separately via `roc build test/wasm/app.roc --target=wasm32`
+    // Build WASM static library fixture and test runner with bytebox.
     {
+        const build_wasm_app = b.addRunArtifact(roc_exe);
+        build_wasm_app.addArgs(&.{
+            "build",
+            "test/wasm/app.roc",
+            "--target=wasm32",
+            "--output=test/wasm/app.wasm",
+        });
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
