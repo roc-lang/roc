@@ -103,6 +103,8 @@ const threads_available = !is_freestanding;
 const Thread = threading.Thread;
 
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
+const CheckedArtifact = check.CheckedArtifact;
+const canonical = check.CanonicalNames;
 
 fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: bool) void {
     const allocator = artifact.canonical_names.allocator;
@@ -1209,12 +1211,12 @@ pub const Coordinator = struct {
 
     fn appendRelationClosureDependencyViews(
         self: *Coordinator,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
         allocator: Allocator,
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error!void {
-        var keys = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
-        defer keys.deinit(allocator);
+        var relation_views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        defer relation_views.deinit(allocator);
 
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const relation_artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
@@ -1223,19 +1225,452 @@ pub const Coordinator = struct {
                 }
                 unreachable;
             };
-            try check.CheckedArtifact.appendPlatformRelationDependencyArtifactKeys(
-                allocator,
-                &keys,
-                relation_artifact,
-                binding,
-            );
+            try appendImportedArtifactViewIfMissing(&relation_views, allocator, root_artifact.key, relation_artifact);
         }
 
-        for (keys.items) |key| {
-            if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) continue;
-            if (rootRelationContainsArtifact(root_artifact, key)) continue;
-            try self.appendPublicApiDependencyViewByKey(views, allocator, root_artifact, key);
+        var dependency_collector = RelationLoweringDependencyCollector.init(
+            self,
+            allocator,
+            root_artifact.key,
+            CheckedArtifact.importedView(root_artifact),
+            relation_views.items,
+            views,
+        );
+        defer dependency_collector.deinit();
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const relation_view = relationViewByKey(relation_views.items, binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("compile.coordinator invariant violated: platform relation view was not collected", .{});
+                }
+                unreachable;
+            };
+            try dependency_collector.appendPlatformRelationDependency(relation_view, binding);
         }
+    }
+
+    const RelationLoweringDependencyCollector = struct {
+        coordinator: *Coordinator,
+        allocator: Allocator,
+        root_key: CheckedArtifact.CheckedModuleArtifactKey,
+        root_view: ?CheckedArtifact.ImportedModuleView,
+        relation_artifacts: []const CheckedArtifact.ImportedModuleView,
+        views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
+        visited_public_api: std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+        visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
+        visited_consts: std.AutoHashMap(CheckedArtifact.ConstRef, void),
+        visited_callable_eval_templates: std.AutoHashMap(CheckedArtifact.ArtifactCallableEvalTemplateRef, void),
+
+        fn init(
+            coordinator: *Coordinator,
+            allocator: Allocator,
+            root_key: CheckedArtifact.CheckedModuleArtifactKey,
+            root_view: ?CheckedArtifact.ImportedModuleView,
+            relation_artifacts: []const CheckedArtifact.ImportedModuleView,
+            views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
+        ) RelationLoweringDependencyCollector {
+            return .{
+                .coordinator = coordinator,
+                .allocator = allocator,
+                .root_key = root_key,
+                .root_view = root_view,
+                .relation_artifacts = relation_artifacts,
+                .views = views,
+                .visited_public_api = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator),
+                .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
+                .visited_consts = std.AutoHashMap(CheckedArtifact.ConstRef, void).init(allocator),
+                .visited_callable_eval_templates = std.AutoHashMap(CheckedArtifact.ArtifactCallableEvalTemplateRef, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *RelationLoweringDependencyCollector) void {
+            self.visited_callable_eval_templates.deinit();
+            self.visited_consts.deinit();
+            self.visited_templates.deinit();
+            self.visited_public_api.deinit();
+        }
+
+        fn appendPlatformRelationDependency(
+            self: *RelationLoweringDependencyCollector,
+            relation_artifact: CheckedArtifact.ImportedModuleView,
+            binding: CheckedArtifact.PlatformRequiredBinding,
+        ) Allocator.Error!void {
+            switch (binding.value_use) {
+                .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
+                .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
+            }
+            try self.appendRelationArtifactExportedValueClosure(relation_artifact, binding);
+        }
+
+        fn appendClosure(
+            self: *RelationLoweringDependencyCollector,
+            closure: CheckedArtifact.ImportedTemplateClosureView,
+        ) Allocator.Error!void {
+            for (closure.checked_bodies) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_type_roots) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_type_schemes) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_callable_bodies) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_const_bodies) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_procedure_templates) |value| try self.appendProcedureTemplateRef(value);
+            for (closure.callable_eval_templates) |value| try self.appendCallableEvalTemplateRef(value);
+            for (closure.const_templates) |value| try self.appendConstRef(value);
+            for (closure.nested_proc_sites) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.resolved_value_refs) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.static_dispatch_plans) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.interface_capabilities) |value| try self.appendArtifactKey(value.artifact);
+        }
+
+        fn appendArtifactKey(
+            self: *RelationLoweringDependencyCollector,
+            key: CheckedArtifact.CheckedModuleArtifactKey,
+        ) Allocator.Error!void {
+            if (checkedArtifactKeyEql(key, self.root_key)) return;
+
+            const view = self.viewForKey(key);
+            if (!self.relationArtifactContainsKey(key)) {
+                try self.appendViewIfMissing(view);
+            }
+            try self.appendPublicApiDependenciesForView(view);
+        }
+
+        fn appendViewIfMissing(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+        ) Allocator.Error!void {
+            if (checkedArtifactKeyEql(view.key, self.root_key)) return;
+            if (self.relationArtifactContainsKey(view.key)) return;
+            if (importedArtifactViewExists(self.views.items, view.key)) return;
+            try self.views.append(self.allocator, view);
+        }
+
+        fn appendPublicApiDependenciesForView(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+        ) Allocator.Error!void {
+            const entry = try self.visited_public_api.getOrPut(view.key);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            for (view.public_api_dependencies.artifacts) |dependency_key| {
+                try self.appendArtifactKey(dependency_key);
+            }
+        }
+
+        fn appendProcedureTemplateRef(
+            self: *RelationLoweringDependencyCollector,
+            template_ref: canonical.ProcedureTemplateRef,
+        ) Allocator.Error!void {
+            const key = checkedArtifactKeyFromArtifactRef(template_ref.artifact);
+            try self.appendArtifactKey(key);
+
+            const entry = try self.visited_templates.getOrPut(template_ref);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            const view = self.viewForKey(key);
+            const index: usize = @intFromEnum(template_ref.template);
+            if (index >= view.checked_procedure_templates.templates.len) {
+                coordinatorInvariant("relation lowering dependency referenced missing checked procedure template", .{});
+            }
+            const template = view.checked_procedure_templates.get(template_ref.template);
+            if (template.proc_base != template_ref.proc_base) {
+                coordinatorInvariant("relation lowering dependency procedure template ref disagreed with template row", .{});
+            }
+            try self.appendResolvedValueRefs(view, template.resolved_value_refs);
+        }
+
+        fn appendCallableEvalTemplateRef(
+            self: *RelationLoweringDependencyCollector,
+            template_ref: CheckedArtifact.ArtifactCallableEvalTemplateRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(template_ref.artifact);
+
+            const entry = try self.visited_callable_eval_templates.getOrPut(template_ref);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            const view = self.viewForKey(template_ref.artifact);
+            const index: usize = @intFromEnum(template_ref.template);
+            if (index >= view.callable_eval_templates.templates.len) {
+                coordinatorInvariant("relation lowering dependency referenced missing callable-eval template", .{});
+            }
+            const template = view.callable_eval_templates.templates[index];
+            const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse {
+                coordinatorInvariant("relation lowering dependency callable-eval template had no entry wrapper", .{});
+            };
+            try self.appendProcedureTemplateRef(wrapper.template);
+        }
+
+        fn appendConstRef(
+            self: *RelationLoweringDependencyCollector,
+            const_ref: CheckedArtifact.ConstRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(const_ref.artifact);
+
+            const entry = try self.visited_consts.getOrPut(const_ref);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            const view = self.viewForKey(const_ref.artifact);
+            const template = view.const_templates.get(const_ref);
+            switch (template.state) {
+                .eval_template => |eval_template| {
+                    try self.appendResolvedValueRefs(view, eval_template.resolved_value_refs);
+                    try self.appendProcedureTemplateRef(eval_template.entry_template);
+                },
+                .stored_const => {},
+                .reserved => coordinatorInvariant("relation lowering dependency reached unsealed const template", .{}),
+            }
+        }
+
+        fn appendResolvedValueRefs(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+            table: CheckedArtifact.ResolvedValueRefTableRef,
+        ) Allocator.Error!void {
+            const end = table.start + table.len;
+            if (end > view.resolved_value_refs.template_refs.len) {
+                coordinatorInvariant("relation lowering dependency resolved-ref span was outside table", .{});
+            }
+            for (view.resolved_value_refs.template_refs[table.start..end]) |ref_id| {
+                const raw = @intFromEnum(ref_id);
+                if (raw >= view.resolved_value_refs.records.len) {
+                    coordinatorInvariant("relation lowering dependency resolved-ref id was outside table", .{});
+                }
+                try self.appendResolvedValueRef(view, view.resolved_value_refs.records[raw].ref);
+            }
+        }
+
+        fn appendResolvedValueRef(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+            ref: CheckedArtifact.ResolvedValueRef,
+        ) Allocator.Error!void {
+            switch (ref) {
+                .top_level_const,
+                .imported_const,
+                => |const_use| try self.appendConstRef(const_use.const_ref),
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                => |procedure| try self.appendProcedureUse(procedure),
+                .platform_required_const => |required| {
+                    try self.appendConstRef(required.const_use.const_ref);
+                    try self.appendPlatformRequiredBindingClosure(view, required.binding);
+                },
+                .platform_required_proc => |required| {
+                    try self.appendProcedureUse(required.procedure);
+                    try self.appendPlatformRequiredBindingClosure(view, required.binding);
+                },
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .platform_required_declaration,
+                => {},
+            }
+        }
+
+        fn appendProcedureUse(
+            self: *RelationLoweringDependencyCollector,
+            procedure: CheckedArtifact.ProcedureUseTemplate,
+        ) Allocator.Error!void {
+            switch (procedure.binding) {
+                .top_level => |top_level| try self.appendTopLevelProcedureBinding(top_level),
+                .imported => |imported| try self.appendImportedProcedureBinding(imported),
+                .hosted => |hosted| try self.appendProcedureTemplateRef(hosted.template),
+                .platform_required => |required| try self.appendArtifactKey(required.artifact),
+            }
+        }
+
+        fn appendTopLevelProcedureBinding(
+            self: *RelationLoweringDependencyCollector,
+            binding_ref: CheckedArtifact.ArtifactTopLevelProcedureBindingRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(binding_ref.artifact);
+            const view = self.viewForKey(binding_ref.artifact);
+            const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
+            try self.appendProcedureBindingBody(binding_ref.artifact, binding.body);
+        }
+
+        fn appendProcedureBindingBody(
+            self: *RelationLoweringDependencyCollector,
+            owner_key: CheckedArtifact.CheckedModuleArtifactKey,
+            body: CheckedArtifact.ProcedureBindingBody,
+        ) Allocator.Error!void {
+            switch (body) {
+                .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+                .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
+                    .artifact = owner_key,
+                    .template = template,
+                }),
+            }
+        }
+
+        fn appendCallableProcedureTemplateRef(
+            self: *RelationLoweringDependencyCollector,
+            template: canonical.CallableProcedureTemplateRef,
+        ) Allocator.Error!void {
+            switch (template) {
+                .checked => |checked| try self.appendProcedureTemplateRef(checked),
+                .synthetic => |synthetic| try self.appendProcedureTemplateRef(synthetic.template),
+                .lifted => coordinatorInvariant("relation lowering dependency reached lifted procedure template before mono", .{}),
+            }
+        }
+
+        fn appendImportedProcedureBinding(
+            self: *RelationLoweringDependencyCollector,
+            binding_ref: CheckedArtifact.ImportedProcedureBindingRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(binding_ref.artifact);
+            const view = self.viewForKey(binding_ref.artifact);
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.def != binding_ref.def or binding.binding.pattern != binding_ref.pattern) continue;
+                try self.appendClosure(binding.template_closure);
+                try self.appendImportedProcedureBindingBody(binding_ref.artifact, binding.body);
+                return;
+            }
+            coordinatorInvariant("relation lowering dependency imported procedure had no exported binding closure", .{});
+        }
+
+        fn appendImportedProcedureBindingBody(
+            self: *RelationLoweringDependencyCollector,
+            owner_key: CheckedArtifact.CheckedModuleArtifactKey,
+            body: CheckedArtifact.ImportedProcedureBindingBody,
+        ) Allocator.Error!void {
+            switch (body) {
+                .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+                .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
+                    .artifact = owner_key,
+                    .template = template,
+                }),
+            }
+        }
+
+        fn appendPlatformRequiredBindingClosure(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+            binding_id: CheckedArtifact.PlatformRequiredBindingId,
+        ) Allocator.Error!void {
+            const binding = view.platform_required_bindings.lookupByBindingId(@intFromEnum(binding_id)) orelse {
+                coordinatorInvariant("relation lowering dependency referenced missing platform-required binding", .{});
+            };
+            switch (binding.value_use) {
+                .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
+                .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
+            }
+        }
+
+        fn appendRelationArtifactExportedValueClosure(
+            self: *RelationLoweringDependencyCollector,
+            relation_artifact: CheckedArtifact.ImportedModuleView,
+            binding: CheckedArtifact.PlatformRequiredBinding,
+        ) Allocator.Error!void {
+            switch (binding.value_use) {
+                .procedure_value => {
+                    var found = false;
+                    for (relation_artifact.exported_procedure_bindings.bindings) |exported| {
+                        if (exported.binding.pattern != binding.app_value.pattern) continue;
+                        found = true;
+                        try self.appendClosure(exported.template_closure);
+                        try self.appendImportedProcedureBindingBody(relation_artifact.key, exported.body);
+                        for (relation_artifact.exported_procedure_templates.templates) |template| {
+                            if (template.def != exported.binding.def) continue;
+                            try self.appendClosure(template.template_closure);
+                            try self.appendProcedureTemplateRef(template.template);
+                        }
+                    }
+                    if (!found) {
+                        coordinatorInvariant("relation lowering dependency could not find exported app procedure binding", .{});
+                    }
+                },
+                .const_value => |const_use| {
+                    var found = false;
+                    for (relation_artifact.exported_const_templates.templates) |template| {
+                        if (template.pattern != binding.app_value.pattern) continue;
+                        if (!std.meta.eql(template.const_ref, const_use.const_use.const_ref)) continue;
+                        found = true;
+                        try self.appendClosure(template.template_closure);
+                        try self.appendConstRef(template.const_ref);
+                    }
+                    if (!found) {
+                        coordinatorInvariant("relation lowering dependency could not find exported app const template", .{});
+                    }
+                },
+            }
+        }
+
+        fn viewForKey(
+            self: *RelationLoweringDependencyCollector,
+            key: CheckedArtifact.CheckedModuleArtifactKey,
+        ) CheckedArtifact.ImportedModuleView {
+            if (self.root_view) |view| {
+                if (checkedArtifactKeyEql(view.key, key)) return view;
+            }
+            if (relationViewByKey(self.relation_artifacts, key)) |view| return view;
+            for (self.views.items) |view| {
+                if (checkedArtifactKeyEql(view.key, key)) return view;
+            }
+            const artifact = self.coordinator.checkedArtifactByKey(key) orelse {
+                coordinatorInvariant("relation lowering dependency referenced unavailable checked module", .{});
+            };
+            return CheckedArtifact.importedView(artifact);
+        }
+
+        fn relationArtifactContainsKey(
+            self: *const RelationLoweringDependencyCollector,
+            key: CheckedArtifact.CheckedModuleArtifactKey,
+        ) bool {
+            return relationViewByKey(self.relation_artifacts, key) != null;
+        }
+    };
+
+    fn relationViewByKey(
+        relation_views: []const CheckedArtifact.ImportedModuleView,
+        key: CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?CheckedArtifact.ImportedModuleView {
+        for (relation_views) |view| {
+            if (checkedArtifactKeyEql(view.key, key)) return view;
+        }
+        return null;
+    }
+
+    fn platformRequiredBindingFromRelationInput(
+        relation: CheckedArtifact.PlatformAppRelation,
+        input: CheckedArtifact.PlatformRequiredBindingInput,
+        index: usize,
+    ) CheckedArtifact.PlatformRequiredBinding {
+        return .{
+            .id = @enumFromInt(@as(u32, @intCast(index))),
+            .relation = relation.key,
+            .module_idx = relation.platform_module_idx,
+            .declaration = input.declaration,
+            .requires_idx = input.requires_idx,
+            .app_value = input.app_value,
+            .requested_source_ty = input.requested_source_ty,
+            .checked_relation = input.checked_relation,
+            .value_use = input.value_use,
+        };
+    }
+
+    fn checkedArtifactKeyFromArtifactRef(ref: canonical.ArtifactRef) CheckedArtifact.CheckedModuleArtifactKey {
+        return .{ .bytes = ref.bytes };
+    }
+
+    fn checkedArtifactKeyEql(
+        a: CheckedArtifact.CheckedModuleArtifactKey,
+        b: CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        return std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("compile.coordinator invariant violated: " ++ message, args);
+        }
+        unreachable;
     }
 
     fn appendPublicApiDependencyViewByKey(
@@ -1580,7 +2015,46 @@ pub const Coordinator = struct {
         defer self.gpa.free(available_artifacts);
 
         var publication_with_availability = publication;
-        publication_with_availability.available_artifacts = available_artifacts;
+        var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
+        var relation_available_artifacts_owned = false;
+        defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
+
+        if (publication.platform_app_relation) |relation| {
+            var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+            errdefer extended_available.deinit(self.gpa);
+            try extended_available.appendSlice(self.gpa, available_artifacts);
+
+            const root_key = if (mod.checkedArtifact()) |current| current.key else CheckedArtifact.CheckedModuleArtifactKey{};
+            for (publication.relation_artifacts) |relation_artifact| {
+                if (checkedArtifactKeyEql(relation_artifact.key, root_key)) continue;
+                if (importedArtifactViewExists(extended_available.items, relation_artifact.key)) continue;
+                try extended_available.append(self.gpa, relation_artifact);
+            }
+
+            var dependency_collector = RelationLoweringDependencyCollector.init(
+                self,
+                self.gpa,
+                root_key,
+                null,
+                publication.relation_artifacts,
+                &extended_available,
+            );
+            defer dependency_collector.deinit();
+
+            for (relation.bindings, 0..) |binding_input, i| {
+                const relation_view = relationViewByKey(publication.relation_artifacts, binding_input.app_value.artifact) orelse {
+                    coordinatorInvariant("platform/app relation publication missing relation checked module view", .{});
+                };
+                const binding = platformRequiredBindingFromRelationInput(relation, binding_input, i);
+                try dependency_collector.appendPlatformRelationDependency(relation_view, binding);
+            }
+
+            relation_available_artifacts = try extended_available.toOwnedSlice(self.gpa);
+            relation_available_artifacts_owned = true;
+            publication_with_availability.available_artifacts = relation_available_artifacts;
+        } else {
+            publication_with_availability.available_artifacts = available_artifacts;
+        }
 
         var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             self.gpa,

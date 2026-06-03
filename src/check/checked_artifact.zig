@@ -12566,6 +12566,13 @@ fn collectPublicApiDependencies(
     exported_defs: []const CIR.Def.Idx,
     checked_type_publication: *const CheckedTypePublication,
     checked_types: *const CheckedTypeStore,
+    checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+    const_templates: *const ConstTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     exported_procedure_templates: *const ExportedProcedureTemplateTable,
@@ -12614,12 +12621,28 @@ fn collectPublicApiDependencies(
         &type_owner_keys,
     );
 
-    try appendExportedClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, exported_procedure_templates.*);
+    var closure_dependencies = PublicApiClosureDependencyCollector.init(
+        allocator,
+        artifact_key,
+        imports,
+        available_artifacts,
+        checked_templates,
+        callable_eval_templates,
+        entry_wrappers,
+        const_templates,
+        resolved_value_refs,
+        top_level_bindings,
+        platform_required_bindings,
+        &keys,
+    );
+    defer closure_dependencies.deinit();
+
+    try closure_dependencies.appendExportedProcedureTemplates(exported_procedure_templates.*);
     for (exported_procedure_bindings.bindings) |binding| {
-        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, binding.template_closure);
+        try closure_dependencies.appendClosure(binding.template_closure);
     }
     for (exported_const_templates.templates) |template| {
-        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, template.template_closure);
+        try closure_dependencies.appendClosure(template.template_closure);
     }
 
     const artifacts = try keys.toOwnedSlice(allocator);
@@ -12906,38 +12929,300 @@ fn appendPublicApiDependencyView(
     _ = try keys.append(allocator, view.key);
 }
 
-fn appendExportedClosurePublicApiDependencies(
+fn appendPublicApiClosureDependencyKey(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     keys: *ArtifactKeyAccumulator,
-    exported_procedure_templates: ExportedProcedureTemplateTable,
+    key: CheckedModuleArtifactKey,
 ) Allocator.Error!void {
-    for (exported_procedure_templates.templates) |template| {
-        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, keys, template.template_closure);
-    }
+    if (checkedArtifactKeyEql(key, artifact_key)) return;
+    if (publicApiDependencyKeyIsKnownBuiltin(key, imports, available_artifacts)) return;
+    _ = try keys.append(allocator, key);
 }
 
-fn appendTemplateClosurePublicApiDependencies(
+fn publicApiDependencyKeyIsKnownBuiltin(
+    key: CheckedModuleArtifactKey,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+) bool {
+    if (publicApiDependencyViewByKey(key, imports, available_artifacts)) |view| {
+        return view.module_env.module_role == .builtin;
+    }
+    return false;
+}
+
+const PublicApiClosureDependencyCollector = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
+    checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+    const_templates: *const ConstTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
     keys: *ArtifactKeyAccumulator,
-    closure: ImportedTemplateClosureView,
-) Allocator.Error!void {
-    var closure_keys = std.ArrayList(CheckedModuleArtifactKey).empty;
-    defer closure_keys.deinit(allocator);
-    try appendImportedTemplateClosureArtifactKeys(allocator, &closure_keys, closure);
-    for (closure_keys.items) |key| {
-        if (checkedArtifactKeyEql(key, artifact_key)) continue;
-        const view = publicApiDependencyViewByKey(key, imports, available_artifacts) orelse {
-            checkedArtifactInvariant("public API closure dependency scan could not find checked artifact for referenced key", .{});
+    visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
+    visited_consts: std.AutoHashMap(ConstRef, void),
+    visited_callable_eval_templates: std.AutoHashMap(ArtifactCallableEvalTemplateRef, void),
+
+    fn init(
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
+        checked_templates: *const CheckedProcedureTemplateTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
+        const_templates: *const ConstTemplateTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
+        top_level_bindings: *const TopLevelProcedureBindingTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
+        keys: *ArtifactKeyAccumulator,
+    ) PublicApiClosureDependencyCollector {
+        return .{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .imports = imports,
+            .available_artifacts = available_artifacts,
+            .checked_templates = checked_templates,
+            .callable_eval_templates = callable_eval_templates,
+            .entry_wrappers = entry_wrappers,
+            .const_templates = const_templates,
+            .resolved_value_refs = resolved_value_refs,
+            .top_level_bindings = top_level_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .keys = keys,
+            .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
+            .visited_consts = std.AutoHashMap(ConstRef, void).init(allocator),
+            .visited_callable_eval_templates = std.AutoHashMap(ArtifactCallableEvalTemplateRef, void).init(allocator),
         };
-        try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
     }
-}
+
+    fn deinit(self: *PublicApiClosureDependencyCollector) void {
+        self.visited_callable_eval_templates.deinit();
+        self.visited_consts.deinit();
+        self.visited_templates.deinit();
+    }
+
+    fn appendExportedProcedureTemplates(
+        self: *PublicApiClosureDependencyCollector,
+        exported_procedure_templates: ExportedProcedureTemplateTable,
+    ) Allocator.Error!void {
+        for (exported_procedure_templates.templates) |template| {
+            try self.appendClosure(template.template_closure);
+        }
+    }
+
+    fn appendClosure(
+        self: *PublicApiClosureDependencyCollector,
+        closure: ImportedTemplateClosureView,
+    ) Allocator.Error!void {
+        for (closure.checked_bodies) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_type_roots) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_type_schemes) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_callable_bodies) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_const_bodies) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_procedure_templates) |value| try self.appendProcedureTemplateRef(value);
+        for (closure.callable_eval_templates) |value| try self.appendCallableEvalTemplateRef(value);
+        for (closure.const_templates) |value| try self.appendConstRef(value);
+        for (closure.nested_proc_sites) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.resolved_value_refs) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.static_dispatch_plans) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.interface_capabilities) |value| try self.appendArtifactKey(value.artifact);
+    }
+
+    fn appendArtifactKey(
+        self: *PublicApiClosureDependencyCollector,
+        key: CheckedModuleArtifactKey,
+    ) Allocator.Error!void {
+        try appendPublicApiClosureDependencyKey(
+            self.allocator,
+            self.artifact_key,
+            self.imports,
+            self.available_artifacts,
+            self.keys,
+            key,
+        );
+    }
+
+    fn appendProcedureTemplateRef(
+        self: *PublicApiClosureDependencyCollector,
+        template_ref: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        const key = checkedArtifactKeyFromArtifactRef(template_ref.artifact);
+        try self.appendArtifactKey(key);
+        if (!checkedArtifactKeyEql(key, self.artifact_key)) return;
+
+        const entry = try self.visited_templates.getOrPut(template_ref);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+
+        const index: usize = @intFromEnum(template_ref.template);
+        if (index >= self.checked_templates.templates.len) {
+            checkedArtifactInvariant("public API closure dependency referenced missing local procedure template", .{});
+        }
+        const template = self.checked_templates.get(template_ref.template);
+        if (template.proc_base != template_ref.proc_base) {
+            checkedArtifactInvariant("public API closure dependency procedure template ref disagreed with template row", .{});
+        }
+        try self.appendResolvedValueRefs(template.resolved_value_refs);
+    }
+
+    fn appendCallableEvalTemplateRef(
+        self: *PublicApiClosureDependencyCollector,
+        template_ref: ArtifactCallableEvalTemplateRef,
+    ) Allocator.Error!void {
+        try self.appendArtifactKey(template_ref.artifact);
+        if (!checkedArtifactKeyEql(template_ref.artifact, self.artifact_key)) return;
+
+        const entry = try self.visited_callable_eval_templates.getOrPut(template_ref);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+
+        const index: usize = @intFromEnum(template_ref.template);
+        if (index >= self.callable_eval_templates.templates.len) {
+            checkedArtifactInvariant("public API closure dependency referenced missing callable-eval template", .{});
+        }
+        const template = self.callable_eval_templates.get(template_ref.template);
+        const wrapper = entryWrapperForRoot(self.entry_wrappers, template.root);
+        try self.appendProcedureTemplateRef(wrapper.template);
+    }
+
+    fn appendConstRef(
+        self: *PublicApiClosureDependencyCollector,
+        const_ref: ConstRef,
+    ) Allocator.Error!void {
+        try self.appendArtifactKey(const_ref.artifact);
+        if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return;
+
+        const entry = try self.visited_consts.getOrPut(const_ref);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+
+        const template = self.const_templates.get(const_ref);
+        switch (template.state) {
+            .eval_template => |eval| {
+                try self.appendResolvedValueRefs(eval.resolved_value_refs);
+                try self.appendProcedureTemplateRef(eval.entry_template);
+            },
+            .stored_const => {},
+            .reserved => checkedArtifactInvariant("public API closure dependency reached unsealed const template", .{}),
+        }
+    }
+
+    fn appendResolvedValueRefs(
+        self: *PublicApiClosureDependencyCollector,
+        table: ResolvedValueRefTableRef,
+    ) Allocator.Error!void {
+        const end = table.start + table.len;
+        if (end > self.resolved_value_refs.template_refs.len) {
+            checkedArtifactInvariant("public API closure resolved-ref span was outside table", .{});
+        }
+        for (self.resolved_value_refs.template_refs[table.start..end]) |ref_id| {
+            const raw = @intFromEnum(ref_id);
+            if (raw >= self.resolved_value_refs.records.len) {
+                checkedArtifactInvariant("public API closure resolved-ref id was outside table", .{});
+            }
+            try self.appendResolvedValueRef(self.resolved_value_refs.records[raw].ref);
+        }
+    }
+
+    fn appendResolvedValueRef(
+        self: *PublicApiClosureDependencyCollector,
+        ref: ResolvedValueRef,
+    ) Allocator.Error!void {
+        switch (ref) {
+            .top_level_const,
+            .imported_const,
+            => |const_use| try self.appendConstRef(const_use.const_ref),
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |procedure| try self.appendProcedureUse(procedure),
+            .platform_required_const => |required| {
+                try self.appendConstRef(required.const_use.const_ref);
+                try self.appendPlatformRequiredBindingClosure(required.binding);
+            },
+            .platform_required_proc => |required| {
+                try self.appendProcedureUse(required.procedure);
+                try self.appendPlatformRequiredBindingClosure(required.binding);
+            },
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .platform_required_declaration,
+            => {},
+        }
+    }
+
+    fn appendProcedureUse(
+        self: *PublicApiClosureDependencyCollector,
+        procedure: ProcedureUseTemplate,
+    ) Allocator.Error!void {
+        switch (procedure.binding) {
+            .top_level => |top_level| try self.appendTopLevelProcedureBinding(top_level),
+            .imported => |imported| try self.appendArtifactKey(imported.artifact),
+            .hosted => |hosted| try self.appendProcedureTemplateRef(hosted.template),
+            .platform_required => |required| try self.appendArtifactKey(required.artifact),
+        }
+    }
+
+    fn appendTopLevelProcedureBinding(
+        self: *PublicApiClosureDependencyCollector,
+        binding_ref: ArtifactTopLevelProcedureBindingRef,
+    ) Allocator.Error!void {
+        try self.appendArtifactKey(binding_ref.artifact);
+        if (!checkedArtifactKeyEql(binding_ref.artifact, self.artifact_key)) return;
+
+        const binding = self.top_level_bindings.get(binding_ref.binding);
+        try self.appendProcedureBindingBody(binding.body);
+    }
+
+    fn appendProcedureBindingBody(
+        self: *PublicApiClosureDependencyCollector,
+        body: ProcedureBindingBody,
+    ) Allocator.Error!void {
+        switch (body) {
+            .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+            .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
+                .artifact = self.artifact_key,
+                .template = template,
+            }),
+        }
+    }
+
+    fn appendCallableProcedureTemplateRef(
+        self: *PublicApiClosureDependencyCollector,
+        template: canonical.CallableProcedureTemplateRef,
+    ) Allocator.Error!void {
+        switch (template) {
+            .checked => |checked| try self.appendProcedureTemplateRef(checked),
+            .synthetic => |synthetic| try self.appendProcedureTemplateRef(synthetic.template),
+            .lifted => checkedArtifactInvariant("public API closure reached lifted procedure template before mono", .{}),
+        }
+    }
+
+    fn appendPlatformRequiredBindingClosure(
+        self: *PublicApiClosureDependencyCollector,
+        binding_id: PlatformRequiredBindingId,
+    ) Allocator.Error!void {
+        const binding = self.platform_required_bindings.lookupByBindingId(@intFromEnum(binding_id)) orelse {
+            checkedArtifactInvariant("public API closure referenced missing platform-required binding", .{});
+        };
+        switch (binding.value_use) {
+            .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
+            .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
+        }
+    }
+};
 
 fn publicApiDependencyViewByKey(
     key: CheckedModuleArtifactKey,
@@ -13232,7 +13517,7 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendNestedProcSites(template.nested_proc_sites);
         try self.appendResolvedValueRefs(template.resolved_value_refs);
         try self.appendStaticDispatchPlans(template.static_dispatch_plans);
-        try self.appendProcedureDependencies(template.resolved_value_refs);
+        try self.appendDirectProcedureDependencies(template.resolved_value_refs);
     }
 
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CheckedBodyId) Allocator.Error!void {
@@ -13317,7 +13602,7 @@ const ImportedTemplateClosureBuilder = struct {
         for (closure.interface_capabilities) |value| _ = try self.interface_capabilities.append(self.allocator, value);
     }
 
-    fn appendProcedureDependencies(
+    fn appendDirectProcedureDependencies(
         self: *ImportedTemplateClosureBuilder,
         table: ResolvedValueRefTableRef,
     ) Allocator.Error!void {
@@ -13331,11 +13616,10 @@ const ImportedTemplateClosureBuilder = struct {
             if (try self.appendPlatformRequiredRelationClosureForResolvedRef(resolved)) continue;
             if (try self.appendCallableEvalBindingClosureForResolvedRef(resolved)) continue;
             if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
-                const template = self.checked_templates.get(dependency_ref.template);
-                try self.appendTemplate(dependency_ref, template);
+                _ = try self.checked_procedure_templates.append(self.allocator, dependency_ref);
             }
             if (self.constRefForResolvedValueRef(resolved)) |dependency_ref| {
-                try self.appendConstTemplate(dependency_ref);
+                _ = try self.const_templates.append(self.allocator, dependency_ref);
             }
         }
     }
@@ -13462,7 +13746,7 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendNestedProcSites(eval.nested_proc_sites);
                 try self.appendResolvedValueRefs(eval.resolved_value_refs);
                 try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
-                try self.appendProcedureDependencies(eval.resolved_value_refs);
+                try self.appendDirectProcedureDependencies(eval.resolved_value_refs);
                 const entry_template = self.checked_templates.get(eval.entry_template.template);
                 try self.appendTemplate(eval.entry_template, entry_template);
             },
@@ -16498,6 +16782,13 @@ pub fn publishFromTypedModule(
         exports,
         &checked_type_publication,
         checked_types,
+        &checked_procedure_templates,
+        &callable_eval_templates,
+        &entry_wrappers,
+        &const_templates,
+        &resolved_value_refs,
+        &top_level_procedure_bindings,
+        &platform_required_bindings,
         inputs.imports,
         inputs.available_artifacts,
         &exported_procedure_templates,
