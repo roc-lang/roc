@@ -14,6 +14,7 @@
 //! multi-threaded execution modes.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -412,16 +413,46 @@ fn buildCheckOwnerEnvs(
         try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, env);
     }
 
+    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+    defer seen_public_dependencies.deinit();
+
     for (imported_artifacts) |imported_artifact| {
-        for (imported_artifact.view.public_api_dependencies.artifacts) |dependency_key| {
-            const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
-                std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
-            };
-            try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, dependency.module_env);
-        }
+        try appendCheckOwnerEnvPublicDependencies(
+            allocator,
+            &owner_envs,
+            available_artifacts,
+            &seen_public_dependencies,
+            imported_artifact.view,
+        );
     }
 
     return try owner_envs.toOwnedSlice(allocator);
+}
+
+fn appendCheckOwnerEnvPublicDependencies(
+    allocator: Allocator,
+    owner_envs: *std.ArrayList(*const ModuleEnv),
+    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+    view: CheckedArtifact.ImportedModuleView,
+) Allocator.Error!void {
+    for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+        const entry = try seen_public_dependencies.getOrPut(dependency_key);
+        if (entry.found_existing) continue;
+        entry.value_ptr.* = {};
+
+        const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
+            std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+        };
+        try appendCheckOwnerEnvIfMissing(allocator, owner_envs, dependency.module_env);
+        try appendCheckOwnerEnvPublicDependencies(
+            allocator,
+            owner_envs,
+            available_artifacts,
+            seen_public_dependencies,
+            dependency,
+        );
+    }
 }
 
 fn appendCheckOwnerEnvIfMissing(
@@ -459,15 +490,11 @@ fn availableArtifactByKey(
     return null;
 }
 
-fn appendAvailableArtifactViewIfMissing(
-    allocator: Allocator,
-    views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
-    view: CheckedArtifact.ImportedModuleView,
-) Allocator.Error!void {
-    for (views.items) |existing| {
-        if (std.mem.eql(u8, &existing.key.bytes, &view.key.bytes)) return;
-    }
-    try views.append(allocator, view);
+fn checkedModuleArtifactKeyEql(
+    a: CheckedArtifact.CheckedModuleArtifactKey,
+    b: CheckedArtifact.CheckedModuleArtifactKey,
+) bool {
+    return std.mem.eql(u8, &a.bytes, &b.bytes);
 }
 
 /// Per-package module build orchestrator
@@ -1842,22 +1869,7 @@ pub const PackageEnv = struct {
             }
         }
 
-        var available_artifact_views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
-        errdefer available_artifact_views.deinit(self.gpa);
-        try appendAvailableArtifactViewIfMissing(
-            self.gpa,
-            &available_artifact_views,
-            CheckedArtifact.importedView(&self.builtin_modules.checked_artifact),
-        );
-        for (self.modules.items) |*module_state| {
-            if (module_state.checkedArtifact()) |artifact| {
-                try appendAvailableArtifactViewIfMissing(self.gpa, &available_artifact_views, CheckedArtifact.importedView(artifact));
-            }
-        }
-        for (imported_artifacts.items) |imported| {
-            try appendAvailableArtifactViewIfMissing(self.gpa, &available_artifact_views, imported.view);
-        }
-        const available_artifacts = try available_artifact_views.toOwnedSlice(self.gpa);
+        const available_artifacts = try self.buildAvailableArtifactViewsForImports(imported_artifacts.items);
         defer self.gpa.free(available_artifacts);
 
         var check_timer = startStageTimer(self.roc_ctx.std_io);
@@ -1913,6 +1925,62 @@ pub const PackageEnv = struct {
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);
         if (!threading.is_freestanding) self.cond.broadcast(self.roc_ctx.std_io);
+    }
+
+    fn buildAvailableArtifactViewsForImports(
+        self: *PackageEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    ) ![]const CheckedArtifact.ImportedModuleView {
+        var views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        errdefer views.deinit(self.gpa);
+
+        var pending = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        defer pending.deinit(self.gpa);
+
+        var seen = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(self.gpa);
+        defer seen.deinit();
+
+        for (imported_artifacts) |imported| {
+            try pending.append(self.gpa, imported.view);
+        }
+
+        while (pending.pop()) |view| {
+            const entry = try seen.getOrPut(view.key);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = {};
+
+            try views.append(self.gpa, view);
+
+            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+                const dependency = self.availableArtifactViewByKey(imported_artifacts, dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.PackageEnv missing type-owner dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(self.gpa, dependency);
+            }
+        }
+
+        return try views.toOwnedSlice(self.gpa);
+    }
+
+    fn availableArtifactViewByKey(
+        self: *PackageEnv,
+        imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+        key: CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?CheckedArtifact.ImportedModuleView {
+        if (checkedModuleArtifactKeyEql(self.builtin_modules.checked_artifact.key, key)) {
+            return CheckedArtifact.importedView(&self.builtin_modules.checked_artifact);
+        }
+        for (imported_artifacts) |imported| {
+            if (checkedModuleArtifactKeyEql(imported.key, key)) return imported.view;
+        }
+        for (self.modules.items) |*module_state| {
+            const artifact = module_state.checkedArtifact() orelse continue;
+            if (checkedModuleArtifactKeyEql(artifact.key, key)) return CheckedArtifact.importedView(artifact);
+        }
+        return null;
     }
 
     fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) ![]const u8 {

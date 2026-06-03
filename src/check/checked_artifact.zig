@@ -323,8 +323,10 @@ const CheckedImportViews = struct {
 /// This is semantic visibility, not lexical import visibility.
 pub const PublicApiDependencies = struct {
     artifacts: []const CheckedModuleArtifactKey = &.{},
+    type_owner_artifacts: []const CheckedModuleArtifactKey = &.{},
 
     pub fn deinit(self: *PublicApiDependencies, allocator: Allocator) void {
+        allocator.free(self.type_owner_artifacts);
         allocator.free(self.artifacts);
         self.* = .{};
     }
@@ -12553,6 +12555,8 @@ fn appendClosureArtifactKey(
     try keys.append(allocator, key);
 }
 
+const ArtifactKeyAccumulator = UniqueList(CheckedModuleArtifactKey);
+
 fn collectPublicApiDependencies(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -12568,8 +12572,10 @@ fn collectPublicApiDependencies(
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
 ) Allocator.Error!PublicApiDependencies {
-    var keys = std.ArrayList(CheckedModuleArtifactKey).empty;
-    errdefer keys.deinit(allocator);
+    var keys = ArtifactKeyAccumulator.empty;
+    defer keys.deinit(allocator);
+    var type_owner_keys = ArtifactKeyAccumulator.empty;
+    defer type_owner_keys.deinit(allocator);
 
     var active_types = std.AutoHashMap(CheckedTypeId, void).init(allocator);
     defer active_types.deinit();
@@ -12589,6 +12595,7 @@ fn collectPublicApiDependencies(
             imports,
             available_artifacts,
             &keys,
+            &type_owner_keys,
         );
     }
 
@@ -12604,6 +12611,7 @@ fn collectPublicApiDependencies(
         available_artifacts,
         &active_types,
         &keys,
+        &type_owner_keys,
     );
 
     try appendExportedClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, exported_procedure_templates.*);
@@ -12614,7 +12622,14 @@ fn collectPublicApiDependencies(
         try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, template.template_closure);
     }
 
-    return .{ .artifacts = try keys.toOwnedSlice(allocator) };
+    const artifacts = try keys.toOwnedSlice(allocator);
+    errdefer allocator.free(artifacts);
+    const type_owner_artifacts = try type_owner_keys.toOwnedSlice(allocator);
+
+    return .{
+        .artifacts = artifacts,
+        .type_owner_artifacts = type_owner_artifacts,
+    };
 }
 
 fn appendExposedTypeDeclarationPublicApiDependencies(
@@ -12628,7 +12643,8 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     active_types: *std.AutoHashMap(CheckedTypeId, void),
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
     var exposed_iter = module_env.common.exposed_items.iterator();
@@ -12659,6 +12675,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
                     imports,
                     available_artifacts,
                     keys,
+                    type_owner_keys,
                 );
             },
             else => {},
@@ -12676,7 +12693,8 @@ fn appendPublicApiTypeDependencies(
     active: *std.AutoHashMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const index: usize = @intFromEnum(root);
     if (index >= checked_types.payloads.len) {
@@ -12700,6 +12718,7 @@ fn appendPublicApiTypeDependencies(
             imports,
             available_artifacts,
             keys,
+            type_owner_keys,
         ),
         .rigid => |rigid| try appendPublicApiConstraintDependencies(
             allocator,
@@ -12712,6 +12731,7 @@ fn appendPublicApiTypeDependencies(
             imports,
             available_artifacts,
             keys,
+            type_owner_keys,
         ),
         .alias => |alias| {
             try appendPublicApiModuleDependency(
@@ -12723,9 +12743,10 @@ fn appendPublicApiTypeDependencies(
                 imports,
                 available_artifacts,
                 keys,
+                type_owner_keys,
             );
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, alias.backing, active, imports, available_artifacts, keys);
-            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, alias.args, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, alias.backing, active, imports, available_artifacts, keys, type_owner_keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, alias.args, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .nominal => |nominal| {
             try appendPublicApiModuleDependency(
@@ -12737,31 +12758,32 @@ fn appendPublicApiTypeDependencies(
                 imports,
                 available_artifacts,
                 keys,
+                type_owner_keys,
             );
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, nominal.backing, active, imports, available_artifacts, keys);
-            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, nominal.args, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, nominal.backing, active, imports, available_artifacts, keys, type_owner_keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, nominal.args, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .record => |record| {
             for (record.fields) |field| {
-                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys);
+                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys, type_owner_keys);
             }
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, record.ext, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, record.ext, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .record_unbound => |fields| {
             for (fields) |field| {
-                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys);
+                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys, type_owner_keys);
             }
         },
-        .tuple => |items| try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, items, active, imports, available_artifacts, keys),
+        .tuple => |items| try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, items, active, imports, available_artifacts, keys, type_owner_keys),
         .function => |function| {
-            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, function.args, active, imports, available_artifacts, keys);
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, function.ret, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, function.args, active, imports, available_artifacts, keys, type_owner_keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, function.ret, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .tag_union => |tag_union| {
             for (tag_union.tags) |tag| {
-                try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, tag.args, active, imports, available_artifacts, keys);
+                try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, tag.args, active, imports, available_artifacts, keys, type_owner_keys);
             }
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, tag_union.ext, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, tag_union.ext, active, imports, available_artifacts, keys, type_owner_keys);
         },
     }
 }
@@ -12776,10 +12798,11 @@ fn appendPublicApiConstraintDependencies(
     active: *std.AutoHashMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     for (constraints) |constraint| {
-        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, constraint.fn_ty, active, imports, available_artifacts, keys);
+        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, constraint.fn_ty, active, imports, available_artifacts, keys, type_owner_keys);
     }
 }
 
@@ -12793,10 +12816,11 @@ fn appendPublicApiTypeDependencyRange(
     active: *std.AutoHashMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     for (roots) |child| {
-        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, child, active, imports, available_artifacts, keys);
+        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, child, active, imports, available_artifacts, keys, type_owner_keys);
     }
 }
 
@@ -12808,7 +12832,8 @@ fn appendPublicApiModuleDependency(
     origin_module: canonical.ModuleNameId,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const origin_name = names.moduleNameText(origin_module);
     if (isSelfPublicApiModuleName(names, module_identity, origin_name)) return;
@@ -12818,6 +12843,7 @@ fn appendPublicApiModuleDependency(
     };
     if (view.module_env.module_role == .builtin) return;
     try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
+    try appendPublicApiDependencyView(allocator, artifact_key, type_owner_keys, view);
 }
 
 fn isSelfPublicApiModuleName(
@@ -12835,13 +12861,33 @@ fn publicApiDependencyViewByModuleName(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
 ) ?ImportedModuleView {
+    var direct: ?ImportedModuleView = null;
     for (imports) |import_artifact| {
-        if (importedViewModuleNameMatches(import_artifact.view, module_name)) return import_artifact.view;
+        if (importedViewModuleNameMatches(import_artifact.view, module_name)) {
+            direct = publicApiDependencyUniqueView(module_name, direct, import_artifact.view);
+        }
     }
+    if (direct) |view| return view;
+
+    var found: ?ImportedModuleView = null;
     for (available_artifacts) |view| {
-        if (importedViewModuleNameMatches(view, module_name)) return view;
+        if (importedViewModuleNameMatches(view, module_name)) {
+            found = publicApiDependencyUniqueView(module_name, found, view);
+        }
     }
-    return null;
+    return found;
+}
+
+fn publicApiDependencyUniqueView(
+    module_name: []const u8,
+    existing: ?ImportedModuleView,
+    next: ImportedModuleView,
+) ImportedModuleView {
+    const view = existing orelse return next;
+    if (!checkedArtifactKeyEql(view.key, next.key)) {
+        checkedArtifactInvariant("public API dependency scan found multiple checked artifacts for module {s}", .{module_name});
+    }
+    return view;
 }
 
 fn importedViewModuleNameMatches(view: ImportedModuleView, module_name: []const u8) bool {
@@ -12853,15 +12899,11 @@ fn importedViewModuleNameMatches(view: ImportedModuleView, module_name: []const 
 fn appendPublicApiDependencyView(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
     view: ImportedModuleView,
 ) Allocator.Error!void {
     if (checkedArtifactKeyEql(view.key, artifact_key)) return;
-    try appendClosureArtifactKey(allocator, keys, view.key);
-    for (view.public_api_dependencies.artifacts) |dependency| {
-        if (checkedArtifactKeyEql(dependency, artifact_key)) continue;
-        try appendClosureArtifactKey(allocator, keys, dependency);
-    }
+    _ = try keys.append(allocator, view.key);
 }
 
 fn appendExportedClosurePublicApiDependencies(
@@ -12869,7 +12911,7 @@ fn appendExportedClosurePublicApiDependencies(
     artifact_key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
     exported_procedure_templates: ExportedProcedureTemplateTable,
 ) Allocator.Error!void {
     for (exported_procedure_templates.templates) |template| {
@@ -12882,7 +12924,7 @@ fn appendTemplateClosurePublicApiDependencies(
     artifact_key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
     closure: ImportedTemplateClosureView,
 ) Allocator.Error!void {
     var closure_keys = std.ArrayList(CheckedModuleArtifactKey).empty;
@@ -13058,6 +13100,37 @@ fn buildImportedTemplateClosure(
     };
 }
 
+fn UniqueList(comptime T: type) type {
+    return struct {
+        items: std.ArrayList(T) = .empty,
+        seen: std.AutoHashMapUnmanaged(T, void) = .{},
+
+        const Self = @This();
+        const empty: Self = .{};
+
+        fn append(self: *Self, allocator: Allocator, value: T) Allocator.Error!bool {
+            const entry = try self.seen.getOrPut(allocator, value);
+            if (entry.found_existing) return false;
+
+            entry.value_ptr.* = {};
+            errdefer _ = self.seen.remove(value);
+
+            try self.items.append(allocator, value);
+            return true;
+        }
+
+        fn toOwnedSlice(self: *Self, allocator: Allocator) Allocator.Error![]T {
+            return try self.items.toOwnedSlice(allocator);
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            self.seen.deinit(allocator);
+            self.items.deinit(allocator);
+            self.* = .{};
+        }
+    };
+}
+
 const ImportedTemplateClosureBuilder = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
@@ -13070,19 +13143,19 @@ const ImportedTemplateClosureBuilder = struct {
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
-    checked_bodies: std.ArrayList(ArtifactCheckedBodyRef),
-    checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef),
-    checked_type_schemes: std.ArrayList(ArtifactCheckedTypeSchemeRef),
-    checked_callable_bodies: std.ArrayList(ArtifactCheckedCallableBodyRef),
-    checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef),
-    checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef),
-    callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef),
-    const_templates: std.ArrayList(ConstRef),
-    nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef),
-    resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef),
-    static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef),
-    method_registry_entries: std.ArrayList(MethodRegistryEntryRef),
-    interface_capabilities: std.ArrayList(ArtifactModuleInterfaceCapabilitiesRef),
+    checked_bodies: UniqueList(ArtifactCheckedBodyRef),
+    checked_type_roots: UniqueList(ArtifactCheckedTypeRef),
+    checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef),
+    checked_callable_bodies: UniqueList(ArtifactCheckedCallableBodyRef),
+    checked_const_bodies: UniqueList(ArtifactCheckedConstBodyRef),
+    checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef),
+    callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef),
+    const_templates: UniqueList(ConstRef),
+    nested_proc_sites: UniqueList(ArtifactNestedProcSiteTableRef),
+    resolved_value_refs: UniqueList(ArtifactResolvedValueRefTableRef),
+    static_dispatch_plans: UniqueList(ArtifactStaticDispatchPlanTableRef),
+    method_registry_entries: UniqueList(MethodRegistryEntryRef),
+    interface_capabilities: UniqueList(ArtifactModuleInterfaceCapabilitiesRef),
 
     fn init(
         allocator: Allocator,
@@ -13146,9 +13219,8 @@ const ImportedTemplateClosureBuilder = struct {
         template_ref: canonical.ProcedureTemplateRef,
         template: CheckedProcedureTemplate,
     ) Allocator.Error!void {
-        if (self.containsProcedureTemplate(template_ref)) return;
+        if (!try self.checked_procedure_templates.append(self.allocator, template_ref)) return;
 
-        try self.checked_procedure_templates.append(self.allocator, template_ref);
         switch (template.body) {
             .checked_body => |body| try self.appendCheckedBody(body),
             .intrinsic_wrapper,
@@ -13163,38 +13235,19 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendProcedureDependencies(template.resolved_value_refs);
     }
 
-    fn containsProcedureTemplate(
-        self: *const ImportedTemplateClosureBuilder,
-        template_ref: canonical.ProcedureTemplateRef,
-    ) bool {
-        for (self.checked_procedure_templates.items) |existing| {
-            if (canonical.procedureTemplateRefEql(existing, template_ref)) return true;
-        }
-        return false;
-    }
-
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CheckedBodyId) Allocator.Error!void {
         const ref = ArtifactCheckedBodyRef{ .artifact = self.artifact_key, .body = body };
-        for (self.checked_bodies.items) |existing| {
-            if (existing.body == ref.body and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_bodies.append(self.allocator, ref);
+        _ = try self.checked_bodies.append(self.allocator, ref);
     }
 
     fn appendCheckedConstBody(self: *ImportedTemplateClosureBuilder, body: CheckedConstBodyRef) Allocator.Error!void {
         const ref = ArtifactCheckedConstBodyRef{ .artifact = self.artifact_key, .body = body };
-        for (self.checked_const_bodies.items) |existing| {
-            if (existing.body == ref.body and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_const_bodies.append(self.allocator, ref);
+        _ = try self.checked_const_bodies.append(self.allocator, ref);
     }
 
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
         const ref = ArtifactCheckedTypeRef{ .artifact = self.artifact_key, .ty = ty };
-        for (self.checked_type_roots.items) |existing| {
-            if (existing.ty == ref.ty and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_type_roots.append(self.allocator, ref);
+        _ = try self.checked_type_roots.append(self.allocator, ref);
     }
 
     fn appendCheckedTypeScheme(
@@ -13208,10 +13261,7 @@ const ImportedTemplateClosureBuilder = struct {
             unreachable;
         };
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.artifact_key, .scheme = scheme.id };
-        for (self.checked_type_schemes.items) |existing| {
-            if (existing.scheme == ref.scheme and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_type_schemes.append(self.allocator, ref);
+        _ = try self.checked_type_schemes.append(self.allocator, ref);
     }
 
     fn appendNestedProcSites(
@@ -13220,10 +13270,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (table.len == 0) return;
         const ref = ArtifactNestedProcSiteTableRef{ .artifact = self.artifact_key, .table = table };
-        for (self.nested_proc_sites.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.nested_proc_sites.append(self.allocator, ref);
+        _ = try self.nested_proc_sites.append(self.allocator, ref);
     }
 
     fn appendResolvedValueRefs(
@@ -13232,10 +13279,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (table.len == 0) return;
         const ref = ArtifactResolvedValueRefTableRef{ .artifact = self.artifact_key, .table = table };
-        for (self.resolved_value_refs.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.resolved_value_refs.append(self.allocator, ref);
+        _ = try self.resolved_value_refs.append(self.allocator, ref);
     }
 
     fn appendStaticDispatchPlans(
@@ -13244,36 +13288,33 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (table.len == 0) return;
         const ref = ArtifactStaticDispatchPlanTableRef{ .artifact = self.artifact_key, .table = table };
-        for (self.static_dispatch_plans.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.static_dispatch_plans.append(self.allocator, ref);
+        _ = try self.static_dispatch_plans.append(self.allocator, ref);
     }
 
     fn appendInterfaceCapabilities(
         self: *ImportedTemplateClosureBuilder,
         ref: ArtifactModuleInterfaceCapabilitiesRef,
     ) Allocator.Error!void {
-        try appendUniqueValue(ArtifactModuleInterfaceCapabilitiesRef, self.allocator, &self.interface_capabilities, ref);
+        _ = try self.interface_capabilities.append(self.allocator, ref);
     }
 
     fn appendImportedTemplateClosure(
         self: *ImportedTemplateClosureBuilder,
         closure: ImportedTemplateClosureView,
     ) Allocator.Error!void {
-        for (closure.checked_bodies) |value| try appendUniqueValue(ArtifactCheckedBodyRef, self.allocator, &self.checked_bodies, value);
-        for (closure.checked_type_roots) |value| try appendUniqueValue(ArtifactCheckedTypeRef, self.allocator, &self.checked_type_roots, value);
-        for (closure.checked_type_schemes) |value| try appendUniqueValue(ArtifactCheckedTypeSchemeRef, self.allocator, &self.checked_type_schemes, value);
-        for (closure.checked_callable_bodies) |value| try appendUniqueValue(ArtifactCheckedCallableBodyRef, self.allocator, &self.checked_callable_bodies, value);
-        for (closure.checked_const_bodies) |value| try appendUniqueValue(ArtifactCheckedConstBodyRef, self.allocator, &self.checked_const_bodies, value);
-        for (closure.checked_procedure_templates) |value| try appendUniqueValue(ArtifactProcedureTemplateRef, self.allocator, &self.checked_procedure_templates, value);
-        for (closure.callable_eval_templates) |value| try appendUniqueValue(ArtifactCallableEvalTemplateRef, self.allocator, &self.callable_eval_templates, value);
-        for (closure.const_templates) |value| try appendUniqueValue(ConstRef, self.allocator, &self.const_templates, value);
-        for (closure.nested_proc_sites) |value| try appendUniqueValue(ArtifactNestedProcSiteTableRef, self.allocator, &self.nested_proc_sites, value);
-        for (closure.resolved_value_refs) |value| try appendUniqueValue(ArtifactResolvedValueRefTableRef, self.allocator, &self.resolved_value_refs, value);
-        for (closure.static_dispatch_plans) |value| try appendUniqueValue(ArtifactStaticDispatchPlanTableRef, self.allocator, &self.static_dispatch_plans, value);
-        for (closure.method_registry_entries) |value| try appendUniqueValue(MethodRegistryEntryRef, self.allocator, &self.method_registry_entries, value);
-        for (closure.interface_capabilities) |value| try appendUniqueValue(ArtifactModuleInterfaceCapabilitiesRef, self.allocator, &self.interface_capabilities, value);
+        for (closure.checked_bodies) |value| _ = try self.checked_bodies.append(self.allocator, value);
+        for (closure.checked_type_roots) |value| _ = try self.checked_type_roots.append(self.allocator, value);
+        for (closure.checked_type_schemes) |value| _ = try self.checked_type_schemes.append(self.allocator, value);
+        for (closure.checked_callable_bodies) |value| _ = try self.checked_callable_bodies.append(self.allocator, value);
+        for (closure.checked_const_bodies) |value| _ = try self.checked_const_bodies.append(self.allocator, value);
+        for (closure.checked_procedure_templates) |value| _ = try self.checked_procedure_templates.append(self.allocator, value);
+        for (closure.callable_eval_templates) |value| _ = try self.callable_eval_templates.append(self.allocator, value);
+        for (closure.const_templates) |value| _ = try self.const_templates.append(self.allocator, value);
+        for (closure.nested_proc_sites) |value| _ = try self.nested_proc_sites.append(self.allocator, value);
+        for (closure.resolved_value_refs) |value| _ = try self.resolved_value_refs.append(self.allocator, value);
+        for (closure.static_dispatch_plans) |value| _ = try self.static_dispatch_plans.append(self.allocator, value);
+        for (closure.method_registry_entries) |value| _ = try self.method_registry_entries.append(self.allocator, value);
+        for (closure.interface_capabilities) |value| _ = try self.interface_capabilities.append(self.allocator, value);
     }
 
     fn appendProcedureDependencies(
@@ -13305,8 +13346,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!bool {
         return switch (ref) {
             .imported_const => |const_use| blk: {
-                const template = self.importedConstTemplate(const_use.const_ref);
-                try self.appendImportedTemplateClosure(template.template_closure);
+                _ = try self.const_templates.append(self.allocator, const_use.const_ref);
                 break :blk true;
             },
             .imported_proc => |proc_use| blk: {
@@ -13318,11 +13358,31 @@ const ImportedTemplateClosureBuilder = struct {
                     => checkedArtifactInvariant("imported procedure ref did not carry imported binding", .{}),
                 };
                 const binding = self.importedProcedureBinding(imported);
-                try self.appendImportedTemplateClosure(binding.template_closure);
+                try self.appendImportedProcedureBindingDependency(binding);
                 break :blk true;
             },
             else => false,
         };
+    }
+
+    fn appendImportedProcedureBindingDependency(
+        self: *ImportedTemplateClosureBuilder,
+        binding: ImportedProcedureBindingView,
+    ) Allocator.Error!void {
+        switch (binding.body) {
+            .direct_template => |direct| {
+                const template_ref = checkedTemplateFromCallableTemplateForClosure(direct.template) orelse {
+                    checkedArtifactInvariant("imported procedure binding referenced a post-check template before mono", .{});
+                };
+                _ = try self.checked_procedure_templates.append(self.allocator, template_ref);
+            },
+            .callable_eval_template => |template_id| {
+                _ = try self.callable_eval_templates.append(self.allocator, .{
+                    .artifact = binding.binding.artifact,
+                    .template = template_id,
+                });
+            },
+        }
     }
 
     fn importedProcedureBinding(
@@ -13340,19 +13400,6 @@ const ImportedTemplateClosureBuilder = struct {
             }
         }
         checkedArtifactInvariant("imported procedure dependency had no published imported closure", .{});
-    }
-
-    fn importedConstTemplate(
-        self: *ImportedTemplateClosureBuilder,
-        ref: ConstRef,
-    ) ImportedConstTemplateView {
-        for (self.imports) |import| {
-            if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
-            for (import.view.exported_const_templates.templates) |template| {
-                if (constRefEql(template.const_ref, ref)) return template;
-            }
-        }
-        checkedArtifactInvariant("imported const dependency had no published imported closure", .{});
     }
 
     fn appendPlatformRequiredRelationClosureForResolvedRef(
@@ -13395,10 +13442,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         const_ref: ConstRef,
     ) Allocator.Error!void {
-        for (self.const_templates.items) |existing| {
-            if (constRefEql(existing, const_ref)) return;
-        }
-        try self.const_templates.append(self.allocator, const_ref);
+        if (!try self.const_templates.append(self.allocator, const_ref)) return;
 
         if (!std.meta.eql(const_ref.artifact.bytes, self.artifact_key.bytes)) return;
 
@@ -13484,7 +13528,7 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendCheckedTypeRoot(template.checked_fn_root);
         try self.appendCheckedTypeScheme(template.source_scheme);
         try self.appendTemplate(wrapper.template, entry_template);
-        try appendUniqueValue(ArtifactCallableEvalTemplateRef, self.allocator, &self.callable_eval_templates, .{
+        _ = try self.callable_eval_templates.append(self.allocator, .{
             .artifact = self.artifact_key,
             .template = template_id,
         });
@@ -13577,18 +13621,6 @@ fn buildImportedConstTemplateClosure(
 
 fn freeConstSlice(allocator: Allocator, slice: anytype) void {
     if (slice.len > 0) allocator.free(slice);
-}
-
-fn appendUniqueValue(
-    comptime T: type,
-    allocator: Allocator,
-    list: *std.ArrayList(T),
-    value: T,
-) Allocator.Error!void {
-    for (list.items) |existing| {
-        if (std.meta.eql(existing, value)) return;
-    }
-    try list.append(allocator, value);
 }
 
 pub fn deinitImportedTemplateClosure(
@@ -13833,7 +13865,7 @@ fn buildProcedureBindingClosure(
             try builder.appendCheckedTypeScheme(template.source_scheme);
             try builder.appendTemplate(wrapper.template, entry_template);
 
-            try builder.callable_eval_templates.append(allocator, .{
+            _ = try builder.callable_eval_templates.append(allocator, .{
                 .artifact = artifact_key,
                 .template = template_id,
             });

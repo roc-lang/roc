@@ -174,8 +174,8 @@ globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
-/// Map from module name string to Import.Idx for tracking unique imports
-import_indices: std.StringHashMapUnmanaged(Import.Idx),
+/// Map from module identifier to Import.Idx for tracking unique imports.
+import_indices: std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
 parser_type_decl_states: std.AutoHashMapUnmanaged(AST.Statement.Idx, ParserTypeDeclState) = .{},
 /// Type declarations whose CIR statements were prepared by a forward reference.
@@ -529,7 +529,7 @@ fn initInternal(
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
-        .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
+        .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
         .assoc_value_patterns = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx){},
@@ -5076,7 +5076,7 @@ fn importAliased(
     try self.introduceItemsAliased(exposed_items_span, module_name, alias, import_region, module_import_idx);
 
     // 6. Store the mapping from module name to Import.Idx
-    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+    try self.import_indices.put(self.env.gpa, module_name, module_import_idx);
 
     // 7. Create CIR import statement
     const cir_import = Statement{
@@ -5093,7 +5093,7 @@ fn importAliased(
 
     // 8. Add the module to the current scope so it can be used in qualified lookups
     const current_scope = self.currentScope();
-    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name, module_import_idx);
 
     // 9. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
@@ -5141,7 +5141,7 @@ fn importUnaliased(
     try self.introduceItemsUnaliased(exposed_items_span, module_name, import_region, module_import_idx);
 
     // 3. Store the mapping from module name to Import.Idx
-    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
+    try self.import_indices.put(self.env.gpa, module_name, module_import_idx);
 
     // 4. Create CIR import statement
     const cir_import = Statement{
@@ -5158,7 +5158,7 @@ fn importUnaliased(
 
     // 5. Add the module to the current scope so it can be used in qualified lookups
     const current_scope = self.currentScope();
-    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name, module_import_idx);
 
     // 6. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
@@ -6405,28 +6405,25 @@ pub fn canonicalizeExpr(
                         };
 
                         {
-                            // This is a module-qualified lookup
-                            const module_text = self.env.getIdent(module_name);
-
                             // Look up auto-imported type info once to avoid repeated map lookups
                             const auto_imported_type_info = self.lookupAvailableModuleEnv(module_name);
 
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
-                            const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_package_qualified) module_text else info.env.module_name
+                            const lookup_module_ident = if (auto_imported_type_info) |info|
+                                if (info.is_package_qualified) module_name else try self.env.insertIdent(base.Ident.for_text(info.env.module_name))
                             else
-                                module_text;
+                                module_name;
 
                             // If not, create an auto-import
-                            const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
+                            const import_idx = self.scopeLookupImportedModule(lookup_module_ident) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (auto_imported_type_info) |info| {
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
-                                    break :blk try self.getOrCreateAutoImport(actual_module_name);
+                                    const actual_module_ident = if (info.is_package_qualified) module_name else try self.env.insertIdent(base.Ident.for_text(info.env.module_name));
+                                    break :blk try self.getOrCreateAutoImportIdent(actual_module_ident);
                                 }
 
                                 // Module not imported in current scope
@@ -6596,9 +6593,8 @@ pub fn canonicalizeExpr(
                         if (self.scopeLookupExposedItem(ident)) |exposed_info| {
 
                             // Get the Import.Idx for the module this item comes from
-                            const module_text = self.env.getIdent(exposed_info.module_name);
                             // scopeLookupExposedItem found it, so the import must exist
-                            const import_idx = self.scopeLookupImportedModule(module_text) orelse unreachable;
+                            const import_idx = self.scopeLookupImportedModule(exposed_info.module_name) orelse unreachable;
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
@@ -9626,10 +9622,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // Not found in auto-imports, check if it's an imported type from exposed_items
         if (self.scopeLookupExposedItem(type_tok_ident)) |exposed_info| {
             const module_name = exposed_info.module_name;
-            const module_name_text = self.env.getIdent(module_name);
-
             // Check if this module is imported in the current scope
-            const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            const import_idx = self.scopeLookupImportedModule(module_name) orelse {
                 return CanonicalizedExpr{
                     .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
                         .module_name = module_name,
@@ -9691,9 +9685,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // above take precedence; this handles the module-qualified form.
         if (self.scopeLookupModule(type_tok_ident)) |module_info| {
             const module_name = module_info.module_name;
-            const module_name_text = self.env.getIdent(module_name);
-
-            const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            const import_idx = self.scopeLookupImportedModule(module_name) orelse {
                 return CanonicalizedExpr{
                     .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
                         .module_name = module_name,
@@ -9837,10 +9829,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
         const module_info = self.scopeLookupModule(first_tok_ident).?; // Already checked above
         const module_name = module_info.module_name;
-        const module_name_text = self.env.getIdent(module_name);
-
         // Check if this is imported in the current scope
-        const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+        const import_idx = self.scopeLookupImportedModule(module_name) orelse {
             return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
                 .module_name = module_name,
                 .region = region,
@@ -10481,9 +10471,7 @@ pub fn canonicalizePattern(
                 };
 
                 const module_name = module_info.module_name;
-                const module_name_text = self.env.getIdent(module_name);
-
-                const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+                const import_idx = self.scopeLookupImportedModule(module_name) orelse {
                     return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .module_not_imported = .{
                         .module_name = module_name,
                         .region = region,
@@ -11390,8 +11378,7 @@ fn canonicalizeTypeAnnoBasicType(
 
             // Not in type_decls, check if it's an exposed item from an imported module
             if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
-                const module_name_text = self.env.getIdent(exposed_info.module_name);
-                if (self.scopeLookupImportedModule(module_name_text)) |import_idx| {
+                if (self.scopeLookupImportedModule(exposed_info.module_name)) |import_idx| {
                     // Get the node index from the imported module
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
                         // Convert identifier from current module to target module's interner
@@ -11453,9 +11440,7 @@ fn canonicalizeTypeAnnoBasicType(
         const first_qualifier_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_toks[0]) orelse unreachable;
         if (self.scopeLookupModule(first_qualifier_ident)) |module_info| {
             const module_name = module_info.module_name;
-            const module_name_text = self.env.getIdent(module_name);
-
-            const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+            const import_idx = self.scopeLookupImportedModule(module_name) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
                     .module_name = module_name,
                     .region = region,
@@ -11534,10 +11519,8 @@ fn canonicalizeTypeAnnoBasicType(
             } });
         };
         const module_name = module_info.module_name;
-        const module_name_text = self.env.getIdent(module_name);
-
         // Check if this module is imported in the current scope
-        const import_idx = self.scopeLookupImportedModule(module_name_text) orelse {
+        const import_idx = self.scopeLookupImportedModule(module_name) orelse {
             return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
                 .module_name = module_name,
                 .region = region,
@@ -14301,7 +14284,7 @@ fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
 }
 
 /// Look up an imported module in the scope hierarchy
-fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?Import.Idx {
+fn scopeLookupImportedModule(self: *const Self, module_name: Ident.Idx) ?Import.Idx {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
     while (i > 0) {
@@ -14319,13 +14302,17 @@ fn scopeLookupImportedModule(self: *const Self, module_name: []const u8) ?Import
 
 /// Get or create an import index for an auto-imported module like Bool or Try
 fn getOrCreateAutoImport(self: *Self, module_name_text: []const u8) std.mem.Allocator.Error!Import.Idx {
+    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+    return try self.getOrCreateAutoImportIdent(module_ident);
+}
+
+fn getOrCreateAutoImportIdent(self: *Self, module_ident: Ident.Idx) std.mem.Allocator.Error!Import.Idx {
+    const module_name_text = self.env.getIdent(module_ident);
+
     // Check if we already have an import for this module
-    if (self.import_indices.get(module_name_text)) |existing_idx| {
+    if (self.import_indices.get(module_ident)) |existing_idx| {
         return existing_idx;
     }
-
-    // Create ident for index-based lookups
-    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
 
     // Create a new import using the imports map (with ident for index-based lookups)
     const new_import_idx = try self.env.imports.getOrPutWithIdent(
@@ -14336,11 +14323,11 @@ fn getOrCreateAutoImport(self: *Self, module_name_text: []const u8) std.mem.Allo
     );
 
     // Store it in our import map
-    try self.import_indices.put(self.env.gpa, module_name_text, new_import_idx);
+    try self.import_indices.put(self.env.gpa, module_ident, new_import_idx);
 
     // Also add to current scope so scopeLookupImportedModule can find it
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, new_import_idx);
+    _ = try current_scope.introduceImportedModule(self.env.gpa, module_ident, new_import_idx);
 
     return new_import_idx;
 }
@@ -14690,10 +14677,8 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         // Not a module alias and not an auto-imported type
         return null;
     };
-    const module_text = self.env.getIdent(module_name);
-
     // Check if this module is imported in the current scope
-    const import_idx = self.scopeLookupImportedModule(module_text) orelse blk: {
+    const import_idx = self.scopeLookupImportedModule(module_name) orelse blk: {
         // Module not in import scope - check if it's an auto-imported module in module_envs
         if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
             // This is an auto-imported module (like Bool, Try, Str, List, etc.)

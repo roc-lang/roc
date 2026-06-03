@@ -327,6 +327,8 @@ pub const ModuleState = struct {
     external_imports: std.ArrayList([]const u8),
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
+    /// Transitive local imports known for this module.
+    reachable_local_imports: std.bit_set.DynamicBitSetUnmanaged,
     /// Diagnostic reports
     reports: std.ArrayList(Report),
     /// Minimum dependency depth from root
@@ -355,6 +357,7 @@ pub const ModuleState = struct {
             .imports = std.ArrayList(ModuleId).empty,
             .external_imports = std.ArrayList([]const u8).empty,
             .dependents = std.ArrayList(ModuleId).empty,
+            .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
             .visit_color = .white,
@@ -491,6 +494,7 @@ pub const ModuleState = struct {
         }
         self.external_imports.deinit(gpa);
         self.dependents.deinit(gpa);
+        self.reachable_local_imports.deinit(gpa);
         for (self.reports.items) |*rep| {
             rep.deinit();
         }
@@ -612,48 +616,99 @@ pub const PackageState = struct {
         return mod.phase == .Done;
     }
 
-    pub fn findPath(self: *PackageState, gpa: Allocator, start: ModuleId, target: ModuleId) !?[]const ModuleId {
-        var visited = std.bit_set.DynamicBitSetUnmanaged{};
-        defer visited.deinit(gpa);
-        try visited.resize(gpa, self.modules.items.len, false);
+    pub fn moduleReaches(self: *const PackageState, from: ModuleId, target: ModuleId) bool {
+        const reachable = self.modules.items[from].reachable_local_imports;
+        return target < reachable.bit_length and reachable.isSet(target);
+    }
 
-        const Frame = struct { id: ModuleId, next_idx: usize };
-        var frames = std.ArrayList(Frame).empty;
-        defer frames.deinit(gpa);
+    fn addReachableLocalImport(
+        self: *PackageState,
+        gpa: Allocator,
+        module_id: ModuleId,
+        reachable_id: ModuleId,
+        delta: ?*std.ArrayList(ModuleId),
+    ) !bool {
+        const reachable = &self.modules.items[module_id].reachable_local_imports;
+        const needed_len = @as(usize, reachable_id) + 1;
+        if (reachable.bit_length < needed_len) {
+            try reachable.resize(gpa, needed_len, false);
+        }
+        if (reachable.isSet(reachable_id)) return false;
 
-        var stack_ids = std.ArrayList(ModuleId).empty;
-        defer stack_ids.deinit(gpa);
+        reachable.set(reachable_id);
+        if (delta) |delta_list| try delta_list.append(gpa, reachable_id);
+        return true;
+    }
 
-        visited.set(start);
-        try frames.append(gpa, .{ .id = start, .next_idx = 0 });
-        try stack_ids.append(gpa, start);
+    pub fn recordLocalImportReachability(
+        self: *PackageState,
+        gpa: Allocator,
+        module_id: ModuleId,
+        imported_id: ModuleId,
+    ) !void {
+        var initial_delta = std.ArrayList(ModuleId).empty;
+        defer initial_delta.deinit(gpa);
 
-        while (frames.items.len > 0) {
-            var top = &frames.items[frames.items.len - 1];
-            if (top.id == target) {
-                const out = try gpa.alloc(ModuleId, stack_ids.items.len);
-                std.mem.copyForwards(ModuleId, out, stack_ids.items);
-                return out;
-            }
+        _ = try self.addReachableLocalImport(gpa, module_id, imported_id, &initial_delta);
 
-            const st = &self.modules.items[top.id];
-            if (top.next_idx >= st.imports.items.len) {
-                visited.unset(top.id);
-                _ = stack_ids.pop();
-                _ = frames.pop();
-                continue;
-            }
-
-            const child = st.imports.items[top.next_idx];
-            top.next_idx += 1;
-
-            if (!visited.isSet(child)) {
-                visited.set(child);
-                try frames.append(gpa, .{ .id = child, .next_idx = 0 });
-                try stack_ids.append(gpa, child);
+        const imported_reachable = &self.modules.items[imported_id].reachable_local_imports;
+        if (imported_reachable.bit_length > 0) {
+            var iter = imported_reachable.iterator(.{});
+            while (iter.next()) |reachable| {
+                _ = try self.addReachableLocalImport(gpa, module_id, @intCast(reachable), &initial_delta);
             }
         }
-        return null;
+
+        if (initial_delta.items.len == 0) return;
+        try self.propagateReachabilityDelta(gpa, module_id, initial_delta.items);
+    }
+
+    fn propagateReachabilityDelta(
+        self: *PackageState,
+        gpa: Allocator,
+        module_id: ModuleId,
+        initial_delta: []const ModuleId,
+    ) !void {
+        const WorkItem = struct {
+            module_id: ModuleId,
+            delta_start: usize,
+            delta_len: usize,
+        };
+
+        var all_delta = std.ArrayList(ModuleId).empty;
+        defer all_delta.deinit(gpa);
+        try all_delta.appendSlice(gpa, initial_delta);
+
+        var work = std.ArrayList(WorkItem).empty;
+        defer work.deinit(gpa);
+        try work.append(gpa, .{
+            .module_id = module_id,
+            .delta_start = 0,
+            .delta_len = initial_delta.len,
+        });
+
+        var work_index: usize = 0;
+        while (work_index < work.items.len) : (work_index += 1) {
+            const item = work.items[work_index];
+            const item_delta_end = item.delta_start + item.delta_len;
+            const dependents = self.modules.items[item.module_id].dependents.items;
+
+            for (dependents) |dependent_id| {
+                const new_delta_start = all_delta.items.len;
+                for (item.delta_start..item_delta_end) |delta_index| {
+                    const reachable_id = all_delta.items[delta_index];
+                    _ = try self.addReachableLocalImport(gpa, dependent_id, reachable_id, &all_delta);
+                }
+                const new_delta_len = all_delta.items.len - new_delta_start;
+                if (new_delta_len == 0) continue;
+
+                try work.append(gpa, .{
+                    .module_id = dependent_id,
+                    .delta_start = new_delta_start,
+                    .delta_len = new_delta_len,
+                });
+            }
+        }
     }
 };
 
@@ -1103,25 +1158,39 @@ pub const Coordinator = struct {
         return try views.toOwnedSlice(allocator);
     }
 
-    fn collectAvailableArtifactViews(
+    fn collectTypecheckAvailableArtifactViews(
         self: *Coordinator,
         allocator: Allocator,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
-        try appendAvailableArtifactViewIfMissing(
-            &views,
-            allocator,
-            &self.builtin_modules.checked_artifact,
-        );
+        var pending = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer pending.deinit(allocator);
 
-        var pkg_iter = self.packages.iterator();
-        while (pkg_iter.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
-                try appendAvailableArtifactViewIfMissing(&views, allocator, artifact);
+        var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+        defer seen.deinit();
+
+        for (imported_artifacts) |imported| {
+            try pending.append(allocator, imported.view);
+        }
+
+        while (pending.pop()) |view| {
+            const entry = try seen.getOrPut(view.key);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = {};
+
+            try views.append(allocator, view);
+
+            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
         }
 
@@ -1136,17 +1205,6 @@ pub const Coordinator = struct {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
-    }
-
-    fn appendAvailableArtifactViewIfMissing(
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!void {
-        for (views.items) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) return;
-        }
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
     }
 
     fn appendRelationClosureDependencyViews(
@@ -1518,7 +1576,7 @@ pub const Coordinator = struct {
         defer self.gpa.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, self.gpa);
         defer self.gpa.free(imported_artifacts);
-        const available_artifacts = try self.collectAvailableArtifactViews(self.gpa);
+        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(self.gpa, imported_artifacts);
         defer self.gpa.free(available_artifacts);
 
         var publication_with_availability = publication;
@@ -2270,6 +2328,12 @@ pub const Coordinator = struct {
                 });
                 unreachable;
             };
+
+            if (child_id == result.module_id or pkg.moduleReaches(child_id, result.module_id)) {
+                try self.handleCycleInline(pkg, result.module_id, child_id);
+                return;
+            }
+
             try current_mod.imports.append(self.gpa, child_id);
 
             const child = pkg.getModule(child_id).?;
@@ -2279,10 +2343,7 @@ pub const Coordinator = struct {
                 child.depth = new_depth;
             }
 
-            if (child_id == result.module_id or (try pkg.findPath(self.gpa, child_id, result.module_id)) != null) {
-                try self.handleCycleInline(pkg, result.module_id, child_id);
-                return;
-            }
+            try pkg.recordLocalImportReachability(self.gpa, result.module_id, child_id);
 
             if (child.phase == .Parse) {
                 pkg.remaining_modules += 1;
@@ -2397,7 +2458,7 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
-        const available_artifacts = try self.collectAvailableArtifactViews(task_payload_alloc);
+        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
 
         if (mod.reports.items.len == 0 and

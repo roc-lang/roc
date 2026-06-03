@@ -310,6 +310,48 @@ test "import interner - Import.Idx functionality" {
     try expectEqual(true, found_set);
 }
 
+test "import interner - many imports keep stable module identity keys" {
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
+
+    const import_count = 320;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+
+    try source.appendSlice(allocator, "module [main]\n\n");
+    for (0..import_count) |i| {
+        const line = try std.fmt.allocPrint(allocator, "import T{d}\n", .{i});
+        defer allocator.free(line);
+        try source.appendSlice(allocator, line);
+    }
+    try source.appendSlice(allocator, "\nmain = \"test\"\n");
+
+    var result = try parseAndCanonicalizeSource(allocator, source.items, null);
+    defer {
+        result.can.deinit();
+        allocator.destroy(result.can);
+        result.builtin_ctx.deinit();
+        result.ast.deinit();
+        result.parse_env.deinit();
+        allocator.destroy(result.parse_env);
+    }
+
+    try result.can.canonicalizeFile();
+
+    var explicit_import_count: usize = 0;
+    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+        const module_name = result.parse_env.getString(import_string_idx);
+        if (std.mem.eql(u8, module_name, "Builtin")) continue;
+
+        explicit_import_count += 1;
+        try testing.expect(std.mem.startsWith(u8, module_name, "T"));
+    }
+
+    try expectEqual(@as(usize, import_count), explicit_import_count);
+}
+
 test "import interner - comprehensive usage example" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
