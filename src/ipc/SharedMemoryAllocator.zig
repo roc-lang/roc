@@ -67,6 +67,10 @@ pub fn getSystemPageSize() !usize {
 
 /// Creates a new anonymous shared memory region with the given size
 pub fn create(io: std.Io, size: usize, page_size: usize) !SharedMemoryAllocator {
+    return createWithMapFailureLogging(io, size, page_size, true);
+}
+
+fn createWithMapFailureLogging(io: std.Io, size: usize, page_size: usize, log_map_failure: bool) !SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Create the shared memory mapping
@@ -74,7 +78,10 @@ pub fn create(io: std.Io, size: usize, page_size: usize) !SharedMemoryAllocator 
     errdefer platform.closeHandle(handle, true);
 
     // Map the memory
-    const base_ptr = try platform.mapMemory(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
+    const base_ptr = if (log_map_failure)
+        try platform.mapMemory(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR)
+    else
+        try platform.mapMemoryNoLog(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
     errdefer platform.unmapMemory(base_ptr, aligned_size);
 
     // On Windows with SEC_RESERVE, we must commit pages before accessing them.
@@ -136,7 +143,8 @@ pub fn createWithMinSize(
 
     var current_size = aligned_preferred;
     while (true) {
-        if (create(io, current_size, page_size)) |shm| {
+        const log_map_failure = platform.is_windows or current_size <= aligned_min;
+        if (createWithMapFailureLogging(io, current_size, page_size, log_map_failure)) |shm| {
             if (current_size < aligned_preferred) {
                 std.log.warn(
                     "shared memory: OS rejected preferred reservation of {} bytes; using {} bytes instead",

@@ -1157,7 +1157,7 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
 fn matchesAnyFilter(name: []const u8, filters: []const []const u8) bool {
     if (filters.len == 0) return true;
     for (filters) |filter| {
-        if (std.mem.indexOf(u8, name, filter) != null) return true;
+        if (std.mem.find(u8, name, filter) != null) return true;
     }
     return false;
 }
