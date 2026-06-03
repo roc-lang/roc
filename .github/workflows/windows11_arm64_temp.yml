@@ -2,20 +2,25 @@ name: Debug Win11 ARM64 build
 
 on: [pull_request]
 
-# This is a temporary workflow to localize the access-violation (0xC0000005,
-# exit code -1073741819) that started on win11 arm64 after the zig 0.15 -> 0.16
-# upgrade. On this target everything is compiled with zig's self-hosted
-# aarch64-windows backend (build.zig `mustUseLlvm` is false), so a backend
-# miscompile or a std-build-system bug are both plausible.
+# Temporary workflow to root-cause the zig-0.16 win11-arm64 build failure.
 #
-# The steps below are ordered to answer, in a single CI run:
-#   1. Does the build runner itself crash? (--help / -l: pure graph config)
-#   2. Is the crash ReleaseFast-specific?  (Debug vs ReleaseFast)
-#   3. Is -Dfuzz required to trigger it?   (ReleaseFast with/without fuzz)
-#   4. Which exact sub-command crashes?    (--verbose -j1 -> linear output)
-# Every step continues on error and captures full stderr so we collect all
-# signals at once. Builds share the zig cache, so total cost ~= one ReleaseFast
-# build.
+# Run 1 (graph/localization) established:
+#   * `zig build -Dfuzz ... -Doptimize=ReleaseFast` fails: 13/218 steps ok, 84 failed.
+#   * Pervasive `warning(zcu): unexpected EOF reading cached ZIR for <file>` across
+#     build_runner.zig, options.zig, the test platform hosts and builtins.
+#   * One hard `LLVM ERROR: Broken module found ... PHINode should have one entry
+#     for each predecessor` while compiling the `fmt` module test (ReleaseFast).
+#   * Subprocess exit codes 5 / 9 / 116; parallel runs hard-crashed (0xC0000005)
+#     while the serial (-j1) run failed gracefully with exit 1.
+#
+# Run 2 (this file) CLASSIFIES the failures with isolated, single-process,
+# fresh-cache reproductions so we can tell apart:
+#   (a) ReleaseFast codegen crash on minimal input   -> base58 compile-only
+#   (b) compile-time vs run-time failure             -> base58 --test-no-exec vs exec
+#   (c) ReleaseFast-specific vs general              -> base58 Debug
+#   (d) the fmt LLVM "broken module" codegen bug      -> zig build test-fmt
+#   (e) is "unexpected EOF ZIR" a real cache-write bug or just fallout from
+#       killed parallel processes?                    -> fresh-cache serial build
 
 jobs:
   debug:
@@ -27,85 +32,96 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
           version: 0.16.0
+          use-cache: false
 
       - name: Environment info
         shell: pwsh
         run: |
           zig version
           zig env
-          Write-Host "--- system ---"
           Write-Host "PROCESSOR_ARCHITECTURE = $env:PROCESSOR_ARCHITECTURE"
-          systeminfo | Select-String 'OS Name','OS Version','System Type'
 
-      # (1) Pure build-runner sanity: configures the build graph and prints help
-      # WITHOUT compiling or running any step. A crash here means the build
-      # runner (compiled build.zig + std build system) is itself broken.
-      - name: build runner sanity -- zig build --help
+      # (a)+(b) Minimal standalone module (base58 has NO module deps), compiled
+      # in ReleaseFast WITHOUT running it, in a private fresh cache. This is the
+      # smallest possible repro of a ReleaseFast codegen crash. Raw stderr is
+      # captured directly (no build-system masking).
+      - name: base58 -- ReleaseFast, compile only (--test-no-exec), fresh cache
         shell: bash
         continue-on-error: true
         run: |
           set -o pipefail
-          zig build --help 2>&1 | tee help.log
+          rm -rf .zig-cache-a
+          zig test -OReleaseFast src/base58/mod.zig -lc --test-no-exec \
+            --cache-dir .zig-cache-a --global-cache-dir .zig-cache-a 2>&1 | tee a-base58-rf-compile.log
           code=${PIPESTATUS[0]}
-          echo "===== zig build --help exit code: $code ====="
+          echo "exit=$code" | tee -a a-base58-rf-compile.log
 
-      # Also exercises full graph construction (discoverBuiltinRocFiles etc).
-      - name: build runner sanity -- zig build -l
+      # (c) Same minimal module in Debug (and self-hosted backend). If Debug
+      # compiles but ReleaseFast crashes, the bug is optimizer/backend specific.
+      - name: base58 -- Debug, compile only (--test-no-exec), fresh cache
         shell: bash
         continue-on-error: true
         run: |
           set -o pipefail
-          zig build -l 2>&1 | tee list.log
+          rm -rf .zig-cache-b
+          zig test src/base58/mod.zig -lc --test-no-exec \
+            --cache-dir .zig-cache-b --global-cache-dir .zig-cache-b 2>&1 | tee b-base58-debug-compile.log
           code=${PIPESTATUS[0]}
-          echo "===== zig build -l exit code: $code ====="
+          echo "exit=$code" | tee -a b-base58-debug-compile.log
 
-      # (2) Default Debug build (also runs the builtin_compiler at build time).
-      # If this succeeds but ReleaseFast crashes, the crash is optimizer/codegen
-      # specific to ReleaseFast.
-      - name: full Debug build -- zig build
+      # (b) Now actually compile AND run the ReleaseFast test binary. If (a)
+      # compiled clean but this fails, the failure is at run time (miscompiled
+      # binary or a real test failure), not at compile time.
+      - name: base58 -- ReleaseFast, compile AND run, fresh cache
         shell: bash
         continue-on-error: true
         run: |
           set -o pipefail
-          zig build 2>&1 | tee debug-build.log
+          rm -rf .zig-cache-c
+          zig test -OReleaseFast src/base58/mod.zig -lc \
+            --cache-dir .zig-cache-c --global-cache-dir .zig-cache-c 2>&1 | tee c-base58-rf-run.log
           code=${PIPESTATUS[0]}
-          echo "===== zig build (Debug) exit code: $code ====="
-          echo "--- tail ---"
-          tail -n 150 debug-build.log
+          echo "exit=$code" | tee -a c-base58-rf-run.log
 
-      # (3) ReleaseFast WITHOUT -Dfuzz. Isolates whether the fuzz-specific
-      # targets are required to trigger the crash.
-      - name: ReleaseFast without fuzz -- zig build -Doptimize=ReleaseFast
+      # (d) Reproduce the fmt LLVM "broken module" bug in isolation via the build
+      # system (fmt has many module deps, so we let build.zig wire them up).
+      # Fresh cache + single-threaded so output is clean and ordered.
+      - name: test-fmt -- ReleaseFast, fresh cache, serial
         shell: bash
         continue-on-error: true
         run: |
           set -o pipefail
-          zig build -Doptimize=ReleaseFast 2>&1 | tee releasefast-nofuzz.log
+          rm -rf .zig-cache
+          zig build test-fmt -Doptimize=ReleaseFast --verbose -j1 2>&1 | tee d-test-fmt.log
           code=${PIPESTATUS[0]}
-          echo "===== zig build -Doptimize=ReleaseFast exit code: $code ====="
-          echo "--- tail ---"
-          tail -n 150 releasefast-nofuzz.log
+          echo "exit=$code" | tee -a d-test-fmt.log
+          echo "--- ZIR-EOF warnings in this fresh-cache serial run: ---"
+          grep -c "unexpected EOF reading cached ZIR" d-test-fmt.log || true
 
-      # (4) The exact failing command, verbose and single-threaded so the
-      # compiler sub-commands print in order. With -j1 the LAST printed
-      # `zig build-obj`/`build-exe` before the crash is the offending unit, and
-      # any segfault handler stack trace lands on stderr.
-      - name: failing command (verbose, -j1) -- the real repro
+      # (e) Definitive ZIR-cache test: fresh cache + strictly serial full
+      # ReleaseFast build. If "unexpected EOF reading cached ZIR" STILL appears
+      # here (no parallelism, no prior crash to truncate files), it is a genuine
+      # cache-write bug. If it is gone, those warnings were fallout from killed
+      # parallel processes and the real bug is codegen.
+      - name: full build -- ReleaseFast, fresh cache, serial
         shell: bash
         continue-on-error: true
         run: |
           set -o pipefail
-          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast --verbose -j1 2>&1 | tee full-build.log
+          rm -rf .zig-cache
+          zig build -Doptimize=ReleaseFast -j1 --verbose 2>&1 | tee e-full-serial.log
           code=${PIPESTATUS[0]}
-          echo "===== failing command exit code: $code ====="
-          echo "--- last 200 lines (crash region) ---"
-          tail -n 200 full-build.log
+          echo "exit=$code" | tee -a e-full-serial.log
+          echo "--- ZIR-EOF warning count on fresh serial build: ---"
+          grep -c "unexpected EOF reading cached ZIR" e-full-serial.log || true
+          echo "--- distinct compiler diagnostics: ---"
+          grep -iE "LLVM ERROR|PHINode|panic|unreachable|Broken module|Build Summary" e-full-serial.log || true
 
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4.6.2
         with:
-          name: win11-arm64-debug-logs
+          name: win11-arm64-debug-logs-run2
           path: |
             *.log
           if-no-files-found: warn
