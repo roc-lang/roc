@@ -1723,6 +1723,35 @@ test "check type - if else - different branch types 3" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - if else - annotated branch mismatch reports error" {
+    // Exercises the expected-return-type path in checkIfElseExpr (the
+    // isCompatibleWithExpected probe). The else branch (a number) does not
+    // match the annotated Str return type, which must be reported.
+    const source =
+        \\f : Bool -> Str
+        \\f = |b| if b "yes" else 42
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - match branch conflicting with rigid return type reports error" {
+    // Load-bearing case for isCompatibleWithExpected: the `Ok(_) => ""` branch
+    // body (Str) conflicts with the function's rigid annotated return type `e`.
+    // The caller's incompatible path (markErroneousBranchWithExpected) emits no
+    // diagnostic of its own, so the mismatch recorded by the
+    // isCompatibleWithExpected probe is the ONLY error reported. If that probe
+    // were switched to a throwaway problem store, this error would silently
+    // disappear.
+    const source =
+        \\get_err : [Ok(a), Err(e)] -> e
+        \\get_err = |result| match result {
+        \\    Ok(_) => ""
+        \\    Err(e) => e
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
 // match
 
 test "check type - match" {

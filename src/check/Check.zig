@@ -10063,8 +10063,11 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
 /// Check if a branch body type is compatible with the expected return type.
-/// This performs a non-destructive unification probe using a type-store snapshot.
-/// Must be called BEFORE pairwise unification poisons branch vars.
+/// This unifies against a type-store snapshot that is rolled back afterward, so
+/// it leaves the type store unchanged. It is NOT fully side-effect-free,
+/// however: a mismatch is recorded as a diagnostic in the real problem store
+/// (see the note at the unify call below). Must be called BEFORE pairwise
+/// unification poisons branch vars.
 fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
     const body = self.types.resolveVar(body_var);
     const expected = self.types.resolveVar(expected_var);
@@ -10087,6 +10090,15 @@ fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: 
         store_snapshot.deinit(self.cir.gpa);
     }
 
+    // NOTE: this passes the real `self.problems`/`self.snapshots` stores, not
+    // throwaway ones, so a mismatch here is RECORDED as a diagnostic and is NOT
+    // rolled back by the defer above (which only rolls back the type store).
+    // This is intentional and load-bearing: callers respond to a `false` return
+    // by marking the branch erroneous WITHOUT emitting their own diagnostic, so
+    // for some branch mismatches (e.g. a match branch whose body conflicts with
+    // a rigid annotated return type) the problem recorded here is the only
+    // diagnostic the user ever sees. Do not switch this to a throwaway problem
+    // store without making the callers emit the diagnostic themselves.
     const probe_result = unifier.unifyInContext(
         self.cir.gpa,
         self.cir.getIdentStoreConst(),
