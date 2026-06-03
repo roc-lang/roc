@@ -128,6 +128,7 @@ const TestHarness = struct {
     }
 };
 
+/// Syntax integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
     .{ .name = "syntax checker skips rebuild when content unchanged", .run = syntaxCheckerSkipsRebuildWhenContentUnchanged },
     .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
@@ -154,6 +155,7 @@ pub const specs = [_]integration_spec.Spec{
 
 // Syntax Checker Tests
 
+/// Verifies unchanged source content reuses the existing syntax-check result.
 pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -190,6 +192,7 @@ pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() !void {
     try std.testing.expectEqualSlices(u8, &hash1.?, &hash2.?);
 }
 
+/// Verifies changed source content updates the syntax checker content hash.
 pub fn syntaxCheckerRebuildsWhenContentChanges() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -232,6 +235,7 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() !void {
     try std.testing.expect(!std.mem.eql(u8, &hash1.?, &hash2.?));
 }
 
+/// Verifies invalid source produces one or more LSP diagnostics.
 pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -260,6 +264,7 @@ pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() !void {
     try std.testing.expect(total_diags > 0);
 }
 
+/// Verifies document symbols are returned for a valid app file.
 pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -297,6 +302,7 @@ pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() !void {
 
 // Completion Tests
 
+/// Verifies basic expression completions return at least one item.
 pub fn getCompletionsAtPositionReturnsBasicCompletions() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -319,6 +325,7 @@ pub fn getCompletionsAtPositionReturnsBasicCompletions() !void {
     try std.testing.expect(items.len > 0);
 }
 
+/// Verifies record fields complete for values with nominal record types.
 pub fn recordFieldCompletionWorksForModules() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -358,6 +365,7 @@ pub fn recordFieldCompletionWorksForModules() !void {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
+/// Verifies record fields complete through a nominal submodule value.
 pub fn recordFieldCompletionInSubModule() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -395,6 +403,7 @@ pub fn recordFieldCompletionInSubModule() !void {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
+/// Verifies nested nominal submodule members complete after a dot.
 pub fn recordFieldCompletionWorksForNestedNominalSubmodule() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -441,6 +450,7 @@ pub fn recordFieldCompletionWorksForNestedNominalSubmodule() !void {
     try TestHarness.expectHasLabels(items, &.{"ta"});
 }
 
+/// Verifies record fields complete for inferred record values.
 pub fn recordFieldCompletionWorks() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -473,6 +483,7 @@ pub fn recordFieldCompletionWorks() !void {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
+/// Verifies tuple index completions appear after a tuple dot.
 pub fn tupleIndexCompletionWorks() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -507,6 +518,7 @@ pub fn tupleIndexCompletionWorks() !void {
     try TestHarness.expectHasLabels(items, &.{ "0", "1", "2" });
 }
 
+/// Verifies partial field names still expose record field completions.
 pub fn recordFieldCompletionWithPartialFieldName() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -546,6 +558,7 @@ pub fn recordFieldCompletionWithPartialFieldName() !void {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
+/// Verifies static-dispatch methods complete for nominal values.
 pub fn staticDispatchCompletionForNominalTypeMethods() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -594,6 +607,7 @@ pub fn staticDispatchCompletionForNominalTypeMethods() !void {
     try TestHarness.expectHasLabels(items, &.{"to_str"});
 }
 
+/// Verifies static-dispatch methods complete after chained method calls.
 pub fn staticDispatchCompletionForChainedCall() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -644,6 +658,7 @@ pub fn staticDispatchCompletionForChainedCall() !void {
 
 // Doc Comment Tests
 
+/// Verifies completion items include doc comments from Roc source.
 pub fn completionIncludesDocCommentsFromSource() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -708,6 +723,7 @@ pub fn completionIncludesDocCommentsFromSource() !void {
 }
 // Hover Documentation Tests
 
+/// Verifies hovering a function definition includes documentation and type text.
 pub fn hoverShowsDocumentationForFunctionDefinition() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -742,6 +758,7 @@ pub fn hoverShowsDocumentationForFunctionDefinition() !void {
     }
 }
 
+/// Verifies hovering a local function call shows documentation from its definition.
 pub fn hoverShowsDocumentationForLocalFunctionCall() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -775,6 +792,7 @@ pub fn hoverShowsDocumentationForLocalFunctionCall() !void {
     }
 }
 
+/// Verifies hovering a builtin function call returns type information.
 pub fn hoverShowsDocumentationForExternalFunctionCall() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -805,6 +823,7 @@ pub fn hoverShowsDocumentationForExternalFunctionCall() !void {
     }
 }
 
+/// Verifies hovering an unannotated function still shows its documentation.
 pub fn hoverShowsDocumentationForFunctionWithoutTypeAnnotation() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -834,6 +853,7 @@ pub fn hoverShowsDocumentationForFunctionWithoutTypeAnnotation() !void {
     }
 }
 
+/// Verifies hovering a local value shows its source documentation.
 pub fn hoverShowsDocumentationForLocalVariable() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -864,6 +884,7 @@ pub fn hoverShowsDocumentationForLocalVariable() !void {
     }
 }
 
+/// Verifies hovering a static-dispatch method call shows method documentation.
 pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() !void {
     var h = try TestHarness.init();
     defer h.deinit();
@@ -898,6 +919,7 @@ pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() !void {
     }
 }
 
+/// Verifies hover text without documentation contains only type information.
 pub fn hoverWithoutDocumentationShowsOnlyType() !void {
     var h = try TestHarness.init();
     defer h.deinit();

@@ -214,6 +214,7 @@ fn expectNonEmptyCompletionItems(items: std.json.Value) !void {
     try std.testing.expect(items.array.items.len > 0);
 }
 
+/// Handler integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
     .{ .name = "document symbol handler extracts function declarations", .run = documentSymbolHandlerExtractsFunctionDeclarations },
     .{ .name = "document highlight handler finds variable occurrences", .run = documentHighlightHandlerFindsVariableOccurrences },
@@ -236,6 +237,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "completion handler returns record fields after dot", .run = completionHandlerReturnsRecordFieldsAfterDot },
 };
 
+/// Verifies document symbols include top-level declarations from an opened file.
 pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -347,6 +349,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
     try std.testing.expect(found_main);
 }
 
+/// Verifies document highlights include occurrences of the selected variable.
 pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -434,6 +437,7 @@ pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
     try std.testing.expect(try hasHighlightRange(result, 0, 0, 0, 1));
 }
 
+/// Verifies goto definition locates a local variable definition.
 pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -531,6 +535,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     try expectLocation(try response.result(), file_uri, 2, 0, 2, 5);
 }
 
+/// Verifies goto definition returns null for an unresolved symbol.
 pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -618,6 +623,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
     try std.testing.expect(result == .null);
 }
 
+/// Verifies hover on a type annotation returns type information.
 pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
     // Regression test for Bug 1: s_type_anno statements were ignored by hover system
     const allocator = test_env.allocator;
@@ -714,6 +720,7 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
     }
 }
 
+/// Verifies goto definition on a builtin annotation type can reach `Builtin.roc`.
 pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
     // Test that clicking on a type in a type annotation (e.g., "x : Str") navigates to Builtin.roc
     const allocator = test_env.allocator;
@@ -808,6 +815,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
     }
 }
 
+/// Verifies document symbols still work after a goto-definition request.
 pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     // Regression test: getDocumentSymbols should use getModuleLookupEnv()
     // after getDefinitionAtPosition creates a fresh build env.
@@ -920,6 +928,7 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     try expectSymbolNames(try symbols_response.result(), &.{ "myFunc", "result" });
 }
 
+/// Verifies repeated goto-definition requests preserve later document symbols.
 pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
     // Test that multiple sequential goto definition calls maintain proper state
     // for subsequent document symbol requests
@@ -1047,6 +1056,7 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
     try expectSymbolNames(try symbols_response.result(), &.{ "foo", "bar", "baz" });
 }
 
+/// Verifies document symbols report the expected Roc definition names.
 pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() !void {
     // Test that outline returns actual symbol names using valid Roc syntax
     const allocator = test_env.allocator;
@@ -1164,6 +1174,7 @@ pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() !void {
     try expectSymbolNames(try response.result(), &.{ "add", "myConst", "main" });
 }
 
+/// Verifies document symbols work without a prior syntax-check request.
 pub fn documentSymbolHandlerWorksIndependentlyOfCheck() !void {
     // Regression test: document symbols should work even without a prior check() call
     // The handler should build the module itself
@@ -1280,6 +1291,7 @@ pub fn documentSymbolHandlerWorksIndependentlyOfCheck() !void {
     try expectSymbolNames(try response.result(), &.{"hello"});
 }
 
+/// Verifies completions include module-level definitions in expression context.
 pub fn completionHandlerReturnsModuleDefinitions() !void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
@@ -1367,6 +1379,7 @@ pub fn completionHandlerReturnsModuleDefinitions() !void {
     try expectNonEmptyCompletionItems(items);
 }
 
+/// Verifies completions include imported module members after a dot.
 pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
     // Test: typing "Str." should trigger completions from the Str module
     const allocator = test_env.allocator;
@@ -1456,6 +1469,7 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
     try expectCompletionLabels(items, &.{"concat"});
 }
 
+/// Verifies completions include module names in expression context.
 pub fn completionHandlerReturnsModuleNamesInExpressionContext() !void {
     // Test: in expression context, module names should be available
     const allocator = test_env.allocator;
@@ -1542,6 +1556,7 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() !void {
     try expectCompletionLabels(items, &.{ "Str", "List", "Num" });
 }
 
+/// Verifies completions include type names after a type annotation colon.
 pub fn completionHandlerReturnsTypesAfterColon() !void {
     // Test: typing "x :" should trigger type completions
     const allocator = test_env.allocator;
@@ -1631,6 +1646,7 @@ pub fn completionHandlerReturnsTypesAfterColon() !void {
     try expectCompletionLabels(items, &.{ "Str", "U64", "Bool" });
 }
 
+/// Verifies completions include `List` module members after `List.`.
 pub fn completionHandlerReturnsListModuleMembersAfterListDot() !void {
     // Test: typing "List." should trigger completions from the List module
     const allocator = test_env.allocator;
@@ -1724,6 +1740,7 @@ pub fn completionHandlerReturnsListModuleMembersAfterListDot() !void {
     try expectCompletionLabels(items, &.{"map"});
 }
 
+/// Verifies completions include local variables visible inside a block.
 pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
     // Test: local variables defined in a block should appear in completions
     // within that block
@@ -1817,6 +1834,7 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
     try expectNonEmptyCompletionItems(items);
 }
 
+/// Verifies completions include lambda parameters inside the lambda body.
 pub fn completionHandlerReturnsLambdaParameters() !void {
     // Test: lambda parameters should appear in completions within the lambda body
     const allocator = test_env.allocator;
@@ -1907,6 +1925,7 @@ pub fn completionHandlerReturnsLambdaParameters() !void {
     try expectNonEmptyCompletionItems(items);
 }
 
+/// Verifies completions include top-level definitions in a module.
 pub fn completionHandlerReturnsTopLevelDefinitions() !void {
     // Test: top-level definitions should appear in completions
     const allocator = test_env.allocator;
@@ -1994,6 +2013,7 @@ pub fn completionHandlerReturnsTopLevelDefinitions() !void {
     try expectCompletionLabels(items, &.{ "my_constant", "my_function" });
 }
 
+/// Verifies completions include record fields after a record dot access.
 pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
     // Test: typing "rec." where rec is a record should trigger field completions
     const allocator = test_env.allocator;

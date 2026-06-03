@@ -18,6 +18,7 @@ pub const cir_queries = @import("cir_queries.zig");
 pub const completion = @import("completion/mod.zig");
 pub const module_lookup = @import("module_lookup.zig");
 pub const doc_comments = @import("doc_comments.zig");
+/// Request handlers exposed for server wiring and LSP tests.
 pub const handlers = struct {
     pub const completion = @import("handlers/completion.zig");
     pub const document_symbol = @import("handlers/document_symbol.zig");

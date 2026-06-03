@@ -9,7 +9,6 @@ const server_module = @import("lsp").server;
 const helpers = @import("helpers.zig");
 const TestSyntaxDriver = @import("test_syntax_driver.zig").TestSyntaxDriver;
 
-const frame = helpers.frame;
 const collectResponses = helpers.collectResponses;
 const uriFromPath = helpers.uriFromPath;
 

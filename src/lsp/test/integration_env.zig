@@ -3,19 +3,24 @@
 const std = @import("std");
 const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
 
+/// Allocator installed by the integration harness before specs run.
 pub var allocator: std.mem.Allocator = undefined;
+/// I/O interface installed by the integration harness before specs run.
 pub var io: std.Io = undefined;
 
+/// Installs the allocator and I/O interface used by integration specs.
 pub fn init(new_allocator: std.mem.Allocator, new_io: std.Io) void {
     allocator = new_allocator;
     io = new_io;
 }
 
+/// Configures a syntax checker for integration tests under the given cache root.
 pub fn configureChecker(checker: *SyntaxChecker, cache_root: []const u8) void {
     checker.cache_config.enabled = false;
     checker.cache_config.cache_dir = cache_root;
 }
 
+/// Temporary directory handle created under `.zig-cache/tmp` for a spec.
 pub const TmpDir = struct {
     dir: std.Io.Dir,
     parent_dir: std.Io.Dir,
@@ -32,6 +37,7 @@ pub const TmpDir = struct {
     }
 };
 
+/// Creates a temporary directory for an integration spec.
 pub fn tmpDir(opts: std.Io.Dir.OpenOptions) TmpDir {
     var random_bytes: [TmpDir.random_bytes_count]u8 = undefined;
     io.random(&random_bytes);

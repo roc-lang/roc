@@ -11,6 +11,7 @@ const harness = @import("test_harness");
 const integration = @import("integration_specs");
 const test_env = integration.integration_env;
 
+/// Standard library options for the LSP integration runner.
 pub const std_options: std.Options = .{
     .logFn = log,
 };
@@ -99,9 +100,7 @@ fn buildMessage(
     return message.toOwnedSlice(allocator) catch null;
 }
 
-fn runSingleTest(io: std.Io, allocator: Allocator, spec: integration.Spec, timeout_ms: u64) TestResult {
-    _ = timeout_ms;
-
+fn runSingleTest(io: std.Io, allocator: Allocator, spec: integration.Spec, _: u64) TestResult {
     var timer = harness.Timer.start() catch @panic("no clock");
 
     var spec_allocator_impl: std.heap.DebugAllocator(.{}) = .init;
@@ -390,6 +389,7 @@ fn printUsage() void {
     , .{});
 }
 
+/// Runs the parallel LSP integration harness or one worker process.
 pub fn main(init: std.process.Init) !void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
@@ -487,6 +487,7 @@ pub fn main(init: std.process.Init) !void {
     if (has_failure) std.process.exit(1);
 }
 
+/// Logs messages emitted while integration specs execute.
 pub fn log(
     comptime message_level: std.log.Level,
     comptime scope: @EnumLiteral(),

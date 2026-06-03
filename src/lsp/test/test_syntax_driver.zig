@@ -11,6 +11,7 @@ const Diagnostics = @import("lsp").diagnostics;
 const completion_handler = @import("lsp").handlers.completion;
 const document_symbol_handler = @import("lsp").handlers.document_symbol;
 
+/// Minimal syntax-driver implementation used by LSP server tests.
 pub const TestSyntaxDriver = struct {
     allocator: std.mem.Allocator,
     check_calls: usize = 0,

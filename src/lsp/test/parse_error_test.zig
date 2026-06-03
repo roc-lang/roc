@@ -5,10 +5,12 @@ const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
 const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
+/// Parse-error integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
     .{ .name = "parse errors are reported as diagnostics", .run = parseErrorsAreReportedAsDiagnostics },
 };
 
+/// Verifies parser failures are returned as concrete LSP diagnostics.
 pub fn parseErrorsAreReportedAsDiagnostics() !void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});

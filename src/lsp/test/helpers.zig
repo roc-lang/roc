@@ -3,10 +3,12 @@
 const std = @import("std");
 const transport_module = @import("lsp").transport;
 
+/// Wraps a JSON-RPC body in an LSP `Content-Length` frame.
 pub fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }
 
+/// Concatenates multiple JSON-RPC bodies into one framed input buffer.
 pub fn framedInput(allocator: std.mem.Allocator, bodies: []const []const u8) ![]u8 {
     var builder: std.ArrayList(u8) = .empty;
     errdefer builder.deinit(allocator);
@@ -22,10 +24,12 @@ pub fn framedInput(allocator: std.mem.Allocator, bodies: []const []const u8) ![]
     return data;
 }
 
+/// Collects response bodies from an LSP byte stream using the testing I/O interface.
 pub fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     return collectResponsesWithIo(allocator, std.testing.io, bytes);
 }
 
+/// Collects response bodies from an LSP byte stream using the provided I/O interface.
 pub fn collectResponsesWithIo(allocator: std.mem.Allocator, std_io: std.Io, bytes: []const u8) ![][]u8 {
     const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
@@ -52,10 +56,12 @@ pub fn collectResponsesWithIo(allocator: std.mem.Allocator, std_io: std.Io, byte
     return responses.toOwnedSlice(allocator);
 }
 
+/// Converts a filesystem path to an LSP file URI.
 pub fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return @import("lsp").uri.pathToUri(allocator, path);
 }
 
+/// Frees response bodies returned by `collectResponses`.
 pub fn freeResponses(allocator: std.mem.Allocator, responses: [][]u8) void {
     for (responses) |body| allocator.free(body);
     allocator.free(responses);
