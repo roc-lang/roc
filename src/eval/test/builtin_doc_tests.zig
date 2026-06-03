@@ -28,6 +28,25 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+/// Builtin module loaded and published once in the parent test process and
+/// reused (read-only) by every block: directly for the in-parent check phase,
+/// and — via fork copy-on-write — by the child eval phase. Reusing it avoids
+/// re-deserializing and re-publishing the Builtin module ~700 times. File-scope
+/// because the C-ABI child work fns dispatched through `runInChild` cannot
+/// capture it, and because it must already be in the parent's address space
+/// when `fork()` copies it into each child.
+var shared_builtins: ?*eval_mod.BuiltinModules = null;
+
+/// Borrow the shared Builtin as a `PrePublishedBuiltin`, or null before setup.
+fn prePublishedBuiltin() ?test_helpers.PrePublishedBuiltin {
+    const bm = shared_builtins orelse return null;
+    return .{
+        .env = bm.builtin_module.env,
+        .indices = bm.builtin_indices,
+        .artifact = &bm.checked_artifact,
+    };
+}
+
 /// Path to the Builtin.roc file, relative to the project root (the directory
 /// where `zig build run-test-zig` is invoked from).
 const builtin_roc_path = "src/build/roc/Builtin.roc";
@@ -458,12 +477,11 @@ fn runCheck(
     source_kind: test_helpers.SourceKind,
     source: []const u8,
 ) !?[]u8 {
-    var resources = test_helpers.parseAndCheckProgramForProblems(
-        allocator,
-        source_kind,
-        source,
-        &.{},
-    ) catch |err| return try dupeErr(allocator, "parseAndCheckProgramForProblems: {s}", .{@errorName(err)});
+    var resources = (if (prePublishedBuiltin()) |ppb|
+        test_helpers.parseAndCheckProgramForProblemsWithBuiltin(allocator, source_kind, source, &.{}, ppb)
+    else
+        test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{})) catch |err|
+        return try dupeErr(allocator, "parseAndCheckProgramForProblems: {s}", .{@errorName(err)});
     defer resources.deinit(allocator);
 
     if (!checkPassed(&resources)) {
@@ -486,7 +504,7 @@ fn runExpects(allocator: Allocator, source: []const u8) !?[]u8 {
         return try dupeErr(allocator, "expect-only block had no expect statements", .{});
     }
 
-    var compiled = test_helpers.compileInspectedProgram(allocator, std.testing.io, .module, wrapped, &.{}) catch |err|
+    var compiled = compileNative(allocator, .module, wrapped) catch |err|
         return try dupeErr(allocator, "compileInspectedProgram: {s}", .{@errorName(err)});
     defer compiled.deinit(allocator);
 
@@ -565,19 +583,44 @@ fn runEval(
     source_kind: test_helpers.SourceKind,
     source: []const u8,
 ) !?[]u8 {
-    var compiled = test_helpers.compileInspectedProgram(
-        allocator,
-        std.testing.io,
-        source_kind,
-        source,
-        &.{},
-    ) catch |err| return try dupeErr(allocator, "compileInspectedProgram: {s}", .{@errorName(err)});
+    var compiled = compileNative(allocator, source_kind, source) catch |err|
+        return try dupeErr(allocator, "compileInspectedProgram: {s}", .{@errorName(err)});
     defer compiled.deinit(allocator);
 
     const inspected = test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err|
         return try dupeErr(allocator, "lirInterpreterInspectedStr: {s}", .{@errorName(err)});
     allocator.free(inspected);
     return null;
+}
+
+/// Compile a block for the native target only, reusing the shared Builtin when
+/// it is available. The harness only evaluates `compiled.lowered` through the
+/// native LIR interpreter, so lowering wasm (as the generic
+/// `compileInspectedProgram` does) is pure waste here.
+fn compileNative(
+    allocator: Allocator,
+    source_kind: test_helpers.SourceKind,
+    source: []const u8,
+) !test_helpers.CompiledTargetProgram {
+    if (prePublishedBuiltin()) |ppb| {
+        return test_helpers.compileInspectedProgramForTargetWithBuiltin(
+            allocator,
+            std.testing.io,
+            source_kind,
+            source,
+            &.{},
+            .native,
+            ppb,
+        );
+    }
+    return test_helpers.compileInspectedProgramForTarget(
+        allocator,
+        std.testing.io,
+        source_kind,
+        source,
+        &.{},
+        .native,
+    );
 }
 
 /// Result of processing a block.
@@ -790,6 +833,14 @@ test "Builtin.roc doc code blocks check and evaluate" {
     }
 
     try testing.expect(blocks.len > 0);
+
+    // Load and publish the Builtin module once. Every block's check phase (in
+    // this parent process) and eval phase (in a forked child, via copy-on-write)
+    // borrows it read-only instead of re-deserializing and re-publishing it.
+    var builtins_instance = try eval_mod.BuiltinModules.init(allocator);
+    defer builtins_instance.deinit();
+    shared_builtins = &builtins_instance;
+    defer shared_builtins = null;
 
     var failures = std.ArrayList(Failure).empty;
     defer {
