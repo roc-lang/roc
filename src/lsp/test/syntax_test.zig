@@ -1,11 +1,11 @@
 //! Tests for the LSP syntax checker integration.
 
 const std = @import("std");
-const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
-const uri_util = @import("../uri.zig");
-const completion_handler = @import("../handlers/completion.zig");
+const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
+const uri_util = @import("lsp").uri;
+const completion_handler = @import("lsp").handlers.completion;
 const CompletionItem = completion_handler.CompletionItem;
-const completion_context = @import("../completion/context.zig");
+const completion_context = @import("lsp").completion;
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path

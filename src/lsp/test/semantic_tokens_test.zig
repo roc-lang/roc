@@ -1,8 +1,8 @@
 //! Tests for semantic token extraction and delta encoding.
 
 const std = @import("std");
-const semantic_tokens = @import("../semantic_tokens.zig");
-const line_info = @import("../line_info.zig");
+const semantic_tokens = @import("lsp").semantic_tokens;
+const line_info = @import("lsp").line_info;
 const tokenize = @import("parse").tokenize;
 
 const Token = tokenize.Token;

@@ -1,7 +1,7 @@
 //! Regression tests for surfacing parser failures as LSP diagnostics.
 
 const std = @import("std");
-const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
+const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
 
 test "parse errors are reported as diagnostics" {
     const allocator = std.testing.allocator;

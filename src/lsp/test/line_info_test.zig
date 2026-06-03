@@ -1,7 +1,7 @@
 //! Tests for line information utilities.
 
 const std = @import("std");
-const line_info = @import("../line_info.zig");
+const line_info = @import("lsp").line_info;
 const LineInfo = line_info.LineInfo;
 const computeLineStarts = line_info.computeLineStarts;
 

@@ -5,8 +5,7 @@ const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
 const DocumentStore = @import("document_store.zig").DocumentStore;
-const SyntaxChecker = @import("syntax.zig").SyntaxChecker;
-const DebugFlags = @import("syntax.zig").DebugFlags;
+const DebugFlags = @import("debug.zig").DebugFlags;
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
 
@@ -35,6 +34,12 @@ const log = std.log.scoped(.roc_lsp_server);
 
 /// Factory for the Roc LSP server. Handles the state and request handlers.
 pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
+    const SyntaxChecker = @import("syntax.zig").SyntaxChecker;
+    return ServerWithSyntaxDriver(ReaderType, WriterType, SyntaxChecker);
+}
+
+/// Factory for tests that need the server without the compiler-backed checker.
+pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: type, comptime SyntaxDriverType: type) type {
     return struct {
         const Self = @This();
         const TransportType = makeTransport(ReaderType, WriterType);
@@ -79,7 +84,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         client: protocol.ClientState = .{},
         state: State = .waiting_for_initialize,
         doc_store: DocumentStore,
-        syntax_checker: SyntaxChecker,
+        syntax_checker: SyntaxDriverType,
         log_file: ?std.Io.File = null,
         debug: DebugFlags,
 
@@ -113,7 +118,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
                 .std_io = std_io,
                 .transport = TransportType.init(allocator, std_io, reader, writer, if (debug_options.transport) log_file else null),
                 .doc_store = DocumentStore.init(allocator),
-                .syntax_checker = SyntaxChecker.init(allocator, std_io, flags, log_file),
+                .syntax_checker = SyntaxDriverType.init(allocator, std_io, flags, log_file),
                 .log_file = log_file,
                 .debug = flags,
             };

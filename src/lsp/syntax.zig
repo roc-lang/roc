@@ -34,13 +34,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
 
-/// Flags allowing granular debugging
-pub const DebugFlags = struct {
-    build: bool = false,
-    syntax: bool = false,
-    server: bool = false,
-    completion: bool = false,
-};
+pub const DebugFlags = @import("debug.zig").DebugFlags;
 
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
 pub const SyntaxChecker = struct {

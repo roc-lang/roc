@@ -1,38 +1,17 @@
 //! Tests for the LSP server lifecycle and request handling.
 
 const std = @import("std");
-const server_module = @import("../server.zig");
-const protocol = @import("../protocol.zig");
-const transport_module = @import("../transport.zig");
+const server_module = @import("lsp").server;
+const protocol = @import("lsp").protocol;
+const helpers = @import("helpers.zig");
+const TestSyntaxDriver = @import("test_syntax_driver.zig").TestSyntaxDriver;
 
-fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
-}
+const frame = helpers.frame;
+const collectResponses = helpers.collectResponses;
+const uriFromPath = helpers.uriFromPath;
 
-fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
-    const reader: std.Io.Reader = .fixed(bytes);
-    var sink_storage: [1]u8 = undefined;
-    const sink: std.Io.Writer = .fixed(&sink_storage);
-
-    const ReaderType = std.Io.Reader;
-    const WriterType = std.Io.Writer;
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, std.testing.io, reader, sink, null);
-
-    var responses: std.ArrayList([]u8) = .empty;
-    errdefer {
-        for (responses.items) |body| allocator.free(body);
-        responses.deinit(allocator);
-    }
-
-    while (true) {
-        const message = transport.readMessage() catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-        try responses.append(allocator, message);
-    }
-
-    return responses.toOwnedSlice(allocator);
+fn TestServer(comptime ReaderType: type, comptime WriterType: type) type {
+    return server_module.ServerWithSyntaxDriver(ReaderType, WriterType, TestSyntaxDriver);
 }
 
 fn lifecycleInput(allocator: std.mem.Allocator) ![]u8 {
@@ -72,7 +51,7 @@ test "server handles initialize/shutdown/exit handshake" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
 
     try server.run();
@@ -135,7 +114,7 @@ test "server rejects re-initialization requests" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -191,9 +170,10 @@ test "server tracks documents on didOpen/didChange" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -244,9 +224,10 @@ test "server applies sequential incremental changes in a single didChange" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -320,19 +301,16 @@ test "server handles burst of incremental didChange messages" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 4), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
     const doc = maybe_doc.?;
     try std.testing.expectEqualStrings("abc DEF\nline!\nDONE", doc.text);
     try std.testing.expectEqual(@as(i64, 4), doc.version);
-}
-
-fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return @import("../uri.zig").pathToUri(allocator, path);
 }
 
 test "server responds to semantic tokens request" {
@@ -402,9 +380,10 @@ test "server responds to semantic tokens request" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
@@ -485,9 +464,10 @@ test "server returns error for semantic tokens on unknown document" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 0), server.syntax_checker.check_calls);
 
     const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
@@ -578,9 +558,10 @@ test "server returns empty tokens for empty document" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
     defer {
