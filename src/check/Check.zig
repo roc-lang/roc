@@ -1463,7 +1463,12 @@ fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: us
                 quotient_len += 1;
             }
         }
-        try digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder)));
+        // Free the freshly-allocated quotient if recording the digit fails,
+        // since it has not yet been adopted into current_buf.
+        digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder))) catch |err| {
+            allocator.free(quotient);
+            return err;
+        };
         allocator.free(current_buf);
         current_buf = quotient;
         current_len = quotient_len;
