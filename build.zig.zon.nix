@@ -3,224 +3,165 @@
 {
   lib,
   linkFarm,
-  fetchurl,
-  fetchgit,
-  runCommandLocal,
+  runCommand,
   zig,
   name ? "zig-packages",
 }:
 
 let
-  unpackZigArtifact =
-    { name, artifact }:
-    runCommandLocal name { nativeBuildInputs = [ zig ]; } ''
-      touch build.zig
-      hash="$(zig fetch --global-cache-dir "$TMPDIR" ${artifact})"
-      mkdir -p "$out"
-      tar -xzf "$TMPDIR/p/$hash.tar.gz" -C "$out" --strip-components=1
-      chmod 755 "$out"
-    '';
-
   fetchZig =
     {
       name,
       url,
       hash,
     }:
-    let
-      artifact = fetchurl { inherit url hash; };
-    in
-    unpackZigArtifact { inherit name artifact; };
+    runCommand "${name}.tar.gz"
+      {
+        src = url;
+        nativeBuildInputs = [ zig ];
+        outputHash = hash;
+        outputHashMode = "flat";
+      }
+      ''
+        touch "$TMPDIR/build.zig" # workaround <https://codeberg.org/ziglang/zig/issues/31866>
+        mkdir -p "$TMPDIR/tmp" # zig 0.16 writes the downloaded .zip to <cache>/tmp before extracting; it does not create this dir itself
+        hash="$(cd "$TMPDIR" && zig fetch --global-cache-dir "$TMPDIR" "${url}")"
+        mv "$TMPDIR/p/$hash.tar.gz" "$out"
+      '';
 
-  fetchGitZig =
+  # `zig build --system <dir>` looks packages up by their bare hash and expects
+  # each to be an extracted directory, not a tarball. fetchZig produces the
+  # canonical `<hash>.tar.gz` (which contains a single `<hash>/` top-level dir),
+  # so strip the suffix from the name and unpack into a directory.
+  unpackZig =
+    entry:
     {
-      name,
-      url,
-      hash,
-      rev ? throw "rev is required, remove and regenerate the zon2json-lock file",
-    }:
-    let
-      parts = lib.splitString "#" url;
-      url_base = lib.elemAt parts 0;
-      url_without_query = lib.elemAt (lib.splitString "?" url_base) 0;
-    in
-    fetchgit {
-      inherit name rev hash;
-      url = url_without_query;
-      deepClone = false;
-      fetchSubmodules = false;
+      name = lib.removeSuffix ".tar.gz" entry.name;
+      path = runCommand (lib.removeSuffix ".tar.gz" entry.name) { } ''
+        mkdir -p "$out"
+        tar -xf "${entry.path}" -C "$out" --strip-components=1
+      '';
     };
-
-  fetchZigArtifact =
-    {
-      name,
-      url,
-      hash,
-      ...
-    }@args:
-    let
-      parts = lib.splitString "://" url;
-      proto = lib.elemAt parts 0;
-      path = lib.elemAt parts 1;
-      fetcher = {
-        "git+http" = fetchGitZig (
-          args
-          // {
-            url = "http://${path}";
-          }
-        );
-        "git+https" = fetchGitZig (
-          args
-          // {
-            url = "https://${path}";
-          }
-        );
-        http = fetchZig {
-          inherit name hash;
-          url = "http://${path}";
-        };
-        https = fetchZig {
-          inherit name hash;
-          url = "https://${path}";
-        };
-      };
-    in
-    fetcher.${proto};
 in
-linkFarm name [
+linkFarm name (map unpackZig [
   {
-    name = "afl_kit-0.1.0-NdJ3ch8eAABQkd1wk2W-JDCvvX5Jmnu3uJulS3lPepG7";
-    path = fetchZigArtifact {
+    name = "afl_kit-0.1.0-NdJ3csgfAABGuiQ4P99kFuaVSy4DHMilISiGF_VKX3xl.tar.gz";
+    path = fetchZig {
       name = "afl_kit";
-      url = "git+https://github.com/kristoff-it/zig-afl-kit.git#395c39d5b33d999f6871a90bd731ec112d3995ca";
-      hash = "sha256-+hfv+gAQr53rT2O1n+8BO/HIYVJx1KWplKTMGxVMLH8=";
-      rev = "395c39d5b33d999f6871a90bd731ec112d3995ca";
+      url = "git+https://github.com/bhansconnect/zig-afl-kit.git#c1f7353e006cf326ffab0a35b6e454cb5d8a5d7b";
+      hash = "sha256-sVnskL0JQgqPWEZxj3XyZSj+0iMK7LY4+CV2ppv0O4U=";
     };
   }
   {
-    name = "AFLplusplus-4.21.0-aA1y4dZxAAAhqDy_JoRw3zwNSg8MenEGP7uJI_xNcYuV";
-    path = fetchZigArtifact {
+    name = "AFLplusplus-4.21.0-aA1y4ZlxAAAHcA1GykLz0bBAGR5RbAZqUvr3SJ38JaZX.tar.gz";
+    path = fetchZig {
       name = "AFLplusplus";
-      url = "git+https://github.com/allyourcodebase/AFLplusplus#7e65eb4262688a120bf830d145060aac0e5db920";
-      hash = "sha256-f5Egmkg2tEOV5jfcNj9KTU0IWOAC/hGdypmC+IG88Q0=";
-      rev = "7e65eb4262688a120bf830d145060aac0e5db920";
+      url = "https://github.com/bhansconnect/AFLplusplus/archive/106e7b61a85b0ee4b226a73c7a6fa0e9361a1664.tar.gz";
+      hash = "sha256-12dlYYCRjDMUd7fuD5BNEl9CNtXcIhgPf0OEhYwdQQc=";
     };
   }
   {
-    name = "N-V-__8AAKE4uAAJZgEcPdaXnWqoj-IwYf3G2h9YSm-x92gg";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAKE4uAAJZgEcPdaXnWqoj-IwYf3G2h9YSm-x92gg.tar.gz";
+    path = fetchZig {
       name = "AFLplusplus";
       url = "https://github.com/AFLplusplus/AFLplusplus/archive/v4.21c.tar.gz";
-      hash = "sha256-EffHfTfP9uf2WsfMVbq3kB4MYgjoRaOHZDlNBO1WezA=";
+      hash = "sha256-XVa9UhZXYzUrD78Xm1epNqiRaqOM+Gfpf88LYU23DHg=";
     };
   }
   {
-    name = "N-V-__8AAEvEEA9B1q8qGkm3rJW_bkae4wn1SvyrfDa0w1lp";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAEvEEA9B1q8qGkm3rJW_bkae4wn1SvyrfDa0w1lp.tar.gz";
+    path = fetchZig {
       name = "roc_deps_aarch64_macos_none";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-macos-none.tar.xz";
-      hash = "sha256-JV7oFi6aqcFS2bELnGbFSN6KfYBms2cc2QDsoJf/jQo=";
+      hash = "sha256-MiACPvTNxHcXnI2q45kRlpldDm21t270ng1z9ewnhfc=";
     };
   }
   {
-    name = "N-V-__8AAHPjwBNV6lTtxPO6DYe4lg2Gx5Qakmeg1PO7N5k7";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAHPjwBNV6lTtxPO6DYe4lg2Gx5Qakmeg1PO7N5k7.tar.gz";
+    path = fetchZig {
       name = "roc_deps_aarch64_linux_musl";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-linux-musl.tar.xz";
-      hash = "sha256-ZWo6xy9XT6x+oAFH+NaIZ6ojMmKocIvlNCWosauogu8=";
+      hash = "sha256-f3U0foiuXE+9p/cg9WEb7fCMEXBAE+Cae745eRQJLJY=";
     };
   }
   {
-    name = "N-V-__8AAI4OFxV11RN1xAhLXxLTyaxZh3Wbi4U1Dza1OESo";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAI4OFxV11RN1xAhLXxLTyaxZh3Wbi4U1Dza1OESo.tar.gz";
+    path = fetchZig {
       name = "roc_deps_aarch64_windows_gnu";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/aarch64-windows-gnu.zip";
-      hash = "sha256-yHGRlDHPyqV2OktDk16COZvk2rqWqOigQ5rQFGhSMIE=";
+      hash = "sha256-UAZPFs8MfyoOP3NFBWMwbugpMqq18NSN3ztuh773os0=";
     };
   }
   {
-    name = "N-V-__8AAHU1FhRO-2yZIDQWw5rkVVuUYn5purRT9mAqykzw";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAHU1FhRO-2yZIDQWw5rkVVuUYn5purRT9mAqykzw.tar.gz";
+    path = fetchZig {
       name = "roc_deps_arm_linux_musleabihf";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/arm-linux-musleabihf.tar.xz";
-      hash = "sha256-ZaNju/84hEYlTq3duLL4JoV4CvzWwnnDyBNHjlyiIIs=";
+      hash = "sha256-oSxJwhRlKIzYLUm21JZSoySaf7pxWjO5/87D8HxlJSU=";
     };
   }
   {
-    name = "N-V-__8AACNk7BFESU37UNPvVOXf2dGyPMjtDSsji-VYqvmz";
-    path = fetchZigArtifact {
+    name = "N-V-__8AACNk7BFESU37UNPvVOXf2dGyPMjtDSsji-VYqvmz.tar.gz";
+    path = fetchZig {
       name = "roc_deps_x86_linux_musl";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86-linux-musl.tar.xz";
-      hash = "sha256-ve8bjmgpmhTT2eqwH0a00jokBxeXNJP2lY0KsUEfDP8=";
+      hash = "sha256-wliAwsrhsON2/GNf5gqnnXPs53B0YBYMGaaJQJ93I2w=";
     };
   }
   {
-    name = "N-V-__8AAJmm4xTmXSEZeLYLtOlZWKI_Kitjx2TOzm9vhCWM";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAJmm4xTmXSEZeLYLtOlZWKI_Kitjx2TOzm9vhCWM.tar.gz";
+    path = fetchZig {
       name = "roc_deps_x86_64_linux_musl";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-linux-musl.tar.xz";
-      hash = "sha256-zo/JIywJ5En7LS6aWJvvfLS2rE7gxChsGyxV4R6Osqw=";
+      hash = "sha256-LjMD6jfUOP1UKvPYSYKlTN01Q5iHYBA0bS4hnFADJdo=";
     };
   }
   {
-    name = "N-V-__8AAJGgsQ-GR2yR2tLFM4OM0z7ClQ0Rx7SjviQbx8Ks";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAJGgsQ-GR2yR2tLFM4OM0z7ClQ0Rx7SjviQbx8Ks.tar.gz";
+    path = fetchZig {
       name = "roc_deps_x86_64_macos_none";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-macos-none.tar.xz";
-      hash = "sha256-l3fin29pd7i8xscVfso2bmmcEvdtvjViESxcj9j5poE=";
+      hash = "sha256-2Bqk1Xg+1niHcKzxpNl3Cr+ThXeSD5xE1lTzRkrpuDM=";
     };
   }
   {
-    name = "N-V-__8AAJAOJxiRcaWQZpXytjyF8_Q7Mj9g7xXQWtegD-6C";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAJAOJxiRcaWQZpXytjyF8_Q7Mj9g7xXQWtegD-6C.tar.gz";
+    path = fetchZig {
       name = "roc_deps_x86_64_windows_gnu";
       url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.16.0/x86_64-windows-gnu.zip";
-      hash = "sha256-Sz1xmgFsi4Keu4+abfcRcKfwZPVOsYda3+jST30m86E=";
+      hash = "sha256-8jPIAh01og2FZ8DUAor0hHZ3EDWWIhbXa0X1+CvQG0s=";
     };
   }
   {
-    name = "bytebox-0.0.1-SXc2sZE5DwBGj-RgYk7yO60U9Uv0I5b5W2nO8m-TTRus";
-    path = fetchZigArtifact {
-      name = "bytebox";
-      url = "git+https://github.com/rdunnington/bytebox.git#95ec0c8ddb9c95ded2e97f02748bc14bff189f6f";
-      hash = "sha256-m382E2V8/1jSn9GwR8TXZE6jXwBRZwYpEUvxkhLpQ8Y=";
-      rev = "95ec0c8ddb9c95ded2e97f02748bc14bff189f6f";
-    };
-  }
-  {
-    name = "stable_array-0.1.0-3ihgvVxbAACET5MoiUn2T5ENunG_da_X3kGbji-f4QTF";
-    path = fetchZigArtifact {
+    name = "stable_array-0.1.0-3ihgvd9eAAA5ozV4aOQZ6GI3d_gTyiR9tS6mwav2w18o.tar.gz";
+    path = fetchZig {
       name = "zig-stable-array";
-      url = "git+https://github.com/rdunnington/zig-stable-array#9e4f089bd3abf127eafd307ecf9796455871becc";
-      hash = "sha256-NpxyNyOoFAeyREn3SvEnI/tyaYgM1ZjlcK+0jG2N0Lk=";
-      rev = "9e4f089bd3abf127eafd307ecf9796455871becc";
+      url = "git+https://github.com/lukewilliamboswell/zig-stable-array#b193182314f2ca65d97e391f0725707e36c0b56d";
+      hash = "sha256-n/NV3r5ji4+fW+c/I8AzjnLsGU4nUSzmJtdAI6+TcRk=";
     };
   }
   {
-    name = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU";
-    path = fetchZigArtifact {
+    name = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU.tar.gz";
+    path = fetchZig {
       name = "zstd";
       url = "git+https://github.com/allyourcodebase/zstd?ref=1.5.7-1#e1a501be57f42c541e8a5597e4b59a074dfd09a3";
-      hash = "sha256-SID1V9gJTr2z/+kMp48+/GZ8IBW6HE695CGomF4RGOw=";
-      rev = "e1a501be57f42c541e8a5597e4b59a074dfd09a3";
+      hash = "sha256-Za7i8doQDlzwjScm8GGqxwaO7qBVz23+KqhXkyHBti8=";
     };
   }
   {
-    name = "N-V-__8AAGxifwAAGwXwvsnl_aOXFGLZTeYCu0WBhuEXr96u";
-    path = fetchZigArtifact {
+    name = "N-V-__8AAGxifwAAGwXwvsnl_aOXFGLZTeYCu0WBhuEXr96u.tar.gz";
+    path = fetchZig {
       name = "zstd";
       url = "git+https://github.com/facebook/zstd.git?ref=v1.5.7#f8745da6ff1ad1e7bab384bd1f9d742439278e99";
-      hash = "sha256-tNFWIT9ydfozB8dWcmTMuZLCQmQudTFJIkSr0aG7S44=";
-      rev = "f8745da6ff1ad1e7bab384bd1f9d742439278e99";
+      hash = "sha256-h35u+KqPsc9xZQ7xJu15M4etPnBIM33NUVG4NKzMZHw=";
     };
   }
   {
-    name = "kcov-42.0.1-EuAG4V2cCwBn2HR1B9rgCHiEk9VmUb3zb_wWC-dCww9z";
-    path = fetchZigArtifact {
+    name = "kcov-42.0.1-EuAG4XacCwBu0G8YHvv6sFHfbMPZuwyBuZGqcRMi8IXq.tar.gz";
+    path = fetchZig {
       name = "kcov";
-      url = "git+https://github.com/roc-lang/zig-kcov.git?ref=kcov-zig#5134813cb804570603b86336050ee134c326816e";
-      hash = "sha256-VKtvFTsL+zos4mrix8ZjBiWra08y83WSPpnog0Mtp40=";
-      rev = "5134813cb804570603b86336050ee134c326816e";
+      url = "git+https://github.com/roc-lang/zig-kcov.git?ref=zig-0.16.0#5e1954e53ce775a6ecf65abd03ae67deee64ac3c";
+      hash = "sha256-vFZLwp2H04EnMCPOxZYuQoVv84WBzknpmoXURbfmpR0=";
     };
   }
-]
+])

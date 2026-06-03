@@ -623,4 +623,22 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "3" },
         .known_bug = true,
     },
+    .{
+        .name = "bughunt B101: monotype function template was assigned two lifted function ids",
+        .source_kind = .module,
+        .source =
+        \\Foo(a) := [Bar(a), Baz]
+        \\
+        \\combine : Foo(a), Foo(b), (a, b -> c) -> Foo(c)
+        \\combine = |ma, mb, f|
+        \\    match (ma, mb) {
+        \\        (Bar(a), Bar(b)) => Bar(f(a, b))
+        \\        _ => Baz
+        \\    }
+        \\
+        \\main = (combine(Baz, Baz, |a, b| a + b) == Baz, combine(Bar(1), Bar(2), |a, b| a + b) == Bar(3))
+        ,
+        .expected = .{ .inspect_str = "(True, True)" },
+        .known_bug = true,
+    },
 };
