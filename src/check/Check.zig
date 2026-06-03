@@ -9000,9 +9000,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const rigid = dispatcher_content.rigid;
                 const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
 
-                // Get the deferred constraints to validate against
-                const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-
                 // Build a map of constraints the rigid has
                 self.ident_to_var_map.clearRetainingCapacity();
                 try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
@@ -9010,8 +9007,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
                 }
 
-                // Iterate over the constraints
-                for (deferred_constraints) |constraint| {
+                // Iterate over the deferred constraints to validate against.
+                // iterRange re-fetches each item through the SafeList, so it stays valid
+                // even if the unify below appends and reallocates the backing array.
+                var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+                while (constraints_iter.next()) |constraint| {
                     if (constraint.origin == .from_numeral) {
                         if (self.builtinNumKindFromTypeName(rigid.name)) |num_kind| {
                             if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) {
@@ -9474,8 +9474,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
             {
                 // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
                 // only if all their components also support is_eq
-                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-                for (constraints) |constraint| {
+                // iterRange re-fetches each item through the SafeList, so it stays valid even if
+                // satisfyImplicitEqualityConstraint appends and reallocates the backing array.
+                var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+                while (constraints_iter.next()) |constraint| {
                     // Check if this is a call to is_eq (anonymous types have implicit structural equality)
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
