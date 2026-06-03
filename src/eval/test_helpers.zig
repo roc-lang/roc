@@ -55,7 +55,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
 
         fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
             const proc = kernel32.GetProcAddress(self.handle, name.ptr) orelse return null;
-            return @ptrCast(proc);
+            return @ptrCast(@alignCast(proc));
         }
     },
     else => struct {
