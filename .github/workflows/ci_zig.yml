@@ -35,6 +35,9 @@ jobs:
       - name: check formatting
         run: zig build run-check-zig-format
 
+      - name: Check Builtin.roc formatting
+        run: zig build run-check-builtin-format
+
       - name: Check that test is actually wired up
         run: |
           zig build run-check-test-wiring
@@ -42,6 +45,30 @@ jobs:
       - name: Check fx platform test coverage
         run: |
           zig build run-check-fx-platform-test-coverage
+
+      - name: Check type checker patterns
+        run: zig build run-check-type-checker-patterns
+
+      - name: Check enumFromInt zero usage
+        run: zig build run-check-enum-from-int-zero
+
+      - name: Check unused suppression patterns
+        run: zig build run-check-unused-suppression
+
+      - name: Run semantic audit gate
+        run: zig build run-check-semantic-audit
+
+      - name: Check post-check architecture
+        run: zig build run-check-postcheck-architecture
+
+      - name: Check panic usage
+        run: zig build run-check-panic
+
+      - name: Check CLI global stdio usage
+        run: zig build run-check-cli-global-stdio
+
+      - name: zig snapshot tests
+        run: zig build run-check-snapshots -- --debug
 
       # We run zig check with tracy enabled.
       # This ensure it compiles and doesn't go stale.
@@ -56,6 +83,13 @@ jobs:
         run: |
           # Just the do super fast check step for now.
           zig build -Dno-bin -Dfuzz -Dtracy=./tracy
+
+  exec-bench-checks:
+    needs: check-once
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
       # To `roc check` benchmark script:
       - name: setup Roc
@@ -78,13 +112,46 @@ jobs:
           roc check CONTRIBUTING/profiling/exec_bench.roc
           roc test CONTRIBUTING/profiling/exec_bench.roc
 
+  playground-tests:
+    needs: check-once
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: true
+
       - name: Run Playground Tests
         run: |
           zig build run-test-playground -Doptimize=ReleaseSmall -- --verbose
 
+  serialized-type-sizes:
+    needs: check-once
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: true
+
       - name: Verify Serialized Type Sizes
         run: |
           zig build run-test-serialization-sizes
+
+  eval-llvm:
+    needs: check-once
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: true
 
       - name: Run eval tests with LLVM backend
         run: |
@@ -152,16 +219,6 @@ jobs:
           command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
           error_string_contains: "build.zig.zon"
           retry_count: 3
-
-      - name: Check Builtin.roc formatting (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          zig build run-check-builtin-format ${{ matrix.target_flag }}
-
-      - name: Check Builtin.roc formatting (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          zig build run-check-builtin-format
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
