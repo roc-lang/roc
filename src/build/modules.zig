@@ -40,7 +40,6 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
         .lsp_unit => &.{"lsp unit tests"},
-        .lsp_integration => &.{"lsp integration tests"},
         else => &.{},
     };
 }
@@ -174,6 +173,10 @@ fn collectAggregatorImports(
             search_index = cursor + 1;
             continue;
         };
+        if (!std.mem.endsWith(u8, import_rel, ".zig")) {
+            search_index = cursor + 1;
+            continue;
+        }
 
         const resolved = resolveImportPath(allocator, current_dir, import_rel) catch |err| {
             std.log.warn(
@@ -646,7 +649,6 @@ pub const RocModules = struct {
             .unbundle,
             .base58,
             .lsp_unit,
-            .lsp_integration,
             .backend,
             .lir_core,
             .postcheck,

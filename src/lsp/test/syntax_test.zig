@@ -5,11 +5,12 @@ const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
 const uri_util = @import("lsp").uri;
 const completion_handler = @import("lsp").handlers.completion;
 const CompletionItem = completion_handler.CompletionItem;
-const completion_context = @import("lsp").completion;
+const integration_spec = @import("integration_spec.zig");
+const test_env = @import("integration_env.zig");
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
-    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
+    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(repo_root);
     const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
@@ -28,17 +29,17 @@ fn platformPath(allocator: std.mem.Allocator) ![]u8 {
 const TestHarness = struct {
     allocator: std.mem.Allocator,
     checker: SyntaxChecker,
-    tmp: std.testing.TmpDir,
+    tmp: test_env.TmpDir,
     platform_path: []u8,
     file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
 
     fn init() !TestHarness {
-        const allocator = std.testing.allocator;
+        const allocator = test_env.allocator;
         return .{
             .allocator = allocator,
-            .checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null),
-            .tmp = std.testing.tmpDir(.{}),
+            .checker = SyntaxChecker.init(allocator, test_env.io, .{}, null),
+            .tmp = test_env.tmpDir(.{}),
             .platform_path = try platformPath(allocator),
         };
     }
@@ -58,10 +59,10 @@ const TestHarness = struct {
 
     /// Write a file to the tmp directory and register its path and URI.
     fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) !void {
-        try self.tmp.dir.writeFile(std.testing.io, .{ .sub_path = filename, .data = data });
+        try self.tmp.dir.writeFile(test_env.io, .{ .sub_path = filename, .data = data });
         if (self.file_path) |f| self.allocator.free(f);
         if (self.uri) |u| self.allocator.free(u);
-        self.file_path = try self.tmp.dir.realPathFileAlloc(std.testing.io, filename, self.allocator);
+        self.file_path = try self.tmp.dir.realPathFileAlloc(test_env.io, filename, self.allocator);
         self.uri = try uri_util.pathToUri(self.allocator, self.file_path.?);
     }
 
@@ -120,9 +121,33 @@ const TestHarness = struct {
     }
 };
 
+pub const specs = [_]integration_spec.Spec{
+    .{ .name = "syntax checker skips rebuild when content unchanged", .run = syntaxCheckerSkipsRebuildWhenContentUnchanged },
+    .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
+    .{ .name = "syntax checker reports diagnostics for invalid source", .run = syntaxCheckerReportsDiagnosticsForInvalidSource },
+    .{ .name = "getDocumentSymbols returns symbols for valid app file", .run = getDocumentSymbolsReturnsSymbolsForValidAppFile },
+    .{ .name = "getCompletionsAtPosition returns basic completions", .run = getCompletionsAtPositionReturnsBasicCompletions },
+    .{ .name = "record field completion works for modules", .run = recordFieldCompletionWorksForModules },
+    .{ .name = "record field completion in sub module", .run = recordFieldCompletionInSubModule },
+    .{ .name = "record field completion works for nested nominal submodule", .run = recordFieldCompletionWorksForNestedNominalSubmodule },
+    .{ .name = "record field completion works", .run = recordFieldCompletionWorks },
+    .{ .name = "tuple index completion works", .run = tupleIndexCompletionWorks },
+    .{ .name = "record field completion with partial field name", .run = recordFieldCompletionWithPartialFieldName },
+    .{ .name = "static dispatch completion for nominal type methods", .run = staticDispatchCompletionForNominalTypeMethods },
+    .{ .name = "static dispatch completion for chained call", .run = staticDispatchCompletionForChainedCall },
+    .{ .name = "completion includes doc comments from source", .run = completionIncludesDocCommentsFromSource },
+    .{ .name = "hover shows documentation for function definition", .run = hoverShowsDocumentationForFunctionDefinition },
+    .{ .name = "hover shows documentation for local function call", .run = hoverShowsDocumentationForLocalFunctionCall },
+    .{ .name = "hover shows documentation for external function call", .run = hoverShowsDocumentationForExternalFunctionCall },
+    .{ .name = "hover shows documentation for function without type annotation", .run = hoverShowsDocumentationForFunctionWithoutTypeAnnotation },
+    .{ .name = "hover shows documentation for local variable", .run = hoverShowsDocumentationForLocalVariable },
+    .{ .name = "hover shows documentation for method call via static dispatch", .run = hoverShowsDocumentationForMethodCallViaStaticDispatch },
+    .{ .name = "hover without documentation shows only type", .run = hoverWithoutDocumentationShowsOnlyType },
+};
+
 // Syntax Checker Tests
 
-test "syntax checker skips rebuild when content unchanged" {
+pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() !void {
     var h = try TestHarness.init();
     defer h.deinit();
     h.checker.cache_config.enabled = false;
@@ -159,7 +184,7 @@ test "syntax checker skips rebuild when content unchanged" {
     try std.testing.expectEqualSlices(u8, &hash1.?, &hash2.?);
 }
 
-test "syntax checker rebuilds when content changes" {
+pub fn syntaxCheckerRebuildsWhenContentChanges() !void {
     var h = try TestHarness.init();
     defer h.deinit();
     h.checker.cache_config.enabled = false;
@@ -202,7 +227,7 @@ test "syntax checker rebuilds when content changes" {
     try std.testing.expect(!std.mem.eql(u8, &hash1.?, &hash2.?));
 }
 
-test "syntax checker reports diagnostics for invalid source" {
+pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() !void {
     var h = try TestHarness.init();
     defer h.deinit();
     h.checker.cache_config.enabled = false;
@@ -231,7 +256,7 @@ test "syntax checker reports diagnostics for invalid source" {
     try std.testing.expect(total_diags > 0);
 }
 
-test "getDocumentSymbols returns symbols for valid app file" {
+pub fn getDocumentSymbolsReturnsSymbolsForValidAppFile() !void {
     var h = try TestHarness.init();
     defer h.deinit();
     h.checker.cache_config.enabled = false;
@@ -267,62 +292,9 @@ test "getDocumentSymbols returns symbols for valid app file" {
     try std.testing.expect(found_helper);
 }
 
-// Completion Context Detection Tests
-
-test "completion context detects after_record_dot for lowercase identifier" {
-    const source = "main = my_var.";
-    const context = completion_context.detectCompletionContext(source, 0, 14);
-    switch (context) {
-        .after_value_dot => |access| {
-            try std.testing.expectEqualStrings("my_var", access.access_chain);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "completion context detects after_module_dot for uppercase identifier" {
-    const source = "main = Str.";
-    const context = completion_context.detectCompletionContext(source, 0, 11);
-    switch (context) {
-        .after_module_dot => |module_name| {
-            try std.testing.expectEqualStrings("Str", module_name);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "completion context detects after_receiver_dot for chained call" {
-    const source = "main = val.func().";
-    const context = completion_context.detectCompletionContext(source, 0, 18);
-    switch (context) {
-        .after_receiver_dot => |info| {
-            try std.testing.expectEqual(@as(u32, 17), info.dot_offset);
-        },
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "completion context detects expression context" {
-    const source = "main = ";
-    const context = completion_context.detectCompletionContext(source, 0, 7);
-    switch (context) {
-        .expression => {},
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "completion context detects after_colon for type annotation" {
-    const source = "foo : ";
-    const context = completion_context.detectCompletionContext(source, 0, 6);
-    switch (context) {
-        .after_colon => {},
-        else => return error.TestUnexpectedResult,
-    }
-}
-
 // Completion Tests
 
-test "getCompletionsAtPosition returns basic completions" {
+pub fn getCompletionsAtPositionReturnsBasicCompletions() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -344,7 +316,7 @@ test "getCompletionsAtPosition returns basic completions" {
     try std.testing.expect(items.len > 0);
 }
 
-test "record field completion works for modules" {
+pub fn recordFieldCompletionWorksForModules() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -383,7 +355,7 @@ test "record field completion works for modules" {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
-test "record field completion in sub module" {
+pub fn recordFieldCompletionInSubModule() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -420,7 +392,7 @@ test "record field completion in sub module" {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
-test "record field completion works for nested nominal submodule" {
+pub fn recordFieldCompletionWorksForNestedNominalSubmodule() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -466,7 +438,7 @@ test "record field completion works for nested nominal submodule" {
     try TestHarness.expectHasLabels(items, &.{"ta"});
 }
 
-test "record field completion works" {
+pub fn recordFieldCompletionWorks() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -498,7 +470,7 @@ test "record field completion works" {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
-test "tuple index completion works" {
+pub fn tupleIndexCompletionWorks() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -532,7 +504,7 @@ test "tuple index completion works" {
     try TestHarness.expectHasLabels(items, &.{ "0", "1", "2" });
 }
 
-test "record field completion with partial field name" {
+pub fn recordFieldCompletionWithPartialFieldName() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -571,7 +543,7 @@ test "record field completion with partial field name" {
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
 }
 
-test "static dispatch completion for nominal type methods" {
+pub fn staticDispatchCompletionForNominalTypeMethods() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -619,7 +591,7 @@ test "static dispatch completion for nominal type methods" {
     try TestHarness.expectHasLabels(items, &.{"to_str"});
 }
 
-test "static dispatch completion for chained call" {
+pub fn staticDispatchCompletionForChainedCall() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -669,7 +641,7 @@ test "static dispatch completion for chained call" {
 
 // Doc Comment Tests
 
-test "completion includes doc comments from source" {
+pub fn completionIncludesDocCommentsFromSource() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -733,7 +705,7 @@ test "completion includes doc comments from source" {
 }
 // Hover Documentation Tests
 
-test "hover shows documentation for function definition" {
+pub fn hoverShowsDocumentationForFunctionDefinition() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -767,7 +739,7 @@ test "hover shows documentation for function definition" {
     }
 }
 
-test "hover shows documentation for local function call" {
+pub fn hoverShowsDocumentationForLocalFunctionCall() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -800,7 +772,7 @@ test "hover shows documentation for local function call" {
     }
 }
 
-test "hover shows documentation for external function call" {
+pub fn hoverShowsDocumentationForExternalFunctionCall() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -830,7 +802,7 @@ test "hover shows documentation for external function call" {
     }
 }
 
-test "hover shows documentation for function without type annotation" {
+pub fn hoverShowsDocumentationForFunctionWithoutTypeAnnotation() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -859,7 +831,7 @@ test "hover shows documentation for function without type annotation" {
     }
 }
 
-test "hover shows documentation for local variable" {
+pub fn hoverShowsDocumentationForLocalVariable() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -889,7 +861,7 @@ test "hover shows documentation for local variable" {
     }
 }
 
-test "hover shows documentation for method call via static dispatch" {
+pub fn hoverShowsDocumentationForMethodCallViaStaticDispatch() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 
@@ -923,7 +895,7 @@ test "hover shows documentation for method call via static dispatch" {
     }
 }
 
-test "hover without documentation shows only type" {
+pub fn hoverWithoutDocumentationShowsOnlyType() !void {
     var h = try TestHarness.init();
     defer h.deinit();
 

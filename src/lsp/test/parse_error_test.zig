@@ -2,11 +2,17 @@
 
 const std = @import("std");
 const SyntaxChecker = @import("lsp").syntax.SyntaxChecker;
+const integration_spec = @import("integration_spec.zig");
+const test_env = @import("integration_env.zig");
 
-test "parse errors are reported as diagnostics" {
-    const allocator = std.testing.allocator;
+pub const specs = [_]integration_spec.Spec{
+    .{ .name = "parse errors are reported as diagnostics", .run = parseErrorsAreReportedAsDiagnostics },
+};
 
-    var checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null);
+pub fn parseErrorsAreReportedAsDiagnostics() !void {
+    const allocator = test_env.allocator;
+
+    var checker = SyntaxChecker.init(allocator, test_env.io, .{}, null);
     defer checker.deinit();
 
     // File content with parse error (unclosed string)

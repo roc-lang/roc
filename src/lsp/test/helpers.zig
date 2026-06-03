@@ -23,13 +23,17 @@ pub fn framedInput(allocator: std.mem.Allocator, bodies: []const []const u8) ![]
 }
 
 pub fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
+    return collectResponsesWithIo(allocator, std.testing.io, bytes);
+}
+
+pub fn collectResponsesWithIo(allocator: std.mem.Allocator, std_io: std.Io, bytes: []const u8) ![][]u8 {
     const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
     const sink: std.Io.Writer = .fixed(&sink_storage);
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, std.testing.io, reader, sink, null);
+    var transport = transport_module.Transport(ReaderType, WriterType).init(allocator, std_io, reader, sink, null);
 
     var responses: std.ArrayList([]u8) = .empty;
     errdefer {

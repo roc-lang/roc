@@ -69,7 +69,9 @@ Use `lsp_unit` for protocol, transport, document store, token-only coloring,
 and handler routing work that does not need compiler checking. Use
 `lsp_integration` when changing syntax checking, completions, hover,
 definition, document symbols, diagnostics, or behavior that depends on real Roc
-source, compiled builtins, and platform/app checking.
+source, compiled builtins, and platform/app checking. The integration command
+is a parallel harness; pass `-- --threads N` to cap workers or
+`-- --test-filter "case name"` to run matching integration cases.
 
 ### Expanding to ZLS
 

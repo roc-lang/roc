@@ -20,6 +20,7 @@ test "lsp unit tests" {
     std.testing.refAllDecls(@import("line_info_test.zig"));
     std.testing.refAllDecls(@import("semantic_tokens_test.zig"));
     std.testing.refAllDecls(@import("handler_unit_tests.zig"));
+    std.testing.refAllDecls(@import("completion_context_test.zig"));
     std.testing.refAllDecls(@import("scope_map_test.zig"));
     std.testing.refAllDecls(@import("lsp").dependency_graph);
     std.testing.refAllDecls(@import("lsp").type_utils);

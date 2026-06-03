@@ -7,15 +7,20 @@
 const std = @import("std");
 const server_module = @import("lsp").server;
 const helpers = @import("helpers.zig");
+const integration_spec = @import("integration_spec.zig");
+const test_env = @import("integration_env.zig");
 
 const frame = helpers.frame;
-const collectResponses = helpers.collectResponses;
 const uriFromPath = helpers.uriFromPath;
+
+fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
+    return helpers.collectResponsesWithIo(allocator, test_env.io, bytes);
+}
 
 /// Get the path to the test platform for creating valid Roc files
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Resolve from repo root to ensure absolute path
-    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
+    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(repo_root);
     const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
     // Convert backslashes to forward slashes for cross-platform Roc source compatibility
@@ -38,11 +43,33 @@ fn hasCompletionLabel(items: std.json.Value, label: []const u8) bool {
     return false;
 }
 
-test "document symbol handler extracts function declarations" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+pub const specs = [_]integration_spec.Spec{
+    .{ .name = "document symbol handler extracts function declarations", .run = documentSymbolHandlerExtractsFunctionDeclarations },
+    .{ .name = "document highlight handler finds variable occurrences", .run = documentHighlightHandlerFindsVariableOccurrences },
+    .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
+    .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
+    .{ .name = "hover handler returns type info for type annotation", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
+    .{ .name = "definition handler navigates to builtin type from type annotation", .run = definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation },
+    .{ .name = "document symbols works after goto definition (regression test)", .run = documentSymbolsWorksAfterGotoDefinitionRegressionTest },
+    .{ .name = "multiple goto definition calls don't break document symbols", .run = multipleGotoDefinitionCallsDontBreakDocumentSymbols },
+    .{ .name = "document symbol handler returns symbols with correct names", .run = documentSymbolHandlerReturnsSymbolsWithCorrectNames },
+    .{ .name = "document symbol handler works independently of check", .run = documentSymbolHandlerWorksIndependentlyOfCheck },
+    .{ .name = "completion handler returns module definitions", .run = completionHandlerReturnsModuleDefinitions },
+    .{ .name = "completion handler returns module members after dot", .run = completionHandlerReturnsModuleMembersAfterDot },
+    .{ .name = "completion handler returns module names in expression context", .run = completionHandlerReturnsModuleNamesInExpressionContext },
+    .{ .name = "completion handler returns types after colon", .run = completionHandlerReturnsTypesAfterColon },
+    .{ .name = "completion handler returns List module members after List dot", .run = completionHandlerReturnsListModuleMembersAfterListDot },
+    .{ .name = "completion handler returns local variables in block scope", .run = completionHandlerReturnsLocalVariablesInBlockScope },
+    .{ .name = "completion handler returns lambda parameters", .run = completionHandlerReturnsLambdaParameters },
+    .{ .name = "completion handler returns top-level definitions", .run = completionHandlerReturnsTopLevelDefinitions },
+    .{ .name = "completion handler returns record fields after dot", .run = completionHandlerReturnsRecordFieldsAfterDot },
+};
+
+pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "symbols.roc" });
     defer allocator.free(file_path);
@@ -108,7 +135,7 @@ test "document symbol handler extracts function declarations" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -141,11 +168,11 @@ test "document symbol handler extracts function declarations" {
     try std.testing.expect(found_symbols_response);
 }
 
-test "document highlight handler finds variable occurrences" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+pub fn documentHighlightHandlerFindsVariableOccurrences() !void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "highlight.roc" });
     defer allocator.free(file_path);
@@ -209,7 +236,7 @@ test "document highlight handler finds variable occurrences" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -240,11 +267,11 @@ test "document highlight handler finds variable occurrences" {
     try std.testing.expect(found_response);
 }
 
-test "definition handler finds local variable definition" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+pub fn definitionHandlerFindsLocalVariableDefinition() !void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition.roc" });
     defer allocator.free(file_path);
@@ -309,7 +336,7 @@ test "definition handler finds local variable definition" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -350,11 +377,11 @@ test "definition handler finds local variable definition" {
     try std.testing.expect(found_response);
 }
 
-test "definition handler returns null for undefined symbol" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+pub fn definitionHandlerReturnsNullForUndefinedSymbol() !void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition_undef.roc" });
     defer allocator.free(file_path);
@@ -418,7 +445,7 @@ test "definition handler returns null for undefined symbol" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -446,12 +473,12 @@ test "definition handler returns null for undefined symbol" {
     try std.testing.expect(found_response);
 }
 
-test "hover handler returns type info for type annotation" {
+pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() !void {
     // Regression test for Bug 1: s_type_anno statements were ignored by hover system
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "hover_anno.roc" });
     defer allocator.free(file_path);
@@ -516,7 +543,7 @@ test "hover handler returns type info for type annotation" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -548,12 +575,12 @@ test "hover handler returns type info for type annotation" {
     try std.testing.expect(found_response);
 }
 
-test "definition handler navigates to builtin type from type annotation" {
+pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() !void {
     // Test that clicking on a type in a type annotation (e.g., "x : Str") navigates to Builtin.roc
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition_type.roc" });
     defer allocator.free(file_path);
@@ -618,7 +645,7 @@ test "definition handler navigates to builtin type from type annotation" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -656,14 +683,14 @@ test "definition handler navigates to builtin type from type annotation" {
     try std.testing.expect(found_response);
 }
 
-test "document symbols works after goto definition (regression test)" {
+pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     // Regression test: getDocumentSymbols should use getModuleLookupEnv()
     // for proper fallback to previous_build_env after getDefinitionAtPosition
     // creates a fresh build env.
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "regression.roc" });
     defer allocator.free(file_path);
@@ -737,7 +764,7 @@ test "document symbols works after goto definition (regression test)" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -775,13 +802,13 @@ test "document symbols works after goto definition (regression test)" {
     try std.testing.expect(found_symbols_response);
 }
 
-test "multiple goto definition calls don't break document symbols" {
+pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() !void {
     // Test that multiple sequential goto definition calls maintain proper state
     // for subsequent document symbol requests
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "multi_def.roc" });
     defer allocator.free(file_path);
@@ -864,7 +891,7 @@ test "multiple goto definition calls don't break document symbols" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -903,12 +930,12 @@ test "multiple goto definition calls don't break document symbols" {
     try std.testing.expect(found_symbols);
 }
 
-test "document symbol handler returns symbols with correct names" {
+pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() !void {
     // Test that outline returns actual symbol names using valid Roc syntax
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "outline.roc" });
     defer allocator.free(file_path);
@@ -933,7 +960,7 @@ test "document symbol handler returns symbols with correct names" {
     defer allocator.free(roc_source);
 
     // Write the file to disk (required for platform resolution)
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "outline.roc", .data = roc_source });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "outline.roc", .data = roc_source });
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1004,7 +1031,7 @@ test "document symbol handler returns symbols with correct names" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -1049,13 +1076,13 @@ test "document symbol handler returns symbols with correct names" {
     try std.testing.expect(found_response);
 }
 
-test "document symbol handler works independently of check" {
+pub fn documentSymbolHandlerWorksIndependentlyOfCheck() !void {
     // Regression test: document symbols should work even without a prior check() call
     // The handler should build the module itself
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "independent.roc" });
     defer allocator.free(file_path);
@@ -1076,7 +1103,7 @@ test "document symbol handler works independently of check" {
     defer allocator.free(roc_source);
 
     // Write the file to disk (required for platform resolution)
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "independent.roc", .data = roc_source });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "independent.roc", .data = roc_source });
 
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
@@ -1149,7 +1176,7 @@ test "document symbol handler works independently of check" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
@@ -1188,11 +1215,11 @@ test "document symbol handler works independently of check" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns module definitions" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+pub fn completionHandlerReturnsModuleDefinitions() !void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "completion.roc" });
     defer allocator.free(file_path);
@@ -1256,7 +1283,7 @@ test "completion handler returns module definitions" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1295,12 +1322,12 @@ test "completion handler returns module definitions" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns module members after dot" {
+pub fn completionHandlerReturnsModuleMembersAfterDot() !void {
     // Test: typing "Str." should trigger completions from the Str module
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "module_completion.roc" });
     defer allocator.free(file_path);
@@ -1367,7 +1394,7 @@ test "completion handler returns module members after dot" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1408,12 +1435,12 @@ test "completion handler returns module members after dot" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns module names in expression context" {
+pub fn completionHandlerReturnsModuleNamesInExpressionContext() !void {
     // Test: in expression context, module names should be available
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "module_name_completion.roc" });
     defer allocator.free(file_path);
@@ -1477,7 +1504,7 @@ test "completion handler returns module names in expression context" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1522,12 +1549,12 @@ test "completion handler returns module names in expression context" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns types after colon" {
+pub fn completionHandlerReturnsTypesAfterColon() !void {
     // Test: typing "x :" should trigger type completions
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "type_completion.roc" });
     defer allocator.free(file_path);
@@ -1594,7 +1621,7 @@ test "completion handler returns types after colon" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1641,12 +1668,12 @@ test "completion handler returns types after colon" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns List module members after List dot" {
+pub fn completionHandlerReturnsListModuleMembersAfterListDot() !void {
     // Test: typing "List." should trigger completions from the List module
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "list_completion.roc" });
     defer allocator.free(file_path);
@@ -1717,7 +1744,7 @@ test "completion handler returns List module members after List dot" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1760,13 +1787,13 @@ test "completion handler returns List module members after List dot" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns local variables in block scope" {
+pub fn completionHandlerReturnsLocalVariablesInBlockScope() !void {
     // Test: local variables defined in a block should appear in completions
     // within that block
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "local_completion.roc" });
     defer allocator.free(file_path);
@@ -1834,7 +1861,7 @@ test "completion handler returns local variables in block scope" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1865,12 +1892,12 @@ test "completion handler returns local variables in block scope" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns lambda parameters" {
+pub fn completionHandlerReturnsLambdaParameters() !void {
     // Test: lambda parameters should appear in completions within the lambda body
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "lambda_param_completion.roc" });
     defer allocator.free(file_path);
@@ -1936,7 +1963,7 @@ test "completion handler returns lambda parameters" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -1967,12 +1994,12 @@ test "completion handler returns lambda parameters" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns top-level definitions" {
+pub fn completionHandlerReturnsTopLevelDefinitions() !void {
     // Test: top-level definitions should appear in completions
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "toplevel_completion.roc" });
     defer allocator.free(file_path);
@@ -2037,7 +2064,7 @@ test "completion handler returns top-level definitions" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 
@@ -2067,12 +2094,12 @@ test "completion handler returns top-level definitions" {
     try std.testing.expect(found_response);
 }
 
-test "completion handler returns record fields after dot" {
+pub fn completionHandlerReturnsRecordFieldsAfterDot() !void {
     // Test: typing "rec." where rec is a record should trigger field completions
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "record_completion.roc" });
     defer allocator.free(file_path);
@@ -2138,7 +2165,7 @@ test "completion handler returns record fields after dot" {
 
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
-    var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     try server.run();
 

@@ -2101,6 +2101,7 @@ pub fn build(b: *std.Build) void {
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
     const run_test_zig_step = b.step("run-test-zig", "Run Zig unit tests");
+    const build_test_lsp_integration_runner_step = b.step("build-test-lsp-integration-runner", "Build LSP integration test harness");
     const build_test_eval_runner_step = b.step("build-test-eval-runner", "Build eval test runner");
     const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
@@ -3255,6 +3256,45 @@ pub fn build(b: *std.Build) void {
         tests_summary.addRun(&module_test.run_step.step);
     }
 
+    const lsp_integration_test_harness_module = b.createModule(.{
+        .root_source_file = b.path("src/build/test_harness.zig"),
+    });
+    const lsp_integration_runner_exe = b.addExecutable(.{
+        .name = "parallel_lsp_integration_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lsp/test/parallel_integration_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "test_harness", .module = lsp_integration_test_harness_module },
+                .{ .name = "integration_specs", .module = roc_modules.lsp_integration },
+            },
+        }),
+    });
+    lsp_integration_runner_exe.step.dependOn(&write_compiled_builtins.step);
+    build_test_lsp_integration_runner_step.dependOn(&lsp_integration_runner_exe.step);
+
+    const run_lsp_integration = b.addRunArtifact(lsp_integration_runner_exe);
+    run_lsp_integration.expectExitCode(0);
+    for (test_filters) |filter| {
+        run_lsp_integration.addArg("--filter");
+        run_lsp_integration.addArg(filter);
+    }
+    if (run_args.len != 0) {
+        run_lsp_integration.addArgs(run_args);
+    }
+
+    const run_lsp_integration_step = b.step(
+        "run-test-zig-module-lsp_integration",
+        "Run LSP integration tests in parallel",
+    );
+    run_lsp_integration_step.dependOn(&run_lsp_integration.step);
+
+    b.default_step.dependOn(&lsp_integration_runner_exe.step);
+    build_test_zig_step.dependOn(&lsp_integration_runner_exe.step);
+    run_test_zig_step.dependOn(&run_lsp_integration.step);
+
     // Add snapshot tool test
     const enable_snapshot_tests = b.option(bool, "snapshot-tests", "Enable snapshot tests") orelse true;
     if (enable_snapshot_tests) {
@@ -3705,6 +3745,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_check_tools_step);
     build_ci_step.dependOn(build_snapshot_tool_step);
     build_ci_step.dependOn(build_test_zig_step);
+    build_ci_step.dependOn(build_test_lsp_integration_runner_step);
     build_ci_step.dependOn(build_test_eval_runner_step);
     build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
     build_ci_step.dependOn(build_playground_step);
