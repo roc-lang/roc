@@ -8036,7 +8036,7 @@ const BodyContext = struct {
         if (raw >= self.view.bodies.exprs.len) {
             Common.invariant("checked divergence referenced a missing expression");
         }
-        return self.view.bodies.exprs[raw].diverges;
+        return self.view.bodies.exprDiverges(expr_id);
     }
 
     fn checkedStatementDiverges(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
@@ -8044,7 +8044,7 @@ const BodyContext = struct {
         if (raw >= self.view.bodies.statements.len) {
             Common.invariant("checked divergence referenced a missing statement");
         }
-        return self.view.bodies.statements[raw].diverges;
+        return self.view.bodies.statementDiverges(statement_id);
     }
 
     const LoopCarry = struct {

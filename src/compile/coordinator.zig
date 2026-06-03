@@ -248,6 +248,9 @@ fn decodeCheckedModuleCacheEntry(
     return body;
 }
 
+/// Maximum scratch arena capacity retained by a worker after each task.
+const worker_scratch_retain_limit = 64 * 1024 * 1024;
+
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
@@ -276,9 +279,10 @@ pub const WorkerAllocators = struct {
         self.arena_impl.deinit();
     }
 
-    /// Reset arena between tasks (keeps capacity, frees memory)
+    /// Reset arena between tasks, retaining ordinary task capacity but trimming
+    /// unusually large scratch spikes so one wide module does not pin worker RSS.
     pub fn resetArena(self: *WorkerAllocators) void {
-        _ = self.arena_impl.reset(.retain_capacity);
+        _ = self.arena_impl.reset(.{ .retain_with_limit = worker_scratch_retain_limit });
     }
 
     pub fn taskAllocators(self: *WorkerAllocators) WorkerTaskAllocators {

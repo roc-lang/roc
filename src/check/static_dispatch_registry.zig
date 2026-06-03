@@ -24,12 +24,33 @@ const PatternBinderId = checked_ids.PatternBinderId;
 /// Public `ProcedureTemplateLookup` declaration.
 pub const ProcedureTemplateLookup = struct {
     module_idx: u32,
-    by_def: []const ?canonical.ProcedureTemplateRef,
+    by_def: []const ProcedureTemplateLookupEntry = &.{},
 
     pub fn templateForDef(self: *const ProcedureTemplateLookup, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
-        const raw = @intFromEnum(def_idx);
-        if (raw >= self.by_def.len) return null;
-        return self.by_def[raw];
+        var lo: usize = 0;
+        var hi: usize = self.by_def.len;
+        const target = @intFromEnum(def_idx);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_def[mid].def);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_def.len or self.by_def[lo].def != def_idx) return null;
+        return self.by_def[lo].template;
+    }
+};
+
+/// Public `ProcedureTemplateLookupEntry` declaration.
+pub const ProcedureTemplateLookupEntry = struct {
+    def: CIR.Def.Idx,
+    template: canonical.ProcedureTemplateRef,
+
+    pub fn lessThan(_: void, lhs: ProcedureTemplateLookupEntry, rhs: ProcedureTemplateLookupEntry) bool {
+        return @intFromEnum(lhs.def) < @intFromEnum(rhs.def);
     }
 };
 

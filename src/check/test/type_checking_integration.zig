@@ -1355,13 +1355,9 @@ test "checked artifact method registry skips nominal associated values" {
     defer modules.deinit();
     const module = modules.module(0);
 
-    const by_def = try testing.allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
-    defer testing.allocator.free(by_def);
-    @memset(by_def, null);
-
     const template_lookup = static_dispatch.ProcedureTemplateLookup{
         .module_idx = module.moduleIndex(),
-        .by_def = by_def,
+        .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
     const checked_bodies = MethodRegistryTestCheckedBodies{};

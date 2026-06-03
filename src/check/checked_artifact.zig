@@ -4992,7 +4992,6 @@ pub const CheckedReturnContext = enum {
 pub const CheckedExpr = struct {
     id: CheckedExprId,
     ty: CheckedTypeId,
-    diverges: bool,
     source_region: base.Region,
     data: CheckedExprData,
 };
@@ -5008,7 +5007,6 @@ pub const CheckedPattern = struct {
 /// Public `CheckedStatement` declaration.
 pub const CheckedStatement = struct {
     id: CheckedStatementId,
-    diverges: bool,
     source_region: base.Region,
     data: CheckedStatementData,
 };
@@ -5017,25 +5015,118 @@ pub const CheckedStatement = struct {
 pub const CheckedBodyStoreView = struct {
     bodies: []const CheckedBody = &.{},
     exprs: []const CheckedExpr = &.{},
+    expr_diverges: []const bool = &.{},
     patterns: []const CheckedPattern = &.{},
     statements: []const CheckedStatement = &.{},
+    statement_diverges: []const bool = &.{},
     string_literals: []const []const u8 = &.{},
     pattern_binders: []const CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []const ?PatternBinderId = &.{},
+
+    pub fn exprDiverges(self: CheckedBodyStoreView, expr: CheckedExprId) bool {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.expr_diverges.len) checkedArtifactInvariant("checked body view divergence referenced a missing expression", .{});
+        return self.expr_diverges[raw];
+    }
+
+    pub fn statementDiverges(self: CheckedBodyStoreView, statement: CheckedStatementId) bool {
+        const raw = @intFromEnum(statement);
+        if (raw >= self.statement_diverges.len) checkedArtifactInvariant("checked body view divergence referenced a missing statement", .{});
+        return self.statement_diverges[raw];
+    }
+};
+
+const CheckedSourceNodeKind = enum(u2) {
+    expr,
+    pattern,
+    statement,
+};
+
+const checked_source_node_empty = std.math.maxInt(u32);
+const checked_source_node_id_bits = 30;
+const checked_source_node_id_limit = @as(u32, 1) << checked_source_node_id_bits;
+
+const CheckedSourceNodeMap = struct {
+    entries: []u32 = &.{},
+
+    fn init(allocator: Allocator, node_count: usize) Allocator.Error!CheckedSourceNodeMap {
+        const entries = try allocator.alloc(u32, node_count);
+        @memset(entries, checked_source_node_empty);
+        return .{ .entries = entries };
+    }
+
+    fn putExpr(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedExprId) void {
+        self.put(node_idx, .expr, @intFromEnum(id));
+    }
+
+    fn putPattern(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedPatternId) void {
+        self.put(node_idx, .pattern, @intFromEnum(id));
+    }
+
+    fn putStatement(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedStatementId) void {
+        self.put(node_idx, .statement, @intFromEnum(id));
+    }
+
+    fn put(self: *CheckedSourceNodeMap, node_idx: u32, kind: CheckedSourceNodeKind, id_raw: u32) void {
+        if (node_idx >= self.entries.len) checkedArtifactInvariant("checked source node map write was out of range", .{});
+        if (id_raw >= checked_source_node_id_limit) checkedArtifactInvariant("checked source id exceeded packed source-node map capacity", .{});
+        if (builtin.mode == .Debug and self.entries[node_idx] != checked_source_node_empty) {
+            std.debug.panic("checked artifact invariant violated: checked source node map wrote source node {d} twice", .{node_idx});
+        }
+        self.entries[node_idx] = (@as(u32, @intFromEnum(kind)) << checked_source_node_id_bits) | id_raw;
+    }
+
+    fn expr(self: *const CheckedSourceNodeMap, source_expr: CIR.Expr.Idx) ?CheckedExprId {
+        return if (self.get(@intFromEnum(source_expr), .expr)) |id| @enumFromInt(id) else null;
+    }
+
+    fn pattern(self: *const CheckedSourceNodeMap, source_pattern: CIR.Pattern.Idx) ?CheckedPatternId {
+        return if (self.get(@intFromEnum(source_pattern), .pattern)) |id| @enumFromInt(id) else null;
+    }
+
+    fn statement(self: *const CheckedSourceNodeMap, source_statement: CIR.Statement.Idx) ?CheckedStatementId {
+        return if (self.get(@intFromEnum(source_statement), .statement)) |id| @enumFromInt(id) else null;
+    }
+
+    fn exprAtRawNode(self: *const CheckedSourceNodeMap, raw_node: u32) ?CheckedExprId {
+        return if (self.get(raw_node, .expr)) |id| @enumFromInt(id) else null;
+    }
+
+    fn patternAtRawNode(self: *const CheckedSourceNodeMap, raw_node: u32) ?CheckedPatternId {
+        return if (self.get(raw_node, .pattern)) |id| @enumFromInt(id) else null;
+    }
+
+    fn statementAtRawNode(self: *const CheckedSourceNodeMap, raw_node: u32) ?CheckedStatementId {
+        return if (self.get(raw_node, .statement)) |id| @enumFromInt(id) else null;
+    }
+
+    fn get(self: *const CheckedSourceNodeMap, raw_node: u32, expected: CheckedSourceNodeKind) ?u32 {
+        if (raw_node >= self.entries.len) return null;
+        const packed_entry = self.entries[raw_node];
+        if (packed_entry == checked_source_node_empty) return null;
+        const kind: CheckedSourceNodeKind = @enumFromInt(packed_entry >> checked_source_node_id_bits);
+        if (kind != expected) return null;
+        return packed_entry & (checked_source_node_id_limit - 1);
+    }
+
+    fn deinit(self: *CheckedSourceNodeMap, allocator: Allocator) void {
+        allocator.free(self.entries);
+        self.* = .{};
+    }
 };
 
 /// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
     bodies: []CheckedBody = &.{},
     exprs: []CheckedExpr = &.{},
+    expr_diverges: []bool = &.{},
     patterns: []CheckedPattern = &.{},
     statements: []CheckedStatement = &.{},
+    statement_diverges: []bool = &.{},
     string_literals: []const []const u8 = &.{},
     pattern_binders: []CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []?PatternBinderId = &.{},
-    expr_by_node: []?CheckedExprId = &.{},
-    pattern_by_node: []?CheckedPatternId = &.{},
-    statement_by_node: []?CheckedStatementId = &.{},
+    source_node_map: CheckedSourceNodeMap = .{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -5059,15 +5150,8 @@ pub const CheckedBodyStore = struct {
         var string_builder = CheckedStringLiteralBuilder.init(allocator, module);
         errdefer string_builder.deinitAll();
         defer string_builder.deinitScratch();
-        const expr_by_node = try allocator.alloc(?CheckedExprId, module.nodeCount());
-        errdefer allocator.free(expr_by_node);
-        const pattern_by_node = try allocator.alloc(?CheckedPatternId, module.nodeCount());
-        errdefer allocator.free(pattern_by_node);
-        const statement_by_node = try allocator.alloc(?CheckedStatementId, module.nodeCount());
-        errdefer allocator.free(statement_by_node);
-        @memset(expr_by_node, null);
-        @memset(pattern_by_node, null);
-        @memset(statement_by_node, null);
+        var source_node_map = try CheckedSourceNodeMap.init(allocator, module.nodeCount());
+        errdefer source_node_map.deinit(allocator);
 
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
@@ -5088,11 +5172,10 @@ pub const CheckedBodyStore = struct {
                 try exprs.append(allocator, .{
                     .id = id,
                     .ty = ty,
-                    .diverges = false,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                expr_by_node[node_idx] = id;
+                source_node_map.putExpr(node_idx, id);
             } else if (isPatternNodeTag(tag)) {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
@@ -5108,18 +5191,25 @@ pub const CheckedBodyStore = struct {
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                pattern_by_node[node_idx] = id;
+                source_node_map.putPattern(node_idx, id);
             } else if (isStatementNodeTag(tag)) {
                 const id: CheckedStatementId = @enumFromInt(@as(u32, @intCast(statements.items.len)));
                 try statements.append(allocator, .{
                     .id = id,
-                    .diverges = false,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                statement_by_node[node_idx] = id;
+                source_node_map.putStatement(node_idx, id);
             }
         }
+
+        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
+        errdefer allocator.free(expr_diverges);
+        @memset(expr_diverges, false);
+
+        const statement_diverges = try allocator.alloc(bool, statements.items.len);
+        errdefer allocator.free(statement_diverges);
+        @memset(statement_diverges, false);
 
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
@@ -5129,9 +5219,7 @@ pub const CheckedBodyStore = struct {
             .allocator = allocator,
             .module = module,
             .names = names,
-            .expr_by_node = expr_by_node,
-            .pattern_by_node = pattern_by_node,
-            .statement_by_node = statement_by_node,
+            .source_node_map = &source_node_map,
             .string_builder = &string_builder,
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
@@ -5143,30 +5231,60 @@ pub const CheckedBodyStore = struct {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
             if (isExprNodeTag(tag)) {
-                const id = expr_by_node[node_idx] orelse unreachable;
+                const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
                 exprs.items[@intFromEnum(id)].data = try copier.copyExprData(@enumFromInt(node_idx));
             } else if (isPatternNodeTag(tag)) {
-                const id = pattern_by_node[node_idx] orelse unreachable;
+                const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@intFromEnum(id)].data = try copier.copyPatternData(@enumFromInt(node_idx));
             } else if (isStatementNodeTag(tag)) {
-                const id = statement_by_node[node_idx] orelse unreachable;
+                const id = source_node_map.statementAtRawNode(node_idx) orelse unreachable;
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
         }
 
-        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items);
+        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, expr_diverges, statement_diverges);
+
+        const body_slice = try bodies.toOwnedSlice(allocator);
+        errdefer allocator.free(body_slice);
+
+        const expr_slice = try exprs.toOwnedSlice(allocator);
+        errdefer {
+            deinitCheckedExprList(allocator, expr_slice);
+            allocator.free(expr_slice);
+        }
+
+        const pattern_slice = try patterns.toOwnedSlice(allocator);
+        errdefer {
+            deinitCheckedPatternList(allocator, pattern_slice);
+            allocator.free(pattern_slice);
+        }
+
+        const statement_slice = try statements.toOwnedSlice(allocator);
+        errdefer {
+            deinitCheckedStatementList(allocator, statement_slice);
+            allocator.free(statement_slice);
+        }
+
+        const string_literals = try string_builder.toOwnedSlice();
+        errdefer {
+            for (string_literals) |literal| allocator.free(literal);
+            allocator.free(string_literals);
+        }
+
+        const pattern_binder_slice = try pattern_binders.toOwnedSlice(allocator);
+        errdefer allocator.free(pattern_binder_slice);
 
         return .{
-            .bodies = try bodies.toOwnedSlice(allocator),
-            .exprs = try exprs.toOwnedSlice(allocator),
-            .patterns = try patterns.toOwnedSlice(allocator),
-            .statements = try statements.toOwnedSlice(allocator),
-            .string_literals = try string_builder.toOwnedSlice(),
-            .pattern_binders = try pattern_binders.toOwnedSlice(allocator),
+            .bodies = body_slice,
+            .exprs = expr_slice,
+            .expr_diverges = expr_diverges,
+            .patterns = pattern_slice,
+            .statements = statement_slice,
+            .statement_diverges = statement_diverges,
+            .string_literals = string_literals,
+            .pattern_binders = pattern_binder_slice,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
-            .expr_by_node = expr_by_node,
-            .pattern_by_node = pattern_by_node,
-            .statement_by_node = statement_by_node,
+            .source_node_map = source_node_map,
         };
     }
 
@@ -5174,8 +5292,10 @@ pub const CheckedBodyStore = struct {
         return .{
             .bodies = self.bodies,
             .exprs = self.exprs,
+            .expr_diverges = self.expr_diverges,
             .patterns = self.patterns,
             .statements = self.statements,
+            .statement_diverges = self.statement_diverges,
             .string_literals = self.string_literals,
             .pattern_binders = self.pattern_binders,
             .pattern_binder_by_pattern = self.pattern_binder_by_pattern,
@@ -5190,16 +5310,24 @@ pub const CheckedBodyStore = struct {
         return self.exprs[@intFromEnum(id)];
     }
 
+    pub fn exprDiverges(self: *const CheckedBodyStore, id: CheckedExprId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.expr_diverges.len) checkedArtifactInvariant("checked body store divergence referenced a missing expression", .{});
+        return self.expr_diverges[raw];
+    }
+
+    pub fn statementDiverges(self: *const CheckedBodyStore, id: CheckedStatementId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.statement_diverges.len) checkedArtifactInvariant("checked body store divergence referenced a missing statement", .{});
+        return self.statement_diverges[raw];
+    }
+
     pub fn exprIdForSource(self: *const CheckedBodyStore, source_expr: CIR.Expr.Idx) ?CheckedExprId {
-        const raw = @intFromEnum(source_expr);
-        if (raw >= self.expr_by_node.len) return null;
-        return self.expr_by_node[raw];
+        return self.source_node_map.expr(source_expr);
     }
 
     pub fn patternIdForSource(self: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) ?CheckedPatternId {
-        const raw = @intFromEnum(pattern);
-        if (raw >= self.pattern_by_node.len) return null;
-        return self.pattern_by_node[raw];
+        return self.source_node_map.pattern(pattern);
     }
 
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
@@ -5260,32 +5388,28 @@ pub const CheckedBodyStore = struct {
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
 
-            if (raw_node < self.expr_by_node.len) {
-                if (self.expr_by_node[raw_node]) |checked_expr| {
-                    const data = &self.exprs[@intFromEnum(checked_expr)].data;
-                    switch (data.*) {
-                        .for_ => |*for_| for_.plan = entry.value_ptr.*,
-                        else => checkedArtifactInvariant(
-                            "iterator-for plan {d} points at non-for checked expression {d}",
-                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
-                        ),
-                    }
-                    continue;
+            if (self.source_node_map.exprAtRawNode(raw_node)) |checked_expr| {
+                const data = &self.exprs[@intFromEnum(checked_expr)].data;
+                switch (data.*) {
+                    .for_ => |*for_| for_.plan = entry.value_ptr.*,
+                    else => checkedArtifactInvariant(
+                        "iterator-for plan {d} points at non-for checked expression {d}",
+                        .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                    ),
                 }
+                continue;
             }
 
-            if (raw_node < self.statement_by_node.len) {
-                if (self.statement_by_node[raw_node]) |checked_statement| {
-                    const data = &self.statements[@intFromEnum(checked_statement)].data;
-                    switch (data.*) {
-                        .for_ => |*for_| for_.plan = entry.value_ptr.*,
-                        else => checkedArtifactInvariant(
-                            "iterator-for plan {d} points at non-for checked statement {d}",
-                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_statement) },
-                        ),
-                    }
-                    continue;
+            if (self.source_node_map.statementAtRawNode(raw_node)) |checked_statement| {
+                const data = &self.statements[@intFromEnum(checked_statement)].data;
+                switch (data.*) {
+                    .for_ => |*for_| for_.plan = entry.value_ptr.*,
+                    else => checkedArtifactInvariant(
+                        "iterator-for plan {d} points at non-for checked statement {d}",
+                        .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_statement) },
+                    ),
                 }
+                continue;
             }
 
             checkedArtifactInvariant(
@@ -5302,13 +5426,7 @@ pub const CheckedBodyStore = struct {
         var iter = plans.numeral_by_node.iterator();
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
-            if (raw_node >= self.expr_by_node.len) {
-                checkedArtifactInvariant(
-                    "from_numeral plan {d} points at source node {d} outside checked expression table",
-                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
-                );
-            }
-            const checked_expr = self.expr_by_node[raw_node] orelse {
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse {
                 checkedArtifactInvariant(
                     "from_numeral plan {d} points at source node {d} with no checked expression",
                     .{ @intFromEnum(entry.value_ptr.*), raw_node },
@@ -5411,9 +5529,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
-        allocator.free(self.statement_by_node);
-        allocator.free(self.pattern_by_node);
-        allocator.free(self.expr_by_node);
+        self.source_node_map.deinit(allocator);
         allocator.free(self.pattern_binder_by_pattern);
         allocator.free(self.pattern_binders);
         for (self.string_literals) |literal| allocator.free(literal);
@@ -5421,6 +5537,8 @@ pub const CheckedBodyStore = struct {
         deinitCheckedStatementList(allocator, self.statements);
         deinitCheckedPatternList(allocator, self.patterns);
         deinitCheckedExprList(allocator, self.exprs);
+        allocator.free(self.statement_diverges);
+        allocator.free(self.expr_diverges);
         allocator.free(self.statements);
         allocator.free(self.patterns);
         allocator.free(self.exprs);
@@ -5435,7 +5553,12 @@ fn publishCheckedBodyDivergence(
     allocator: Allocator,
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
 ) Allocator.Error!void {
+    if (expr_diverges.len != exprs.len or statement_diverges.len != statements.len) {
+        checkedArtifactInvariant("checked divergence column length mismatch", .{});
+    }
     const expr_states = try allocator.alloc(DivergenceVisitState, exprs.len);
     defer allocator.free(expr_states);
     const statement_states = try allocator.alloc(DivergenceVisitState, statements.len);
@@ -5445,16 +5568,18 @@ fn publishCheckedBodyDivergence(
     @memset(statement_states, .fresh);
 
     for (exprs) |*expr| {
-        expr.diverges = checkedExprDiverges(exprs, statements, expr.id, expr_states, statement_states);
+        expr_diverges[@intFromEnum(expr.id)] = checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr.id, expr_states, statement_states);
     }
     for (statements) |*statement| {
-        statement.diverges = checkedStatementDiverges(exprs, statements, statement.id, expr_states, statement_states);
+        statement_diverges[@intFromEnum(statement.id)] = checkedStatementDiverges(exprs, statements, expr_diverges, statement_diverges, statement.id, expr_states, statement_states);
     }
 }
 
 fn checkedExprDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     expr_id: CheckedExprId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5462,13 +5587,13 @@ fn checkedExprDiverges(
     const index = @intFromEnum(expr_id);
     if (index >= exprs.len) checkedArtifactInvariant("checked divergence referenced a missing expression", .{});
     switch (expr_states[index]) {
-        .done => return exprs[index].diverges,
+        .done => return expr_diverges[index],
         .active => checkedArtifactInvariant("checked expression divergence contains a cycle", .{}),
         .fresh => {},
     }
     expr_states[index] = .active;
-    const result = checkedExprDataDiverges(exprs, statements, exprs[index].data, expr_states, statement_states);
-    exprs[index].diverges = result;
+    const result = checkedExprDataDiverges(exprs, statements, expr_diverges, statement_diverges, exprs[index].data, expr_states, statement_states);
+    expr_diverges[index] = result;
     expr_states[index] = .done;
     return result;
 }
@@ -5476,6 +5601,8 @@ fn checkedExprDiverges(
 fn checkedStatementDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     statement_id: CheckedStatementId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5483,13 +5610,13 @@ fn checkedStatementDiverges(
     const index = @intFromEnum(statement_id);
     if (index >= statements.len) checkedArtifactInvariant("checked divergence referenced a missing statement", .{});
     switch (statement_states[index]) {
-        .done => return statements[index].diverges,
+        .done => return statement_diverges[index],
         .active => checkedArtifactInvariant("checked statement divergence contains a cycle", .{}),
         .fresh => {},
     }
     statement_states[index] = .active;
-    const result = checkedStatementDataDiverges(exprs, statements, statements[index].data, expr_states, statement_states);
-    statements[index].diverges = result;
+    const result = checkedStatementDataDiverges(exprs, statements, expr_diverges, statement_diverges, statements[index].data, expr_states, statement_states);
+    statement_diverges[index] = result;
     statement_states[index] = .done;
     return result;
 }
@@ -5497,6 +5624,8 @@ fn checkedStatementDiverges(
 fn checkedExprDataDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     data: CheckedExprData,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5505,64 +5634,64 @@ fn checkedExprDataDiverges(
         .crash,
         .return_,
         => true,
-        .str => |items| checkedAnyExprDiverges(exprs, statements, items, expr_states, statement_states),
-        .list => |items| checkedAnyExprDiverges(exprs, statements, items, expr_states, statement_states),
-        .tuple => |items| checkedAnyExprDiverges(exprs, statements, items, expr_states, statement_states),
+        .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
+        .list => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
+        .tuple => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
         .match_ => |match| blk: {
-            if (checkedExprDiverges(exprs, statements, match.cond, expr_states, statement_states)) break :blk true;
+            if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, match.cond, expr_states, statement_states)) break :blk true;
             if (match.branches.len == 0) break :blk false;
             for (match.branches) |branch| {
                 if (branch.guard != null) break :blk false;
-                if (!checkedExprDiverges(exprs, statements, branch.value, expr_states, statement_states)) break :blk false;
+                if (!checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, branch.value, expr_states, statement_states)) break :blk false;
             }
             break :blk true;
         },
         .if_ => |if_| blk: {
-            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, if_.branches[0].cond, expr_states, statement_states)) {
+            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, if_.branches[0].cond, expr_states, statement_states)) {
                 break :blk true;
             }
             for (if_.branches) |branch| {
-                if (!checkedExprDiverges(exprs, statements, branch.body, expr_states, statement_states)) break :blk false;
+                if (!checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, branch.body, expr_states, statement_states)) break :blk false;
             }
-            break :blk checkedExprDiverges(exprs, statements, if_.final_else, expr_states, statement_states);
+            break :blk checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, if_.final_else, expr_states, statement_states);
         },
         .call => |call| blk: {
-            if (checkedExprDiverges(exprs, statements, call.func, expr_states, statement_states)) break :blk true;
-            break :blk checkedAnyExprDiverges(exprs, statements, call.args, expr_states, statement_states);
+            if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, call.func, expr_states, statement_states)) break :blk true;
+            break :blk checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, call.args, expr_states, statement_states);
         },
         .record => |record| blk: {
             if (record.ext) |ext| {
-                if (checkedExprDiverges(exprs, statements, ext, expr_states, statement_states)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, ext, expr_states, statement_states)) break :blk true;
             }
             for (record.fields) |field| {
-                if (checkedExprDiverges(exprs, statements, field.value, expr_states, statement_states)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.value, expr_states, statement_states)) break :blk true;
             }
             break :blk false;
         },
         .block => |block| blk: {
             for (block.statements) |statement| {
-                if (checkedStatementDiverges(exprs, statements, statement, expr_states, statement_states)) break :blk true;
+                if (checkedStatementDiverges(exprs, statements, expr_diverges, statement_diverges, statement, expr_states, statement_states)) break :blk true;
             }
-            break :blk checkedExprDiverges(exprs, statements, block.final_expr, expr_states, statement_states);
+            break :blk checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, block.final_expr, expr_states, statement_states);
         },
-        .tag => |tag| checkedAnyExprDiverges(exprs, statements, tag.args, expr_states, statement_states),
-        .nominal => |nominal| checkedExprDiverges(exprs, statements, nominal.backing_expr, expr_states, statement_states),
+        .tag => |tag| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, tag.args, expr_states, statement_states),
+        .nominal => |nominal| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, nominal.backing_expr, expr_states, statement_states),
         .closure => false,
         .lambda => false,
-        .binop => |binop| checkedExprDiverges(exprs, statements, binop.lhs, expr_states, statement_states) or
-            checkedExprDiverges(exprs, statements, binop.rhs, expr_states, statement_states),
+        .binop => |binop| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, binop.lhs, expr_states, statement_states) or
+            checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, binop.rhs, expr_states, statement_states),
         .unary_minus,
         .unary_not,
         .dbg,
         .expect,
-        => |child| checkedExprDiverges(exprs, statements, child, expr_states, statement_states),
-        .field_access => |field| checkedExprDiverges(exprs, statements, field.receiver, expr_states, statement_states),
-        .structural_eq => |eq| checkedExprDiverges(exprs, statements, eq.lhs, expr_states, statement_states) or
-            checkedExprDiverges(exprs, statements, eq.rhs, expr_states, statement_states),
-        .tuple_access => |access| checkedExprDiverges(exprs, statements, access.tuple, expr_states, statement_states),
-        .for_ => |for_| checkedExprDiverges(exprs, statements, for_.expr, expr_states, statement_states),
+        => |child| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, child, expr_states, statement_states),
+        .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
+        .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
+            checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
+        .tuple_access => |access| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states),
+        .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .hosted_lambda => false,
-        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, run.args, expr_states, statement_states),
+        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, run.args, expr_states, statement_states),
         .pending,
         .num,
         .frac_f32,
@@ -5594,6 +5723,8 @@ fn checkedExprDataDiverges(
 fn checkedStatementDataDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     data: CheckedStatementData,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5603,15 +5734,15 @@ fn checkedStatementDataDiverges(
         .break_,
         .return_,
         => true,
-        .decl => |decl| checkedExprDiverges(exprs, statements, decl.expr, expr_states, statement_states),
-        .var_ => |var_| checkedExprDiverges(exprs, statements, var_.expr, expr_states, statement_states),
-        .reassign => |reassign| checkedExprDiverges(exprs, statements, reassign.expr, expr_states, statement_states),
+        .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
+        .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
+        .reassign => |reassign| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states),
         .dbg,
         .expr,
         .expect,
-        => |expr| checkedExprDiverges(exprs, statements, expr, expr_states, statement_states),
-        .for_ => |for_| checkedExprDiverges(exprs, statements, for_.expr, expr_states, statement_states),
-        .while_ => |while_| checkedExprDiverges(exprs, statements, while_.cond, expr_states, statement_states),
+        => |expr| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr, expr_states, statement_states),
+        .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
+        .while_ => |while_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states),
         .pending,
         .import_,
         .alias_decl,
@@ -5626,12 +5757,14 @@ fn checkedStatementDataDiverges(
 fn checkedAnyExprDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     items: []const CheckedExprId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
 ) bool {
     for (items) |item| {
-        if (checkedExprDiverges(exprs, statements, item, expr_states, statement_states)) return true;
+        if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, item, expr_states, statement_states)) return true;
     }
     return false;
 }
@@ -5832,9 +5965,7 @@ const CheckedBodyPayloadCopier = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    expr_by_node: []const ?CheckedExprId,
-    pattern_by_node: []const ?CheckedPatternId,
-    statement_by_node: []const ?CheckedStatementId,
+    source_node_map: *const CheckedSourceNodeMap,
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
@@ -6582,9 +6713,7 @@ const CheckedBodyPayloadCopier = struct {
 
     fn checkedExpr(self: *const @This(), expr: CIR.Expr.Idx) CheckedExprId {
         const raw = @intFromEnum(expr);
-        if (raw < self.expr_by_node.len) {
-            if (self.expr_by_node[raw]) |id| return id;
-        }
+        if (self.source_node_map.expr(expr)) |id| return id;
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
         }
@@ -6601,9 +6730,7 @@ const CheckedBodyPayloadCopier = struct {
 
     fn checkedPattern(self: *const @This(), pattern: CIR.Pattern.Idx) CheckedPatternId {
         const raw = @intFromEnum(pattern);
-        if (raw < self.pattern_by_node.len) {
-            if (self.pattern_by_node[raw]) |id| return id;
-        }
+        if (self.source_node_map.pattern(pattern)) |id| return id;
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
         }
@@ -6635,9 +6762,7 @@ const CheckedBodyPayloadCopier = struct {
 
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
         const raw = @intFromEnum(statement);
-        if (raw < self.statement_by_node.len) {
-            if (self.statement_by_node[raw]) |id| return id;
-        }
+        if (self.source_node_map.statement(statement)) |id| return id;
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
         }
@@ -8585,7 +8710,7 @@ pub const CheckedProcedureTemplate = struct {
 /// Public `CheckedProcedureTemplateTable` declaration.
 pub const CheckedProcedureTemplateTable = struct {
     templates: []CheckedProcedureTemplate = &.{},
-    by_def: []?canonical.ProcedureTemplateRef = &.{},
+    by_def: []static_dispatch.ProcedureTemplateLookupEntry = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -8599,10 +8724,8 @@ pub const CheckedProcedureTemplateTable = struct {
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
         errdefer templates.deinit(allocator);
-
-        const by_def = try allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
-        errdefer allocator.free(by_def);
-        @memset(by_def, null);
+        var by_def = std.ArrayList(static_dispatch.ProcedureTemplateLookupEntry).empty;
+        errdefer by_def.deinit(allocator);
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
@@ -8628,7 +8751,10 @@ pub const CheckedProcedureTemplateTable = struct {
                 .proc_base = proc_base,
                 .template = template_id,
             };
-            by_def[@intFromEnum(def_idx)] = template_ref;
+            try by_def.append(allocator, .{
+                .def = def_idx,
+                .template = template_ref,
+            });
             const checked_fn_root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: checked procedure function root was not published", .{});
@@ -8673,16 +8799,31 @@ pub const CheckedProcedureTemplateTable = struct {
             });
         }
 
+        std.mem.sort(static_dispatch.ProcedureTemplateLookupEntry, by_def.items, {}, static_dispatch.ProcedureTemplateLookupEntry.lessThan);
+        const template_slice = try templates.toOwnedSlice(allocator);
+        errdefer allocator.free(template_slice);
+        const by_def_slice = try by_def.toOwnedSlice(allocator);
         return .{
-            .templates = try templates.toOwnedSlice(allocator),
-            .by_def = by_def,
+            .templates = template_slice,
+            .by_def = by_def_slice,
         };
     }
 
     pub fn lookupByDef(self: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
-        const raw = @intFromEnum(def_idx);
-        if (raw >= self.by_def.len) return null;
-        return self.by_def[raw];
+        var lo: usize = 0;
+        var hi: usize = self.by_def.len;
+        const target = @intFromEnum(def_idx);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_def[mid].def);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_def.len or self.by_def[lo].def != def_idx) return null;
+        return self.by_def[lo].template;
     }
 
     pub fn appendEntryWrappersForRoots(
@@ -12145,11 +12286,20 @@ pub const TopLevelValueEntry = struct {
     value: TopLevelValueKind,
 };
 
+const TopLevelValueByDefEntry = struct {
+    def: CIR.Def.Idx,
+    entry: u32,
+
+    fn lessThan(_: void, lhs: TopLevelValueByDefEntry, rhs: TopLevelValueByDefEntry) bool {
+        return @intFromEnum(lhs.def) < @intFromEnum(rhs.def);
+    }
+};
+
 /// Public `TopLevelValueTable` declaration.
 pub const TopLevelValueTable = struct {
     entries: []TopLevelValueEntry = &.{},
     by_pattern: []?u32 = &.{},
-    by_def: []?u32 = &.{},
+    by_def: []TopLevelValueByDefEntry = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -12171,9 +12321,8 @@ pub const TopLevelValueTable = struct {
         errdefer allocator.free(by_pattern);
         @memset(by_pattern, null);
 
-        const by_def = try allocator.alloc(?u32, module.nodeCount());
-        errdefer allocator.free(by_def);
-        @memset(by_def, null);
+        var by_def = std.ArrayList(TopLevelValueByDefEntry).empty;
+        errdefer by_def.deinit(allocator);
 
         var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
         defer seen_source_names.deinit(allocator);
@@ -12253,13 +12402,20 @@ pub const TopLevelValueTable = struct {
                 .value = value,
             });
             by_pattern[@intFromEnum(checked_pattern)] = entry_idx;
-            by_def[@intFromEnum(def_idx)] = entry_idx;
+            try by_def.append(allocator, .{
+                .def = def_idx,
+                .entry = entry_idx,
+            });
         }
 
+        std.mem.sort(TopLevelValueByDefEntry, by_def.items, {}, TopLevelValueByDefEntry.lessThan);
+        const entry_slice = try entries.toOwnedSlice(allocator);
+        errdefer allocator.free(entry_slice);
+        const by_def_slice = try by_def.toOwnedSlice(allocator);
         return .{
-            .entries = try entries.toOwnedSlice(allocator),
+            .entries = entry_slice,
             .by_pattern = by_pattern,
-            .by_def = by_def,
+            .by_def = by_def_slice,
         };
     }
 
@@ -12271,10 +12427,20 @@ pub const TopLevelValueTable = struct {
     }
 
     pub fn lookupByDef(self: *const TopLevelValueTable, def: CIR.Def.Idx) ?TopLevelValueEntry {
-        const raw = @intFromEnum(def);
-        if (raw >= self.by_def.len) return null;
-        const idx = self.by_def[raw] orelse return null;
-        return self.entries[idx];
+        var lo: usize = 0;
+        var hi: usize = self.by_def.len;
+        const target = @intFromEnum(def);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_def[mid].def);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_def.len or self.by_def[lo].def != def) return null;
+        return self.entries[self.by_def[lo].entry];
     }
 
     pub fn deinit(self: *TopLevelValueTable, allocator: Allocator) void {
@@ -14642,6 +14808,8 @@ pub const CheckedModuleArtifact = struct {
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.len == self.checked_types.payloads.len);
+        std.debug.assert(self.checked_bodies.expr_diverges.len == self.checked_bodies.exprs.len);
+        std.debug.assert(self.checked_bodies.statement_diverges.len == self.checked_bodies.statements.len);
         verifyRootRequestSubsets(self.root_requests);
 
         for (self.checked_types.payloads, 0..) |payload, i| {
@@ -14707,6 +14875,8 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
+        std.debug.assert(self.checked_bodies.expr_diverges.len == self.checked_bodies.exprs.len);
+        std.debug.assert(self.checked_bodies.statement_diverges.len == self.checked_bodies.statements.len);
         verifyRootRequestSubsets(self.root_requests);
 
         for (self.root_requests.requests, 0..) |request, i| {
