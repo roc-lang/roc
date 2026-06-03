@@ -38,6 +38,9 @@ jobs:
       - name: Check Builtin.roc formatting
         run: zig build run-check-builtin-format
 
+      - name: Verify Serialized Type Sizes
+        run: zig build run-test-serialization-sizes
+
       - name: Check that test is actually wired up
         run: |
           zig build run-check-test-wiring
@@ -69,6 +72,9 @@ jobs:
 
       - name: zig snapshot tests
         run: zig build run-check-snapshots -- --debug
+
+      - name: Run Playground Tests
+        run: zig build run-test-playground -Doptimize=ReleaseSmall -- --verbose
 
       # We run zig check with tracy enabled.
       # This ensure it compiles and doesn't go stale.
@@ -111,36 +117,6 @@ jobs:
       - run: |
           roc check CONTRIBUTING/profiling/exec_bench.roc
           roc test CONTRIBUTING/profiling/exec_bench.roc
-
-  playground-tests:
-    needs: check-once
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
-        with:
-          version: 0.16.0
-          use-cache: true
-
-      - name: Run Playground Tests
-        run: |
-          zig build run-test-playground -Doptimize=ReleaseSmall -- --verbose
-
-  serialized-type-sizes:
-    needs: check-once
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
-        with:
-          version: 0.16.0
-          use-cache: true
-
-      - name: Verify Serialized Type Sizes
-        run: |
-          zig build run-test-serialization-sizes
 
   eval-llvm:
     needs: check-once
