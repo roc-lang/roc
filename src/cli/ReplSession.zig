@@ -1116,6 +1116,23 @@ test "Repl - variable redefinition" {
     try expectStateful(.wasm, steps);
 }
 
+test "Repl - invalid syntax preserves definitions" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const assigned = try repl.step("x = 42");
+    defer testing.allocator.free(assigned);
+    try testing.expectEqualStrings("assigned `x`", assigned);
+
+    const diagnostic = try repl.step("x +");
+    defer testing.allocator.free(diagnostic);
+    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED TOKEN") != null);
+
+    const result = try repl.step("x");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("42.0", result);
+}
+
 test "Repl - for loop over list" {
     const steps = &[_][2][]const u8{
         .{ "[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]" },
