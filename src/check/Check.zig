@@ -8558,7 +8558,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
             const fn_content = self.types.resolveVar(c.fn_var).desc.content;
             const func = fn_content.unwrapFunc() orelse continue;
             var found_peer = false;
-            for (self.types.sliceVars(func.args)) |arg| {
+            // Use iterVars, not sliceVars: unify below appends fresh vars and
+            // can reallocate the backing array, which would dangle a slice.
+            var peer_args = self.types.iterVars(func.args);
+            while (peer_args.next()) |arg| {
                 const resolved_arg = self.types.resolveVar(arg);
                 if (resolved_arg.var_ == resolved.var_) continue; // skip self
                 if (resolved_arg.desc.content.unwrapNominalType() == null) continue;
@@ -8581,7 +8584,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
             if (resolved_ret.desc.content.unwrapNominalType() == null) continue;
             _ = try self.unify(resolved.var_, resolved_ret.var_, env);
 
-            for (self.types.sliceVars(func.args)) |arg| {
+            // Use iterVars, not sliceVars: each unify can reallocate the
+            // backing array, so a held slice would dangle on the next iteration.
+            var ret_args = self.types.iterVars(func.args);
+            while (ret_args.next()) |arg| {
                 const resolved_arg = self.types.resolveVar(arg);
                 if (resolved_arg.var_ == resolved.var_) continue;
                 _ = try self.unify(resolved_ret.var_, resolved_arg.var_, env);
