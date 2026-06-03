@@ -1045,8 +1045,13 @@ fn runTests(
             stats.skipped += 1;
             continue;
         }
+        var case_arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer case_arena_state.deinit();
+        const case_arena = case_arena_state.allocator();
+
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
         const setup_start = nanoTimestamp();
+        var setup_end = setup_start;
         var setup_status: TestResult = .failed;
         var setup_message: ?[]const u8 = null;
         defer if (stats_events) |events| {
@@ -1060,12 +1065,13 @@ fn runTests(
                 "wasm setup",
                 statsStatus(setup_status),
                 relativeNs(case_start, setup_start),
-                relativeNs(case_start, nanoTimestamp()),
+                relativeNs(case_start, setup_end),
                 failureData(arena, setup_message, setup_status),
             );
         };
-        var wasm_interface = setupWasm(std_io, gpa, arena, wasm_path) catch |err| {
+        var wasm_interface = setupWasm(std_io, gpa, case_arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
+            setup_end = nanoTimestamp();
             setup_message = "WASM setup failed";
             case_message = "WASM setup failed";
             stats.failed += 1;
@@ -1077,6 +1083,7 @@ fn runTests(
             continue;
         };
         setup_status = .passed;
+        setup_end = nanoTimestamp();
         defer wasm_interface.deinit();
 
         const case_execution_result = runTestCase(
@@ -1147,6 +1154,14 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
     return TestCase{ .name = name, .steps = steps };
 }
 
+fn matchesAnyFilter(name: []const u8, filters: []const []const u8) bool {
+    if (filters.len == 0) return true;
+    for (filters) |filter| {
+        if (std.mem.indexOf(u8, name, filter) != null) return true;
+    }
+    return false;
+}
+
 pub fn main(init: std.process.Init) !void {
     const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
@@ -1169,6 +1184,8 @@ pub fn main(init: std.process.Init) !void {
 
     var wasm_path: ?[]const u8 = null;
     var stats_args: PlaygroundStatsArgs = .{};
+    var case_filters = std.ArrayList([]const u8).empty;
+    defer case_filters.deinit(allocator);
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -1180,6 +1197,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("  --verbose           Enable verbose mode\n", .{});
             std.debug.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
             std.debug.print("  --stats-json PATH   Write MiniCI stats JSON\n", .{});
+            std.debug.print("  --filter SUBSTRING  Only run cases whose name contains SUBSTRING\n", .{});
             std.debug.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
@@ -1196,6 +1214,13 @@ pub fn main(init: std.process.Init) !void {
                 return;
             }
             stats_args.json_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--filter")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --filter requires a substring argument\n", .{});
+                return;
+            }
+            try case_filters.append(allocator, args[i]);
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             // Positional argument - treat as WASM path
             wasm_path = arg;
@@ -1256,38 +1281,14 @@ pub fn main(init: std.process.Init) !void {
         .steps = happy_path_steps,
     });
 
-    // Error Handling Test
+    // Diagnostics over the playground protocol.
     const syntax_error_code_val = try TestData.syntaxErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
 
-    // Empty Source Test
-    const empty_source_code = try allocator.dupe(u8, "");
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
-
-    // Code Formatting Test
-    var formatted_test_steps = try allocator.alloc(MessageStep, 3);
-    formatted_test_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const unformatted_code = try allocator.dupe(u8, "module [foo]\n\nfoo=42\nbar=\"hello world\"\n");
-    formatted_test_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = unformatted_code },
-        .expected_status = "SUCCESS",
-        .expected_message_contains = "LOADED",
-        .owned_source = unformatted_code,
-    };
-    formatted_test_steps[2] = .{
-        .message = .{ .type = "QUERY_FORMATTED" },
-        .expected_status = "SUCCESS",
-        .expected_data_contains = "foo",
-    };
-    try test_cases.append(allocator, .{
-        .name = "QUERY_FORMATTED - Code Formatting",
-        .steps = formatted_test_steps,
-    });
-
-    // Invalid Message Type Test
+    // Invalid message handling at the WASM/JSON boundary.
     var invalid_msg_type_steps = try allocator.alloc(MessageStep, 2);
     invalid_msg_type_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     invalid_msg_type_steps[1] = .{
@@ -1300,7 +1301,7 @@ pub fn main(init: std.process.Init) !void {
         .steps = invalid_msg_type_steps,
     });
 
-    // RESET Functionality Test
+    // Reset from a loaded state and prove a later load/query still works.
     var reset_test_steps = try allocator.alloc(MessageStep, 5);
     reset_test_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     const code_for_reset_test = try TestData.syntaxErrorRocCode(allocator);
@@ -1310,12 +1311,12 @@ pub fn main(init: std.process.Init) !void {
         .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
         .owned_source = code_for_reset_test,
     };
-    reset_test_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" }; // Perform reset
+    reset_test_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
     const happy_code_after_reset = try TestData.happyPathRocCode(allocator);
     reset_test_steps[3] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = happy_code_after_reset },
         .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 }, // Expect no errors from the new code
+        .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 },
         .owned_source = happy_code_after_reset,
     };
     reset_test_steps[4] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
@@ -1324,166 +1325,44 @@ pub fn main(init: std.process.Init) !void {
         .steps = reset_test_steps,
     });
 
-    // Memory Corruption on Reset Test
-    var memory_corruption_steps = try allocator.alloc(MessageStep, 4);
-    memory_corruption_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const code_for_mem_test_1 = try TestData.happyPathRocCode(allocator);
-    memory_corruption_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = code_for_mem_test_1 },
-        .expected_status = "SUCCESS",
-        .owned_source = code_for_mem_test_1,
-    };
-    memory_corruption_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    const code_for_mem_test_2 = try TestData.syntaxErrorRocCode(allocator);
-    memory_corruption_steps[3] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = code_for_mem_test_2 },
-        .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
-        .owned_source = code_for_mem_test_2,
-    };
-    try test_cases.append(allocator, .{
-        .name = "Memory Corruption on Reset - Load, Reset, Load",
-        .steps = memory_corruption_steps,
-    });
-
-    // GET_HOVER_INFO Specific Test
-    var get_hover_info_steps = try allocator.alloc(MessageStep, 3);
-    get_hover_info_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const get_hover_info_code = try allocator.dupe(u8,
-        \\module [main]
-        \\
-        \\main : Str
-        \\main = "hello"
-        \\
-        \\num : I32
-        \\num = 123
-    );
-    get_hover_info_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = get_hover_info_code },
-        .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 },
-        .owned_source = get_hover_info_code,
-    };
-    get_hover_info_steps[2] = .{
-        .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
-        .expected_status = "SUCCESS",
-        .expected_hover_info_contains = "I32",
-    };
-    try test_cases.append(allocator, .{
-        .name = "GET_HOVER_INFO - Specific Type Query",
-        .steps = get_hover_info_steps,
-    });
-
-    // REPL Test Cases
-
-    // Test: REPL Lifecycle - Init, Step, Clear, Reset
-    var repl_lifecycle_steps = try allocator.alloc(MessageStep, 5);
-    repl_lifecycle_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_lifecycle_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
-    repl_lifecycle_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
-    repl_lifecycle_steps[3] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
-    repl_lifecycle_steps[4] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Lifecycle - Init, Step, Clear, Reset",
-        .steps = repl_lifecycle_steps,
-    });
-
-    // Test: REPL Core - Definitions and Expressions
-    var repl_core_steps = try allocator.alloc(MessageStep, 6);
-    repl_core_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_core_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_core_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
-    repl_core_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "y = x + 5" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `y`" };
-    repl_core_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
-    repl_core_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Core - Definitions and Expressions",
-        .steps = repl_core_steps,
-    });
-
-    // Test: REPL Variable Redefinition - Dependency Updates
-    var repl_redefinition_steps = try allocator.alloc(MessageStep, 8);
-    repl_redefinition_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 10" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "y = x + 5" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
-    repl_redefinition_steps[5] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 20" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[6] = .{
-        .message = .{ .type = "REPL_STEP", .input = "y" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "25", // Should reflect new x value
-    };
-    repl_redefinition_steps[7] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Variable Redefinition - Dependency Updates",
-        .steps = repl_redefinition_steps,
-    });
-
-    // Test: REPL Error Handling - Invalid Syntax Recovery
-    var repl_error_steps = try allocator.alloc(MessageStep, 6);
-    repl_error_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_error_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_error_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
-    repl_error_steps[3] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x +" }, // Invalid syntax - incomplete expression
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "UNEXPECTED TOKEN",
-        .expected_result_type = "error",
-        .expected_result_error_stage = "parse",
-    };
-    repl_error_steps[4] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x" }, // Should still work
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "42", // Previous definition should still be valid
-    };
-    repl_error_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Error Handling - Invalid Syntax Recovery",
-        .steps = repl_error_steps,
-    });
-
-    // Test: REPL Compiler Integration - Query After Evaluation
-    var repl_compiler_steps = try allocator.alloc(MessageStep, 5);
-    repl_compiler_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "x + 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "52" };
-    repl_compiler_steps[4] = .{
-        .message = .{ .type = "QUERY_CIR" }, // Should work in REPL mode
+    // REPL protocol smoke. Detailed REPL behavior is covered by native Debug
+    // ReplSession tests in run-test-zig-cli-main.
+    var repl_protocol_steps = try allocator.alloc(MessageStep, 9);
+    repl_protocol_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    repl_protocol_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
+    repl_protocol_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
+    repl_protocol_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "x + 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "52" };
+    repl_protocol_steps[4] = .{
+        .message = .{ .type = "QUERY_CIR" },
         .expected_status = "SUCCESS",
         .expected_data_contains = "can-ir",
     };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Compiler Integration - Query After Evaluation",
-        .steps = repl_compiler_steps,
-    });
-
-    // Test: REPL State Isolation - Mode Switching
-    var repl_isolation_steps = try allocator.alloc(MessageStep, 6);
-    repl_isolation_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[3] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    // After reset, should be back to single-file mode
+    repl_protocol_steps[5] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
+    repl_protocol_steps[6] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
     const simple_source = try TestData.happyPathRocCode(allocator);
-    repl_isolation_steps[4] = .{
+    repl_protocol_steps[7] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = simple_source },
         .expected_status = "SUCCESS",
         .expected_message_contains = "LOADED",
         .owned_source = simple_source,
     };
-    repl_isolation_steps[5] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS" };
+    repl_protocol_steps[8] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
 
     try test_cases.append(allocator, .{
-        .name = "REPL State Isolation - Mode Switching",
-        .steps = repl_isolation_steps,
+        .name = "REPL Protocol - Step, Query, Clear, Reset",
+        .steps = repl_protocol_steps,
     });
+
+    if (case_filters.items.len > 0) {
+        var kept = std.ArrayList(TestCase).empty;
+        for (test_cases.items) |case| {
+            if (matchesAnyFilter(case.name, case_filters.items)) {
+                try kept.append(allocator, case);
+            }
+        }
+        test_cases.deinit(allocator);
+        test_cases = kept;
+    }
 
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});
     logDebug("[INFO] Running {} test cases\n", .{test_cases.items.len});

@@ -2979,14 +2979,37 @@ pub fn build(b: *std.Build) void {
         run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
-    // Build playground integration tests - now enabled for all optimization modes
+    // Build playground integration tests - now enabled for all optimization modes.
     const playground_test_install = blk: {
+        const playground_test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSafe else optimize;
+        const playground_wasm_target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+        });
+        const playground_test_wasm = b.addExecutable(.{
+            .name = "playground-test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/playground_wasm/main.zig"),
+                .target = playground_wasm_target,
+                .optimize = playground_test_optimize,
+            }),
+        });
+        configureBackend(playground_test_wasm, playground_wasm_target);
+        playground_test_wasm.entry = .disabled;
+        playground_test_wasm.rdynamic = true;
+        playground_test_wasm.link_function_sections = true;
+        playground_test_wasm.import_memory = false;
+        roc_modules.addAll(playground_test_wasm);
+        playground_test_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        playground_test_wasm.step.dependOn(&write_compiled_builtins.step);
+        add_tracy(b, roc_modules.build_options, playground_test_wasm, playground_wasm_target, false, null);
+
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/playground-integration/main.zig"),
                 .target = target,
-                .optimize = optimize,
+                .optimize = playground_test_optimize,
             }),
         });
         configureBackend(playground_integration_test_exe, target);
@@ -2998,11 +3021,16 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(playground_integration_test_exe);
 
         const install = b.addInstallArtifact(playground_integration_test_exe, .{});
-        // Ensure playground WASM is built before running the integration test
-        install.step.dependOn(&playground_install.step);
+        install.step.dependOn(&playground_test_wasm.step);
         build_test_playground_runner_step.dependOn(&install.step);
 
         const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+        run_playground_test.addArg("--wasm-path");
+        run_playground_test.addFileArg(playground_test_wasm.getEmittedBin());
+        for (test_filters) |f| {
+            run_playground_test.addArg("--filter");
+            run_playground_test.addArg(f);
+        }
         if (run_args.len != 0) {
             run_playground_test.addArgs(run_args);
         }
