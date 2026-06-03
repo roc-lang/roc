@@ -480,6 +480,11 @@ const warning_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "warning" },
 };
 
+const repl_parse_diagnostic_needles = [_]OutputNeedle{
+    .{ .stream = .stderr, .text = "PARSE ERROR" },
+    .{ .stream = .stderr, .text = "UNEXPECTED TOKEN" },
+};
+
 const format_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "needs_formatting.roc" },
     .{ .stream = .stdout, .text = "needs_formatting.roc" },
@@ -502,10 +507,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many symbols per file", .body = .{ .custom = .generated_graph_2_100 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many imported files", .body = .{ .custom = .generated_graph_200_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc version outputs at least 5 chars to stdout", .body = .{ .command = .{ .args = &.{"version"}, .stdout_min_len = 5 } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc repl shows welcome banner", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "", .contains = &.{ .{ .stream = .stdout, .text = "Roc REPL" }, .{ .stream = .stdout, .text = ":help" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates simple expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1\n", .contains = &.{.{ .stream = .stdout, .text = "2" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc repl batch mode suppresses welcome banner", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "", .stdout_exact = "", .stderr_exact = "" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates simple expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1\n", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "Roc REPL" }, .{ .stream = .stdout, .text = ">" }, .{ .stream = .stdout, .text = "Goodbye" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates final stdin line without trailing newline", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl :help command works", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = ":help\n", .contains_any = &.{.{ .needles = &.{ .{ .stream = .stdout, .text = ":exit" }, .{ .stream = .stdout, .text = ":quit" } } }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc repl :exit command exits cleanly", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = ":exit\n", .contains = &.{.{ .stream = .stdout, .text = "Goodbye" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc repl :exit command exits cleanly in batch mode", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = ":exit\n", .stdout_exact = "", .stderr_exact = "" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc repl parse diagnostics go to stderr in batch mode", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1+\\n\n", .exit = .failure, .stdout_exact = "", .contains_any = &.{.{ .needles = &repl_parse_diagnostic_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "Error: ParseError" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc repl type diagnostics go to stderr without ANSI in batch mode", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "x = 1\nx + \"a\"\nx + 1\n", .exit = .failure, .contains = &.{ .{ .stream = .stdout, .text = "assigned `x`" }, .{ .stream = .stdout, .text = "2" }, .{ .stream = .stderr, .text = "MISSING METHOD" } }, .not_contains = &.{.{ .stream = .stderr, .text = "\x1b" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl variable definition and usage", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "x = 5\nx + 3\n", .contains = &.{.{ .stream = .stdout, .text = "8" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl string expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "\"hello\"\n", .contains = &.{.{ .stream = .stdout, .text = "hello" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc help contains Usage:", .body = .{ .command = .{ .args = &.{"help"}, .contains = &.{.{ .stream = .stdout, .text = "Usage:" }} } } },

@@ -1371,16 +1371,27 @@ pub fn renderProblems(
     source_kind: SourceKind,
     source: []const u8,
 ) ![]u8 {
+    return try renderProblemsWithConfig(allocator, source_kind, source, reporting.ReportingConfig.initColorTerminal());
+}
+
+/// Renders diagnostics for the given source using the provided reporting configuration.
+pub fn renderProblemsWithConfig(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    config: reporting.ReportingConfig,
+) ![]u8 {
     var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, &.{});
     defer resources.deinit(allocator);
 
-    return try renderCheckedModuleProblems(allocator, &resources.main, "repl");
+    return try renderCheckedModuleProblemsWithConfig(allocator, &resources.main, "repl", config);
 }
 
-fn renderCheckedModuleProblems(
+fn renderCheckedModuleProblemsWithConfig(
     allocator: Allocator,
     main: *const CheckedModule,
     filename: []const u8,
+    config: reporting.ReportingConfig,
 ) ![]u8 {
     var reports = std.array_list.Managed(reporting.Report).init(allocator);
     defer {
@@ -1426,7 +1437,7 @@ fn renderCheckedModuleProblems(
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     for (reports.items) |report| {
-        try report.render(&out.writer, .color_terminal);
+        try reporting.renderReportWithConfig(&report, &out.writer, config);
     }
     const raw = try out.toOwnedSlice();
     const trimmed = std.mem.trimEnd(u8, raw, "\r\n");

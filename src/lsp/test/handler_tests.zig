@@ -2247,7 +2247,9 @@ test "completion handler returns List module members after List dot" {
     defer allocator.free(combined);
 
     const reader_stream: std.Io.Reader = .fixed(combined);
-    var writer_buffer: [16384]u8 = undefined;
+    // The completion response enumerates every member of the List module,
+    // so this buffer must be large enough to fit the full JSON for all of them.
+    var writer_buffer: [65536]u8 = undefined;
     const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
 
     const ReaderType = std.Io.Reader;

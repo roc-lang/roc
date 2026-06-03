@@ -499,7 +499,13 @@ const Unifier = struct {
                 self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
-            .alias => return error.TypeMismatch,
+            .alias => |b_alias| {
+                // Aliases are transparent, so expand to the backing var and
+                // unify that against the rigid. This mirrors the `.rigid` branch
+                // of `unifyAlias`, keeping unification commutative.
+                const backing_var = self.types_store.getAliasBackingVar(b_alias);
+                try self.unifyGuarded(backing_var, vars.a.var_);
+            },
             .structure => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
