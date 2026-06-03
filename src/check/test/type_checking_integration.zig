@@ -708,6 +708,30 @@ test "check type - tag - ext - typo" {
     );
 }
 
+test "check type - large open tag union annotation preserves all tags" {
+    // Regression guard for the tag-union arm of generateAnnoTypeInPlace, which
+    // builds the tag union from the scratch_tags buffer. Uses enough tags to
+    // grow scratch_tags past its initial capacity (64) so the buffer
+    // reallocates while building the annotation, ensuring tags are materialized
+    // into the types store rather than read from a stale scratch slice.
+    const lo = "abcdefghijklmnopqrstuvwxyz";
+    const source = comptime blk: {
+        var s: []const u8 = "foo : [";
+        var i: usize = 0;
+        while (i < 80) : (i += 1) {
+            s = s ++ "T" ++ &[_]u8{ lo[i / 26], lo[i % 26] };
+            if (i < 79) s = s ++ ", ";
+        }
+        s = s ++ ", ..ext]\nfoo = Taa";
+        break :blk s;
+    };
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    // The first and last tags must both survive intact in the inferred type.
+    try test_env.assertLastDefTypeContains("Taa");
+    try test_env.assertLastDefTypeContains("Tdb");
+}
+
 // blocks //
 
 test "check type - block - return expr" {

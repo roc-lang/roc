@@ -3646,6 +3646,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 }
             }.less);
 
+            // Materialize the tags into the types store before processing the
+            // ext. `tags_slice` points into the scratch_tags buffer, and
+            // generating the ext recurses and may append to scratch_tags,
+            // reallocating that buffer and dangling the slice. Copying into a
+            // stable range here mirrors the record case below.
+            const tags_range = try self.types.appendTags(tags_slice);
+
             // Process the ext if it exists. Absence means it's a closed union
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
@@ -3657,7 +3664,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             };
 
             // Set the anno's type
-            try self.unifyWith(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), env);
+            try self.unifyWith(
+                anno_var,
+                .{ .structure = types_mod.FlatType{ .tag_union = .{
+                    .tags = tags_range,
+                    .ext = ext_var,
+                } } },
+                env,
+            );
         },
         .tag => {
             // Tags should only exist as direct children of tag_unions in type annotations.
