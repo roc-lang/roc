@@ -68,7 +68,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-module-docs" },
     .{ .name = "run-test-zig-snapshot-tool" },
     .{ .name = "run-test-zig-builtin-doc" },
-    .{ .name = "run-test-zig-cli-main", .skip_reason = "Skipped until #9516 is resolved" },
+    .{ .name = "run-test-zig-cli-main" },
     .{ .name = "run-test-zig-watch-cli" },
     .{ .name = "run-test-zig-fx-platform", .skip_reason = "Skipped until #9517 is resolved" },
     .{ .name = "run-test-eval", .kind = .harness },
