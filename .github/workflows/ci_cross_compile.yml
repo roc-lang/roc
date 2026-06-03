@@ -8,7 +8,7 @@ permissions: {}
 
 jobs:
   # Cross-compile all fx platform tests from all host platforms
-  cross-compile-fx-tests:
+  roc-cross-compile:
     runs-on: ${{ matrix.host }}
     strategy:
       fail-fast: false
@@ -79,7 +79,7 @@ jobs:
 
   # Test cross-compiled int platform executables on actual target platforms
   test-int-on-target:
-    needs: [cross-compile-fx-tests]
+    needs: [roc-cross-compile]
     runs-on: ${{ matrix.target_os }}
     strategy:
       fail-fast: false
