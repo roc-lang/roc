@@ -2773,6 +2773,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
+    // Check the result expression itself, matching checkExprRepl: its type may
+    // have incompatible constraints (e.g. !3) or be infinite/anonymously
+    // recursive, neither of which is covered by the per-def checks above.
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
+    try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
+
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
 }
