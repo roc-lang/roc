@@ -9621,60 +9621,83 @@ fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
 }
 
 fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
-    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true);
+    self.var_set.clearRetainingCapacity();
+    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set) catch false;
 }
 
-fn varContainsUnboxedFunctionInHostedSignatureInternal(self: *Self, var_: Var, allow_top_fn: bool) bool {
+fn varContainsUnboxedFunctionInHostedSignatureInternal(
+    self: *Self,
+    var_: Var,
+    allow_top_fn: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    // Cycle guard: recursive nominal/structural types would otherwise recurse
+    // forever through their backing vars. A var already on the stack
+    // contributes no new unboxed function we haven't already considered.
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
     return switch (resolved.desc.content) {
         .structure => |s| switch (s) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 if (!allow_top_fn) break :blk true;
                 const args = self.types.sliceVars(func.args);
                 for (args) |arg_var| {
-                    if (self.varContainsUnboxedFunctionInternal(arg_var, false)) break :blk true;
+                    if (try self.varContainsUnboxedFunctionInternal(arg_var, false, visited)) break :blk true;
                 }
-                if (self.varContainsUnboxedFunctionInternal(func.ret, false)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(func.ret, false, visited)) break :blk true;
                 break :blk false;
             },
-            else => self.flatTypeContainsUnboxedFunction(s, false),
+            else => try self.flatTypeContainsUnboxedFunction(s, false, visited),
         },
-        .alias => |alias| self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn),
+        .alias => |alias| try self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn, visited),
         .flex, .rigid, .err => false,
     };
 }
 
-fn varContainsUnboxedFunctionInternal(self: *Self, var_: Var, boxed_allowed: bool) bool {
+fn varContainsUnboxedFunctionInternal(
+    self: *Self,
+    var_: Var,
+    boxed_allowed: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
     return switch (resolved.desc.content) {
-        .structure => |s| self.flatTypeContainsUnboxedFunction(s, boxed_allowed),
-        .alias => |alias| self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed),
+        .structure => |s| try self.flatTypeContainsUnboxedFunction(s, boxed_allowed, visited),
+        .alias => |alias| try self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed, visited),
         .flex, .rigid, .err => false,
     };
 }
 
-fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, boxed_allowed: bool) bool {
+fn flatTypeContainsUnboxedFunction(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    boxed_allowed: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         .fn_pure, .fn_effectful, .fn_unbound => !boxed_allowed,
         .empty_record, .empty_tag_union => false,
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
         .tuple => |tuple| blk: {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem_var| {
-                if (self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
@@ -9683,7 +9706,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
             for (tags_slice.items(.args)) |tag_args| {
                 const args = self.types.sliceVars(tag_args);
                 for (args) |arg_var| {
-                    if (self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed)) break :blk true;
+                    if (try self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed, visited)) break :blk true;
                 }
             }
             break :blk false;
@@ -9691,7 +9714,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
         .nominal_type => |nominal| blk: {
             if (self.nominalIsBoxType(nominal)) break :blk false;
             const backing_var = self.types.getNominalBackingVar(nominal);
-            break :blk self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed);
+            break :blk try self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed, visited);
         },
     };
 }
