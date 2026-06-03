@@ -81,6 +81,8 @@ const jobs = [_]Job{
 
 const CommandResult = struct {
     status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
     duration_ns: u64,
     log_path: []const u8,
     command: []const []const u8,
@@ -94,6 +96,10 @@ fn nowNs(io: std.Io) u64 {
 
 fn durationSince(io: std.Io, started: u64) u64 {
     return nowNs(io) -| started;
+}
+
+fn unixMs(io: std.Io) u64 {
+    return @intCast(@divTrunc(@max(0, std.Io.Timestamp.now(io, .real).nanoseconds), std.time.ns_per_ms));
 }
 
 fn seconds(ns: u64) f64 {
@@ -218,6 +224,7 @@ fn runCommand(
     argv: []const []const u8,
     log_path: []const u8,
     heartbeat_interval_ms: u64,
+    run_started_ns: u64,
 ) !CommandResult {
     const started = nowNs(io);
     var heartbeat = Heartbeat{
@@ -238,11 +245,14 @@ fn runCommand(
     }
 
     const result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| {
+        const ended = nowNs(io);
         const message = try std.fmt.allocPrint(allocator, "spawn failed: {s}\n", .{@errorName(err)});
         try writeFile(io, log_path, message);
         return .{
             .status = "crash",
-            .duration_ns = durationSince(io, started),
+            .start_ns = started -| run_started_ns,
+            .end_ns = ended -| run_started_ns,
+            .duration_ns = ended -| started,
             .log_path = log_path,
             .command = argv,
             .heartbeat_printed = heartbeat.printed.load(.acquire),
@@ -261,10 +271,13 @@ fn runCommand(
         .exited => |code| if (code == 0) "pass" else "fail",
         else => "crash",
     };
+    const ended = nowNs(io);
 
     return .{
         .status = status,
-        .duration_ns = durationSince(io, started),
+        .start_ns = started -| run_started_ns,
+        .end_ns = ended -| run_started_ns,
+        .duration_ns = ended -| started,
         .log_path = log_path,
         .command = argv,
         .heartbeat_printed = heartbeat.printed.load(.acquire),
@@ -276,12 +289,16 @@ fn skipCommand(
     argv: []const []const u8,
     log_path: []const u8,
     reason: []const u8,
+    run_started_ns: u64,
 ) !CommandResult {
     const started = nowNs(io);
     try writeFile(io, log_path, reason);
+    const ended = nowNs(io);
     return .{
         .status = "skip",
-        .duration_ns = durationSince(io, started),
+        .start_ns = started -| run_started_ns,
+        .end_ns = ended -| run_started_ns,
+        .duration_ns = ended -| started,
         .log_path = log_path,
         .command = argv,
     };
@@ -321,13 +338,16 @@ fn appendCommandJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, comm
 fn writeReportJson(
     allocator: std.mem.Allocator,
     io: std.Io,
+    run_started_unix_ms: u64,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
 
-    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"build_ci\": ");
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"run_started_unix_ms\": ");
+    try appendU64(&out, allocator, run_started_unix_ms);
+    try out.appendSlice(allocator, ",\n  \"build_ci\": ");
     try appendResultJson(&out, allocator, build_result);
     try out.appendSlice(allocator, ",\n  \"jobs\": [\n");
     for (results, 0..) |result, i| {
@@ -341,6 +361,10 @@ fn writeReportJson(
 fn appendResultJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, result: CommandResult) !void {
     try out.appendSlice(allocator, "{\n    \"status\": ");
     try appendJsonString(out, allocator, result.status);
+    try out.appendSlice(allocator, ",\n    \"start_ns\": ");
+    try appendU64(out, allocator, result.start_ns);
+    try out.appendSlice(allocator, ",\n    \"end_ns\": ");
+    try appendU64(out, allocator, result.end_ns);
     try out.appendSlice(allocator, ",\n    \"duration_ns\": ");
     try appendU64(out, allocator, result.duration_ns);
     try out.appendSlice(allocator, ",\n    \"log_path\": ");
@@ -370,10 +394,13 @@ fn appendScriptJsonBytes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, 
 fn appendReportJsonObject(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
+    run_started_unix_ms: u64,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
-    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"build_ci\": ");
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"run_started_unix_ms\": ");
+    try appendU64(out, allocator, run_started_unix_ms);
+    try out.appendSlice(allocator, ",\n  \"build_ci\": ");
     try appendResultJson(out, allocator, build_result);
     try out.appendSlice(allocator, ",\n  \"jobs\": [\n");
     for (results, 0..) |result, i| {
@@ -411,6 +438,7 @@ fn appendStatsJsonObject(
 fn writeHtml(
     allocator: std.mem.Allocator,
     io: std.Io,
+    run_started_unix_ms: u64,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
@@ -425,68 +453,79 @@ fn writeHtml(
         \\  <meta name="viewport" content="width=device-width, initial-scale=1">
         \\  <title>MiniCI</title>
         \\  <style>
-        \\    :root{color-scheme:light;--bg:#f5f6f8;--panel:#fff;--text:#171717;--muted:#636873;--line:#dfe3e8;--line-soft:#edf0f3;--pass:#147a3f;--fail:#b42318;--skip:#68707c;--bar:#3168b7;--bar-pass:#1f8a55;--bar-fail:#c43d2f;--bar-skip:#8992a0}
+        \\    :root{color-scheme:light;--bg:#f6f7f9;--panel:#fff;--text:#15181d;--muted:#68707d;--line:#d9dee6;--line-soft:#edf0f4;--pass:#16834a;--fail:#b42318;--skip:#737b87;--bar:#356fb8;--select:#101828;--track:#eef2f6}
         \\    *{box-sizing:border-box}
-        \\    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.4}
-        \\    header{padding:20px 24px 14px;border-bottom:1px solid var(--line);background:#fff}
-        \\    h1{margin:0;font-size:24px;font-weight:700}
-        \\    h2{margin:20px 0 10px;font-size:16px;font-weight:700}
-        \\    main{padding:18px 24px 32px;max-width:1600px;margin:0 auto}
-        \\    .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:14px}
-        \\    .metric{border:1px solid var(--line);background:#fafbfc;padding:10px 12px;border-radius:6px}
-        \\    .metric b{display:block;font-size:20px}
-        \\    .metric span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+        \\    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;line-height:1.4}
+        \\    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:14px 20px}
+        \\    h1{margin:0;font-size:20px;font-weight:700}
+        \\    h2{margin:0 0 10px;font-size:15px;font-weight:700}
+        \\    h3{margin:0 0 8px;font-size:13px;font-weight:700}
+        \\    main{padding:16px 20px 28px;display:grid;grid-template-columns:minmax(0,1fr)360px;gap:16px;max-width:1800px;margin:0 auto}
+        \\    .summary{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
+        \\    .metric{display:flex;gap:6px;align-items:baseline}
+        \\    .metric b{font-size:16px}.metric span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
         \\    .panel{border:1px solid var(--line);background:var(--panel);border-radius:6px;overflow:hidden}
-        \\    .job{border-top:1px solid var(--line-soft)}
-        \\    .job:first-child{border-top:0}
-        \\    .job>summary{display:grid;grid-template-columns:minmax(260px,1.7fr)90px 90px 120px minmax(280px,2fr);gap:12px;align-items:center;padding:10px 12px;cursor:pointer;list-style:none}
-        \\    .job>summary::-webkit-details-marker{display:none}
-        \\    .job>summary:hover{background:#fafbfc}
-        \\    .job-body{border-top:1px solid var(--line-soft);padding:12px;background:#fbfcfd}
+        \\    .section{margin-bottom:16px}
+        \\    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+        \\    .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+        \\    input[type=search]{height:30px;border:1px solid var(--line);border-radius:4px;padding:0 9px;background:#fff;color:var(--text);min-width:220px}
+        \\    button{height:30px;border:1px solid var(--line);background:#fff;color:var(--text);border-radius:4px;padding:0 10px;cursor:pointer}
+        \\    button.active{border-color:var(--select);box-shadow:inset 0 0 0 1px var(--select)}
         \\    code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
         \\    .status{font-weight:700}.pass{color:var(--pass)}.fail,.crash,.timeout{color:var(--fail)}.skip{color:var(--skip)}
         \\    .muted{color:var(--muted)}.small{font-size:12px}
-        \\    .paths{white-space:normal;overflow-wrap:anywhere}
-        \\    .failure-list{display:grid;gap:8px}
-        \\    .failure{border:1px solid var(--line);background:#fff;border-left:4px solid var(--fail);border-radius:4px;padding:10px}
-        \\    .failure pre,.event-data pre{white-space:pre-wrap;overflow:auto;max-height:220px;margin:8px 0 0;padding:8px;background:#111827;color:#f8fafc;border-radius:4px;font-size:12px}
-        \\    .harness-grid{display:grid;grid-template-columns:minmax(360px,1fr)minmax(460px,1.4fr);gap:14px;align-items:start}
-        \\    .cases{max-height:760px;overflow:auto;border:1px solid var(--line);background:#fff;border-radius:4px}
-        \\    .case{border-top:1px solid var(--line-soft)}
-        \\    .case:first-child{border-top:0}
-        \\    .case>summary{display:grid;grid-template-columns:1fr 70px 82px;gap:8px;padding:8px 10px;cursor:pointer;list-style:none}
-        \\    .case>summary::-webkit-details-marker{display:none}
-        \\    .case>summary:hover{background:#f7f8fa}
-        \\    .children{padding:0 10px 8px 24px}
-        \\    .child{display:grid;grid-template-columns:1fr 70px 82px;gap:8px;padding:5px 0;border-top:1px solid var(--line-soft)}
-        \\    .timeline{border:1px solid var(--line);background:#fff;border-radius:4px;overflow:hidden}
-        \\    .lane{display:grid;grid-template-columns:minmax(180px,320px)1fr;gap:10px;align-items:center;min-height:34px;border-top:1px solid var(--line-soft);padding:6px 8px}
-        \\    .lane:first-child{border-top:0}
-        \\    .track{position:relative;height:24px;background:#eef1f5;border-radius:3px;overflow:hidden}
-        \\    .bar{position:absolute;top:3px;height:18px;border-radius:3px;background:var(--bar);min-width:2px}
-        \\    .bar.pass{background:var(--bar-pass)}.bar.fail,.bar.crash,.bar.timeout{background:var(--bar-fail)}.bar.skip{background:var(--bar-skip)}
-        \\    .bar span{position:absolute;left:5px;top:1px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff;font-size:11px;line-height:16px;text-shadow:0 1px 1px rgba(0,0,0,.35)}
-        \\    .event-data{margin-top:8px}
         \\    .empty{padding:12px;color:var(--muted)}
-        \\    @media(max-width:900px){main{padding:12px}.job>summary{grid-template-columns:1fr 70px 80px}.job>summary .paths{grid-column:1/-1}.harness-grid{grid-template-columns:1fr}.lane{grid-template-columns:1fr}.track{height:28px}}
+        \\    .grid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:12px;align-items:start}
+        \\    .list{max-height:520px;overflow:auto;border:1px solid var(--line);background:#fff;border-radius:6px}
+        \\    .row{display:grid;grid-template-columns:minmax(0,1fr)70px 80px;gap:8px;align-items:center;padding:7px 9px;border-top:1px solid var(--line-soft);cursor:pointer}
+        \\    .row:first-child{border-top:0}.row:hover,.row.selected{background:#f2f5f9}.row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        \\    .timeline{border:1px solid var(--line);background:#fff;border-radius:6px;overflow:hidden}
+        \\    .axis{height:26px;position:relative;border-bottom:1px solid var(--line-soft);background:#fafbfc}
+        \\    .tick{position:absolute;top:0;height:100%;border-left:1px solid var(--line-soft);font-size:11px;color:var(--muted);padding-left:4px;white-space:nowrap}
+        \\    .chart-row{display:grid;grid-template-columns:260px minmax(0,1fr);gap:10px;min-height:34px;border-top:1px solid var(--line-soft);padding:6px 8px;align-items:center}
+        \\    .chart-row:first-child{border-top:0}.label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.label-meta{font-size:11px;color:var(--muted)}
+        \\    .track{height:24px;position:relative;background:var(--track);border-radius:3px;overflow:hidden}
+        \\    .lane-track{height:28px;position:relative;background:var(--track);border-radius:3px;overflow:hidden}
+        \\    .bar{position:absolute;top:4px;height:16px;min-width:2px;border-radius:3px;background:var(--bar);cursor:pointer}
+        \\    .lane-track .bar{top:5px;height:18px}.bar.pass{background:var(--pass)}.bar.fail,.bar.crash,.bar.timeout{background:var(--fail)}.bar.skip{background:var(--skip)}.bar.selected{outline:2px solid var(--select);outline-offset:1px}
+        \\    .detail{padding:12px}.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 10px}.kv div{overflow-wrap:anywhere}
+        \\    .failure-list{display:grid;gap:8px;max-height:440px;overflow:auto}.failure{border:1px solid var(--line);border-left:4px solid var(--fail);background:#fff;border-radius:4px;padding:9px;cursor:pointer}.failure:hover{background:#f7f8fa}
+        \\    .event-data{margin-top:10px}.event-data pre{white-space:pre-wrap;overflow:auto;max-height:260px;margin:6px 0 0;padding:8px;background:#111827;color:#f8fafc;border-radius:4px;font-size:12px}
+        \\    .split{display:grid;grid-template-columns:minmax(0,1fr)320px;gap:12px}
+        \\    @media(max-width:1100px){main{grid-template-columns:1fr}.grid,.split{grid-template-columns:1fr}.chart-row{grid-template-columns:1fr}.label-meta{display:inline;margin-left:6px}}
         \\  </style>
         \\</head>
         \\<body>
         \\  <header>
         \\    <h1>MiniCI</h1>
-        \\    <div id="summary" class="summary"></div>
+        \\    <div id="summary" class="summary"><div class="metric"><b>Loading</b><span>Report</span></div></div>
         \\  </header>
         \\  <main>
-        \\    <section id="failures"></section>
-        \\    <h2>Jobs</h2>
-        \\    <section id="jobs" class="panel"></section>
+        \\    <div>
+        \\      <section class="section">
+        \\        <div class="section-head"><h2>Run Timeline</h2><div class="controls"><input id="search" type="search" placeholder="Filter jobs and tests"><button id="failOnly">Failures</button></div></div>
+        \\        <div id="runTimeline" class="timeline"><div class="empty">Loading run timeline...</div></div>
+        \\      </section>
+        \\      <section class="section grid">
+        \\        <div><h2>Jobs</h2><div id="jobList" class="list"><div class="empty">Loading jobs...</div></div></div>
+        \\        <div><h2 id="jobTitle">Job</h2><div id="jobDetail" class="panel"><div class="empty">Select a job.</div></div></div>
+        \\      </section>
+        \\      <section class="section split">
+        \\        <div><h2 id="caseTitle">Case Detail</h2><div id="caseDetail" class="panel"><div class="empty">Select a harness case.</div></div></div>
+        \\        <div><h2>Slowest Cases</h2><div id="caseList" class="list"><div class="empty">Select a harness job.</div></div></div>
+        \\      </section>
+        \\    </div>
+        \\    <aside>
+        \\      <section class="section"><h2>Failures</h2><div id="failures" class="failure-list"><div class="panel empty">Loading failures...</div></div></section>
+        \\      <section class="section"><h2>Selection</h2><div id="selection" class="panel detail">Loading selection...</div></section>
+        \\    </aside>
         \\  </main>
         \\  <script>
         \\  const REPORT =
     );
     var report_json = std.ArrayList(u8).empty;
     defer report_json.deinit(allocator);
-    try appendReportJsonObject(&report_json, allocator, build_result, results);
+    try appendReportJsonObject(&report_json, allocator, run_started_unix_ms, build_result, results);
     try appendScriptJsonBytes(&out, allocator, report_json.items);
     try out.appendSlice(allocator,
         \\;
@@ -495,145 +534,196 @@ fn writeHtml(
     try appendStatsJsonObject(&out, allocator, io, results);
     try out.appendSlice(allocator,
         \\;
-        \\  const STATUS_ORDER = ["fail","crash","timeout","pass","skip"];
-        \\  const statusClass = value => value === "passed" ? "pass" : value === "skipped" ? "skip" : value;
+        \\  const state = { selectedJob: null, selectedCase: null, query: "", failOnly: false };
+        \\  const statusClass = value => value === "passed" ? "pass" : value === "skipped" ? "skip" : String(value || "");
+        \\  const isFailure = status => { const s = statusClass(status); return s !== "pass" && s !== "skip"; };
+        \\  const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
+        \\  const jobName = job => job.name || (job.command && job.command.length > 2 ? job.command[2] : "unknown");
+        \\  const commandText = command => (command || []).map(part => /\s/.test(part) ? JSON.stringify(part) : part).join(" ");
         \\  function formatNs(ns) {
         \\    if (!Number.isFinite(ns)) return "";
         \\    if (ns >= 1e9) return `${(ns / 1e9).toFixed(1)}s`;
         \\    if (ns >= 1e6) return `${(ns / 1e6).toFixed(1)}ms`;
         \\    if (ns >= 1e3) return `${(ns / 1e3).toFixed(1)}us`;
-        \\    return `${ns}ns`;
+        \\    return `${Math.round(ns)}ns`;
         \\  }
-        \\  function esc(value) {
-        \\    return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
+        \\  function normJob(name, job) {
+        \\    const start = Number(job.start_ns ?? 0);
+        \\    const duration = Number(job.duration_ns ?? 0);
+        \\    const end = Number(job.end_ns ?? (start + duration));
+        \\    return { ...job, name, start_ns: start, end_ns: end, duration_ns: duration || Math.max(0, end - start) };
         \\  }
-        \\  function commandText(command) {
-        \\    return (command || []).map(part => /\s/.test(part) ? JSON.stringify(part) : part).join(" ");
+        \\  const jobs = [normJob("build-ci", REPORT.build_ci), ...REPORT.jobs.map(job => normJob(jobName(job), job))];
+        \\  const jobsByName = new Map(jobs.map(job => [job.name, job]));
+        \\  const maxRunEnd = Math.max(1, ...jobs.map(job => job.end_ns || job.duration_ns || 0));
+        \\  function statsFor(job) { return STATS[job.name] && Array.isArray(STATS[job.name].events) ? STATS[job.name] : null; }
+        \\  function childrenByParent(stats) {
+        \\    const map = new Map();
+        \\    for (const event of stats?.events || []) {
+        \\      const key = event.parent_id || "";
+        \\      if (!map.has(key)) map.set(key, []);
+        \\      map.get(key).push(event);
+        \\    }
+        \\    for (const list of map.values()) list.sort((a,b) => (a.start_ns || 0) - (b.start_ns || 0));
+        \\    return map;
         \\  }
-        \\  function isFailure(status) {
-        \\    const normalized = statusClass(status);
-        \\    return normalized !== "pass" && normalized !== "skip";
+        \\  function rootCases(stats) { return (stats?.events || []).filter(event => event.parent_id == null); }
+        \\  function sortedCases(stats) {
+        \\    return rootCases(stats).sort((a,b) => (isFailure(a.status) ? 0 : 1) - (isFailure(b.status) ? 0 : 1) || (b.duration_ns || 0) - (a.duration_ns || 0));
         \\  }
-        \\  function jobName(job) {
-        \\    return job.command && job.command.length > 2 ? job.command[2] : "unknown";
+        \\  function scaleStyle(start, end, max) {
+        \\    const left = Math.max(0, (Number(start || 0) / max) * 100);
+        \\    const width = Math.max(0.25, ((Number(end || 0) - Number(start || 0)) / max) * 100);
+        \\    return `left:${left.toFixed(3)}%;width:${width.toFixed(3)}%`;
         \\  }
-        \\  function sortedCases(events) {
-        \\    return events.filter(event => event.parent_id == null).sort((a, b) => {
-        \\      const af = isFailure(a.status) ? 0 : 1;
-        \\      const bf = isFailure(b.status) ? 0 : 1;
-        \\      if (af !== bf) return af - bf;
-        \\      return (b.duration_ns || 0) - (a.duration_ns || 0);
-        \\    });
+        \\  function axis(max) {
+        \\    const ticks = [];
+        \\    for (let i = 0; i <= 4; i++) ticks.push(`<div class="tick" style="left:${i * 25}%">${formatNs(max * i / 4)}</div>`);
+        \\    return `<div class="axis">${ticks.join("")}</div>`;
+        \\  }
+        \\  function rowMatches(text, status) {
+        \\    const q = state.query.trim().toLowerCase();
+        \\    if (state.failOnly && !isFailure(status)) return false;
+        \\    return q === "" || String(text || "").toLowerCase().includes(q);
         \\  }
         \\  function renderSummary() {
-        \\    const jobs = [REPORT.build_ci, ...REPORT.jobs];
         \\    const counts = { pass:0, fail:0, crash:0, timeout:0, skip:0 };
-        \\    let totalNs = 0;
-        \\    for (const job of jobs) {
-        \\      const status = statusClass(job.status);
-        \\      counts[status] = (counts[status] || 0) + 1;
-        \\      totalNs += job.duration_ns || 0;
-        \\    }
+        \\    for (const job of jobs) counts[statusClass(job.status)] = (counts[statusClass(job.status)] || 0) + 1;
+        \\    const failed = (counts.fail || 0) + (counts.crash || 0) + (counts.timeout || 0);
+        \\    const started = REPORT.run_started_unix_ms ? new Date(REPORT.run_started_unix_ms).toLocaleString() : "";
         \\    document.getElementById("summary").innerHTML = [
-        \\      ["Jobs", jobs.length],
-        \\      ["Passed", counts.pass || 0],
-        \\      ["Failed", (counts.fail || 0) + (counts.crash || 0) + (counts.timeout || 0)],
-        \\      ["Total Time", formatNs(totalNs)]
-        \\    ].map(([label, value]) => `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
+        \\      ["Jobs", jobs.length], ["Passed", counts.pass || 0], ["Failed", failed], ["Wall", formatNs(maxRunEnd)], ["Started", started]
+        \\    ].filter(item => item[1] !== "").map(([label,value]) => `<div class="metric"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join("");
         \\  }
-        \\  function renderFailures() {
-        \\    const failures = [];
-        \\    for (const job of REPORT.jobs) {
-        \\      const name = jobName(job);
-        \\      const stats = STATS[name];
-        \\      if (!stats || !Array.isArray(stats.events)) {
-        \\        if (isFailure(job.status)) failures.push({ job: name, event: null, data: { log: job.log_path } });
-        \\        continue;
-        \\      }
-        \\      for (const event of stats.events) {
-        \\        if (event.parent_id == null && isFailure(event.status)) failures.push({ job: name, event, data: event.data || {} });
-        \\      }
-        \\    }
-        \\    const root = document.getElementById("failures");
-        \\    if (failures.length === 0) {
-        \\      root.innerHTML = "<h2>Failures</h2><div class=\"panel empty\">No failing jobs or harness cases.</div>";
+        \\  function renderRunTimeline() {
+        \\    const rows = jobs.map(job => `<div class="chart-row"><div><div class="label"><code>${esc(job.name)}</code></div><div class="label-meta"><span class="${statusClass(job.status)}">${esc(job.status)}</span> ${formatNs(job.duration_ns)}</div></div><div class="track"><div class="bar ${statusClass(job.status)} ${state.selectedJob === job.name ? "selected" : ""}" data-job="${esc(job.name)}" title="${esc(job.name)} ${formatNs(job.duration_ns)}" style="${scaleStyle(job.start_ns, job.end_ns, maxRunEnd)}"></div></div></div>`).join("");
+        \\    document.getElementById("runTimeline").innerHTML = axis(maxRunEnd) + rows;
+        \\  }
+        \\  function renderJobList() {
+        \\    const visible = jobs.filter(job => rowMatches(job.name, job.status)).sort((a,b) => (isFailure(a.status) ? 0 : 1) - (isFailure(b.status) ? 0 : 1) || (b.duration_ns || 0) - (a.duration_ns || 0));
+        \\    document.getElementById("jobList").innerHTML = visible.length ? visible.map(job => `<div class="row ${state.selectedJob === job.name ? "selected" : ""}" data-job="${esc(job.name)}"><div class="name"><code>${esc(job.name)}</code></div><span class="status ${statusClass(job.status)}">${esc(job.status)}</span><span>${formatNs(job.duration_ns)}</span></div>`).join("") : `<div class="empty">No jobs match.</div>`;
+        \\  }
+        \\  function renderJobDetail() {
+        \\    const job = jobsByName.get(state.selectedJob) || jobs[0];
+        \\    state.selectedJob = job.name;
+        \\    document.getElementById("jobTitle").textContent = job.name;
+        \\    const stats = statsFor(job);
+        \\    document.getElementById("selection").innerHTML = renderJobMeta(job);
+        \\    if (!stats) {
+        \\      document.getElementById("jobDetail").innerHTML = `<div class="detail">${renderJobMeta(job)}</div>`;
+        \\      renderCaseList(null);
+        \\      renderCaseDetail(null, null);
         \\      return;
         \\    }
-        \\    root.innerHTML = `<h2>Failures</h2><div class="failure-list">${failures.map(item => renderFailure(item)).join("")}</div>`;
-        \\  }
-        \\  function reproFor(job, event) {
-        \\    if (!event) return `zig build ${job}`;
-        \\    if (job === "run-test-playground") return `zig build ${job}`;
-        \\    return `zig build ${job} -- --test-filter ${JSON.stringify(event.name)}`;
-        \\  }
-        \\  function renderFailure(item) {
-        \\    const event = item.event;
-        \\    const title = event ? event.name : item.job;
-        \\    const data = item.data || {};
-        \\    const entries = Object.entries(data).slice(0, 6);
-        \\    const details = entries.map(([key, value]) => `<div class="event-data"><b>${esc(key)}</b><pre>${esc(String(value).slice(0, 4000))}</pre></div>`).join("");
-        \\    return `<article class="failure"><div><b>${esc(item.job)}</b> <span class="${statusClass(event ? event.status : "fail")}">${esc(event ? event.status : "fail")}</span></div><div>${esc(title)}</div><div class="small muted"><code>${esc(reproFor(item.job, event))}</code></div>${details}</article>`;
-        \\  }
-        \\  function renderJobs() {
-        \\    const jobs = [Object.assign({ name: "build-ci" }, REPORT.build_ci), ...REPORT.jobs.map(job => Object.assign({ name: jobName(job) }, job))];
-        \\    document.getElementById("jobs").innerHTML = jobs.map(job => renderJob(job)).join("");
-        \\  }
-        \\  function renderJob(job) {
-        \\    const stats = STATS[job.name];
-        \\    const hasStats = stats && Array.isArray(stats.events);
-        \\    const body = hasStats ? renderHarness(job.name, stats) : renderSingle(job);
-        \\    const open = isFailure(job.status) ? " open" : "";
-        \\    return `<details class="job"${open}><summary><code>${esc(job.name)}</code><span class="status ${statusClass(job.status)}">${esc(job.status)}</span><span>${formatNs(job.duration_ns || 0)}</span><span class="paths small"><code>${esc(job.log_path || "")}${job.stats_path ? " " + esc(job.stats_path) : ""}</code></span></summary><div class="job-body">${body}</div></details>`;
-        \\  }
-        \\  function renderSingle(job) {
-        \\    return `<div class="small muted"><div><code>${esc(commandText(job.command))}</code></div><div>Log: <code>${esc(job.log_path || "")}</code></div></div>`;
-        \\  }
-        \\  function renderHarness(jobNameValue, stats) {
-        \\    const events = stats.events || [];
-        \\    const byParent = new Map();
-        \\    for (const event of events) {
-        \\      const key = event.parent_id || "";
-        \\      if (!byParent.has(key)) byParent.set(key, []);
-        \\      byParent.get(key).push(event);
+        \\    const cases = rootCases(stats);
+        \\    const byLane = new Map();
+        \\    for (const c of cases) {
+        \\      const lane = c.worker_index ?? 0;
+        \\      if (!byLane.has(lane)) byLane.set(lane, []);
+        \\      byLane.get(lane).push(c);
         \\    }
-        \\    for (const list of byParent.values()) {
-        \\      list.sort((a, b) => (a.start_ns || 0) - (b.start_ns || 0));
-        \\    }
-        \\    const cases = sortedCases(events);
+        \\    const maxEnd = Math.max(1, ...cases.map(c => c.end_ns || c.duration_ns || 0));
+        \\    const lanes = [...byLane.entries()].sort((a,b) => a[0] - b[0]).map(([lane, list]) => {
+        \\      const bars = list.map(c => `<div class="bar ${statusClass(c.status)} ${state.selectedCase === c.id ? "selected" : ""}" data-case="${esc(c.id)}" title="${esc(c.name)} ${formatNs(c.duration_ns)}" style="${scaleStyle(c.start_ns || 0, c.end_ns || c.duration_ns || 0, maxEnd)}"></div>`).join("");
+        \\      return `<div class="chart-row"><div><div class="label">worker ${esc(lane)}</div><div class="label-meta">${list.length} cases</div></div><div class="lane-track">${bars}</div></div>`;
+        \\    }).join("");
         \\    const summary = stats.summary || {};
-        \\    return `<div class="small muted">Runner <b>${esc(stats.runner || jobNameValue)}</b>: ${esc(summary.passed || 0)} passed, ${esc(summary.failed || 0)} failed, ${esc(summary.crashed || 0)} crashed, ${esc(summary.timed_out || 0)} timed out, ${esc(summary.skipped || 0)} skipped</div><div class="harness-grid"><div class="cases">${cases.map(testCase => renderCase(testCase, byParent)).join("")}</div>${renderTimeline(cases, byParent)}</div>`;
+        \\    document.getElementById("jobDetail").innerHTML = `<div class="detail small muted">Runner <b>${esc(stats.runner || job.name)}</b>: ${esc(summary.passed || 0)} passed, ${esc(summary.failed || 0)} failed, ${esc(summary.crashed || 0)} crashed, ${esc(summary.timed_out || 0)} timed out, ${esc(summary.skipped || 0)} skipped</div><div class="timeline">${axis(maxEnd)}${lanes || `<div class="empty">No case events.</div>`}</div>`;
+        \\    if (!state.selectedCase || !cases.some(c => c.id === state.selectedCase)) state.selectedCase = sortedCases(stats)[0]?.id || null;
+        \\    renderCaseList(stats);
+        \\    renderCaseDetail(stats, state.selectedCase);
         \\  }
-        \\  function renderCase(testCase, byParent) {
-        \\    const children = byParent.get(testCase.id) || [];
-        \\    const open = isFailure(testCase.status) ? " open" : "";
-        \\    const data = renderData(testCase.data);
-        \\    return `<details class="case"${open}><summary><span>${esc(testCase.name)}</span><span class="status ${statusClass(testCase.status)}">${esc(testCase.status)}</span><span>${formatNs(testCase.duration_ns || 0)}</span></summary><div class="children">${children.map(renderChild).join("")}${data}</div></details>`;
+        \\  function renderJobMeta(job) {
+        \\    return `<div class="kv"><div>Status</div><div class="status ${statusClass(job.status)}">${esc(job.status)}</div><div>Duration</div><div>${formatNs(job.duration_ns)}</div><div>Command</div><div><code>${esc(commandText(job.command))}</code></div><div>Log</div><div><code>${esc(job.log_path || "")}</code></div>${job.stats_path ? `<div>Stats</div><div><code>${esc(job.stats_path)}</code></div>` : ""}</div>`;
         \\  }
-        \\  function renderChild(event) {
-        \\    return `<div class="child"><span><code>${esc(event.kind)}</code> ${esc(event.name)}</span><span class="status ${statusClass(event.status)}">${esc(event.status)}</span><span>${formatNs(event.duration_ns || 0)}</span></div>${renderData(event.data)}`;
+        \\  function renderCaseList(stats) {
+        \\    if (!stats) { document.getElementById("caseList").innerHTML = `<div class="empty">No harness cases.</div>`; return; }
+        \\    const cases = sortedCases(stats).filter(c => rowMatches(c.name, c.status)).slice(0, 300);
+        \\    document.getElementById("caseList").innerHTML = cases.length ? cases.map(c => `<div class="row ${state.selectedCase === c.id ? "selected" : ""}" data-case="${esc(c.id)}"><div class="name">${esc(c.name)}</div><span class="status ${statusClass(c.status)}">${esc(c.status)}</span><span>${formatNs(c.duration_ns)}</span></div>`).join("") : `<div class="empty">No cases match.</div>`;
+        \\  }
+        \\  function renderCaseDetail(stats, caseId) {
+        \\    const root = document.getElementById("caseDetail");
+        \\    if (!stats || !caseId) { document.getElementById("caseTitle").textContent = "Case Detail"; root.innerHTML = `<div class="empty">Select a harness case.</div>`; return; }
+        \\    const byParent = childrenByParent(stats);
+        \\    const event = (stats.events || []).find(e => e.id === caseId);
+        \\    if (!event) { root.innerHTML = `<div class="empty">Selected case is missing.</div>`; return; }
+        \\    document.getElementById("caseTitle").textContent = event.name;
+        \\    const children = byParent.get(event.id) || [];
+        \\    const spans = children.length ? children : [event];
+        \\    const maxEnd = Math.max(1, ...spans.map(s => s.end_ns || s.duration_ns || 0));
+        \\    const rows = spans.map(s => `<div class="chart-row"><div><div class="label">${esc(s.kind)} ${esc(s.name)}</div><div class="label-meta"><span class="${statusClass(s.status)}">${esc(s.status)}</span> ${formatNs(s.duration_ns)}</div></div><div class="track"><div class="bar ${statusClass(s.status)}" title="${esc(s.name)} ${formatNs(s.duration_ns)}" style="${scaleStyle(s.start_ns || 0, s.end_ns || s.duration_ns || 0, maxEnd)}"></div></div></div>`).join("");
+        \\    root.innerHTML = `<div class="detail">${renderCaseMeta(event)}${renderData(event.data)}</div><div class="timeline">${axis(maxEnd)}${rows}</div>`;
+        \\  }
+        \\  function renderCaseMeta(event) {
+        \\    const job = jobsByName.get(state.selectedJob);
+        \\    const repro = job ? `zig build ${job.name} -- --test-filter ${JSON.stringify(event.name)}` : "";
+        \\    return `<div class="kv"><div>Status</div><div class="status ${statusClass(event.status)}">${esc(event.status)}</div><div>Duration</div><div>${formatNs(event.duration_ns)}</div><div>Worker</div><div>${esc(event.worker_index ?? "")}</div><div>Rerun</div><div><code>${esc(repro)}</code></div></div>`;
         \\  }
         \\  function renderData(data) {
         \\    if (!data || Object.keys(data).length === 0) return "";
-        \\    return `<div class="event-data">${Object.entries(data).map(([key, value]) => `<b>${esc(key)}</b><pre>${esc(String(value).slice(0, 4000))}</pre>`).join("")}</div>`;
+        \\    return `<div class="event-data">${Object.entries(data).slice(0,8).map(([key,value]) => `<b>${esc(key)}</b><pre>${esc(String(value).slice(0, 4000))}</pre>`).join("")}</div>`;
         \\  }
-        \\  function renderTimeline(cases, byParent) {
-        \\    if (cases.length === 0) return `<div class="timeline empty">No events.</div>`;
-        \\    return `<div class="timeline">${cases.map(testCase => renderLane(testCase, byParent)).join("")}</div>`;
+        \\  function collectFailures() {
+        \\    const failures = [];
+        \\    for (const job of jobs) {
+        \\      if (job.name !== "build-ci" && isFailure(job.status)) failures.push({ job, event: null });
+        \\      const stats = statsFor(job);
+        \\      for (const event of rootCases(stats)) if (isFailure(event.status)) failures.push({ job, event });
+        \\    }
+        \\    return failures;
         \\  }
-        \\  function renderLane(testCase, byParent) {
-        \\    const children = byParent.get(testCase.id) || [];
-        \\    const spans = children.length > 0 ? children : [testCase];
-        \\    const maxEnd = Math.max(testCase.end_ns || 0, ...spans.map(span => span.end_ns || 0), 1);
-        \\    const bars = spans.map(span => {
-        \\      const left = Math.max(0, ((span.start_ns || 0) / maxEnd) * 100);
-        \\      const width = Math.max(.25, ((span.duration_ns || 0) / maxEnd) * 100);
-        \\      return `<div class="bar ${statusClass(span.status)}" title="${esc(span.kind)} ${esc(span.name)} ${formatNs(span.duration_ns || 0)}" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"><span>${esc(span.kind)}</span></div>`;
-        \\    }).join("");
-        \\    return `<div class="lane"><div><div>${esc(testCase.name)}</div><div class="small muted">${formatNs(testCase.duration_ns || 0)} <span class="${statusClass(testCase.status)}">${esc(testCase.status)}</span></div></div><div class="track">${bars}</div></div>`;
+        \\  function renderFailures() {
+        \\    const failures = collectFailures();
+        \\    document.getElementById("failures").innerHTML = failures.length ? failures.map((item, i) => {
+        \\      const title = item.event ? item.event.name : item.job.name;
+        \\      const status = item.event ? item.event.status : item.job.status;
+        \\      return `<article class="failure" data-failure="${i}"><div><b>${esc(item.job.name)}</b> <span class="${statusClass(status)}">${esc(status)}</span></div><div>${esc(title)}</div><div class="small muted"><code>${esc(item.event ? `zig build ${item.job.name} -- --test-filter ${JSON.stringify(item.event.name)}` : `zig build ${item.job.name}`)}</code></div></article>`;
+        \\    }).join("") : `<div class="panel empty">No failing jobs or harness cases.</div>`;
         \\  }
-        \\  renderSummary();
-        \\  renderFailures();
-        \\  renderJobs();
+        \\  function selectJob(name) { state.selectedJob = name; state.selectedCase = null; renderAll(); }
+        \\  function selectCase(id) { state.selectedCase = id; renderAll(); }
+        \\  function wireEvents() {
+        \\    document.querySelectorAll("[data-job]").forEach(el => el.onclick = () => selectJob(el.getAttribute("data-job")));
+        \\    document.querySelectorAll("[data-case]").forEach(el => el.onclick = () => selectCase(el.getAttribute("data-case")));
+        \\    const failures = collectFailures();
+        \\    document.querySelectorAll("[data-failure]").forEach(el => el.onclick = () => {
+        \\      const item = failures[Number(el.getAttribute("data-failure"))];
+        \\      if (!item) return;
+        \\      state.selectedJob = item.job.name;
+        \\      state.selectedCase = item.event ? item.event.id : null;
+        \\      renderAll();
+        \\    });
+        \\  }
+        \\  function chooseInitialSelection() {
+        \\    const failure = collectFailures()[0];
+        \\    state.selectedJob = failure ? failure.job.name : jobs[0].name;
+        \\    state.selectedCase = failure && failure.event ? failure.event.id : null;
+        \\  }
+        \\  function renderAll() {
+        \\    renderSummary();
+        \\    renderRunTimeline();
+        \\    renderJobList();
+        \\    renderJobDetail();
+        \\    renderFailures();
+        \\    wireEvents();
+        \\  }
+        \\  function showRenderError(error) {
+        \\    const message = error && error.stack ? error.stack : String(error);
+        \\    const html = `<div class="detail"><b>Report render failed</b><div class="event-data"><pre>${esc(message)}</pre></div></div>`;
+        \\    document.getElementById("selection").innerHTML = html;
+        \\    document.getElementById("runTimeline").innerHTML = html;
+        \\  }
+        \\  function boot() {
+        \\    try {
+        \\      document.getElementById("search").addEventListener("input", event => { state.query = event.target.value; renderAll(); });
+        \\      document.getElementById("failOnly").addEventListener("click", event => { state.failOnly = !state.failOnly; event.target.classList.toggle("active", state.failOnly); renderAll(); });
+        \\      chooseInitialSelection();
+        \\      renderAll();
+        \\    } catch (error) {
+        \\      showRenderError(error);
+        \\    }
+        \\  }
+        \\  setTimeout(boot, 0);
         \\  </script>
         \\</body>
         \\</html>
@@ -663,11 +753,13 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(io, logs_dir);
 
     std.debug.print("=== MINICI ORCHESTRATOR ===\n", .{});
+    const run_started_ns = nowNs(io);
+    const run_started_unix_ms = unixMs(io);
 
     const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null);
     const build_log = logs_dir ++ "/build-ci.txt";
     std.debug.print("Building CI steps ... ", .{});
-    const build_result = try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms);
+    const build_result = try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns);
     if (build_result.heartbeat_printed) std.debug.print("Building CI steps ... ", .{});
     std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
 
@@ -676,8 +768,8 @@ pub fn main(init: std.process.Init) !void {
 
     if (!isPass(build_result)) {
         printRerunHint(build_result);
-        try writeReportJson(allocator, io, build_result, results.items);
-        try writeHtml(allocator, io, build_result, results.items);
+        try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
+        try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
         std.process.exit(1);
     }
 
@@ -690,9 +782,9 @@ pub fn main(init: std.process.Init) !void {
         const argv = try buildCommand(allocator, zig_exe, job.name, stats_path);
         std.debug.print("Running `{s}` ... ", .{job.name});
         var result = if (job.skip_reason) |reason|
-            try skipCommand(io, argv, log_path, reason)
+            try skipCommand(io, argv, log_path, reason, run_started_ns)
         else
-            try runCommand(allocator, io, argv, log_path, heartbeat_interval_ms);
+            try runCommand(allocator, io, argv, log_path, heartbeat_interval_ms, run_started_ns);
         result.stats_path = if (job.skip_reason == null) stats_path else null;
         try results.append(allocator, result);
         if (result.heartbeat_printed) std.debug.print("Running `{s}` ... ", .{job.name});
@@ -703,14 +795,14 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (isCheckJob(job.name) and !isSuccessful(result)) {
-            try writeReportJson(allocator, io, build_result, results.items);
-            try writeHtml(allocator, io, build_result, results.items);
+            try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
+            try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
             std.process.exit(1);
         }
     }
 
-    try writeReportJson(allocator, io, build_result, results.items);
-    try writeHtml(allocator, io, build_result, results.items);
+    try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
+    try writeHtml(allocator, io, run_started_unix_ms, build_result, results.items);
 
     for (results.items) |result| {
         if (!isSuccessful(result)) std.process.exit(1);

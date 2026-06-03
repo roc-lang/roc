@@ -2352,12 +2352,39 @@ fn appendStatsEvent(
     }) catch {};
 }
 
+fn appendCaseStatsEvent(
+    gpa: Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(gpa, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
 fn writeStatsJson(
     gpa: Allocator,
     io: std.Io,
     path: []const u8,
     tests: []const CliCase,
     results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
 ) !void {
     var stats_arena = std.heap.ArenaAllocator.init(gpa);
     defer stats_arena.deinit();
@@ -2372,8 +2399,9 @@ fn writeStatsJson(
         const build_ns = result.build_ns;
         const run_ns = result.run_ns;
         const setup_ns = total_ns -| (build_ns +| run_ns);
+        const maybe_span = if (i < spans.len) spans[i] else null;
 
-        appendStatsEvent(stats_allocator, &events, case_id, null, "case", tc.name, status, 0, total_ns, caseStatsData(stats_allocator, tc, result));
+        appendCaseStatsEvent(stats_allocator, &events, case_id, tc.name, status, total_ns, maybe_span, caseStatsData(stats_allocator, tc, result));
 
         if (setup_ns > 0) {
             const id = try std.fmt.allocPrint(stats_allocator, "case-{d}-setup", .{i});
@@ -2565,6 +2593,9 @@ pub fn main(init: std.process.Init) !void {
     const results = try gpa.alloc(TestResult, tests.len);
     defer gpa.free(results);
     @memset(results, .{ .status = .crash });
+    const spans = try gpa.alloc(?harness.PoolSpan, tests.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     // Build a worker_argv_template so Windows can re-invoke this binary as a
     // single-test Child worker. On POSIX it's unused (fork path doesn't
@@ -2573,13 +2604,13 @@ pub fn main(init: std.process.Init) !void {
     const worker_argv_template = try buildCliWorkerArgvTemplate(init.io, spec_arena.allocator(), init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.run(init.io, tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
+    Pool.runWithSpans(init.io, tests, results, spans, max_children, args.timeout_ms, gpa, worker_argv_template);
     const wall_ns = wall_timer.read();
 
     printResults(tests, results, args.verbose, gpa, wall_ns, max_children);
 
     if (args.stats_json_path) |path| {
-        try writeStatsJson(gpa, init.io, path, tests, results);
+        try writeStatsJson(gpa, init.io, path, tests, results, spans);
     }
 
     for (results) |r| {

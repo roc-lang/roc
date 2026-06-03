@@ -3320,12 +3320,39 @@ fn appendStatsEvent(
     }) catch {};
 }
 
+fn appendCaseStatsEvent(
+    gpa: Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(gpa, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
 fn writeStatsJson(
     gpa: Allocator,
     io: std.Io,
     path: []const u8,
     specs: []const CliBugSpec,
     results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
 ) !void {
     var stats_arena = std.heap.ArenaAllocator.init(gpa);
     defer stats_arena.deinit();
@@ -3336,7 +3363,8 @@ fn writeStatsJson(
     for (specs, results, 0..) |spec, result, i| {
         const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
         const status = statsStatus(result.status);
-        appendStatsEvent(stats_allocator, &events, case_id, null, "case", spec.name, status, 0, result.duration_ns, maybeStatsData(stats_allocator, result));
+        const maybe_span = if (i < spans.len) spans[i] else null;
+        appendCaseStatsEvent(stats_allocator, &events, case_id, spec.name, status, result.duration_ns, maybe_span, maybeStatsData(stats_allocator, result));
 
         if (result.setup_ns > 0) {
             const setup_id = try std.fmt.allocPrint(stats_allocator, "case-{d}-setup", .{i});
@@ -3398,18 +3426,21 @@ pub fn main(init: std.process.Init) !void {
     const results = try gpa.alloc(TestResult, specs.len);
     defer gpa.free(results);
     @memset(results, .{ .status = .crash });
+    const spans = try gpa.alloc(?harness.PoolSpan, specs.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     std.debug.print("=== Bughunt CLI Repros ===\n", .{});
     std.debug.print("{d} tests, {d} workers, {d}s timeout\n\n", .{ specs.len, workers, args.timeout_ms / 1000 });
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.run(init.io, specs, results, workers, args.timeout_ms, gpa, null);
+    Pool.runWithSpans(init.io, specs, results, spans, workers, args.timeout_ms, gpa, null);
     const wall_ns = wall_timer.read();
 
     printResults(specs, results, args.verbose, wall_ns, workers);
 
     if (args.stats_json_path) |path| {
-        try writeStatsJson(gpa, init.io, path, specs, results);
+        try writeStatsJson(gpa, init.io, path, specs, results, spans);
     }
 
     for (results) |result| {

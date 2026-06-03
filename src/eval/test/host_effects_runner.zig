@@ -938,12 +938,39 @@ fn appendStatsEvent(
     }) catch {};
 }
 
+fn appendCaseStatsEvent(
+    allocator: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(allocator, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
 fn writeStatsJson(
     allocator: std.mem.Allocator,
     io: std.Io,
     path: []const u8,
     tests: []const TestCase,
     results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
 ) !void {
     var stats_arena = std.heap.ArenaAllocator.init(allocator);
     defer stats_arena.deinit();
@@ -953,7 +980,8 @@ fn writeStatsJson(
 
     for (tests, results, 0..) |tc, result, i| {
         const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
-        appendStatsEvent(stats_allocator, &events, case_id, null, "case", tc.name, statsStatus(result.status), 0, result.duration_ns, maybeStatsData(stats_allocator, result));
+        const maybe_span = if (i < spans.len) spans[i] else null;
+        appendCaseStatsEvent(stats_allocator, &events, case_id, tc.name, statsStatus(result.status), result.duration_ns, maybe_span, maybeStatsData(stats_allocator, result));
 
         var cursor: u64 = 0;
         for (result.backends, 0..) |backend_detail, backend_i| {
@@ -1020,6 +1048,9 @@ pub fn main(init: std.process.Init) !void {
         gpa.free(results);
     }
     @memset(results, default_result);
+    const spans = try gpa.alloc(?harness.PoolSpan, tests.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     var wall_timer = Timer.start() catch unreachable;
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
@@ -1032,7 +1063,7 @@ pub fn main(init: std.process.Init) !void {
     // worker_argv_template is null — this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, null);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;
@@ -1081,7 +1112,7 @@ pub fn main(init: std.process.Init) !void {
     );
 
     if (cli.stats_json_path) |path| {
-        try writeStatsJson(gpa, io, path, tests, results);
+        try writeStatsJson(gpa, io, path, tests, results, spans);
     }
 
     if (failed > 0 or crashed > 0 or timed_out > 0) std.process.exit(1);

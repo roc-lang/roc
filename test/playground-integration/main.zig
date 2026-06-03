@@ -1021,6 +1021,7 @@ fn runTests(
         var case_result: TestResult = .failed;
         var case_message: ?[]const u8 = null;
         defer if (stats_events) |events| {
+            const event_index = events.items.len;
             appendStatsEvent(
                 arena,
                 events,
@@ -1029,10 +1030,13 @@ fn runTests(
                 "case",
                 case.name,
                 statsStatus(case_result),
-                0,
-                relativeNs(case_start, nanoTimestamp()),
+                relativeNs(stats.start_time, case_start),
+                relativeNs(stats.start_time, nanoTimestamp()),
                 failureData(arena, case_message, case_result),
             );
+            if (events.items.len > event_index) {
+                events.items[event_index].worker_index = 0;
+            }
         };
 
         if (case.skip) {

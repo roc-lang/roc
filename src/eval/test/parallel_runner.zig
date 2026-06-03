@@ -1943,6 +1943,32 @@ fn appendStatsEvent(
     }) catch {};
 }
 
+fn appendCaseStatsEvent(
+    gpa: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(gpa, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
 fn appendPhaseEvent(
     gpa: std.mem.Allocator,
     events: *std.ArrayListUnmanaged(harness.StatsEvent),
@@ -1964,6 +1990,7 @@ fn writeStatsJson(
     path: []const u8,
     tests: []const TestCase,
     results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
 ) !void {
     var stats_arena = std.heap.ArenaAllocator.init(gpa);
     defer stats_arena.deinit();
@@ -1974,7 +2001,8 @@ fn writeStatsJson(
     for (tests, results, 0..) |tc, result, i| {
         const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
         const case_status = statsStatus(result.status);
-        appendStatsEvent(stats_allocator, &events, case_id, null, "case", tc.name, case_status, 0, result.duration_ns, maybeStatsData(stats_allocator, result));
+        const maybe_span = if (i < spans.len) spans[i] else null;
+        appendCaseStatsEvent(stats_allocator, &events, case_id, tc.name, case_status, result.duration_ns, maybe_span, maybeStatsData(stats_allocator, result));
 
         var cursor: u64 = 0;
         try appendPhaseEvent(stats_allocator, &events, i, case_id, "parse", &cursor, result.timings.parse_ns);
@@ -2335,6 +2363,9 @@ pub fn main(init: std.process.Init) !void {
     for (results) |*result| {
         result.* = default_result;
     }
+    const spans = try gpa.alloc(?harness.PoolSpan, tests.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     var wall_timer = Timer.start() catch unreachable;
 
@@ -2347,7 +2378,7 @@ pub fn main(init: std.process.Init) !void {
     // unused (fork path doesn't re-exec) but we build it uniformly.
     const worker_argv_template = try buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
-    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, worker_argv_template);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template);
 
     // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
     // whole worker before per-backend details land in the wire payload. For
@@ -2420,7 +2451,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (cli.stats_json_path) |path| {
-        try writeStatsJson(gpa, io, path, tests, results);
+        try writeStatsJson(gpa, io, path, tests, results, spans);
     }
 
     // Free GPA-duped messages after all reporting that may reference them.
