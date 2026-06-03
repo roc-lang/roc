@@ -11,7 +11,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 
 Do a test run with
 ```
-zig build roc
+zig build build-roc
 ./zig-out/bin/roc version
 ```
 

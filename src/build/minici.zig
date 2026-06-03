@@ -21,8 +21,8 @@ const Job = struct {
 
 const jobs = [_]Job{
     // MiniCI trusts `build.zig` to keep build work behind `build-ci`. Keep this
-    // list to leaf `run-*` steps; do not add aggregate aliases that hide useful
-    // reporting boundaries.
+    // list to leaf `run-*` steps. Do not add aliases or aggregate steps that
+    // hide useful reporting boundaries.
     .{ .name = "run-check-zig-format" },
     .{ .name = "run-check-zig-lints" },
     .{ .name = "run-check-tidy" },
@@ -76,6 +76,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-playground", .kind = .harness, .skip_reason = "Skipped until #9518 is resolved" },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
+    .{ .name = "run-test-wasm-static-lib" },
     .{ .name = "run-coverage-parser" },
 };
 

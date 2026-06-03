@@ -2108,7 +2108,7 @@ fn generateExpectedSection(
                 std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
                 std.debug.print("Expected:\n{s}\n", .{expected_content.?});
                 std.debug.print("Generated:\n{s}\n", .{new_content});
-                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations.\n", .{});
+                std.debug.print("Hint: use `zig build run-snapshot-tool -- --update-expected` to automatically update the expectations.\n", .{});
 
                 success = false;
             }
@@ -3690,7 +3690,7 @@ fn processDocsSnapshot(
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS mismatch in {s}\n\n", .{output_path});
                     std.debug.print("Expected:\n{s}\n\nActual:\n{s}\n", .{ existing_trimmed, new_trimmed });
-                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DOCS output.\n\n", .{});
+                    std.debug.print("\nHint: use `zig build run-snapshot-tool -- --update-expected` to update DOCS output.\n\n", .{});
                     success = false;
                 }
                 break :blk false;
@@ -3700,7 +3700,7 @@ fn processDocsSnapshot(
                 const new_trimmed = std.mem.trimEnd(u8, new_docs_text, " \t\r\n");
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS warning: output changed in {s}\n", .{output_path});
-                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                    std.debug.print("Hint: use `zig build run-snapshot-tool -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
                 }
                 break :blk false;
             },
@@ -4240,7 +4240,7 @@ fn processDevObjectSnapshot(
                 if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
                     std.debug.print("\nDEV OUTPUT mismatch in {s}\n\n", .{output_path});
                     printHashMismatchTable(content.dev_output.?, new_hash_text);
-                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
+                    std.debug.print("\nHint: use `zig build run-snapshot-tool -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
                     success = false;
                 }
                 break :blk false;
@@ -4248,7 +4248,7 @@ fn processDevObjectSnapshot(
             .none => {
                 if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
                     std.debug.print("\nDEV OUTPUT warning: hashes changed in {s}\n", .{output_path});
-                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                    std.debug.print("Hint: use `zig build run-snapshot-tool -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
                 }
                 break :blk false;
             },

@@ -2071,14 +2071,14 @@ pub fn build(b: *std.Build) void {
     // - `run-*` steps own execution of checks/tests/tools after prep is done.
     // - If a `run-*` step needs a binary or generated input, wire that work into
     //   a `build-*` step and add it to `build-ci`.
+    // - Do not add duplicate alias steps. References should use the exact
+    //   `build-*`, `run-*`, `run-check-*`, or `run-test-*` step name.
     // - MiniCI runs `build-ci` once and then runs leaf `run-*` jobs. Keep
-    //   aggregate aliases out of MiniCI so each job remains independently
+    //   aggregate steps out of MiniCI so each job remains independently
     //   reportable and re-runnable.
     // MiniCI intentionally does not parse Zig summaries to detect misplaced
     // build work; this convention is the source of truth.
     const build_ci_step = b.step("build-ci", "Build all binaries used by MiniCI");
-    const run_step = b.step("run", "Alias for run-roc");
-    const roc_step = b.step("roc", "Alias for build-roc");
     const build_roc_step = b.step("build-roc", "Build the roc compiler without running it");
     const run_roc_step = b.step("run-roc", "Build and run the roc cli");
     const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
@@ -2113,30 +2113,17 @@ pub fn build(b: *std.Build) void {
     const run_test_cli_bughunt_step = b.step("run-test-cli-bughunt", "Run opt-in CLI compiler-bug repros");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
+    const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
-    const minici_step = b.step("minici", "Run a subset of CI build and test steps");
-    const tidy_step = b.step("tidy", "Alias for run-check-tidy");
-    const git_lints_step = b.step("git-lints", "Alias for run-check-git-lints");
-    const checkfx_step = b.step("checkfx", "Alias for run-check-fx-platform-test-coverage");
-    const fmt_step = b.step("fmt", "Format all zig code");
-    const check_fmt_step = b.step("check-fmt", "Alias for run-check-zig-format");
-    const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Alias for run-check-postcheck-architecture");
-    const check_semantic_audit_step = b.step("check-semantic-audit", "Alias for run-check-semantic-audit");
-    const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    const eval_test_step = b.step("test-eval", "Alias for run-test-eval");
-    const eval_host_effects_step = b.step("test-eval-host-effects", "Alias for run-test-eval-host-effects");
-    const playground_step = b.step("playground", "Alias for build-playground");
-    const playground_test_step = b.step("test-playground", "Alias for run-test-playground");
+    const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
+    const run_fmt_zig_step = b.step("run-fmt-zig", "Format all zig code");
+    const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
-    const serialization_size_step = b.step("test-serialization-sizes", "Alias for run-test-serialization-sizes");
-    const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
-    const test_cli_step = b.step("test-cli", "Alias for run-test-cli");
-    const test_bughunt_cli_step = b.step("test-bughunt-cli", "Alias for run-test-cli-bughunt");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
-    const coverage_step = b.step("coverage", "Alias for run-coverage-parser");
-    const release_step = b.step("release", "Build optimized release binary for distribution");
+    const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
 
     // general configuration
     const target = blk: {
@@ -2379,13 +2366,11 @@ pub fn build(b: *std.Build) void {
     const run_tidy = b.addRunArtifact(tidy_exe);
     run_tidy.step.dependOn(&install_tidy.step);
     run_check_tidy_step.dependOn(&run_tidy.step);
-    tidy_step.dependOn(run_check_tidy_step);
 
     const run_git_lints = b.addRunArtifact(tidy_exe);
     run_git_lints.addArg("--git-lints");
     run_git_lints.step.dependOn(&install_tidy.step);
     run_check_git_lints_step.dependOn(&run_git_lints.step);
-    git_lints_step.dependOn(run_check_git_lints_step);
 
     const run_test_wiring = b.addRunArtifact(test_wiring_exe);
     run_test_wiring.step.dependOn(&install_test_wiring.step);
@@ -2394,7 +2379,7 @@ pub fn build(b: *std.Build) void {
     const run_minici = b.addRunArtifact(minici_exe);
     run_minici.addArg(b.graph.zig_exe);
     run_minici.step.dependOn(&install_minici.step);
-    minici_step.dependOn(&run_minici.step);
+    run_minici_step.dependOn(&run_minici.step);
 
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
@@ -2465,8 +2450,6 @@ pub fn build(b: *std.Build) void {
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
-    roc_step.dependOn(build_roc_step);
-    run_step.dependOn(run_roc_step);
 
     // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -2506,7 +2489,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
             exe.step.dependOn(&write_compiled_builtins.step);
             const install = b.addInstallArtifact(exe, .{});
-            release_step.dependOn(&install.step);
+            build_release_step.dependOn(&install.step);
         }
     }
 
@@ -2566,7 +2549,6 @@ pub fn build(b: *std.Build) void {
         run_cli.step.dependOn(build_test_hosts_step);
         run_cli_test_step = &run_cli.step;
         run_test_cli_step.dependOn(&run_cli.step);
-        test_cli_step.dependOn(run_test_cli_step);
 
         // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
         // stays out of test-cli because these tests document currently failing
@@ -2599,13 +2581,12 @@ pub fn build(b: *std.Build) void {
         run_bughunt_cli.step.dependOn(&install.step);
         run_bughunt_cli.step.dependOn(build_test_hosts_step);
         run_test_cli_bughunt_step.dependOn(&run_bughunt_cli.step);
-        test_bughunt_cli_step.dependOn(run_test_cli_bughunt_step);
     }
 
-    // Manual rebuild command: zig build rebuild-builtins
+    // Manual rebuild command: zig build run-rebuild-builtins
     // Use this after making compiler changes to ensure those changes are reflected in builtins
     const rebuild_builtins_step = b.step(
-        "rebuild-builtins",
+        "run-rebuild-builtins",
         "Force rebuild of all builtin modules (*.roc -> *.bin)",
     );
 
@@ -2739,11 +2720,11 @@ pub fn build(b: *std.Build) void {
         no_bin,
         snapshot_exe,
         build_snapshot_tool_step,
-        snapshot_step,
+        run_snapshot_tool_step,
         run_args,
     );
     const check_snapshot_diff = b.addSystemCommand(&.{ "git", "diff", "--exit-code", "test/snapshots" });
-    check_snapshot_diff.step.dependOn(snapshot_step);
+    check_snapshot_diff.step.dependOn(run_snapshot_tool_step);
     run_check_snapshots_step.dependOn(&check_snapshot_diff.step);
 
     // Add parallel eval test runner
@@ -2809,7 +2790,6 @@ pub fn build(b: *std.Build) void {
         run_test_eval_step,
         eval_run_args,
     );
-    eval_test_step.dependOn(run_test_eval_step);
 
     const eval_host_effects_exe = b.addExecutable(.{
         .name = "eval-host-effects-runner",
@@ -2863,7 +2843,6 @@ pub fn build(b: *std.Build) void {
         run_test_eval_host_effects_step,
         eval_host_effects_run_args,
     );
-    eval_host_effects_step.dependOn(run_test_eval_host_effects_step);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -2895,7 +2874,6 @@ pub fn build(b: *std.Build) void {
 
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     build_playground_step.dependOn(&playground_install.step);
-    playground_step.dependOn(build_playground_step);
 
     // Build echo.wasm — echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.
@@ -2994,11 +2972,11 @@ pub fn build(b: *std.Build) void {
         configureBackend(echo_wasm_test_exe, target);
         echo_wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
 
-        const test_echo_wasm_step = b.step("test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
+        const run_test_echo_wasm_step = b.step("run-test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
         const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
         // Ensure the wasm is built before the test runs.
         run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
-        test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
+        run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
 
     // Build playground integration tests - now enabled for all optimization modes
@@ -3030,7 +3008,6 @@ pub fn build(b: *std.Build) void {
         }
         run_playground_test.step.dependOn(&install.step);
         run_test_playground_step.dependOn(&run_playground_test.step);
-        playground_test_step.dependOn(run_test_playground_step);
 
         break :blk install;
     };
@@ -3080,7 +3057,6 @@ pub fn build(b: *std.Build) void {
         build_test_serialization_sizes_step.dependOn(&size_check_wasm32.step);
         run_test_serialization_sizes_step.dependOn(build_test_serialization_sizes_step);
         run_test_serialization_sizes_step.dependOn(&run_native.step);
-        serialization_size_step.dependOn(run_test_serialization_sizes_step);
     }
 
     // Build WASM static library test runner with bytebox
@@ -3098,20 +3074,19 @@ pub fn build(b: *std.Build) void {
         wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
 
         const install = b.addInstallArtifact(wasm_test_exe, .{});
-        wasm_static_lib_test_step.dependOn(&install.step);
+        build_test_wasm_static_lib_runner_step.dependOn(&install.step);
 
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         }
-        run_wasm_test.step.dependOn(&install.step);
-        wasm_static_lib_test_step.dependOn(&run_wasm_test.step);
+        run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+        run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
     }
 
     // Check fx platform test coverage convenience step
     const checkfx_inner = CheckFxStep.create(b);
     run_check_fx_platform_test_coverage_step.dependOn(&checkfx_inner.step);
-    checkfx_step.dependOn(run_check_fx_platform_test_coverage_step);
 
     const stack_overflow_test_helper_exe = b.addExecutable(.{
         .name = "stack_overflow_test_helper",
@@ -3236,12 +3211,6 @@ pub fn build(b: *std.Build) void {
         }
         run_module_test_step.dependOn(&individual_run.step);
 
-        const legacy_test_step = b.step(
-            b.fmt("test-{s}", .{test_exe_name}),
-            b.fmt("Alias for run-test-zig-module-{s}", .{test_exe_name}),
-        );
-        legacy_test_step.dependOn(run_module_test_step);
-
         b.default_step.dependOn(&module_test.test_step.step);
         build_test_zig_step.dependOn(&module_test.test_step.step);
         tests_summary.addRun(&module_test.run_step.step);
@@ -3345,18 +3314,11 @@ pub fn build(b: *std.Build) void {
 
         tests_summary.addRun(&run_builtin_doc_test.step);
 
-        // Also expose this as a focused step for debugging a single doc suite
-        // failure without running the entire default `test` aggregate.
-        const builtin_doc_test_step = b.step(
-            "test-builtin-doc",
-            "Alias for run-test-zig-builtin-doc",
-        );
         const run_builtin_doc_test_step = b.step(
             "run-test-zig-builtin-doc",
             "Run Builtin.roc doc code-block Zig tests",
         );
         run_builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
-        builtin_doc_test_step.dependOn(run_builtin_doc_test_step);
     }
 
     // Add CLI test
@@ -3462,12 +3424,10 @@ pub fn build(b: *std.Build) void {
     // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
-    check_postcheck_architecture_step.dependOn(run_check_postcheck_architecture_step);
 
     // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = ci_steps.SemanticAuditStep.create(b);
     run_check_semantic_audit_step.dependOn(&run_semantic_audit.step);
-    check_semantic_audit_step.dependOn(run_check_semantic_audit_step);
 
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);
@@ -3479,7 +3439,7 @@ pub fn build(b: *std.Build) void {
 
     run_test_zig_step.dependOn(&tests_summary.step);
 
-    b.default_step.dependOn(playground_step);
+    b.default_step.dependOn(build_playground_step);
     {
         const install = playground_test_install;
         b.default_step.dependOn(&install.step);
@@ -3488,11 +3448,10 @@ pub fn build(b: *std.Build) void {
     // Fmt zig code.
     const fmt_paths = .{ "src", "build.zig" };
     const fmt = b.addFmt(.{ .paths = &fmt_paths });
-    fmt_step.dependOn(&fmt.step);
+    run_fmt_zig_step.dependOn(&fmt.step);
 
     const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
     run_check_zig_format_step.dependOn(&check_fmt.step);
-    check_fmt_step.dependOn(run_check_zig_format_step);
 
     // Parser code coverage with kcov
     // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
@@ -3573,9 +3532,9 @@ pub fn build(b: *std.Build) void {
             // Eval coverage: builds a separate binary with coverage=true (comptime),
             // which DCEs dev/wasm backends, disables fork isolation, and forces
             // single-threaded — so kcov can trace the interpreter in-process.
-            // Run separately via: zig build coverage-eval
+            // Run separately via: zig build run-coverage-eval
             {
-                const coverage_eval_step = b.step("coverage-eval", "Run eval tests with kcov code coverage");
+                const coverage_eval_step = b.step("run-coverage-eval", "Run eval tests with kcov code coverage");
 
                 // Build a coverage-specific binary with the coverage build option.
                 const eval_coverage_exe = b.addExecutable(.{
@@ -3703,8 +3662,6 @@ pub fn build(b: *std.Build) void {
         });
         run_coverage_parser_step.dependOn(unsupported_step);
     }
-    coverage_step.dependOn(run_coverage_parser_step);
-
     build_ci_step.dependOn(build_roc_step);
     build_ci_step.dependOn(build_check_tools_step);
     build_ci_step.dependOn(build_snapshot_tool_step);
@@ -3716,6 +3673,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);
     build_ci_step.dependOn(build_test_serialization_sizes_step);
+    build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
     build_ci_step.dependOn(build_coverage_tools_step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
@@ -3839,7 +3797,7 @@ pub fn build(b: *std.Build) void {
         run_fx_platform_test.step.dependOn(final_fx_host_step);
         run_fx_platform_test.step.dependOn(final_static_data_platform_step);
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
-        run_fx_platform_test.step.dependOn(roc_step);
+        run_fx_platform_test.step.dependOn(build_roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
 
         const run_fx_platform_zig_test_step = b.step(
@@ -4019,7 +3977,8 @@ fn add_fuzz_target(
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
-    const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
+    const build_repro_step = b.step(b.fmt("build-repro-{s}", .{name}), b.fmt("Build fuzz reproduction for {s}", .{name}));
+    const run_repro_step = b.step(b.fmt("run-repro-{s}", .{name}), b.fmt("Run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
         .root_module = b.createModule(.{
@@ -4032,10 +3991,10 @@ fn add_fuzz_target(
     configureBackend(repro_exe, target);
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
 
-    _ = install_and_run(b, no_bin, repro_exe, repro_step, repro_step, run_args);
+    _ = install_and_run(b, no_bin, repro_exe, build_repro_step, run_repro_step, run_args);
 
     if (fuzz and build_afl and !no_bin) {
-        const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
+        const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
         const afl = b.lazyImport(@This(), "afl_kit") orelse return;

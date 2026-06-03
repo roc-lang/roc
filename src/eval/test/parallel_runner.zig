@@ -57,7 +57,7 @@ const build_options = @import("build_options");
 const coverage_options = @import("coverage_options");
 const eval = @import("eval");
 
-/// When true (set via `zig build coverage-eval`), the runner:
+/// When true (set via `zig build run-coverage-eval`), the runner:
 /// - Only builds/runs the interpreter backend (dev/wasm are DCE'd)
 /// - Runs eval in-process (no fork) so kcov can trace it
 /// - Forces single-threaded execution
@@ -1720,7 +1720,7 @@ fn printHelp() void {
         \\  known-bugs            Include opt-in known compiler-bug repro tests.
         \\
         \\COVERAGE:
-        \\  Use `zig build coverage-eval` to build with coverage instrumentation.
+        \\  Use `zig build run-coverage-eval` to build with coverage instrumentation.
         \\  This compiles with -Dcoverage=true, which at comptime: skips dev/wasm
         \\  backends (DCE), disables fork isolation, and forces single-threaded.
         \\  See CONTRIBUTING/eval_coverage.md for details.
