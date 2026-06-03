@@ -212,14 +212,17 @@ pub const CheckedModule = struct {
 /// Public `ProblemResources` declaration.
 pub const ProblemResources = struct {
     main: CheckedModule,
-    builtin_module: builtin_loading.LoadedModule,
+    /// Locally-loaded Builtin; null when the caller supplied a pre-published
+    /// Builtin via `parseAndCheckProgramForProblemsWithBuiltin` and retains
+    /// ownership of the borrowed env.
+    builtin_module: ?builtin_loading.LoadedModule,
     extra_modules: []CheckedModule,
 
     pub fn deinit(self: *ProblemResources, allocator: Allocator) void {
         cleanupCheckedModule(allocator, self.main);
         for (self.extra_modules) |module| cleanupCheckedModule(allocator, module);
         allocator.free(self.extra_modules);
-        self.builtin_module.deinit();
+        if (self.builtin_module) |*lm| lm.deinit();
     }
 };
 
@@ -437,14 +440,49 @@ pub fn parseAndCheckProgramForProblems(
     source: []const u8,
     imports: []const ModuleSource,
 ) !ProblemResources {
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try builtin_loading.loadCompiledModule(
-        allocator,
-        compiled_builtins.builtin_bin,
-        "Builtin",
-        compiled_builtins.builtin_source,
-    );
-    errdefer builtin_module.deinit();
+    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, null);
+}
+
+/// Same as `parseAndCheckProgramForProblems` but reuses a Builtin module the
+/// caller has already loaded. The returned `ProblemResources` borrows the
+/// builtin env (its `builtin_module` is null) and never deinits it.
+pub fn parseAndCheckProgramForProblemsWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) !ProblemResources {
+    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin);
+}
+
+fn parseAndCheckProgramForProblemsImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) !ProblemResources {
+    const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
+        ppb.indices
+    else
+        try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+
+    var loaded_builtin: ?builtin_loading.LoadedModule = if (pre_published_builtin == null)
+        try builtin_loading.loadCompiledModule(
+            allocator,
+            compiled_builtins.builtin_bin,
+            "Builtin",
+            compiled_builtins.builtin_source,
+        )
+    else
+        null;
+    errdefer if (loaded_builtin) |*lm| lm.deinit();
+
+    const builtin_env: *const ModuleEnv = if (pre_published_builtin) |ppb|
+        ppb.env
+    else
+        loaded_builtin.?.env;
 
     var extra_modules = std.ArrayList(CheckedModule).empty;
     errdefer {
@@ -472,7 +510,7 @@ pub fn parseAndCheckProgramForProblems(
             true,
             .checked_artifact,
             &.{},
-            builtin_module.env,
+            builtin_env,
             builtin_indices,
             available_imports,
         );
@@ -498,7 +536,7 @@ pub fn parseAndCheckProgramForProblems(
         false,
         .checked_artifact,
         &.{},
-        builtin_module.env,
+        builtin_env,
         builtin_indices,
         main_imports,
     );
@@ -507,7 +545,7 @@ pub fn parseAndCheckProgramForProblems(
     var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
     defer allocator.free(all_module_envs);
     all_module_envs[0] = main_checked.module_env;
-    all_module_envs[1] = builtin_module.env;
+    all_module_envs[1] = @constCast(builtin_env);
     for (extra_modules.items, 0..) |extra, i| {
         all_module_envs[i + 2] = extra.module_env;
     }
@@ -515,7 +553,7 @@ pub fn parseAndCheckProgramForProblems(
 
     return .{
         .main = main_checked,
-        .builtin_module = builtin_module,
+        .builtin_module = loaded_builtin,
         .extra_modules = try extra_modules.toOwnedSlice(allocator),
     };
 }
