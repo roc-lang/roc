@@ -9926,8 +9926,12 @@ fn satisfyImplicitEqualityConstraint(
         );
     }
 
-    _ = try self.unify(dispatcher_var, args[0], env);
-    _ = try self.unify(dispatcher_var, args[1], env);
+    // Read both arg vars before unifying: the first unify can append fresh
+    // vars and reallocate the backing array, dangling the `args` slice.
+    const arg0 = args[0];
+    const arg1 = args[1];
+    _ = try self.unify(dispatcher_var, arg0, env);
+    _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
 }
