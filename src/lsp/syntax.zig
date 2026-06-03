@@ -2,6 +2,7 @@
 //! reports to LSP diagnostics.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
@@ -101,11 +102,16 @@ pub const SyntaxChecker = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
+        var cache_config = CacheConfig{ .roc_ctx = CoreCtx.default(allocator, allocator, std_io) };
+        if (builtin.is_test) {
+            cache_config.enabled = false;
+        }
+
         return .{
             .allocator = allocator,
             .std_io = std_io,
             .dependency_graph = DependencyGraph.init(allocator),
-            .cache_config = .{ .roc_ctx = CoreCtx.default(allocator, allocator, std_io) },
+            .cache_config = cache_config,
             .debug = debug,
             .log_file = log_file,
         };
