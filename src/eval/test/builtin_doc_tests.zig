@@ -770,7 +770,9 @@ fn wrapForBinary(allocator: Allocator, block: *const Block) ![]u8 {
     };
 }
 
-test "Builtin.roc doc code blocks check and evaluate" {
+fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) !void {
+    std.debug.assert(shard_index < shard_count);
+
     const allocator = std.heap.page_allocator;
 
     const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
@@ -799,10 +801,13 @@ test "Builtin.roc doc code blocks check and evaluate" {
 
     var phantom_failures: usize = 0;
 
+    var processed_blocks: usize = 0;
     for (blocks, 0..) |*block, i| {
+        if (i % shard_count != shard_index) continue;
         if (containsEffectfulCall(block.source)) {
             continue;
         }
+        processed_blocks += 1;
         const result = try processBlock(allocator, block);
         switch (result) {
             .success => {},
@@ -869,6 +874,48 @@ test "Builtin.roc doc code blocks check and evaluate" {
         );
         return error.DocBlockFailures;
     }
+
+    try testing.expect(processed_blocks > 0);
+}
+
+test "Builtin.roc doc code blocks shard 00" {
+    try testBuiltinDocBlocks(0, 10);
+}
+
+test "Builtin.roc doc code blocks shard 01" {
+    try testBuiltinDocBlocks(1, 10);
+}
+
+test "Builtin.roc doc code blocks shard 02" {
+    try testBuiltinDocBlocks(2, 10);
+}
+
+test "Builtin.roc doc code blocks shard 03" {
+    try testBuiltinDocBlocks(3, 10);
+}
+
+test "Builtin.roc doc code blocks shard 04" {
+    try testBuiltinDocBlocks(4, 10);
+}
+
+test "Builtin.roc doc code blocks shard 05" {
+    try testBuiltinDocBlocks(5, 10);
+}
+
+test "Builtin.roc doc code blocks shard 06" {
+    try testBuiltinDocBlocks(6, 10);
+}
+
+test "Builtin.roc doc code blocks shard 07" {
+    try testBuiltinDocBlocks(7, 10);
+}
+
+test "Builtin.roc doc code blocks shard 08" {
+    try testBuiltinDocBlocks(8, 10);
+}
+
+test "Builtin.roc doc code blocks shard 09" {
+    try testBuiltinDocBlocks(9, 10);
 }
 
 /// Used by `runInChild EINTR regression` to mark that the test's signal

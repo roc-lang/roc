@@ -86,7 +86,6 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
-        std.testing.refAllDecls(ReplSession);
         std.testing.refAllDecls(@import("stack_probe.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
@@ -5110,6 +5109,19 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
+fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
+    const abs_path = if (std.fs.path.isAbsolute(filepath))
+        try std.fs.path.resolve(gpa, &.{filepath})
+    else
+        try std.fs.path.resolve(gpa, &.{ cwd, filepath });
+    defer gpa.free(abs_path);
+
+    const compiler_builtin_path = try std.fs.path.resolve(gpa, &.{build_options.compiler_builtin_roc_path});
+    defer gpa.free(compiler_builtin_path);
+
+    return std.mem.eql(u8, abs_path, compiler_builtin_path);
+}
+
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliCtx,
@@ -5129,6 +5141,9 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+        build_env.setRootModuleRole(.builtin);
+    }
 
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
@@ -5934,6 +5949,25 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
+}
+
+test "user project src/build/roc/Builtin.roc is not compiler-owned builtin" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const user_project_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
+    defer allocator.free(user_project_root);
+
+    const classified_as_compiler_builtin = try isCompilerOwnedBuiltinSourcePath(
+        allocator,
+        user_project_root,
+        "src/build/roc/Builtin.roc",
+    );
+
+    try testing.expect(!classified_as_compiler_builtin);
 }
 
 test "classifyNativeRunTermination preserves warning exit code" {

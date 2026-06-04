@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Record field access used in expressions (field-access)
+description=Record field access used in expressions (dot-access)
 type=expr
 ~~~
 # SOURCE

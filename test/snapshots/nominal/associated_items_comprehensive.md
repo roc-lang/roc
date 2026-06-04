@@ -438,38 +438,32 @@ errTryLeaf = leaf1Val        # ERROR: not in scope
 errTryGrand = grandchildVal  # ERROR: not in scope
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
-UNUSED VARIABLE - associated_items_comprehensive.md:361:17:361:26
-UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
-UNUSED VARIABLE - associated_items_comprehensive.md:372:28:372:35
-UNDEFINED VARIABLE - associated_items_comprehensive.md:387:31:387:39
-UNUSED VARIABLE - associated_items_comprehensive.md:387:31:387:39
-UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
-UNUSED VARIABLE - associated_items_comprehensive.md:401:27:401:40
-UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
-UNUSED VARIABLE - associated_items_comprehensive.md:423:25:423:33
 UNDEFINED VARIABLE - associated_items_comprehensive.md:350:24:350:29
+UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
+UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
+UNDEFINED VARIABLE - associated_items_comprehensive.md:387:31:387:39
+UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
+UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
 UNDEFINED VARIABLE - associated_items_comprehensive.md:428:15:428:24
 UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
 UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
 UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
 **UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**associated_items_comprehensive.md:350:24:350:29:**
+```roc
+errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
+```
+                       ^^^^^
+
+
+**UNDEFINED VARIABLE**
 Nothing is named `innerItem` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_comprehensive.md:361:17:361:26:**
-```roc
-    badAccess = innerItem  # ERROR: 'innerItem' not in scope here
-```
-                ^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `innerItem` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_innerItem` to suppress this warning.
-The unused variable is declared here:
 **associated_items_comprehensive.md:361:17:361:26:**
 ```roc
     badAccess = innerItem  # ERROR: 'innerItem' not in scope here
@@ -488,34 +482,10 @@ Is there an `import` or `exposing` missing up-top?
                            ^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `sibAVal` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_sibAVal` to suppress this warning.
-The unused variable is declared here:
-**associated_items_comprehensive.md:372:28:372:35:**
-```roc
-        badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
-```
-                           ^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `leaf1Val` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**associated_items_comprehensive.md:387:31:387:39:**
-```roc
-            badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
-```
-                              ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `leaf1Val` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_leaf1Val` to suppress this warning.
-The unused variable is declared here:
 **associated_items_comprehensive.md:387:31:387:39:**
 ```roc
             badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
@@ -534,18 +504,6 @@ Is there an `import` or `exposing` missing up-top?
                           ^^^^^^^^^^^^^
 
 
-**UNUSED VARIABLE**
-Variable `grandchildVal` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_grandchildVal` to suppress this warning.
-The unused variable is declared here:
-**associated_items_comprehensive.md:401:27:401:40:**
-```roc
-    badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
-```
-                          ^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `otherVal` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -555,29 +513,6 @@ Is there an `import` or `exposing` missing up-top?
         badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
 ```
                         ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `otherVal` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_otherVal` to suppress this warning.
-The unused variable is declared here:
-**associated_items_comprehensive.md:423:25:423:33:**
-```roc
-        badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
-```
-                        ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**associated_items_comprehensive.md:350:24:350:29:**
-```roc
-errModuleUnqualified = value  # ERROR: 'value' not in scope at module level
-```
-                       ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2359,353 +2294,16 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "associated_items_comprehensive.Simple.value"))
 		(e-num (value "1")))
 	(d-let
+		(p-assign (ident "simple1"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.Simple.value"))))
+	(d-let
 		(p-assign (ident "associated_items_comprehensive.Forward.first"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Forward.second"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Forward.second"))
 		(e-num (value "2")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Multi.a"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Multi.b"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1078)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Multi.a"))))
-			(args
-				(e-num (value "5")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Multi.c"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1110)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Multi.b"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer1.Inner1.innerVal"))
-		(e-num (value "200")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer1.outerVal"))
-		(e-num (value "100")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.Outer2.shared"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1232)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer2.shared"))
-		(e-num (value "50")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))
-		(e-num (value "42")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer3.first"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))
-		(e-num (value "2")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1324)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Outer4.val"))
-		(e-num (value "1")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Level1.Level2.Level3.val3"))
-		(e-num (value "30")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Level1.Level2.val2"))
-		(e-num (value "20")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Level1.val1"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1508)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1506)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.CrossRef.top"))
-		(e-num (value "5")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))
-		(e-num (value "99")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ForwardDeep.usesDeepNested"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.D4.v4"))
-		(e-num (value "4000")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.v3"))
-		(e-num (value "3000")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.D2.v2"))
-		(e-num (value "2000")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.D1.v1"))
-		(e-num (value "1000")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))
-		(e-num (value "777")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.DeepForward.usesDeeply"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Max1.Max2.Max3.Max4.Max5.deepestValue"))
-		(e-num (value "5555")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1876)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1844)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1812)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1780)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Full.val1"))))
-			(args
-				(e-num (value "1")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Full.val1"))
-		(e-num (value "1")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))
-		(e-num (value "888")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeTest.canUse"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.usesOuter"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))
-		(e-num (value "222")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))
-		(e-num (value "111")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ScopeNested.usesNested"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Annotated.NestedAnnotated.alsoTyped"))
-		(e-num (value "111"))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Annotated.typed"))
-		(e-num (value "999"))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2341)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))))
-			(args
-				(e-num (value "5")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2309)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))))
-			(args
-				(e-num (value "4")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2277)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))))
-			(args
-				(e-num (value "3")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2245)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Chain.start"))))
-			(args
-				(e-num (value "2")))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Chain.start"))
-		(e-num (value "1")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Circular.sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2435)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2403)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "associated_items_comprehensive.Circular.a"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_comprehensive.Circular.b"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Circular.c"))))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Circular.a"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Circular.b"))
-		(e-num (value "20")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Circular.c"))
-		(e-num (value "30")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2668)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val")))))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2658)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2698)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2688)
-					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2678)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))
-		(e-num (value "50"))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.Ultimate.base"))
-		(e-num (value "100"))
-		(annotation
-			(ty-lookup (name "U64") (builtin))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.InnerScope.innerItem"))
-		(e-num (value "20")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.outerItem"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.badAccess"))
-		(e-lookup-local
-			(p-assign (ident "innerItem"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrSiblingAccess.SiblingA.sibAVal"))
-		(e-num (value "100")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrSiblingAccess.SiblingB.badSiblingAccess"))
-		(e-lookup-local
-			(p-assign (ident "sibAVal"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1.leaf1Val"))
-		(e-num (value "1")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2.badCousinAccess"))
-		(e-lookup-local
-			(p-assign (ident "leaf1Val"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild.grandchildVal"))
-		(e-num (value "999")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrGrandchildAccess.badGrandchildAccess"))
-		(e-lookup-local
-			(p-assign (ident "grandchildVal"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3.goodAccess"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch.otherVal"))
-		(e-num (value "77")))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt.badDeepAccess"))
-		(e-lookup-local
-			(p-assign (ident "otherVal"))))
-	(d-let
-		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))
-		(e-num (value "50")))
-	(d-let
-		(p-assign (ident "simple1"))
-		(e-lookup-local
-			(p-assign (ident "associated_items_comprehensive.Simple.value"))))
 	(d-let
 		(p-assign (ident "forward1"))
 		(e-lookup-local
@@ -2714,6 +2312,25 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "forward2"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Forward.second"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Multi.a"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Multi.b"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 988)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Multi.a"))))
+			(args
+				(e-num (value "5")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Multi.c"))
+		(e-dispatch-call (method "times") (constraint-fn-var 1020)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Multi.b"))))
+			(args
+				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "multi1"))
 		(e-lookup-local
@@ -2731,6 +2348,12 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Simple.value"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer1.outerVal"))
+		(e-num (value "100")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer1.Inner1.innerVal"))
+		(e-num (value "200")))
+	(d-let
 		(p-assign (ident "depth2_1"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer1.outerVal"))))
@@ -2738,6 +2361,21 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "depth2_2"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer1.Inner1.innerVal"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer2.shared"))
+		(e-num (value "50")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.Outer2.shared"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))
+		(e-dispatch-call (method "times") (constraint-fn-var 1142)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))))
+			(args
+				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "depth2_3"))
 		(e-lookup-local
@@ -2751,6 +2389,13 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer3.first"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))
+		(e-num (value "42")))
+	(d-let
 		(p-assign (ident "depth2_6"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer3.first"))))
@@ -2758,6 +2403,20 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "depth2_7"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer3.Inner3.nested"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer4.val"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))
+		(e-num (value "2")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1264)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))))
+			(args
+				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "depth2_8"))
 		(e-lookup-local
@@ -2771,6 +2430,15 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.Level1.val1"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Level1.Level2.val2"))
+		(e-num (value "20")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Level1.Level2.Level3.val3"))
+		(e-num (value "30")))
+	(d-let
 		(p-assign (ident "depth3_1"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Level1.val1"))))
@@ -2782,6 +2450,26 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "depth3_3"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Level1.Level2.Level3.val3"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.CrossRef.top"))
+		(e-num (value "5")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))
+		(e-dispatch-call (method "times") (constraint-fn-var 1416)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))
+			(args
+				(e-num (value "2")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1418)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))))
 	(d-let
 		(p-assign (ident "depth3_4"))
 		(e-lookup-local
@@ -2795,6 +2483,13 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.ForwardDeep.usesDeepNested"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))
+		(e-num (value "99")))
+	(d-let
 		(p-assign (ident "depth3_7"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ForwardDeep.usesDeepNested"))))
@@ -2802,6 +2497,18 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "depth3_8"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ForwardDeep.M1.M2.deepVal"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.D1.v1"))
+		(e-num (value "1000")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.D1.D2.v2"))
+		(e-num (value "2000")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.v3"))
+		(e-num (value "3000")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.D1.D2.D3.D4.v4"))
+		(e-num (value "4000")))
 	(d-let
 		(p-assign (ident "depth4_1"))
 		(e-lookup-local
@@ -2819,13 +2526,58 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.D1.D2.D3.D4.v4"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.DeepForward.usesDeeply"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.DeepForward.A.B.C.deepest"))
+		(e-num (value "777")))
+	(d-let
 		(p-assign (ident "depth4_5"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.DeepForward.usesDeeply"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.Max1.Max2.Max3.Max4.Max5.deepestValue"))
+		(e-num (value "5555")))
+	(d-let
 		(p-assign (ident "depth5_1"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Max1.Max2.Max3.Max4.Max5.deepestValue"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.val1"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1690)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Full.val1"))))
+			(args
+				(e-num (value "1")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1722)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))))
+			(args
+				(e-num (value "1")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1754)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))))
+			(args
+				(e-num (value "1")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 1786)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))))
+			(args
+				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "depth5_2"))
 		(e-lookup-local
@@ -2847,6 +2599,13 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))
+		(e-num (value "888")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeTest.canUse"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))))
+	(d-let
 		(p-assign (ident "scopeOuter"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ScopeTest.innerOnly"))))
@@ -2855,6 +2614,30 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.ScopeTest.canUse"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))
+		(e-num (value "111")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.usesOuter"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.ScopeNested.outer"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))
+		(e-num (value "222")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ScopeNested.usesNested"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.ScopeNested.Nested.inner"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Annotated.typed"))
+		(e-num (value "999"))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Annotated.NestedAnnotated.alsoTyped"))
+		(e-num (value "111"))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
 		(p-assign (ident "annoTest1"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Annotated.typed"))))
@@ -2862,6 +2645,41 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(p-assign (ident "annoTest2"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Annotated.NestedAnnotated.alsoTyped"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.start"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))
+		(e-dispatch-call (method "times") (constraint-fn-var 2150)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Chain.start"))))
+			(args
+				(e-num (value "2")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
+		(e-dispatch-call (method "times") (constraint-fn-var 2182)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))))
+			(args
+				(e-num (value "3")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
+		(e-dispatch-call (method "times") (constraint-fn-var 2214)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))))
+			(args
+				(e-num (value "4")))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
+		(e-dispatch-call (method "times") (constraint-fn-var 2246)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))))
+			(args
+				(e-num (value "5")))))
 	(d-let
 		(p-assign (ident "chain1"))
 		(e-lookup-local
@@ -2883,9 +2701,81 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))))
 	(d-let
+		(p-assign (ident "associated_items_comprehensive.Circular.sum"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2340)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2308)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "associated_items_comprehensive.Circular.a"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "associated_items_comprehensive.Circular.b"))))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Circular.c"))))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Circular.a"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Circular.b"))
+		(e-num (value "20")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Circular.c"))
+		(e-num (value "30")))
+	(d-let
 		(p-assign (ident "circTest"))
 		(e-lookup-local
 			(p-assign (ident "associated_items_comprehensive.Circular.sum"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Ultimate.base"))
+		(e-num (value "100"))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2554)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2570)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val")))))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))
+		(e-num (value "50"))
+		(annotation
+			(ty-lookup (name "U64") (builtin))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 2600)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 2590)
+					(receiver
+						(e-dispatch-call (method "plus") (constraint-fn-var 2580)
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
+							(args
+								(e-lookup-local
+									(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))))))
 	(d-let
 		(p-assign (ident "ultimate1"))
 		(e-lookup-local
@@ -2908,6 +2798,46 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))))
 	(d-let
 		(p-assign (ident "errModuleUnqualified"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.outerItem"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.InnerScope.innerItem"))
+		(e-num (value "20")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrOuterAccessInner.badAccess"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrSiblingAccess.SiblingA.sibAVal"))
+		(e-num (value "100")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrSiblingAccess.SiblingB.badSiblingAccess"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1.leaf1Val"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2.badCousinAccess"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild.grandchildVal"))
+		(e-num (value "999")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrGrandchildAccess.badGrandchildAccess"))
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))
+		(e-num (value "50")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3.goodAccess"))
+		(e-lookup-local
+			(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.outerSibling"))))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch.otherVal"))
+		(e-num (value "77")))
+	(d-let
+		(p-assign (ident "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt.badDeepAccess"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "errTryOuter"))
@@ -2938,101 +2868,29 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "D"))))
 	(s-nominal-decl
-		(ty-header (name "Outer2"))
-		(ty-tag-union
-			(ty-tag-name (name "F"))))
-	(s-nominal-decl
-		(ty-header (name "Outer3"))
-		(ty-tag-union
-			(ty-tag-name (name "H"))))
-	(s-nominal-decl
-		(ty-header (name "Outer4"))
-		(ty-tag-union
-			(ty-tag-name (name "J"))))
-	(s-nominal-decl
-		(ty-header (name "Level1"))
-		(ty-tag-union
-			(ty-tag-name (name "M"))))
-	(s-nominal-decl
-		(ty-header (name "CrossRef"))
-		(ty-tag-union
-			(ty-tag-name (name "P"))))
-	(s-nominal-decl
-		(ty-header (name "ForwardDeep"))
-		(ty-tag-union
-			(ty-tag-name (name "S"))))
-	(s-nominal-decl
-		(ty-header (name "D1"))
-		(ty-tag-union
-			(ty-tag-name (name "V"))))
-	(s-nominal-decl
-		(ty-header (name "DeepForward"))
-		(ty-tag-union
-			(ty-tag-name (name "Z"))))
-	(s-nominal-decl
-		(ty-header (name "Max1"))
-		(ty-tag-union
-			(ty-tag-name (name "DD"))))
-	(s-nominal-decl
-		(ty-header (name "Full"))
-		(ty-tag-union
-			(ty-tag-name (name "II"))))
-	(s-nominal-decl
-		(ty-header (name "ScopeTest"))
-		(ty-tag-union
-			(ty-tag-name (name "NN"))))
-	(s-nominal-decl
-		(ty-header (name "ScopeNested"))
-		(ty-tag-union
-			(ty-tag-name (name "OO"))))
-	(s-nominal-decl
-		(ty-header (name "Annotated"))
-		(ty-tag-union
-			(ty-tag-name (name "QQ"))))
-	(s-nominal-decl
-		(ty-header (name "Chain"))
-		(ty-tag-union
-			(ty-tag-name (name "SS"))))
-	(s-nominal-decl
-		(ty-header (name "Circular"))
-		(ty-tag-union
-			(ty-tag-name (name "XX"))))
-	(s-nominal-decl
-		(ty-header (name "Ultimate"))
-		(ty-tag-union
-			(ty-tag-name (name "YY"))))
-	(s-nominal-decl
-		(ty-header (name "ErrOuterAccessInner"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR1"))))
-	(s-nominal-decl
-		(ty-header (name "ErrSiblingAccess"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR3"))))
-	(s-nominal-decl
-		(ty-header (name "ErrCousinAccess"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR6"))))
-	(s-nominal-decl
-		(ty-header (name "ErrGrandchildAccess"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR11"))))
-	(s-nominal-decl
-		(ty-header (name "ErrDeepSiblingAccess"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR14"))))
-	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Outer1.Inner1"))
 		(ty-tag-union
 			(ty-tag-name (name "E"))))
+	(s-nominal-decl
+		(ty-header (name "Outer2"))
+		(ty-tag-union
+			(ty-tag-name (name "F"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Outer2.Inner2"))
 		(ty-tag-union
 			(ty-tag-name (name "G"))))
 	(s-nominal-decl
+		(ty-header (name "Outer3"))
+		(ty-tag-union
+			(ty-tag-name (name "H"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Outer3.Inner3"))
 		(ty-tag-union
 			(ty-tag-name (name "I"))))
+	(s-nominal-decl
+		(ty-header (name "Outer4"))
+		(ty-tag-union
+			(ty-tag-name (name "J"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Outer4.InnerA"))
 		(ty-tag-union
@@ -3042,6 +2900,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "L"))))
 	(s-nominal-decl
+		(ty-header (name "Level1"))
+		(ty-tag-union
+			(ty-tag-name (name "M"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Level1.Level2"))
 		(ty-tag-union
 			(ty-tag-name (name "N"))))
@@ -3049,6 +2911,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-header (name "associated_items_comprehensive.Level1.Level2.Level3"))
 		(ty-tag-union
 			(ty-tag-name (name "O"))))
+	(s-nominal-decl
+		(ty-header (name "CrossRef"))
+		(ty-tag-union
+			(ty-tag-name (name "P"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.CrossRef.Mid"))
 		(ty-tag-union
@@ -3058,6 +2924,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "R"))))
 	(s-nominal-decl
+		(ty-header (name "ForwardDeep"))
+		(ty-tag-union
+			(ty-tag-name (name "S"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ForwardDeep.M1"))
 		(ty-tag-union
 			(ty-tag-name (name "T"))))
@@ -3065,6 +2935,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-header (name "associated_items_comprehensive.ForwardDeep.M1.M2"))
 		(ty-tag-union
 			(ty-tag-name (name "U"))))
+	(s-nominal-decl
+		(ty-header (name "D1"))
+		(ty-tag-union
+			(ty-tag-name (name "V"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.D1.D2"))
 		(ty-tag-union
@@ -3078,6 +2952,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "Y"))))
 	(s-nominal-decl
+		(ty-header (name "DeepForward"))
+		(ty-tag-union
+			(ty-tag-name (name "Z"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.DeepForward.A"))
 		(ty-tag-union
 			(ty-tag-name (name "AA"))))
@@ -3089,6 +2967,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-header (name "associated_items_comprehensive.DeepForward.A.B.C"))
 		(ty-tag-union
 			(ty-tag-name (name "CC"))))
+	(s-nominal-decl
+		(ty-header (name "Max1"))
+		(ty-tag-union
+			(ty-tag-name (name "DD"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Max1.Max2"))
 		(ty-tag-union
@@ -3106,6 +2988,10 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "HH"))))
 	(s-nominal-decl
+		(ty-header (name "Full"))
+		(ty-tag-union
+			(ty-tag-name (name "II"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Full.L2"))
 		(ty-tag-union
 			(ty-tag-name (name "JJ"))))
@@ -3122,13 +3008,29 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "MM"))))
 	(s-nominal-decl
+		(ty-header (name "ScopeTest"))
+		(ty-tag-union
+			(ty-tag-name (name "NN"))))
+	(s-nominal-decl
+		(ty-header (name "ScopeNested"))
+		(ty-tag-union
+			(ty-tag-name (name "OO"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ScopeNested.Nested"))
 		(ty-tag-union
 			(ty-tag-name (name "PP"))))
 	(s-nominal-decl
+		(ty-header (name "Annotated"))
+		(ty-tag-union
+			(ty-tag-name (name "QQ"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Annotated.NestedAnnotated"))
 		(ty-tag-union
 			(ty-tag-name (name "RR"))))
+	(s-nominal-decl
+		(ty-header (name "Chain"))
+		(ty-tag-union
+			(ty-tag-name (name "SS"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Chain.Mid"))
 		(ty-tag-union
@@ -3146,25 +3048,41 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "WW"))))
 	(s-nominal-decl
+		(ty-header (name "Circular"))
+		(ty-tag-union
+			(ty-tag-name (name "XX"))))
+	(s-nominal-decl
+		(ty-header (name "Ultimate"))
+		(ty-tag-union
+			(ty-tag-name (name "YY"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Ultimate.Branch1"))
 		(ty-tag-union
 			(ty-tag-name (name "ZZ"))))
-	(s-nominal-decl
-		(ty-header (name "associated_items_comprehensive.Ultimate.Branch2"))
-		(ty-tag-union
-			(ty-tag-name (name "BBB"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "AAA"))))
 	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.Ultimate.Branch2"))
+		(ty-tag-union
+			(ty-tag-name (name "BBB"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner"))
 		(ty-tag-union
 			(ty-tag-name (name "CCC"))))
 	(s-nominal-decl
+		(ty-header (name "ErrOuterAccessInner"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR1"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrOuterAccessInner.InnerScope"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR2"))))
+	(s-nominal-decl
+		(ty-header (name "ErrSiblingAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR3"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingA"))
 		(ty-tag-union
@@ -3174,21 +3092,29 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "ERR5"))))
 	(s-nominal-decl
+		(ty-header (name "ErrCousinAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR6"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR7"))))
-	(s-nominal-decl
-		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR9"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR8"))))
 	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR9"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR10"))))
+	(s-nominal-decl
+		(ty-header (name "ErrGrandchildAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR11"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child"))
 		(ty-tag-union
@@ -3198,25 +3124,29 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(ty-tag-union
 			(ty-tag-name (name "ERR13"))))
 	(s-nominal-decl
+		(ty-header (name "ErrDeepSiblingAccess"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR14"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR15"))))
-	(s-nominal-decl
-		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt"))
-		(ty-tag-union
-			(ty-tag-name (name "ERR19"))))
 	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR16"))))
 	(s-nominal-decl
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3"))
+		(ty-tag-union
+			(ty-tag-name (name "ERR17"))))
+	(s-nominal-decl
 		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch"))
 		(ty-tag-union
 			(ty-tag-name (name "ERR18"))))
 	(s-nominal-decl
-		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3"))
+		(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt"))
 		(ty-tag-union
-			(ty-tag-name (name "ERR17")))))
+			(ty-tag-name (name "ERR19")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -3264,35 +3194,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "U64"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
-		(patt (type "Dec"))
-		(patt (type "_d"))
-		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -3333,6 +3234,17 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "Dec"))
 		(patt (type "U64"))
 		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
 		(patt (type "Dec"))
@@ -3344,6 +3256,24 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "U64"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Error"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
+		(patt (type "Dec"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
@@ -3358,82 +3288,58 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-header (name "Multi")))
 		(nominal (type "Outer1")
 			(ty-header (name "Outer1")))
-		(nominal (type "Outer2")
-			(ty-header (name "Outer2")))
-		(nominal (type "Outer3")
-			(ty-header (name "Outer3")))
-		(nominal (type "Outer4")
-			(ty-header (name "Outer4")))
-		(nominal (type "Level1")
-			(ty-header (name "Level1")))
-		(nominal (type "CrossRef")
-			(ty-header (name "CrossRef")))
-		(nominal (type "ForwardDeep")
-			(ty-header (name "ForwardDeep")))
-		(nominal (type "D1")
-			(ty-header (name "D1")))
-		(nominal (type "DeepForward")
-			(ty-header (name "DeepForward")))
-		(nominal (type "Max1")
-			(ty-header (name "Max1")))
-		(nominal (type "Full")
-			(ty-header (name "Full")))
-		(nominal (type "ScopeTest")
-			(ty-header (name "ScopeTest")))
-		(nominal (type "ScopeNested")
-			(ty-header (name "ScopeNested")))
-		(nominal (type "Annotated")
-			(ty-header (name "Annotated")))
-		(nominal (type "Chain")
-			(ty-header (name "Chain")))
-		(nominal (type "Circular")
-			(ty-header (name "Circular")))
-		(nominal (type "Ultimate")
-			(ty-header (name "Ultimate")))
-		(nominal (type "ErrOuterAccessInner")
-			(ty-header (name "ErrOuterAccessInner")))
-		(nominal (type "ErrSiblingAccess")
-			(ty-header (name "ErrSiblingAccess")))
-		(nominal (type "ErrCousinAccess")
-			(ty-header (name "ErrCousinAccess")))
-		(nominal (type "ErrGrandchildAccess")
-			(ty-header (name "ErrGrandchildAccess")))
-		(nominal (type "ErrDeepSiblingAccess")
-			(ty-header (name "ErrDeepSiblingAccess")))
 		(nominal (type "Outer1.Inner1")
 			(ty-header (name "associated_items_comprehensive.Outer1.Inner1")))
+		(nominal (type "Outer2")
+			(ty-header (name "Outer2")))
 		(nominal (type "Outer2.Inner2")
 			(ty-header (name "associated_items_comprehensive.Outer2.Inner2")))
+		(nominal (type "Outer3")
+			(ty-header (name "Outer3")))
 		(nominal (type "Outer3.Inner3")
 			(ty-header (name "associated_items_comprehensive.Outer3.Inner3")))
+		(nominal (type "Outer4")
+			(ty-header (name "Outer4")))
 		(nominal (type "Outer4.InnerA")
 			(ty-header (name "associated_items_comprehensive.Outer4.InnerA")))
 		(nominal (type "Outer4.InnerB")
 			(ty-header (name "associated_items_comprehensive.Outer4.InnerB")))
+		(nominal (type "Level1")
+			(ty-header (name "Level1")))
 		(nominal (type "Level1.Level2")
 			(ty-header (name "associated_items_comprehensive.Level1.Level2")))
 		(nominal (type "Level1.Level2.Level3")
 			(ty-header (name "associated_items_comprehensive.Level1.Level2.Level3")))
+		(nominal (type "CrossRef")
+			(ty-header (name "CrossRef")))
 		(nominal (type "CrossRef.Mid")
 			(ty-header (name "associated_items_comprehensive.CrossRef.Mid")))
 		(nominal (type "CrossRef.Mid.Deep")
 			(ty-header (name "associated_items_comprehensive.CrossRef.Mid.Deep")))
+		(nominal (type "ForwardDeep")
+			(ty-header (name "ForwardDeep")))
 		(nominal (type "ForwardDeep.M1")
 			(ty-header (name "associated_items_comprehensive.ForwardDeep.M1")))
 		(nominal (type "ForwardDeep.M1.M2")
 			(ty-header (name "associated_items_comprehensive.ForwardDeep.M1.M2")))
+		(nominal (type "D1")
+			(ty-header (name "D1")))
 		(nominal (type "D1.D2")
 			(ty-header (name "associated_items_comprehensive.D1.D2")))
 		(nominal (type "D1.D2.D3")
 			(ty-header (name "associated_items_comprehensive.D1.D2.D3")))
 		(nominal (type "D1.D2.D3.D4")
 			(ty-header (name "associated_items_comprehensive.D1.D2.D3.D4")))
+		(nominal (type "DeepForward")
+			(ty-header (name "DeepForward")))
 		(nominal (type "DeepForward.A")
 			(ty-header (name "associated_items_comprehensive.DeepForward.A")))
 		(nominal (type "DeepForward.A.B")
 			(ty-header (name "associated_items_comprehensive.DeepForward.A.B")))
 		(nominal (type "DeepForward.A.B.C")
 			(ty-header (name "associated_items_comprehensive.DeepForward.A.B.C")))
+		(nominal (type "Max1")
+			(ty-header (name "Max1")))
 		(nominal (type "Max1.Max2")
 			(ty-header (name "associated_items_comprehensive.Max1.Max2")))
 		(nominal (type "Max1.Max2.Max3")
@@ -3442,6 +3348,8 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-header (name "associated_items_comprehensive.Max1.Max2.Max3.Max4")))
 		(nominal (type "Max1.Max2.Max3.Max4.Max5")
 			(ty-header (name "associated_items_comprehensive.Max1.Max2.Max3.Max4.Max5")))
+		(nominal (type "Full")
+			(ty-header (name "Full")))
 		(nominal (type "Full.L2")
 			(ty-header (name "associated_items_comprehensive.Full.L2")))
 		(nominal (type "Full.L2.L3")
@@ -3450,10 +3358,18 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-header (name "associated_items_comprehensive.Full.L2.L3.L4")))
 		(nominal (type "Full.L2.L3.L4.L5")
 			(ty-header (name "associated_items_comprehensive.Full.L2.L3.L4.L5")))
+		(nominal (type "ScopeTest")
+			(ty-header (name "ScopeTest")))
+		(nominal (type "ScopeNested")
+			(ty-header (name "ScopeNested")))
 		(nominal (type "ScopeNested.Nested")
 			(ty-header (name "associated_items_comprehensive.ScopeNested.Nested")))
+		(nominal (type "Annotated")
+			(ty-header (name "Annotated")))
 		(nominal (type "Annotated.NestedAnnotated")
 			(ty-header (name "associated_items_comprehensive.Annotated.NestedAnnotated")))
+		(nominal (type "Chain")
+			(ty-header (name "Chain")))
 		(nominal (type "Chain.Mid")
 			(ty-header (name "associated_items_comprehensive.Chain.Mid")))
 		(nominal (type "Chain.Mid.Deep")
@@ -3462,42 +3378,56 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-header (name "associated_items_comprehensive.Chain.Mid.Deep.Deeper")))
 		(nominal (type "Chain.Mid.Deep.Deeper.Deepest")
 			(ty-header (name "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest")))
+		(nominal (type "Circular")
+			(ty-header (name "Circular")))
+		(nominal (type "Ultimate")
+			(ty-header (name "Ultimate")))
 		(nominal (type "Ultimate.Branch1")
 			(ty-header (name "associated_items_comprehensive.Ultimate.Branch1")))
-		(nominal (type "Ultimate.Branch2")
-			(ty-header (name "associated_items_comprehensive.Ultimate.Branch2")))
 		(nominal (type "Ultimate.Branch1.Branch1Inner")
 			(ty-header (name "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner")))
+		(nominal (type "Ultimate.Branch2")
+			(ty-header (name "associated_items_comprehensive.Ultimate.Branch2")))
 		(nominal (type "Ultimate.Branch2.Branch2Inner")
 			(ty-header (name "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner")))
+		(nominal (type "ErrOuterAccessInner")
+			(ty-header (name "ErrOuterAccessInner")))
 		(nominal (type "ErrOuterAccessInner.InnerScope")
 			(ty-header (name "associated_items_comprehensive.ErrOuterAccessInner.InnerScope")))
+		(nominal (type "ErrSiblingAccess")
+			(ty-header (name "ErrSiblingAccess")))
 		(nominal (type "ErrSiblingAccess.SiblingA")
 			(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingA")))
 		(nominal (type "ErrSiblingAccess.SiblingB")
 			(ty-header (name "associated_items_comprehensive.ErrSiblingAccess.SiblingB")))
+		(nominal (type "ErrCousinAccess")
+			(ty-header (name "ErrCousinAccess")))
 		(nominal (type "ErrCousinAccess.Branch1")
 			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1")))
-		(nominal (type "ErrCousinAccess.Branch2")
-			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2")))
 		(nominal (type "ErrCousinAccess.Branch1.Leaf1")
 			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch1.Leaf1")))
+		(nominal (type "ErrCousinAccess.Branch2")
+			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2")))
 		(nominal (type "ErrCousinAccess.Branch2.Leaf2")
 			(ty-header (name "associated_items_comprehensive.ErrCousinAccess.Branch2.Leaf2")))
+		(nominal (type "ErrGrandchildAccess")
+			(ty-header (name "ErrGrandchildAccess")))
 		(nominal (type "ErrGrandchildAccess.Child")
 			(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child")))
 		(nominal (type "ErrGrandchildAccess.Child.Grandchild")
 			(ty-header (name "associated_items_comprehensive.ErrGrandchildAccess.Child.Grandchild")))
+		(nominal (type "ErrDeepSiblingAccess")
+			(ty-header (name "ErrDeepSiblingAccess")))
 		(nominal (type "ErrDeepSiblingAccess.Level1")
 			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1")))
-		(nominal (type "ErrDeepSiblingAccess.Level1Alt")
-			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt")))
 		(nominal (type "ErrDeepSiblingAccess.Level1.Level2")
 			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2")))
+		(nominal (type "ErrDeepSiblingAccess.Level1.Level2.Level3")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3")))
 		(nominal (type "ErrDeepSiblingAccess.Level1.OtherBranch")
 			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.OtherBranch")))
-		(nominal (type "ErrDeepSiblingAccess.Level1.Level2.Level3")
-			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1.Level2.Level3"))))
+		(nominal (type "ErrDeepSiblingAccess.Level1Alt")
+			(ty-header (name "associated_items_comprehensive.ErrDeepSiblingAccess.Level1Alt"))))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -3541,35 +3471,6 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "U64"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
-		(expr (type "Dec"))
-		(expr (type "_d"))
-		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -3610,6 +3511,17 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "Dec"))
 		(expr (type "U64"))
 		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
 		(expr (type "Dec"))
@@ -3621,6 +3533,24 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "U64"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Error"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
+		(expr (type "Dec"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

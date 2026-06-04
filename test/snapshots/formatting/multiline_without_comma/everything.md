@@ -197,9 +197,9 @@ PARSE ERROR - everything.md:56:37:56:38
 PARSE ERROR - everything.md:56:38:56:39
 PARSE ERROR - everything.md:56:39:56:40
 PARSE ERROR - everything.md:56:40:56:42
-MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:12:1:13:7
 UNDECLARED TYPE - everything.md:43:5:43:6
+MALFORMED WHERE CLAUSE - everything.md:56:12:56:17
 UNUSED VARIABLE - everything.md:88:5:88:6
 UNUSED VARIABLE - everything.md:93:4:93:5
 UNUSED VARIABLE - everything.md:98:5:98:6
@@ -1174,17 +1174,6 @@ g : e -> e where module(e).A, module(e).B
                                        ^^
 
 
-**MALFORMED WHERE CLAUSE**
-This where clause could not be parsed correctly.
-
-**everything.md:56:12:56:17:**
-```roc
-g : e -> e where module(e).A, module(e).B
-```
-           ^^^^^
-
-Check the syntax of your where clause.
-
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
 
@@ -1206,6 +1195,17 @@ This type is referenced here:
 ```
     ^
 
+
+**MALFORMED WHERE CLAUSE**
+This where clause could not be parsed correctly.
+
+**everything.md:56:12:56:17:**
+```roc
+g : e -> e where module(e).A, module(e).B
+```
+           ^^^^^
+
+Check the syntax of your where clause.
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -1886,6 +1886,14 @@ h = |x, y| {
 								(value
 									(e-lookup-local
 										(p-assign (ident "a")))))))))))
+	(s-import (module "I1")
+		(exposes
+			(exposed (name "I11") (wildcard false))
+			(exposed (name "I12") (wildcard false))))
+	(s-import (module "I2")
+		(exposes
+			(exposed (name "I21") (alias "Ias1") (wildcard false))
+			(exposed (name "I22") (alias "Ias2") (wildcard false))))
 	(s-alias-decl
 		(ty-header (name "A")
 			(ty-args
@@ -1908,15 +1916,7 @@ h = |x, y| {
 		(ty-header (name "F"))
 		(ty-tag-union
 			(ty-tag-name (name "A"))
-			(ty-tag-name (name "B"))))
-	(s-import (module "I1")
-		(exposes
-			(exposed (name "I11") (wildcard false))
-			(exposed (name "I12") (wildcard false))))
-	(s-import (module "I2")
-		(exposes
-			(exposed (name "I21") (alias "Ias1") (wildcard false))
-			(exposed (name "I22") (alias "Ias2") (wildcard false)))))
+			(ty-tag-name (name "B")))))
 ~~~
 # TYPES
 ~~~clojure

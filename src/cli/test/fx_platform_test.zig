@@ -17,6 +17,7 @@ const std = @import("std");
 const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
+const fx_test_options = @import("fx_test_options");
 
 // Wire up tests from fx_test_specs module
 comptime {
@@ -309,9 +310,17 @@ fn expectDevRuntimeDivisionByZero() !void {
 
 /// Shared body for IO spec tests with a specific backend.
 fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !void {
+    try runIoSpecTestWithEnv(opt_flag, spec, null);
+}
+
+fn runIoSpecTestWithEnv(
+    comptime opt_flag: []const u8,
+    spec: fx_test_specs.TestSpec,
+    extra_env: ?*const std.process.Environ.Map,
+) !void {
     const allocator = testing.allocator;
 
-    const result = util.runRocCommand(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+    const result = util.runRocCommandWithEnv(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }, extra_env) catch |err| {
         std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
         return err;
     };
@@ -328,14 +337,23 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !v
 }
 
 fn runIoSpecTests(comptime opt_flag: []const u8) !void {
+    if (!fx_test_options.include_io_spec_tests) return error.SkipZigTest;
+    std.debug.assert(fx_test_options.io_spec_shard_count > 0);
+    std.debug.assert(fx_test_options.io_spec_shard_index < fx_test_options.io_spec_shard_count);
+
+    const allocator = testing.allocator;
+    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
+    defer env_map.deinit();
+
     var passed: usize = 0;
     var failed: usize = 0;
 
-    for (fx_test_specs.io_spec_tests) |spec| {
+    for (fx_test_specs.io_spec_tests, 0..) |spec, spec_i| {
+        if (spec_i % fx_test_options.io_spec_shard_count != fx_test_options.io_spec_shard_index) continue;
         if (spec.skip) continue;
         if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
 
-        runIoSpecTest(opt_flag, spec) catch {
+        runIoSpecTestWithEnv(opt_flag, spec, &env_map) catch {
             failed += 1;
             continue;
         };

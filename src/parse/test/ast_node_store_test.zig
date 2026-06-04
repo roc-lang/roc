@@ -747,6 +747,7 @@ test "NodeStore round trip - Expr" {
         .block = .{
             .region = rand_region(),
             .statements = AST.Statement.Span{ .span = rand_span() },
+            .scope = rand_idx(AST.DeclIndex.ScopeIdx),
         },
     });
     try expressions.append(gpa, AST.Expr{

@@ -219,6 +219,9 @@ PARSE ERROR - fuzz_crash_023.md:178:38:178:40
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:41
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:46
 PARSE ERROR - fuzz_crash_023.md:178:52:178:54
+NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
+MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
+MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
 UNDECLARED TYPE - fuzz_crash_023.md:36:13:36:16
 UNDECLARED TYPE - fuzz_crash_023.md:39:2:39:5
@@ -229,9 +232,6 @@ UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:10
 UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
 UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
 UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
-NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
-MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
-MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
@@ -249,8 +249,6 @@ UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:147:9:147:13
-NOT IMPLEMENTED - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - fuzz_crash_023.md:1:1:1:1
 UNDEFINED VARIABLE - fuzz_crash_023.md:158:2:158:11
 UNDEFINED VARIABLE - fuzz_crash_023.md:175:3:175:15
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:38:178:40
@@ -277,6 +275,7 @@ UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
+TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 TYPE MISMATCH - fuzz_crash_023.md:146:15:146:18
 MISSING METHOD - fuzz_crash_023.md:176:12:176:22
@@ -340,6 +339,47 @@ This is an unexpected parsing error. Please check your syntax.
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
 	                                                  ^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: malformed import module name contains invalid control characters
+
+**fuzz_crash_023.md:6:1:12:4:**
+```roc
+import # Comment after import keyword
+	pf # Comment after qualifier
+		.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+```
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**MODULE NOT FOUND**
+The module `BadName` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_023.md:16:1:16:27:**
+```roc
+import BadName as GoodName
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadNameMultiline` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_023.md:17:1:20:20:**
+```roc
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+```
 
 
 **UNDECLARED TYPE**
@@ -450,47 +490,6 @@ This type is referenced here:
 	bar : Something, # Another after pattern record field
 ```
 	      ^^^^^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: malformed import module name contains invalid control characters
-
-**fuzz_crash_023.md:6:1:12:4:**
-```roc
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-```
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**MODULE NOT FOUND**
-The module `BadName` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:16:1:16:27:**
-```roc
-import BadName as GoodName
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `BadNameMultiline` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:17:1:20:20:**
-```roc
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-```
 
 
 **UNDEFINED VARIABLE**
@@ -690,30 +689,6 @@ Is there an `import` or `exposing` missing up-top?
 	expect blah == 1
 ```
 	       ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_023.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_023.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **UNDEFINED VARIABLE**
@@ -1070,6 +1045,21 @@ This declaration has a type annotation but no implementation.
 
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
+
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
+**fuzz_crash_023.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+The `match_time` function has the type:
+
+    [Blue, Green, Red, ..], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
@@ -2394,12 +2384,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 2356)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2517,7 +2507,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3016)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3012)
 									(receiver
 										(e-match
 											(match
@@ -2542,7 +2532,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3011)
+										(e-dispatch-call (method "times") (constraint-fn-var 3007)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2557,18 +2547,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3124)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3120)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3089)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3085)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3224)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3220)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3189)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3185)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2583,11 +2573,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3334)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3330)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3329)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3325)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2602,12 +2592,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3400)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3396)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3367)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3363)
 																			(receiver
 																				(e-match
 																					(match
@@ -2759,6 +2749,23 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
+	(s-import (module "pf.Stdout")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
+	(s-import (module "#malformed_import_0")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
+	(s-import (module "pkg.Something")
+		(exposes
+			(exposed (name "func") (alias "function") (wildcard false))
+			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
+			(exposed (name "Custom") (wildcard true))))
+	(s-import (module "BadName")
+		(exposes))
+	(s-import (module "BadNameMultiline")
+		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2850,23 +2857,6 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-apply (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
-	(s-import (module "pf.Stdout")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import (module "#malformed_import_0")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import (module "pkg.Something")
-		(exposes
-			(exposed (name "func") (alias "function") (wildcard false))
-			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "BadName")
-		(exposes))
-	(s-import (module "BadNameMultiline")
-		(exposes))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
