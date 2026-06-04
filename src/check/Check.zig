@@ -9307,20 +9307,12 @@ fn probeUnifyWithoutRecordingProblems(
     var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
     defer probe_snapshots.deinit();
 
-    const result = try unifier.unifyInContext(
-        self.cir.gpa,
-        self.cir.getIdentStoreConst(),
-        self.cir.qualified_module_ident,
-        self.types,
-        &probe_problems,
-        &probe_snapshots,
-        &self.type_writer,
-        &self.unify_scratch,
-        &self.occurs_scratch,
-        expected,
-        actual,
-        .none,
-    );
+    // Probe against throwaway problem/snapshot stores so a mismatch here is
+    // neither recorded nor poisoned — only the ok/not-ok answer matters.
+    var env = self.unifyEnv();
+    env.problems = &probe_problems;
+    env.snapshots = &probe_snapshots;
+    const result = try unifier.unify(&env, expected, actual, .{});
 
     return result.isOk();
 }
