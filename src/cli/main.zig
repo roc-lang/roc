@@ -3205,25 +3205,83 @@ fn freeOwnedWasmInputs(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8)) void {
     owned_inputs.deinit(ctx.gpa);
 }
 
-fn preloadWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) !backend.wasm.WasmModule {
-    const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
+fn preloadWasmObject(
+    ctx: *CliCtx,
+    path: []const u8,
+    member_name: ?[]const u8,
+    bytes: []const u8,
+) !backend.wasm.WasmModule {
     return backend.wasm.WasmModule.preload(ctx.gpa, bytes, true) catch |err| {
-        std.log.err("Failed to preload wasm input {s}: {}", .{ path, err });
+        if (member_name) |name| {
+            std.log.err("Failed to preload wasm archive member {s}({s}): {}", .{ path, name, err });
+        } else {
+            std.log.err("Failed to preload wasm input {s}: {}", .{ path, err });
+        }
         return err;
     };
 }
 
-fn mergeWasmInput(
+fn addWasmObject(
     ctx: *CliCtx,
     module: *backend.wasm.WasmModule,
-    owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
+    member_name: ?[]const u8,
+    bytes: []const u8,
+    loaded_module: *bool,
 ) !void {
-    var next_module = try preloadWasmInput(ctx, owned_inputs, path);
+    var next_module = try preloadWasmObject(ctx, path, member_name, bytes);
+
+    if (!loaded_module.*) {
+        module.* = next_module;
+        loaded_module.* = true;
+        return;
+    }
+
     defer next_module.deinit();
 
     var merge_result = try module.mergeModule(&next_module);
     merge_result.deinit();
+}
+
+fn addWasmInput(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    owned_inputs: *std.ArrayList([]u8),
+    path: []const u8,
+    loaded_module: *bool,
+) !void {
+    const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
+
+    if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
+        try addWasmObject(ctx, module, path, null, bytes, loaded_module);
+        return;
+    }
+
+    if (!backend.wasm.ObjectArchive.isArchive(bytes)) {
+        std.log.err("Failed to preload wasm input {s}: {}", .{ path, error.InvalidMagic });
+        return error.InvalidMagic;
+    }
+
+    var member_count: usize = 0;
+    var iter = backend.wasm.ObjectArchive.Iterator.init(bytes) catch |err| {
+        std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
+        return err;
+    };
+
+    while (true) {
+        const maybe_member = iter.next() catch |err| {
+            std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
+            return err;
+        };
+        const member = maybe_member orelse break;
+        member_count += 1;
+        try addWasmObject(ctx, module, path, member.name, member.bytes, loaded_module);
+    }
+
+    if (member_count == 0) {
+        std.log.err("Wasm archive {s} does not contain object members", .{path});
+        return error.EmptyArchive;
+    }
 }
 
 fn rocBuildWasmSurgical(
@@ -3251,7 +3309,7 @@ fn rocBuildWasmSurgical(
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
     if (link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
-        try ctx.io.stderr().writeAll("Error: wasm32 builds require a relocatable wasm platform file.\n");
+        try ctx.io.stderr().writeAll("Error: wasm32 builds require a relocatable wasm platform file or archive.\n");
         return error.UnsupportedTarget;
     }
 
@@ -3263,20 +3321,10 @@ fn rocBuildWasmSurgical(
     errdefer if (loaded_module) wasm_module.deinit();
 
     for (link_inputs.platform_files_pre) |path| {
-        if (!loaded_module) {
-            wasm_module = try preloadWasmInput(ctx, &owned_inputs, path);
-            loaded_module = true;
-        } else {
-            try mergeWasmInput(ctx, &wasm_module, &owned_inputs, path);
-        }
+        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
     for (link_inputs.platform_files_post) |path| {
-        if (!loaded_module) {
-            wasm_module = try preloadWasmInput(ctx, &owned_inputs, path);
-            loaded_module = true;
-        } else {
-            try mergeWasmInput(ctx, &wasm_module, &owned_inputs, path);
-        }
+        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
     wasm_module.exportGlobalSymbols();
