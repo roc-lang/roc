@@ -834,6 +834,8 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_host_abi_types)
 		.concat("\n")
+		.concat(generate_roc_box_helpers)
+		.concat("\n")
 		.concat(generate_roc_str)
 		.concat("\n")
 		.concat(generate_roc_list_generic)
@@ -983,6 +985,94 @@ generate_host_abi_types =
 	\\        }
 	\\    }
 	\\    return @ptrCast(func);
+	\\}
+	\\
+
+## Generate self-contained RocBox refcount helpers
+generate_roc_box_helpers : Str
+generate_roc_box_helpers =
+	\\/// Payload drop callback for a boxed value.
+	\\///
+	\\/// The callback receives the boxed payload data pointer and must recursively
+	\\/// decref any Roc refcounted values inside the payload. It must not free the
+	\\/// box allocation; `decrefBoxWith` and `freeBoxWith` free it after the callback.
+	\\pub const RocBoxPayloadDecref = *const fn (?*anyopaque, *RocOps) callconv(.c) void;
+	\\
+	\\/// Increment the refcount of a boxed payload data pointer.
+	\\pub fn increfBox(data_ptr: ?*anyopaque, amount: isize) void {
+	\\    const data = boxDataPtr(data_ptr) orelse return;
+	\\    const rc = boxRefcountPtr(data);
+	\\    if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
+	\\    _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
+	\\}
+	\\
+	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
+	\\pub fn decrefBox(data_ptr: ?*anyopaque, roc_ops: *RocOps) void {
+	\\    decrefBoxWith(data_ptr, @alignOf(usize), null, roc_ops);
+	\\}
+	\\
+	\\/// Decrement a boxed payload and run payload teardown when this is the final ref.
+	\\pub fn decrefBoxWith(
+	\\    data_ptr: ?*anyopaque,
+	\\    payload_alignment: usize,
+	\\    payload_decref: ?RocBoxPayloadDecref,
+	\\    roc_ops: *RocOps,
+	\\) void {
+	\\    const data = boxDataPtr(data_ptr) orelse return;
+	\\    const rc = boxRefcountPtr(data);
+	\\    if (rc.* == 0) return; // REFCOUNT_STATIC_DATA
+	\\
+	\\    const prev = @atomicRmw(isize, rc, .Sub, 1, .monotonic);
+	\\    if (prev == 1) {
+	\\        if (payload_decref) |callback| callback(data_ptr, roc_ops);
+	\\        freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_ops);
+	\\    }
+	\\}
+	\\
+	\\/// Free a boxed payload allocation immediately after running payload teardown.
+	\\pub fn freeBoxWith(
+	\\    data_ptr: ?*anyopaque,
+	\\    payload_alignment: usize,
+	\\    payload_decref: ?RocBoxPayloadDecref,
+	\\    roc_ops: *RocOps,
+	\\) void {
+	\\    const data = boxDataPtr(data_ptr) orelse return;
+	\\    if (payload_decref) |callback| callback(data_ptr, roc_ops);
+	\\    freeBoxAllocation(data, payload_alignment, payload_decref != null, roc_ops);
+	\\}
+	\\
+	\\/// Return true when a boxed payload data pointer has exactly one live ref.
+	\\pub fn isUniqueBox(data_ptr: ?*anyopaque) bool {
+	\\    const data = boxDataPtr(data_ptr) orelse return true;
+	\\    const rc = boxRefcountPtr(data);
+	\\    return rc.* == 1;
+	\\}
+	\\
+	\\fn boxDataPtr(data_ptr: ?*anyopaque) ?[*]u8 {
+	\\    const ptr = data_ptr orelse return null;
+	\\    return @ptrCast(ptr);
+	\\}
+	\\
+	\\fn boxRefcountPtr(data: [*]u8) *isize {
+	\\    return @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
+	\\}
+	\\
+	\\fn freeBoxAllocation(
+	\\    data: [*]u8,
+	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
+	\\    roc_ops: *RocOps,
+	\\) void {
+	\\    const ptr_width = @sizeOf(usize);
+	\\    const required_space: usize = if (payload_contains_refcounted) (2 * ptr_width) else ptr_width;
+	\\    const header_bytes = @max(required_space, payload_alignment);
+	\\    const alloc_alignment = @max(ptr_width, payload_alignment);
+	\\    const base: *anyopaque = @ptrFromInt(@intFromPtr(data) - header_bytes);
+	\\    var dealloc_args: RocDealloc = .{
+	\\        .alignment = alloc_alignment,
+	\\        .ptr = base,
+	\\    };
+	\\    roc_ops.roc_dealloc(&dealloc_args, roc_ops.env);
 	\\}
 	\\
 

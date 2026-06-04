@@ -45,6 +45,131 @@ fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
     }
 }
 
+fn runGeneratedZigBoxHelperTest(allocator: std.mem.Allocator, tmp_path: []const u8) !void {
+    const test_source =
+        \\const std = @import("std");
+        \\const abi = @import("roc_platform_abi.zig");
+        \\
+        \\const Env = struct {
+        \\    callback_count: usize = 0,
+        \\    callback_rc: isize = -1,
+        \\    dealloc_count: usize = 0,
+        \\    dealloc_ptr: usize = 0,
+        \\    dealloc_alignment: usize = 0,
+        \\};
+        \\
+        \\fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+        \\
+        \\var hosted_fns = [_]abi.HostedFn{&dummyHostedFn};
+        \\
+        \\fn rocAlloc(_: *abi.RocAlloc, _: *anyopaque) callconv(.c) void {
+        \\    unreachable;
+        \\}
+        \\
+        \\fn rocDealloc(dealloc_args: *abi.RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
+        \\    const env: *Env = @ptrCast(@alignCast(env_ptr));
+        \\    env.dealloc_count += 1;
+        \\    env.dealloc_ptr = @intFromPtr(dealloc_args.ptr);
+        \\    env.dealloc_alignment = dealloc_args.alignment;
+        \\}
+        \\
+        \\fn rocRealloc(_: *abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+        \\    unreachable;
+        \\}
+        \\
+        \\fn rocDbg(_: *const abi.RocDbg, _: *anyopaque) callconv(.c) void {}
+        \\fn rocExpectFailed(_: *const abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+        \\fn rocCrashed(_: *const abi.RocCrashed, _: *anyopaque) callconv(.c) void {}
+        \\
+        \\fn makeOps(env: *Env) abi.RocOps {
+        \\    return .{
+        \\        .env = @ptrCast(env),
+        \\        .roc_alloc = &rocAlloc,
+        \\        .roc_dealloc = &rocDealloc,
+        \\        .roc_realloc = &rocRealloc,
+        \\        .roc_dbg = &rocDbg,
+        \\        .roc_expect_failed = &rocExpectFailed,
+        \\        .roc_crashed = &rocCrashed,
+        \\        .hosted_fns = .{ .count = 0, .fns = &hosted_fns },
+        \\    };
+        \\}
+        \\
+        \\fn dataPtr(comptime payload_contains_refcounted: bool, backing: *align(16) [64]u8) *anyopaque {
+        \\    const header_bytes = if (payload_contains_refcounted) 2 * @sizeOf(usize) else @sizeOf(usize);
+        \\    const base: [*]u8 = @ptrCast(backing);
+        \\    return @ptrCast(base + header_bytes);
+        \\}
+        \\
+        \\fn refcountPtr(data_ptr: *anyopaque) *isize {
+        \\    return @ptrFromInt(@intFromPtr(data_ptr) - @sizeOf(isize));
+        \\}
+        \\
+        \\fn payloadDrop(data_ptr: ?*anyopaque, roc_ops: *abi.RocOps) callconv(.c) void {
+        \\    const env: *Env = @ptrCast(@alignCast(roc_ops.env));
+        \\    env.callback_count += 1;
+        \\    env.callback_rc = refcountPtr(data_ptr orelse unreachable).*;
+        \\}
+        \\
+        \\test "decrefBoxWith runs payload callback after final atomic decrement" {
+        \\    var env = Env{};
+        \\    var ops = makeOps(&env);
+        \\    var backing: [64]u8 align(16) = undefined;
+        \\    const ptr = dataPtr(true, &backing);
+        \\
+        \\    refcountPtr(ptr).* = 1;
+        \\    abi.decrefBoxWith(ptr, @alignOf(usize), &payloadDrop, &ops);
+        \\
+        \\    try std.testing.expectEqual(@as(usize, 1), env.callback_count);
+        \\    try std.testing.expectEqual(@as(isize, 0), env.callback_rc);
+        \\    try std.testing.expectEqual(@as(usize, 1), env.dealloc_count);
+        \\    try std.testing.expectEqual(@intFromPtr(&backing), env.dealloc_ptr);
+        \\    try std.testing.expectEqual(@as(usize, @alignOf(usize)), env.dealloc_alignment);
+        \\}
+        \\
+        \\test "isUniqueBox returns false for static refcount" {
+        \\    var env = Env{};
+        \\    var ops = makeOps(&env);
+        \\    var backing: [64]u8 align(16) = undefined;
+        \\    const ptr = dataPtr(false, &backing);
+        \\
+        \\    refcountPtr(ptr).* = 0;
+        \\
+        \\    try std.testing.expect(!abi.isUniqueBox(ptr));
+        \\    abi.decrefBox(ptr, &ops);
+        \\    try std.testing.expectEqual(@as(usize, 0), env.dealloc_count);
+        \\}
+    ;
+
+    const test_path = std.fs.path.join(allocator, &.{ tmp_path, "box_helper_test.zig" }) catch unreachable;
+    defer allocator.free(test_path);
+
+    std.Io.Dir.cwd().writeFile(std.testing.io, .{
+        .sub_path = test_path,
+        .data = test_source,
+    }) catch |err| {
+        std.debug.print("\nFailed to write Zig box helper test file: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+
+    const zig_test_result = std.process.run(allocator, std.testing.io, .{
+        .argv = &.{ "zig", "test", test_path },
+    }) catch |err| {
+        std.debug.print("\nFailed to run zig test for generated box helpers: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(zig_test_result.stdout);
+    defer allocator.free(zig_test_result.stderr);
+
+    if (zig_test_result.term != .exited or zig_test_result.term.exited != 0) {
+        std.debug.print("\ngenerated Zig box helper test failed!\n", .{});
+        std.debug.print("\n--- Compiler stderr ---\n{s}\n", .{zig_test_result.stderr});
+        std.debug.print("\n--- Test source ---\n{s}\n", .{test_source});
+        try std.testing.expect(false);
+    }
+}
+
 test "glue command with DebugGlue succeeds (interpreter)" {
     const allocator = std.testing.allocator;
 
@@ -254,7 +379,12 @@ test "glue regression: ZigGlue interpreter succeeds on fx platform" {
     // Generated file should contain key Zig constructs
     try std.testing.expect(std.mem.find(u8, generated_content, "pub const RocStr") != null);
     try std.testing.expect(std.mem.find(u8, generated_content, "pub const RocOps") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "pub fn increfBox") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "pub fn decrefBox") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "pub fn decrefBoxWith") != null);
     try std.testing.expect(std.mem.find(u8, generated_content, "Entrypoint") != null);
+
+    try runGeneratedZigBoxHelperTest(allocator, tmp_path);
 }
 
 test "glue regression: ZigGlue quotes bang record fields" {
