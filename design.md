@@ -1081,7 +1081,7 @@ loop iterator:
         One item next_iterator ->
             match item with
                 pattern -> body; continue next_iterator
-        Skip { count, rest } ->
+        Skip { rest } ->
             continue rest
 ```
 
@@ -1094,9 +1094,9 @@ The exact step tag names and payloads come from the checked/builtin `Iter`
 definition and the monomorphic iterator type. The `.iter` and `.next` calls are
 resolved through the same Monotype static-dispatch path described above.
 
-The `Skip` count is part of the iterator step value. A plain source `for` loop
-does not bind it, but iterator adapters may use it to preserve efficient skip
-information.
+A `Skip` carries only `rest`: it signals "advanced one position, produced no
+item this step," which is what keeps adapters like `keep_if` non-recursive. A
+plain source `for` loop binds nothing from it and simply continues with `rest`.
 
 No `for` node exists after Monotype IR.
 
