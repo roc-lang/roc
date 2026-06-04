@@ -904,6 +904,24 @@ test "roc run test/str/app_static_24_byte_string.roc does not panic" {
 
 // roc build tests
 
+test "roc build --opt=size and --opt=speed generate LLVM object files" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    for ([_][]const u8{ "--opt=size", "--opt=speed" }) |opt_arg| {
+        const result = try util.runRoc(gpa, &.{ "build", opt_arg, "--no-link", "--no-cache" }, "test/str/app.roc");
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+
+        if (!(result.term == .exited and result.term.exited == 0)) {
+            std.debug.print("roc build {s} failed\nstdout: {s}\nstderr: {s}\n", .{ opt_arg, result.stdout, result.stderr });
+        }
+        try testing.expect(result.term == .exited and result.term.exited == 0);
+        try testing.expect(std.mem.find(u8, result.stdout, "Object file generated:") != null);
+        try testing.expect(std.mem.find(u8, result.stderr, "OPTIMIZATION MODE NOT IMPLEMENTED") == null);
+    }
+}
+
 test "roc build creates executable from test/int/app.roc (interpreter)" {
     // Skip on Windows - test/int platform doesn't have Windows host libraries
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;

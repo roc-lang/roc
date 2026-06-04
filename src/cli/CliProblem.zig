@@ -115,6 +115,12 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// The requested optimization level is not implemented for this command
+    unsupported_opt_level: struct {
+        command: []const u8,
+        opt: []const u8,
+    },
+
     /// Compilation produced errors
     compilation_failed: struct {
         path: []const u8,
@@ -224,6 +230,7 @@ pub const CliProblem = union(enum) {
             .platform_not_found,
             .no_platform_found,
             .build_not_supported_for_headerless,
+            .unsupported_opt_level,
             .compilation_failed,
             .linker_failed,
             => .fatal,
@@ -280,6 +287,7 @@ pub const CliProblem = union(enum) {
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
+            .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -580,6 +588,25 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     return report;
 }
 
+fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "OPTIMIZATION MODE NOT IMPLEMENTED", .fatal);
+
+    try report.document.addText("The optimization mode ");
+    try report.document.addAnnotated(info.opt, .emphasized);
+    try report.document.addText(" is not implemented for ");
+    try report.document.addAnnotated(info.command, .emphasized);
+    try report.document.addText(" yet.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Use ");
+    try report.document.addAnnotated("--opt=dev", .emphasized);
+    try report.document.addText(" for compiled builds, or ");
+    try report.document.addAnnotated("--opt=interpreter", .emphasized);
+    try report.document.addText(" for interpreter builds.");
+
+    return report;
+}
+
 fn createCompilationFailedReport(allocator: Allocator, info: anytype) !Report {
     var report = Report.init(allocator, "COMPILATION FAILED", .fatal);
 
@@ -870,6 +897,21 @@ test "compilation_failed generates correct report" {
     defer report.deinit();
 
     try std.testing.expectEqualStrings("COMPILATION FAILED", report.title);
+    try std.testing.expectEqual(Severity.fatal, report.severity);
+}
+
+test "unsupported_opt_level generates correct report" {
+    const allocator = std.testing.allocator;
+
+    const problem = CliProblem{ .unsupported_opt_level = .{
+        .command = "roc build",
+        .opt = "size",
+    } };
+
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("OPTIMIZATION MODE NOT IMPLEMENTED", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 

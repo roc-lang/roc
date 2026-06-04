@@ -681,7 +681,7 @@ const StaticDataBuilder = struct {
         const proc_symbol = try backend.procSymbolName(self.allocator, proc.name);
         var proc_symbol_owned = true;
         errdefer if (proc_symbol_owned) self.allocator.free(proc_symbol);
-        try self.writeOwnedPointerRelocation(payload, &payload_relocs, 0, proc_symbol, 0);
+        try self.writeOwnedPointerRelocation(payload, &payload_relocs, 0, proc_symbol, 0, .function_pointer);
         proc_symbol_owned = false;
 
         try self.writeCaptures(
@@ -818,6 +818,7 @@ const StaticDataBuilder = struct {
                 .offset = data_offset + relocation.offset,
                 .target_symbol_name = relocation.target_symbol_name,
                 .addend = relocation.addend,
+                .kind = relocation.kind,
                 .owns_target_symbol_name = relocation.owns_target_symbol_name,
             };
         }
@@ -873,12 +874,14 @@ const StaticDataBuilder = struct {
         offset: u32,
         target_symbol_name: []const u8,
         addend: i64,
+        kind: StaticDataRelocation.Kind,
     ) Allocator.Error!void {
         self.writeTargetWord(bytes, offset, 0);
         try relocations.append(self.allocator, .{
             .offset = offset,
             .target_symbol_name = target_symbol_name,
             .addend = addend,
+            .kind = kind,
             .owns_target_symbol_name = true,
         });
     }

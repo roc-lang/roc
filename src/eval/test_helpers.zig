@@ -1665,14 +1665,19 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
 
-    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", &.{
-        .{
-            .symbol_name = "roc_eval_test_main",
-            .proc = lowered.mainProc(),
-            .arg_layouts = arg_layouts,
-            .ret_layout = proc.ret_layout,
-        },
-    });
+    const LlvmEvalEntrypoint = struct {
+        symbol_name: []const u8,
+        proc: LirProcSpecId,
+        arg_layouts: []const LayoutIdx,
+        ret_layout: LayoutIdx,
+    };
+    const llvm_entrypoints = [_]LlvmEvalEntrypoint{.{
+        .symbol_name = "roc_eval_test_main",
+        .proc = lowered.mainProc(),
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+    }};
+    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", llvm_entrypoints[0..]);
     defer {
         var owned = bitcode;
         owned.deinit();

@@ -7,6 +7,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WasmLinking = @import("WasmLinking.zig");
+const StaticDataExport = @import("../dev/StaticDataExport.zig").StaticDataExport;
+const StaticDataRelocation = @import("../dev/StaticDataExport.zig").StaticDataRelocation;
 const index_types = @import("index_types.zig");
 const DefinedFunction = index_types.DefinedFunction;
 const FunctionIndex = index_types.FunctionIndex;
@@ -680,11 +682,17 @@ pub fn findDefinedFunctionSymbolExact(self: *const Self, name: []const u8) Symbo
         const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
         if (!std.mem.eql(u8, sym_name, name)) continue;
         if (sym.kind != .function) return error.WrongSymbolKind;
-        if (sym.isUndefined()) return error.UndefinedSymbol;
+        if (sym.isUndefined()) continue;
         if (found != null) return error.DuplicateSymbol;
         found = SymbolIndex.fromRaw(@intCast(i));
     }
     return found orelse error.MissingSymbol;
+}
+
+/// Find exactly one defined function symbol by exact name and return its function index.
+pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) SymbolLookupError!u32 {
+    const symbol = try self.findDefinedFunctionSymbolExact(name);
+    return self.linking.symbol_table.items[symbol.raw()].index;
 }
 
 fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
@@ -811,6 +819,87 @@ pub fn addDataSymbol(
         .index = segment_index,
         .data_offset = data_offset,
         .data_size = size,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Build a relocatable data-only module from materialized static data exports.
+pub fn staticDataModule(allocator: Allocator, exports: []const StaticDataExport) !Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+    try module.addStaticDataExports(exports);
+    return module;
+}
+
+/// Add materialized static data exports to this relocatable module.
+pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) !void {
+    if (exports.len == 0) return;
+
+    const segment_indices = try self.allocator.alloc(u32, exports.len);
+    defer self.allocator.free(segment_indices);
+
+    for (exports, 0..) |data_export, i| {
+        segment_indices[i] = @intCast(self.data_segments.items.len);
+        _ = try self.addDataSegmentWithInfo(
+            data_export.bytes,
+            @max(data_export.alignment, 1),
+            data_export.symbol_name,
+            0,
+        );
+
+        const symbol_flags: u32 = if (data_export.is_global)
+            0
+        else
+            WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN;
+        const symbol_offset: usize = @intCast(data_export.symbol_offset);
+        _ = try self.addDataSymbol(
+            segment_indices[i],
+            data_export.symbol_name,
+            data_export.symbol_offset,
+            @intCast(data_export.bytes.len - symbol_offset),
+            symbol_flags,
+        );
+    }
+
+    for (exports, segment_indices) |data_export, segment_index| {
+        for (data_export.relocations) |relocation| {
+            const symbol_index = try self.staticDataRelocationSymbol(relocation);
+            switch (relocation.kind) {
+                .address => try self.reloc_data.entries.append(self.allocator, .{ .offset = .{
+                    .type_id = .memory_addr_i32,
+                    .offset = @intCast(relocation.offset),
+                    .symbol_index = symbol_index.raw(),
+                    .addend = @intCast(relocation.addend),
+                    .data_segment_index = segment_index,
+                } }),
+                .function_pointer => try self.reloc_data.entries.append(self.allocator, .{ .index = .{
+                    .type_id = .table_index_i32,
+                    .offset = @intCast(relocation.offset),
+                    .symbol_index = symbol_index.raw(),
+                    .data_segment_index = segment_index,
+                } }),
+            }
+        }
+    }
+}
+
+fn staticDataRelocationSymbol(self: *Self, relocation: StaticDataRelocation) !SymbolIndex {
+    const kind: WasmLinking.SymKind = switch (relocation.kind) {
+        .address => .data,
+        .function_pointer => .function,
+    };
+    if (self.findSymbolByNameAndKind(relocation.target_symbol_name, kind)) |symbol_index| {
+        return SymbolIndex.fromRaw(symbol_index);
+    }
+    if (relocation.kind == .address) return error.MissingSymbol;
+
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    const flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME;
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = kind,
+        .flags = flags,
+        .name = relocation.target_symbol_name,
+        .index = 0,
     });
     return SymbolIndex.fromRaw(raw_symbol);
 }
@@ -1216,12 +1305,34 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) !Merge
     const total_source_fns = source.import_fn_count + source_defined_count;
     const func_remap = try gpa.alloc(u32, total_source_fns);
     defer gpa.free(func_remap);
+    const source_import_resolved_to_defined = try gpa.alloc(bool, source.imports.items.len);
+    defer gpa.free(source_import_resolved_to_defined);
+    @memset(source_import_resolved_to_defined, false);
 
     // Remap source imports → self imports (by name match).
     // NOTE: This loop may add new imports to self, changing importCount().
     // We must compute self_defined_base AFTER this loop completes.
     const old_import_count = self.importCount();
     for (source.imports.items, 0..) |src_imp, src_idx| {
+        const remapped_type = type_remap[src_imp.type_idx];
+        var matched_defined: ?u32 = null;
+        for (self.linking.symbol_table.items) |sym| {
+            if (sym.kind != .function or sym.isUndefined()) continue;
+            const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
+            if (!std.mem.eql(u8, sym_name, src_imp.field_name)) continue;
+            if (matched_defined != null) return error.DuplicateSymbol;
+            matched_defined = sym.index;
+        }
+        if (matched_defined) |fn_idx| {
+            if (fn_idx < old_import_count) return error.InvalidSection;
+            const local_idx = fn_idx - old_import_count;
+            if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
+            if (self.func_type_indices.items[local_idx] != remapped_type) return error.FunctionTypeMismatch;
+            func_remap[src_idx] = fn_idx;
+            source_import_resolved_to_defined[src_idx] = true;
+            continue;
+        }
+
         // Find matching import in self by field_name.
         var matched: ?u32 = null;
         for (self.imports.items, 0..) |self_imp, self_idx| {
@@ -1232,7 +1343,6 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) !Merge
         }
         func_remap[src_idx] = matched orelse {
             // Source imports a function self doesn't have — add it as a new import.
-            const remapped_type = type_remap[src_imp.type_idx];
             func_remap[src_idx] = try self.addImport(src_imp.module_name, src_imp.field_name, remapped_type);
             continue;
         };
@@ -1259,6 +1369,9 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) !Merge
             if (exp.kind == .func and exp.idx >= old_import_count) {
                 exp.idx += import_delta;
             }
+        }
+        for (source_import_resolved_to_defined, 0..) |resolved_to_defined, src_idx| {
+            if (resolved_to_defined) func_remap[src_idx] += import_delta;
         }
     }
 

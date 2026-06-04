@@ -103,7 +103,7 @@ var global_host_context: HostContext = .{};
 
 /// Initialize WASM module from file.
 fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data = std.Io.Dir.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+    const wasm_data = std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -211,7 +211,7 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const 
     }
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
@@ -220,15 +220,13 @@ pub fn main() !void {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    // Handle CLI arguments
-    const args = try std.process.argsAlloc(arena);
-
     var wasm_path: []const u8 = "test/wasm/app.wasm";
     var expected_output: []const u8 = "Hello from Roc WASM!";
 
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
+    var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, arena);
+    defer arg_iter.deinit();
+    _ = arg_iter.skip();
+    while (arg_iter.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
             std.debug.print("Usage: test-wasm-static-lib [options]\n", .{});
             std.debug.print("Options:\n", .{});
@@ -237,19 +235,15 @@ pub fn main() !void {
             std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
-            i += 1;
-            if (i >= args.len) {
+            wasm_path = arg_iter.next() orelse {
                 std.debug.print("Error: --wasm-path requires an argument\n", .{});
                 return;
-            }
-            wasm_path = args[i];
+            };
         } else if (std.mem.eql(u8, arg, "--expected")) {
-            i += 1;
-            if (i >= args.len) {
+            expected_output = arg_iter.next() orelse {
                 std.debug.print("Error: --expected requires an argument\n", .{});
                 return;
-            }
-            expected_output = args[i];
+            };
         }
     }
 

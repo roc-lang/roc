@@ -49,8 +49,8 @@ pub const ArgProblem = union(enum) {
 
 /// The optimization strategy for the compilation of a Roc program
 pub const OptLevel = enum {
-    size, // binary size (future: LLVM)
-    speed, // execution speed (future: LLVM)
+    size, // optimize for binary size
+    speed, // optimize for execution speed
     dev, // speed of compilation (dev backend)
     interpreter,
 
@@ -230,7 +230,7 @@ const main_help =
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
-    \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed (future: LLVM)
+    \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed (not implemented yet)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
@@ -347,7 +347,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed (future: LLVM)
+            \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
@@ -639,7 +639,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<opt>                     Optimization level: dev (default, fast compilation), interpreter, size or speed (future: LLVM)
+            \\      --opt=<opt>                     Optimization level: dev (default, fast compilation), interpreter, size or speed (not implemented yet)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
             \\      --no-cache                      Disable compilation caching, force re-run all tests
