@@ -87,7 +87,7 @@ NO CHANGE
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "not_implemented")))
+			(e-not-implemented))
 		(branches
 			(branch
 				(patterns

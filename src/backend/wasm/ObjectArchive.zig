@@ -7,6 +7,7 @@ const wasm_magic = "\x00asm";
 const header_len = 60;
 const header_end = "`\n";
 
+/// Errors returned while reading Unix archive bytes.
 pub const ParseError = error{
     InvalidArchiveMagic,
     InvalidArchiveHeader,
@@ -15,19 +16,23 @@ pub const ParseError = error{
     UnexpectedEnd,
 };
 
+/// One member entry from a Unix archive.
 pub const Member = struct {
     name: []const u8,
     bytes: []const u8,
 };
 
+/// Return whether the bytes start with the Unix archive magic header.
 pub fn isArchive(bytes: []const u8) bool {
     return bytes.len >= archive_magic.len and std.mem.eql(u8, bytes[0..archive_magic.len], archive_magic);
 }
 
+/// Return whether the bytes start with the wasm binary magic header.
 pub fn isWasmObject(bytes: []const u8) bool {
     return bytes.len >= 8 and std.mem.eql(u8, bytes[0..wasm_magic.len], wasm_magic);
 }
 
+/// Streaming reader over Unix archive members.
 pub const Iterator = struct {
     bytes: []const u8,
     cursor: usize,

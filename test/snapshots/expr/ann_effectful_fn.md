@@ -114,13 +114,13 @@ EndOfFile,
 			(args
 				(p-record-destructure
 					(destructs)))
-			(e-runtime-error (tag "not_implemented"))))
-	(e-call (constraint-fn-var 56)
+			(e-not-implemented)))
+	(e-call (constraint-fn-var 55)
 		(e-lookup-local
 			(p-assign (ident "launchTheNukes")))
 		(e-empty_record)))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

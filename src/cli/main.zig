@@ -3290,14 +3290,64 @@ fn rocBuildWasmSurgical(
     target: RocTarget,
     link_type: roc_target.LinkType,
     final_output_path: []const u8,
+    build_cache_dir: []const u8,
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
 ) !void {
     if (args.no_link) {
-        try ctx.io.stderr().writeAll("Error: --no-link is not supported for wasm32 surgical builds.\n");
-        return error.UnsupportedTarget;
+        if (entrypoints.len == 0) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("wasm no-link invariant violated: no exported platform entrypoints", .{});
+            }
+            unreachable;
+        }
+
+        var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+        errdefer wasm_module.deinit();
+        wasm_module.addMemoryImport();
+        _ = try wasm_module.addTableImportWithSymbol();
+        const stack_pointer_symbol = try wasm_module.addStackPointerImportWithSymbol();
+        const builtin_symbols = try backend.wasm.BuiltinSignatures.declareUndefinedRelocs(&wasm_module);
+
+        var codegen = backend.wasm.WasmCodeGen.initWithModule(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            wasm_module,
+        );
+        defer codegen.deinit();
+        codegen.configureBuiltinRelocs(builtin_symbols);
+        codegen.configureStackPointerReloc(stack_pointer_symbol);
+
+        try codegen.registerIndirectCallTypes();
+        try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+
+        for (entrypoints) |entry| {
+            _ = try codegen.generateEntrypointWrapper(
+                entry.symbol_name,
+                entry.proc,
+                entry.arg_layouts,
+                entry.ret_layout,
+            );
+        }
+
+        try codegen.flushPendingBodies();
+
+        const wasm_bytes = try codegen.module.encodeRelocatable(ctx.gpa);
+        defer ctx.gpa.free(wasm_bytes);
+
+        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, "roc_app_wasm32.o" });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
+            std.log.err("Failed to write wasm object output: {}", .{err});
+            return error.WasmOutputWriteFailed;
+        };
+
+        if (!args.suppress_build_status) {
+            try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
+        }
+        return;
     }
 
     if (entrypoints.len == 0) {
@@ -3342,6 +3392,11 @@ fn rocBuildWasmSurgical(
         merge_result.deinit();
     }
 
+    const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
+        std.log.err("Failed to locate wasm builtin symbols after merge: {}", .{err});
+        return err;
+    };
+
     var codegen = backend.wasm.WasmCodeGen.initWithModule(
         ctx.gpa,
         &lowered.lir_result.store,
@@ -3350,6 +3405,7 @@ fn rocBuildWasmSurgical(
     );
     defer codegen.deinit();
     loaded_module = false;
+    codegen.configureBuiltinRelocs(builtin_symbols);
 
     try codegen.registerIndirectCallTypes();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
@@ -3605,6 +3661,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
             target,
             link_type,
             final_output_path,
+            build_cache_dir,
             platform_dir,
             targets_config,
             &lowered,

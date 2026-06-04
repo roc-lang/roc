@@ -203,8 +203,6 @@ UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
@@ -228,6 +226,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
 TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
@@ -659,30 +658,6 @@ Is there an `import` or `exposing` missing up-top?
 	       ^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -1018,6 +993,21 @@ But the expression between the `match` parenthesis has the type:
     [Blue, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
+
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
+**fuzz_crash_027.md:111:2:113:3:**
+```roc
+	match_time(
+		..., #
+	)
+```
+
+The `match_time` function has the type:
+
+    [Blue, Red, ..], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -2137,12 +2127,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 2063)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2259,7 +2249,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2723)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2724)
 									(receiver
 										(e-match
 											(match
@@ -2284,7 +2274,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2718)
+										(e-dispatch-call (method "times") (constraint-fn-var 2719)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2299,18 +2289,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2831)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2832)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2796)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2797)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2931)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2932)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2896)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2897)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2325,11 +2315,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3041)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3042)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3036)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3037)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2344,12 +2334,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3107)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3108)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 3074)
+																		(e-dispatch-call (method "statod") (constraint-fn-var 3075)
 																			(receiver
 																				(e-match
 																					(match

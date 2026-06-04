@@ -72,7 +72,7 @@ match ... {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "not_implemented")))
+			(e-not-implemented))
 		(branches
 			(branch
 				(patterns
@@ -91,7 +91,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "name")))
 						(e-literal (string " is "))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 52)
+						(e-dispatch-call (method "to_str") (constraint-fn-var 51)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "age"))))

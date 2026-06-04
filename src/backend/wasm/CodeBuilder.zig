@@ -8,6 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
+const WasmLinking = @import("WasmLinking.zig");
 const index_types = @import("index_types.zig");
 const SymbolIndex = index_types.SymbolIndex;
 
@@ -23,6 +24,8 @@ import_relocations: std.ArrayList(Relocation),
 
 /// A relocation entry recording a call site that needs patching during linking.
 pub const Relocation = struct {
+    /// Relocation kind for this padded LEB operand.
+    type_id: WasmLinking.IndexRelocType = .function_index_leb,
     /// Byte position of the 5-byte padded LEB128 placeholder, relative to start of `code`.
     code_pos: u32,
     /// Index into the module's linking symbol table.
@@ -45,17 +48,33 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
 
 /// Emit a relocatable call instruction.
 ///
-/// Writes a `call` opcode followed by a 5-byte padded LEB128 placeholder (value 0).
+/// Writes a `call` opcode followed by a 5-byte padded LEB128 operand.
 /// Records the relocation position relative to this function's code buffer so that
 /// `insertIntoModule` can compute the absolute offset later.
-pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex) !void {
+pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex, provisional_func_idx: u32) !void {
     try self.code.append(allocator, WasmModule.Op.call);
     const code_pos: u32 = @intCast(self.code.items.len);
     try self.import_relocations.append(allocator, .{
+        .type_id = .function_index_leb,
         .code_pos = code_pos,
         .symbol_index = symbol_idx,
     });
-    try WasmModule.appendPaddedU32(allocator, &self.code, 0); // 5-byte placeholder
+    try WasmModule.appendPaddedU32(allocator, &self.code, provisional_func_idx);
+}
+
+/// Record a relocatable padded LEB operand already emitted into this function.
+pub fn addIndexRelocation(
+    self: *Self,
+    allocator: Allocator,
+    type_id: WasmLinking.IndexRelocType,
+    code_pos: u32,
+    symbol_idx: SymbolIndex,
+) !void {
+    try self.import_relocations.append(allocator, .{
+        .type_id = type_id,
+        .code_pos = code_pos,
+        .symbol_index = symbol_idx,
+    });
 }
 
 /// Finalize this function and insert it into the module's code section.
@@ -64,7 +83,7 @@ pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: Symbol
 /// `code_bytes` (accounting for the LEB128 body-length prefix and preamble).
 /// Returns the byte offset where this function's body starts in `code_bytes`
 /// (i.e. the position of the body-length prefix).
-pub fn insertIntoModule(self: *const Self, allocator: Allocator, module: *WasmModule) !u32 {
+pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) !u32 {
     const fn_offset: u32 = @intCast(module.code_bytes.items.len);
     try module.function_offsets.append(allocator, fn_offset);
 
@@ -81,10 +100,16 @@ pub fn insertIntoModule(self: *const Self, allocator: Allocator, module: *WasmMo
     // Append instruction bytes
     try module.code_bytes.appendSlice(allocator, self.code.items);
 
-    // Create relocation entries with absolute offsets
+    std.sort.heap(Relocation, self.import_relocations.items, {}, struct {
+        fn lessThan(_: void, a: Relocation, b: Relocation) bool {
+            return a.code_pos < b.code_pos;
+        }
+    }.lessThan);
+
+    // Create relocation entries with absolute offsets.
     for (self.import_relocations.items) |reloc| {
         try module.reloc_code.entries.append(allocator, .{ .index = .{
-            .type_id = .function_index_leb,
+            .type_id = reloc.type_id,
             .offset = code_start + reloc.code_pos,
             .symbol_index = reloc.symbol_index.raw(),
         } });
@@ -142,7 +167,7 @@ test "CodeBuilder.emitRelocatableCall — records code_pos relative to function 
 
     // Now emit a relocatable call — the call opcode lands at byte 2,
     // and the 5-byte placeholder starts at byte 3.
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(42));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(42), 12);
 
     try testing.expectEqual(@as(usize, 1), cb.import_relocations.items.len);
     // code_pos should be 3: after 2 nops + 1 call opcode byte
@@ -153,6 +178,11 @@ test "CodeBuilder.emitRelocatableCall — records code_pos relative to function 
     try testing.expectEqual(@as(usize, 8), cb.code.items.len);
     // The call opcode should be at position 2
     try testing.expectEqual(WasmModule.Op.call, cb.code.items[2]);
+    try testing.expectEqual(@as(u8, 0x8c), cb.code.items[3]);
+    try testing.expectEqual(@as(u8, 0x80), cb.code.items[4]);
+    try testing.expectEqual(@as(u8, 0x80), cb.code.items[5]);
+    try testing.expectEqual(@as(u8, 0x80), cb.code.items[6]);
+    try testing.expectEqual(@as(u8, 0x00), cb.code.items[7]);
 }
 
 test "CodeBuilder.insertIntoModule — function appended at correct code_bytes position" {
@@ -193,7 +223,7 @@ test "CodeBuilder.insertIntoModule — relocation offset accounts for body lengt
     // Empty preamble (0 local groups)
     try cb.preamble.append(testing.allocator, 0x00);
     // Emit a relocatable call as the first instruction
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(7));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(7), 7);
     // End opcode
     try cb.code.append(testing.allocator, WasmModule.Op.end);
 
@@ -223,7 +253,7 @@ test "CodeBuilder.insertIntoModule — relocation offset accounts for preamble s
     // Larger preamble: 5 bytes (simulating multiple local groups)
     try cb.preamble.appendSlice(testing.allocator, &.{ 0x02, 0x03, 0x7F, 0x01, 0x7E });
     // Emit a relocatable call
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(99));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(99), 99);
     try cb.code.append(testing.allocator, WasmModule.Op.end);
 
     _ = try cb.insertIntoModule(testing.allocator, &module);
@@ -250,11 +280,11 @@ test "CodeBuilder.insertIntoModule — multiple relocations in one function" {
     try cb.preamble.append(testing.allocator, 0x00); // empty locals
 
     // First relocatable call
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(10));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(10), 10);
     // Some instructions between calls
     try cb.code.append(testing.allocator, WasmModule.Op.drop);
     // Second relocatable call
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(20));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(20), 20);
     // End
     try cb.code.append(testing.allocator, WasmModule.Op.end);
 
@@ -285,14 +315,14 @@ test "CodeBuilder — two functions inserted sequentially have non-overlapping o
 
     // --- Function 1 ---
     try cb.preamble.append(testing.allocator, 0x00);
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(1));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(1), 1);
     try cb.code.append(testing.allocator, WasmModule.Op.end);
     const offset1 = try cb.insertIntoModule(testing.allocator, &module);
     cb.clear();
 
     // --- Function 2 ---
     try cb.preamble.append(testing.allocator, 0x00);
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(2));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(2), 2);
     try cb.code.append(testing.allocator, WasmModule.Op.end);
     const offset2 = try cb.insertIntoModule(testing.allocator, &module);
 
@@ -337,7 +367,7 @@ test "CodeBuilder.prependToCode — shifts relocations and inserts prefix" {
     defer cb.deinit(testing.allocator);
 
     // Emit a relocatable call (call opcode at byte 0, placeholder at byte 1)
-    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(5));
+    try cb.emitRelocatableCall(testing.allocator, SymbolIndex.fromRaw(5), 5);
     try cb.code.append(testing.allocator, WasmModule.Op.end);
 
     // Before prepend: reloc code_pos = 1 (after call opcode)

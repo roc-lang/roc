@@ -130,7 +130,7 @@ match ... {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "not_implemented")))
+			(e-not-implemented))
 		(branches
 			(branch
 				(patterns
@@ -259,7 +259,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "firstName")))
 						(e-literal (string " ("))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 176)
+						(e-dispatch-call (method "to_str") (constraint-fn-var 175)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "userAge"))))

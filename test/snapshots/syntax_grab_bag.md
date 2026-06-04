@@ -244,8 +244,6 @@ UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:147:9:147:13
-NOT IMPLEMENTED - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - syntax_grab_bag.md:1:1:1:1
 UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
 UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
 UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
@@ -267,6 +265,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
+TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
 MISSING METHOD - syntax_grab_bag.md:176:12:176:22
@@ -626,30 +625,6 @@ Is there an `import` or `exposing` missing up-top?
 	       ^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**syntax_grab_bag.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**syntax_grab_bag.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -949,6 +924,21 @@ But the expression between the `match` parenthesis has the type:
     [Blue, Green, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
+
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
+**syntax_grab_bag.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+The `match_time` function has the type:
+
+    [Blue, Green, Red, ..], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
@@ -2265,12 +2255,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 2355)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2394,7 +2384,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3041)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3042)
 									(receiver
 										(e-match
 											(match
@@ -2419,7 +2409,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3036)
+										(e-dispatch-call (method "times") (constraint-fn-var 3037)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2434,18 +2424,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3149)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3150)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3114)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3115)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3249)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3250)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3214)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3215)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2460,11 +2450,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3359)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3360)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3354)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3355)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2479,12 +2469,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3425)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3426)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3392)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3393)
 																			(receiver
 																				(e-match
 																					(match

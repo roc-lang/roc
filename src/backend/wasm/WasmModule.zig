@@ -496,6 +496,7 @@ pub fn addImport(self: *Self, module_name: []const u8, field_name: []const u8, t
         .field_name = field_name,
         .type_idx = type_idx,
     });
+    self.import_fn_count = @intCast(self.imports.items.len);
     return func_idx;
 }
 
@@ -520,6 +521,66 @@ pub fn addFunctionImportWithSymbol(
         .function = FunctionIndex.fromRaw(raw_function),
         .symbol = SymbolIndex.fromRaw(raw_symbol),
     };
+}
+
+/// Add an imported global and the corresponding undefined linking symbol.
+pub fn addGlobalImportWithSymbol(
+    self: *Self,
+    module_name: []const u8,
+    field_name: []const u8,
+    val_type: ValType,
+    mutable: bool,
+) !struct { global_index: u32, symbol: SymbolIndex } {
+    const global_index: u32 = @intCast(self.global_imports.items.len);
+    try self.global_imports.append(self.allocator, .{
+        .module_name = module_name,
+        .field_name = field_name,
+        .val_type = @intFromEnum(val_type),
+        .mutable = mutable,
+    });
+    self.import_global_count = @intCast(self.global_imports.items.len);
+
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .global,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = field_name,
+        .index = global_index,
+    });
+    return .{
+        .global_index = global_index,
+        .symbol = SymbolIndex.fromRaw(raw_symbol),
+    };
+}
+
+/// Import the standard wasm object-mode stack pointer global.
+pub fn addStackPointerImportWithSymbol(self: *Self) !SymbolIndex {
+    const imported = try self.addGlobalImportWithSymbol("env", "__stack_pointer", .i32, true);
+    return imported.symbol;
+}
+
+/// Import linear memory for a generated relocatable object.
+pub fn addMemoryImport(self: *Self) void {
+    self.has_memory = true;
+    self.memory_min_pages = @max(self.memory_min_pages, 1);
+}
+
+/// Import the standard indirect function table for a generated relocatable object.
+pub fn addTableImportWithSymbol(self: *Self) !SymbolIndex {
+    self.has_table = true;
+    const table_index: u32 = @intCast(self.table_imports.items.len);
+    try self.table_imports.append(self.allocator, .{
+        .module_name = "env",
+        .field_name = "__indirect_function_table",
+    });
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .table,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = "__indirect_function_table",
+        .index = table_index,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
 }
 
 /// Get the number of imported functions. Regular function indices are offset by this.
@@ -2448,6 +2509,247 @@ pub fn encode(self: *Self, allocator: Allocator) ![]u8 {
     }
 
     return output.toOwnedSlice(allocator);
+}
+
+/// Encode this module as a relocatable wasm object.
+///
+/// Unlike `encode()`, this preserves the linking metadata and relocation
+/// sections. Function bodies are emitted directly from `code_bytes`, because
+/// relocation offsets are recorded against that representation.
+pub fn encodeRelocatable(self: *Self, allocator: Allocator) ![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    try output.appendSlice(allocator, &.{ 0x00, 0x61, 0x73, 0x6D });
+    try output.appendSlice(allocator, &.{ 0x01, 0x00, 0x00, 0x00 });
+
+    var section_index: u32 = 0;
+    var code_section_index: ?u32 = null;
+    var data_section_index: ?u32 = null;
+
+    if (self.func_types.items.len > 0) {
+        try self.encodeTypeSection(allocator, &output);
+        section_index += 1;
+    }
+
+    if (self.imports.items.len > 0 or self.global_imports.items.len > 0 or self.table_imports.items.len > 0 or self.has_memory) {
+        try self.encodeRelocatableImportSection(allocator, &output);
+        section_index += 1;
+    }
+
+    if (self.func_type_indices.items.len > 0) {
+        try self.encodeFunctionSection(allocator, &output);
+        section_index += 1;
+    }
+
+    if (self.exports.items.len > 0) {
+        try self.encodeExportSection(allocator, &output);
+        section_index += 1;
+    }
+
+    const code_fn_count_leb_size = if (self.func_type_indices.items.len > 0) blk: {
+        code_section_index = section_index;
+        const count_leb_size = try self.encodeCodeSectionFromCodeBytes(allocator, &output);
+        section_index += 1;
+        break :blk count_leb_size;
+    } else 0;
+
+    if (self.data_segments.items.len > 0) {
+        data_section_index = section_index;
+        try self.encodeDataSection(allocator, &output);
+        section_index += 1;
+    }
+
+    try self.encodeLinkingSection(allocator, &output);
+    section_index += 1;
+    if (self.reloc_code.entries.items.len > 0) {
+        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_section_index orelse unreachable, self.reloc_code.entries.items, code_fn_count_leb_size);
+        section_index += 1;
+    }
+    if (self.reloc_data.entries.items.len > 0) {
+        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_section_index orelse unreachable, self.reloc_data.entries.items, 0);
+        section_index += 1;
+    }
+
+    return output.toOwnedSlice(allocator);
+}
+
+fn encodeRelocatableImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+    var section_data: std.ArrayList(u8) = .empty;
+    defer section_data.deinit(gpa);
+
+    const memory_import_count: u32 = if (self.has_memory) 1 else 0;
+    const import_count: u32 =
+        @as(u32, @intCast(self.imports.items.len)) +
+        @as(u32, @intCast(self.table_imports.items.len)) +
+        memory_import_count +
+        @as(u32, @intCast(self.global_imports.items.len));
+    try leb128WriteU32(gpa, &section_data, import_count);
+
+    for (self.imports.items) |imp| {
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        try section_data.append(gpa, 0x00);
+        try leb128WriteU32(gpa, &section_data, imp.type_idx);
+    }
+
+    for (self.table_imports.items) |imp| {
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        try section_data.append(gpa, 0x01);
+        try section_data.append(gpa, funcref);
+        try section_data.append(gpa, 0x00);
+        try leb128WriteU32(gpa, &section_data, @max(1, @as(u32, @intCast(self.table_func_indices.items.len))));
+    }
+
+    if (self.has_memory) {
+        try leb128WriteU32(gpa, &section_data, 3);
+        try section_data.appendSlice(gpa, "env");
+        try leb128WriteU32(gpa, &section_data, 6);
+        try section_data.appendSlice(gpa, "memory");
+        try section_data.append(gpa, 0x02);
+        try section_data.append(gpa, 0x00);
+        try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+    }
+
+    for (self.global_imports.items) |imp| {
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        try section_data.append(gpa, 0x03);
+        try section_data.append(gpa, imp.val_type);
+        try section_data.append(gpa, if (imp.mutable) @as(u8, 0x01) else @as(u8, 0x00));
+    }
+
+    try output.append(gpa, @intFromEnum(SectionId.import_section));
+    try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
+    try output.appendSlice(gpa, section_data.items);
+}
+
+fn encodeCodeSectionFromCodeBytes(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !u32 {
+    var section_data: std.ArrayList(u8) = .empty;
+    defer section_data.deinit(gpa);
+
+    const before_count = section_data.items.len;
+    try leb128WriteU32(gpa, &section_data, @intCast(self.func_type_indices.items.len));
+    const count_leb_size: u32 = @intCast(section_data.items.len - before_count);
+    try section_data.appendSlice(gpa, self.code_bytes.items);
+
+    try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
+    try output.appendSlice(gpa, section_data.items);
+    return count_leb_size;
+}
+
+fn encodeLinkingSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(gpa);
+
+    try leb128WriteU32(gpa, &payload, 7);
+    try payload.appendSlice(gpa, "linking");
+    try payload.append(gpa, @intCast(WasmLinking.LINKING_VERSION));
+
+    if (self.data_segments.items.len > 0) {
+        var segment_data: std.ArrayList(u8) = .empty;
+        defer segment_data.deinit(gpa);
+        try leb128WriteU32(gpa, &segment_data, @intCast(self.data_segments.items.len));
+        for (self.data_segments.items, 0..) |_, i| {
+            const name = try std.fmt.allocPrint(gpa, ".rodata.{d}", .{i});
+            defer gpa.free(name);
+            try leb128WriteU32(gpa, &segment_data, @intCast(name.len));
+            try segment_data.appendSlice(gpa, name);
+            try leb128WriteU32(gpa, &segment_data, 0);
+            try leb128WriteU32(gpa, &segment_data, 0);
+        }
+        try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.segment_info));
+        try leb128WriteU32(gpa, &payload, @intCast(segment_data.items.len));
+        try payload.appendSlice(gpa, segment_data.items);
+    }
+
+    var symbol_data: std.ArrayList(u8) = .empty;
+    defer symbol_data.deinit(gpa);
+    try leb128WriteU32(gpa, &symbol_data, @intCast(self.linking.symbol_table.items.len));
+    for (self.linking.symbol_table.items) |sym| {
+        try encodeSymbol(gpa, &symbol_data, sym);
+    }
+    try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.symbol_table));
+    try leb128WriteU32(gpa, &payload, @intCast(symbol_data.items.len));
+    try payload.appendSlice(gpa, symbol_data.items);
+
+    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try leb128WriteU32(gpa, output, @intCast(payload.items.len));
+    try output.appendSlice(gpa, payload.items);
+}
+
+fn encodeSymbol(gpa: Allocator, output: *std.ArrayList(u8), sym: WasmLinking.SymInfo) !void {
+    try output.append(gpa, @intFromEnum(sym.kind));
+    try leb128WriteU32(gpa, output, sym.flags);
+    switch (sym.kind) {
+        .function, .global, .event, .table => {
+            try leb128WriteU32(gpa, output, sym.index);
+            if (!sym.isUndefined() or (sym.flags & WasmLinking.SymFlag.EXPLICIT_NAME) != 0) {
+                const name = sym.name orelse "";
+                try leb128WriteU32(gpa, output, @intCast(name.len));
+                try output.appendSlice(gpa, name);
+            }
+        },
+        .data => {
+            const name = sym.name orelse "";
+            try leb128WriteU32(gpa, output, @intCast(name.len));
+            try output.appendSlice(gpa, name);
+            if (!sym.isUndefined()) {
+                try leb128WriteU32(gpa, output, sym.index);
+                try leb128WriteU32(gpa, output, sym.data_offset);
+                try leb128WriteU32(gpa, output, sym.data_size);
+            }
+        },
+        .section => {
+            try leb128WriteU32(gpa, output, sym.index);
+        },
+    }
+}
+
+fn encodeRelocationSection(
+    _: *Self,
+    gpa: Allocator,
+    output: *std.ArrayList(u8),
+    name: []const u8,
+    target_section: u32,
+    entries: []const WasmLinking.RelocationEntry,
+    code_offset_delta: u32,
+) !void {
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(gpa);
+
+    try leb128WriteU32(gpa, &payload, @intCast(name.len));
+    try payload.appendSlice(gpa, name);
+    try leb128WriteU32(gpa, &payload, target_section);
+    try leb128WriteU32(gpa, &payload, @intCast(entries.len));
+
+    for (entries) |entry| {
+        switch (entry) {
+            .index => |idx| {
+                try payload.append(gpa, @intFromEnum(idx.type_id));
+                try leb128WriteU32(gpa, &payload, idx.offset + code_offset_delta);
+                try leb128WriteU32(gpa, &payload, idx.symbol_index);
+            },
+            .offset => |off| {
+                try payload.append(gpa, @intFromEnum(off.type_id));
+                try leb128WriteU32(gpa, &payload, off.offset + code_offset_delta);
+                try leb128WriteU32(gpa, &payload, off.symbol_index);
+                try leb128WriteI32(gpa, &payload, off.addend);
+            },
+        }
+    }
+
+    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try leb128WriteU32(gpa, output, @intCast(payload.items.len));
+    try output.appendSlice(gpa, payload.items);
 }
 
 fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {

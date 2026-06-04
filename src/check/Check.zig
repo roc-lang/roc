@@ -7111,6 +7111,7 @@ fn checkMatchExpr(
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond, env, Expected.none());
     const cond_var = ModuleEnv.varFrom(match.cond);
+    const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
 
     // Assert we have at least 1 branch
     std.debug.assert(match.branches.span.len > 0);
@@ -7155,16 +7156,18 @@ fn checkMatchExpr(
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
-        const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
-        const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
-            .branch_index = 0,
-            .pattern_index = @intCast(cur_ptrn_index),
-            .num_branches = @intCast(match.branches.span.len),
-            .num_patterns = @intCast(first_branch_ptrn_idxs.len),
-            .match_expr = expr_idx,
-        } });
-        if (!ptrn_result.isOk()) had_type_error = true;
+        if (!cond_always_crashes) {
+            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+            const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                .branch_index = 0,
+                .pattern_index = @intCast(cur_ptrn_index),
+                .num_branches = @intCast(match.branches.span.len),
+                .num_patterns = @intCast(first_branch_ptrn_idxs.len),
+                .match_expr = expr_idx,
+            } });
+            if (!ptrn_result.isOk()) had_type_error = true;
+        }
     }
 
     if (try self.unifyMatchAltPatternBindings(first_branch_ptrn_idxs, 0, @intCast(match.branches.span.len), expr_idx, env)) {
@@ -7212,15 +7215,17 @@ fn checkMatchExpr(
             try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
 
             // Check the pattern against the cond
-            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-            const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
-                .branch_index = @intCast(branch_cur_index),
-                .pattern_index = @intCast(cur_ptrn_index),
-                .num_branches = @intCast(match.branches.span.len),
-                .num_patterns = @intCast(branch_ptrn_idxs.len),
-                .match_expr = expr_idx,
-            } });
-            if (!ptrn_result.isOk()) had_type_error = true;
+            if (!cond_always_crashes) {
+                const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+                const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                    .branch_index = @intCast(branch_cur_index),
+                    .pattern_index = @intCast(cur_ptrn_index),
+                    .num_branches = @intCast(match.branches.span.len),
+                    .num_patterns = @intCast(branch_ptrn_idxs.len),
+                    .match_expr = expr_idx,
+                } });
+                if (!ptrn_result.isOk()) had_type_error = true;
+            }
         }
 
         if (try self.unifyMatchAltPatternBindings(branch_ptrn_idxs, @intCast(branch_cur_index), @intCast(match.branches.span.len), expr_idx, env)) {
@@ -7275,14 +7280,16 @@ fn checkMatchExpr(
                         try self.checkPattern(other_branch_ptrn.pattern, .match_branch, env);
 
                         // Check the pattern against the cond
-                        const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
-                        _ = try self.unifyInContext(cond_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
-                            .branch_index = @intCast(other_branch_cur_index),
-                            .pattern_index = @intCast(other_cur_ptrn_index),
-                            .num_branches = @intCast(match.branches.span.len),
-                            .num_patterns = @intCast(other_branch_ptrn_idxs.len),
-                            .match_expr = expr_idx,
-                        } });
+                        if (!cond_always_crashes) {
+                            const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
+                            _ = try self.unifyInContext(cond_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
+                                .branch_index = @intCast(other_branch_cur_index),
+                                .pattern_index = @intCast(other_cur_ptrn_index),
+                                .num_branches = @intCast(match.branches.span.len),
+                                .num_patterns = @intCast(other_branch_ptrn_idxs.len),
+                                .match_expr = expr_idx,
+                            } });
+                        }
                     }
 
                     // Then check the other branch's exprs
@@ -7308,10 +7315,11 @@ fn checkMatchExpr(
     // that confuse the exhaustiveness checker
     // Also skip if the condition type is an error type (can happen with complex inference)
     // Also skip if we already reported an invalid try operator error
+    // Also skip if the condition explicitly diverges; no pattern is observed at runtime.
     const resolved_cond = self.types.resolveVar(cond_var);
     const cond_is_error = resolved_cond.desc.content == .err;
 
-    if (!had_type_error and !cond_is_error and !has_invalid_try) {
+    if (!had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
         const builtin_idents = exhaustive.BuiltinIdents{
             .builtin_module = self.cir.idents.builtin_module,
