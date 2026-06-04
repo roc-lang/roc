@@ -1,7 +1,6 @@
 //! Signal handling for the Roc compiler process.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
 const signal_handler = @import("signal_handler.zig");

@@ -1,7 +1,6 @@
 //! Structural assertions for post-check stage boundaries.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const check = @import("check");
 
 const Common = @import("common.zig");

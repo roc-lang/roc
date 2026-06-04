@@ -2,7 +2,6 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
 const TestEnv = @import("./TestEnv.zig");

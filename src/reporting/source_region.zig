@@ -1,7 +1,6 @@
 //! Utilities for formatting source code regions in diagnostic reports
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
 /// Calculate the width needed to display a line number

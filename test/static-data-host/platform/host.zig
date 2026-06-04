@@ -6,7 +6,6 @@
 //! header is `REFCOUNT_STATIC_DATA`.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const shim_io = @import("shim_io");

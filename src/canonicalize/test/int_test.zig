@@ -5,7 +5,6 @@
 //! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const base = @import("base");
 const types = @import("types");

@@ -1,7 +1,6 @@
 //! Simple platform host that calls into a simplified Roc entrypoint and prints a string result.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 

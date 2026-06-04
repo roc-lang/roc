@@ -5,7 +5,6 @@
 //! parsing, formatting, and conversions for precise decimal calculations
 //! without floating-point precision issues.
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const i128h = @import("compiler_rt_128.zig");
 
 const U256 = @import("num.zig").U256;

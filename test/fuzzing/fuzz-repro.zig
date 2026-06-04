@@ -4,7 +4,6 @@
 //! This runners makes a simple script to reproduce failures from the command line (stdin or file).
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const fuzz_test = @import("fuzz_test");
 
 // TODO: add a func zig_pretty_print or something to dump the test case in a pretty printed format.

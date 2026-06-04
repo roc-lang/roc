@@ -1,7 +1,6 @@
 //! Generate HTML representation of the AST using a stack-based traversal.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const AST = @import("AST.zig");

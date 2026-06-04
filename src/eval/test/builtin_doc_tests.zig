@@ -770,7 +770,7 @@ fn wrapForBinary(allocator: Allocator, block: *const Block) Allocator.Error![]u8
     };
 }
 
-fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) Allocator.Error!void {
+fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
     std.debug.assert(shard_index < shard_count);
 
     const allocator = std.heap.page_allocator;

@@ -258,7 +258,7 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) anyerror!Isolat
 pub fn buildIsolatedTestEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,
-) Allocator.Error!std.process.Environ.Map {
+) anyerror!std.process.Environ.Map {
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB on use) and
     // PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -395,7 +395,7 @@ pub fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []co
 
 /// Check if a run result indicates success (exit code 0).
 /// Also checks for GPA memory errors in stderr.
-pub fn checkSuccess(result: RocResult) Allocator.Error!void {
+pub fn checkSuccess(result: RocResult) anyerror!void {
     if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDOUT: {s}\n", .{result.stdout});
@@ -429,7 +429,7 @@ pub fn checkSuccess(result: RocResult) Allocator.Error!void {
 
 /// Check if a run result indicates failure (non-zero exit code).
 /// Verifies the process exited cleanly with a non-zero code, NOT that it crashed.
-pub fn checkFailure(result: RocResult) Allocator.Error!void {
+pub fn checkFailure(result: RocResult) anyerror!void {
     switch (result.term) {
         .exited => |code| {
             if (code == 0) {
@@ -454,7 +454,7 @@ pub fn checkFailure(result: RocResult) Allocator.Error!void {
 
 /// Check if a test mode run succeeded (exit code 0).
 /// Also checks for GPA memory errors.
-pub fn checkTestSuccess(result: RocResult) Allocator.Error!void {
+pub fn checkTestSuccess(result: RocResult) anyerror!void {
     if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDERR: {s}\n", .{result.stderr});

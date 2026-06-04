@@ -4,7 +4,6 @@
 //! within function bodies and blocks, scoped to that block.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const TestEnv = @import("TestEnv.zig").TestEnv;

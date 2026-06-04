@@ -5,7 +5,6 @@
 //! memory management. It defines the RocStr structure and associated functions
 //! that are called from compiled Roc code to handle string operations efficiently.
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 const RocList = @import("list.zig").RocList;

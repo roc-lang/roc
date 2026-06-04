@@ -6,7 +6,6 @@
 //! definitions are NOT allowed and are reported with dedicated diagnostics.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const testing = std.testing;
