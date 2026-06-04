@@ -693,7 +693,7 @@ pub fn main(init: std.process.Init) !void {
                 \\Options:
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
-                \\  --debug         Use DebugAllocator for debugging (default: c_allocator)
+                \\  --debug         Disable per-thread arenas to surface allocation bugs
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto, capped at 4; 1 = single-threaded). Default: 0.
