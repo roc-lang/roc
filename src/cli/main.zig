@@ -86,7 +86,6 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
-        std.testing.refAllDecls(ReplSession);
         std.testing.refAllDecls(@import("stack_probe.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
