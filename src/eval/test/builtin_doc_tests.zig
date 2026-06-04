@@ -62,6 +62,71 @@ const Block = struct {
     }
 };
 
+const WeightedBlock = struct {
+    work_i: usize,
+    weight: u64,
+};
+
+fn blockWeight(block: *const Block) u64 {
+    var weight: u64 = 1 + @as(u64, @intCast(block.source.len));
+    switch (block.kind) {
+        .expects_only => weight += 1_000_000,
+        .module_with_def => weight += 2_000_000,
+        .expression_block => weight += 1_500_000,
+    }
+    return weight;
+}
+
+fn leastLoadedPartition(loads: []const u64) usize {
+    var min_i: usize = 0;
+    for (loads[1..], 1..) |load, i| {
+        if (load < loads[min_i]) min_i = i;
+    }
+    return min_i;
+}
+
+fn assignBlockPartitions(
+    allocator: Allocator,
+    blocks: []const Block,
+    runnable_block_indices: []const usize,
+    partition_count: usize,
+) ![]usize {
+    std.debug.assert(partition_count > 0);
+
+    var weighted = std.ArrayList(WeightedBlock).empty;
+    defer weighted.deinit(allocator);
+
+    for (runnable_block_indices, 0..) |block_i, work_i| {
+        try weighted.append(allocator, .{
+            .work_i = work_i,
+            .weight = blockWeight(&blocks[block_i]),
+        });
+    }
+
+    std.mem.sort(WeightedBlock, weighted.items, {}, struct {
+        fn lessThan(_: void, a: WeightedBlock, b: WeightedBlock) bool {
+            if (a.weight != b.weight) return a.weight > b.weight;
+            return a.work_i < b.work_i;
+        }
+    }.lessThan);
+
+    const owners = try allocator.alloc(usize, runnable_block_indices.len);
+    @memset(owners, partition_count);
+    errdefer allocator.free(owners);
+
+    const loads = try allocator.alloc(u64, partition_count);
+    defer allocator.free(loads);
+    @memset(loads, 0);
+
+    for (weighted.items) |entry| {
+        const owner = leastLoadedPartition(loads);
+        owners[entry.work_i] = owner;
+        loads[owner] +|= entry.weight;
+    }
+
+    return owners;
+}
+
 fn extractBlocks(allocator: Allocator, source: []const u8) ![]Block {
     var blocks = std.ArrayList(Block).empty;
     errdefer {
@@ -836,6 +901,14 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
     }
     try testing.expect(runnable_block_indices.items.len > 0);
 
+    const partition_owners = try assignBlockPartitions(
+        allocator,
+        blocks,
+        runnable_block_indices.items,
+        partition_count,
+    );
+    defer allocator.free(partition_owners);
+
     var failures = std.ArrayList(Failure).empty;
     defer {
         for (failures.items) |*f| f.deinit(allocator);
@@ -845,7 +918,7 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
     var phantom_failures: usize = 0;
 
     for (runnable_block_indices.items, 0..) |block_i, work_i| {
-        if (work_i % partition_count != partition_index) continue;
+        if (partition_owners[work_i] != partition_index) continue;
         const block = &blocks[block_i];
         const result = try processBlock(allocator, block);
         switch (result) {

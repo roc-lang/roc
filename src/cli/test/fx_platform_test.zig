@@ -371,11 +371,79 @@ fn ioSpecPartitionFromEnv(allocator: std.mem.Allocator) !IoSpecPartition {
     return .{ .index = index, .count = count };
 }
 
+const WeightedIoSpec = struct {
+    spec_i: usize,
+    weight: u64,
+};
+
+fn runnableIoSpec(spec: fx_test_specs.TestSpec) bool {
+    if (spec.skip) return false;
+    if (spec.skip_on_windows and @import("builtin").os.tag == .windows) return false;
+    return true;
+}
+
+fn ioSpecSourceSize(roc_file: []const u8) u64 {
+    const stat = std.Io.Dir.cwd().statFile(std.testing.io, roc_file, .{}) catch return 0;
+    return stat.size;
+}
+
+fn ioSpecWeight(spec: fx_test_specs.TestSpec) u64 {
+    return 1 + ioSpecSourceSize(spec.roc_file) + @as(u64, @intCast(spec.io_spec.len)) * 1000;
+}
+
+fn leastLoadedPartition(loads: []const u64) usize {
+    var min_i: usize = 0;
+    for (loads[1..], 1..) |load, i| {
+        if (load < loads[min_i]) min_i = i;
+    }
+    return min_i;
+}
+
+fn assignIoSpecPartitions(allocator: std.mem.Allocator, partition_count: usize) ![]usize {
+    std.debug.assert(partition_count > 0);
+
+    var weighted = std.ArrayList(WeightedIoSpec).empty;
+    defer weighted.deinit(allocator);
+
+    for (fx_test_specs.io_spec_tests, 0..) |spec, spec_i| {
+        if (!runnableIoSpec(spec)) continue;
+        try weighted.append(allocator, .{
+            .spec_i = spec_i,
+            .weight = ioSpecWeight(spec),
+        });
+    }
+
+    std.mem.sort(WeightedIoSpec, weighted.items, {}, struct {
+        fn lessThan(_: void, a: WeightedIoSpec, b: WeightedIoSpec) bool {
+            if (a.weight != b.weight) return a.weight > b.weight;
+            return a.spec_i < b.spec_i;
+        }
+    }.lessThan);
+
+    const owners = try allocator.alloc(usize, fx_test_specs.io_spec_tests.len);
+    @memset(owners, partition_count);
+    errdefer allocator.free(owners);
+
+    const loads = try allocator.alloc(u64, partition_count);
+    defer allocator.free(loads);
+    @memset(loads, 0);
+
+    for (weighted.items) |entry| {
+        const owner = leastLoadedPartition(loads);
+        owners[entry.spec_i] = owner;
+        loads[owner] +|= entry.weight;
+    }
+
+    return owners;
+}
+
 fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     if (!fx_test_options.include_io_spec_tests) return error.SkipZigTest;
 
     const allocator = testing.allocator;
     const partition = try ioSpecPartitionFromEnv(allocator);
+    const partition_owners = try assignIoSpecPartitions(allocator, partition.count);
+    defer allocator.free(partition_owners);
 
     var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
@@ -384,9 +452,7 @@ fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     var failed: usize = 0;
 
     for (fx_test_specs.io_spec_tests, 0..) |spec, spec_i| {
-        if (spec_i % partition.count != partition.index) continue;
-        if (spec.skip) continue;
-        if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
+        if (partition_owners[spec_i] != partition.index) continue;
 
         runIoSpecTestWithEnv(opt_flag, spec, &env_map) catch {
             failed += 1;

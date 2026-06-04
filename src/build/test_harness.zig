@@ -499,6 +499,102 @@ pub fn printSlowestN(
     }
 }
 
+const timing_dir = ".zig-cache/roc-test-timings";
+const max_timing_file_bytes = 16 * 1024 * 1024;
+
+/// Per-runner timing history, keyed by stable test display name.
+///
+/// This is test-infrastructure scheduling data only. Missing or malformed
+/// entries do not affect test coverage; they only mean a runner falls back to
+/// its deterministic default ordering for that test.
+pub const TimingWeights = struct {
+    allocator: Allocator,
+    map: std.StringHashMap(u64),
+
+    pub fn init(allocator: Allocator) TimingWeights {
+        return .{
+            .allocator = allocator,
+            .map = std.StringHashMap(u64).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TimingWeights) void {
+        var key_it = self.map.keyIterator();
+        while (key_it.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.map.deinit();
+    }
+
+    pub fn load(self: *TimingWeights, io: std.Io, path: []const u8) void {
+        const contents = std.Io.Dir.cwd().readFileAlloc(
+            io,
+            path,
+            self.allocator,
+            .limited(max_timing_file_bytes),
+        ) catch return;
+        defer self.allocator.free(contents);
+
+        var lines = std.mem.splitScalar(u8, contents, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            const tab = std.mem.findScalar(u8, line, '\t') orelse continue;
+            const duration_ns = std.fmt.parseUnsigned(u64, line[0..tab], 10) catch continue;
+            const name = line[tab + 1 ..];
+            if (name.len == 0) continue;
+
+            if (self.map.getPtr(name)) |existing| {
+                existing.* = duration_ns;
+                continue;
+            }
+
+            const owned_name = self.allocator.dupe(u8, name) catch continue;
+            self.map.put(owned_name, duration_ns) catch {
+                self.allocator.free(owned_name);
+                continue;
+            };
+        }
+    }
+
+    pub fn weight(self: *const TimingWeights, name: []const u8, default_weight: u64) u64 {
+        return self.map.get(name) orelse default_weight;
+    }
+};
+
+/// Return the default timing-history path for a named standalone test runner.
+pub fn defaultTimingPath(allocator: Allocator, runner_name: []const u8) Allocator.Error![]const u8 {
+    std.debug.assert(std.mem.findScalar(u8, runner_name, '/') == null);
+    std.debug.assert(std.mem.findScalar(u8, runner_name, '\\') == null);
+    return std.fmt.allocPrint(allocator, "{s}/{s}.tsv", .{ timing_dir, runner_name });
+}
+
+/// Persist test durations as timing-history weights keyed by test display name.
+pub fn writeTimingWeights(
+    comptime Spec: type,
+    io: std.Io,
+    allocator: Allocator,
+    path: []const u8,
+    specs: []const Spec,
+    durations: []const u64,
+    comptime getName: fn (Spec) []const u8,
+) void {
+    if (specs.len != durations.len) return;
+
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    for (specs, durations) |spec, duration_ns| {
+        if (duration_ns == 0) continue;
+        buf.print(allocator, "{d}\t{s}\n", .{ duration_ns, getName(spec) }) catch return;
+    }
+
+    std.Io.Dir.cwd().createDirPath(io, timing_dir) catch return;
+    std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = buf.items,
+    }) catch {};
+}
+
 // CLI argument parsing
 
 /// Common CLI arguments shared across parallel test runners.

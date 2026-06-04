@@ -114,7 +114,6 @@ const TestsSummaryStep = struct {
     test_filters: []const []const u8,
     forced_passes: u64,
     load_balance_pass_subtractions: u64,
-    run_prerequisite: ?*Step,
     serialize_runs: bool,
     last_run: ?*Step,
 
@@ -135,15 +134,10 @@ const TestsSummaryStep = struct {
             .test_filters = test_filters,
             .forced_passes = @intCast(forced_passes),
             .load_balance_pass_subtractions = 0,
-            .run_prerequisite = null,
             .serialize_runs = false,
             .last_run = null,
         };
         return self;
-    }
-
-    fn setRunPrerequisite(self: *TestsSummaryStep, prerequisite: *Step) void {
-        self.run_prerequisite = prerequisite;
     }
 
     fn setRunSerialization(self: *TestsSummaryStep) void {
@@ -155,9 +149,6 @@ const TestsSummaryStep = struct {
     }
 
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
-        if (self.run_prerequisite) |prerequisite| {
-            run_step.dependOn(prerequisite);
-        }
         if (self.serialize_runs) {
             if (self.last_run) |last_run| {
                 run_step.dependOn(last_run);
@@ -292,6 +283,22 @@ const FocusedAndSummaryRuns = struct {
     summary: []const *Step.Run,
 };
 
+fn sanitizedTestTimingName(b: *std.Build, label: []const u8) []const u8 {
+    var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(b.allocator);
+
+    for (label) |c| {
+        const safe = std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
+        buf.append(b.allocator, if (safe) c else '_') catch @panic("OOM while creating test timing name");
+    }
+
+    if (buf.items.len == 0) {
+        buf.appendSlice(b.allocator, "tests") catch @panic("OOM while creating test timing name");
+    }
+
+    return buf.toOwnedSlice(b.allocator) catch @panic("OOM while creating test timing name");
+}
+
 fn addAutoTestRuns(b: *std.Build, options: AutoTestRunOptions) []const *Step.Run {
     if (options.partition_count == 0) {
         std.log.err("-Dtest-partitions must be greater than 0", .{});
@@ -301,6 +308,14 @@ fn addAutoTestRuns(b: *std.Build, options: AutoTestRunOptions) []const *Step.Run
     const runs = b.allocator.alloc(*Step.Run, options.partition_count) catch
         @panic("OOM while creating automatic test runs");
     const label = options.label orelse options.test_step.name;
+    const timing_name = if (options.use_runner_partitions)
+        sanitizedTestTimingName(b, label)
+    else
+        null;
+    const timing_generation_ns = if (timing_name != null)
+        std.Io.Timestamp.now(b.graph.io, .real).nanoseconds
+    else
+        null;
 
     for (runs, 0..) |*slot, partition_i| {
         const run = b.addRunArtifact(options.test_step);
@@ -312,6 +327,12 @@ fn addAutoTestRuns(b: *std.Build, options: AutoTestRunOptions) []const *Step.Run
         if (options.use_runner_partitions and options.partition_count != 1) {
             run.addArg(b.fmt("--roc-test-partition-index={d}", .{partition_i}));
             run.addArg(b.fmt("--roc-test-partition-count={d}", .{options.partition_count}));
+        }
+        if (timing_name) |name| {
+            run.addArg(b.fmt("--roc-test-timing-name={s}", .{name}));
+        }
+        if (timing_generation_ns) |ns| {
+            run.addArg(b.fmt("--roc-test-timing-generation-ns={d}", .{ns}));
         }
         if (options.run_args.len != 0) {
             run.addArgs(options.run_args);
@@ -3321,15 +3342,10 @@ pub fn build(b: *std.Build) void {
     // Create and add module tests
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters, test_runner);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
-    const eval_tests_complete = createNoopStep(b, "eval-tests-complete");
-    eval_tests_complete.dependOn(eval_test_step);
-    eval_tests_complete.dependOn(eval_host_effects_step);
-    tests_summary.setRunPrerequisite(eval_tests_complete);
-    tests_summary.step.dependOn(eval_tests_complete);
     if (builtin.os.tag == .windows) {
         // Zig 0.16's Windows test runner IPC can time out while many Roc test
         // binaries are starting at once. Keep the same tests, but start them
-        // in a deterministic order after the eval suite completes.
+        // in a deterministic order.
         tests_summary.setRunSerialization();
     }
 
@@ -3730,10 +3746,8 @@ pub fn build(b: *std.Build) void {
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
     test_step.dependOn(&check_cli_stdio.step);
 
-    // Run eval tests before the other test suites to avoid resource contention.
-    // The dev backend's forked children allocate heavily (code generation + mmap PROT_EXEC)
-    // and get SIGKILL'd by macOS jetsam under memory pressure when running in parallel
-    // with fx_platform_test and other test suites.
+    test_step.dependOn(eval_test_step);
+    test_step.dependOn(eval_host_effects_step);
     test_step.dependOn(&tests_summary.step);
 
     b.default_step.dependOn(playground_step);
