@@ -17,6 +17,7 @@
 //! - CC: Calling convention constants
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 
 const x86_64 = @import("x86_64/mod.zig");
@@ -226,7 +227,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         ///
         /// The stack_offset pointer should point to the CodeGen's stack_offset field.
         /// This method will allocate space by decrementing the stack offset on Windows.
-        pub fn init(emit: *EmitType, stack_offset: *i32) !Self {
+        pub fn init(emit: *EmitType, stack_offset: *i32) Allocator.Error!Self {
             var self = Self{ .emit = emit, .stack_offset = stack_offset };
             if (comptime is_x86_64 and is_windows) {
                 // Allocate 16-byte slot for R12 save to maintain 16-byte alignment
@@ -256,14 +257,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Set up return by pointer (for large return types)
         /// Call this FIRST before adding any arguments
-        pub fn setReturnByPointer(self: *Self, offset: i32) !void {
+        pub fn setReturnByPointer(self: *Self, offset: i32) Allocator.Error!void {
             std.debug.assert(self.int_arg_index == 0);
             self.return_by_ptr = true;
             try self.addLeaArg(CC_EMIT.BASE_PTR, offset);
         }
 
         /// Add argument from a general register
-        pub fn addRegArg(self: *Self, src_reg: GeneralReg) !void {
+        pub fn addRegArg(self: *Self, src_reg: GeneralReg) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -280,7 +281,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Add argument by loading a pointer (LEA) to a stack location
-        pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
+        pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -297,7 +298,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Add argument by loading from stack memory
-        pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
+        pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -314,7 +315,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Add immediate value argument
-        pub fn addImmArg(self: *Self, value: i64) !void {
+        pub fn addImmArg(self: *Self, value: i64) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.reg_args[self.reg_arg_count] = .{
                     .dst_index = @intCast(self.int_arg_index),
@@ -333,7 +334,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add a struct argument, handling pass-by-pointer per platform ABI.
         /// Windows x64: Only 1, 2, 4, 8 byte structs pass by value; all others by pointer.
         /// System V: Structs up to 16 bytes can be passed in registers.
-        pub fn addStructArg(self: *Self, offset: i32, size: usize) !void {
+        pub fn addStructArg(self: *Self, offset: i32, size: usize) Allocator.Error!void {
             if (CC_EMIT.canPassStructByValue(size)) {
                 // Struct can be passed by value in register(s)
                 if (size <= 8) {
@@ -353,7 +354,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         ///              A float arg at position 1 goes in XMM1, consuming both int and float slots.
         /// System V: Uses separate float register pool (XMM0-7 independent of integer regs).
-        pub fn addFloatRegArg(self: *Self, src_reg: FloatReg, is_f64: bool) !void {
+        pub fn addFloatRegArg(self: *Self, src_reg: FloatReg, is_f64: bool) Allocator.Error!void {
             if (comptime is_windows) {
                 // Windows: float args use same position as int args
                 // XMM0 for arg 0, XMM1 for arg 1, etc.
@@ -393,19 +394,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Add a f64 float argument from a float register (convenience wrapper).
-        pub fn addF64RegArg(self: *Self, src_reg: FloatReg) !void {
+        pub fn addF64RegArg(self: *Self, src_reg: FloatReg) Allocator.Error!void {
             try self.addFloatRegArg(src_reg, true);
         }
 
         /// Add a f32 float argument from a float register (convenience wrapper).
-        pub fn addF32RegArg(self: *Self, src_reg: FloatReg) !void {
+        pub fn addF32RegArg(self: *Self, src_reg: FloatReg) Allocator.Error!void {
             try self.addFloatRegArg(src_reg, false);
         }
 
         /// Add a float argument by loading from memory.
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         /// System V: Uses separate float register pool (XMM0-7).
-        pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, is_f64: bool) !void {
+        pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
             if (comptime is_windows) {
                 // Windows: float args use same position as int args
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
@@ -438,12 +439,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Add a f64 float argument by loading from memory (convenience wrapper).
-        pub fn addF64MemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
+        pub fn addF64MemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             try self.addFloatMemArg(base_reg, offset, true);
         }
 
         /// Add a f32 float argument by loading from memory (convenience wrapper).
-        pub fn addF32MemArg(self: *Self, base_reg: GeneralReg, offset: i32) !void {
+        pub fn addF32MemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             try self.addFloatMemArg(base_reg, offset, false);
         }
 
@@ -463,7 +464,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Emit a single argument instruction: move source to destination register.
-        fn emitArgInst(self: *Self, dst: GeneralReg, src: ArgSource) !void {
+        fn emitArgInst(self: *Self, dst: GeneralReg, src: ArgSource) Allocator.Error!void {
             switch (src) {
                 .from_reg => |reg| {
                     if (dst != reg) try self.emit.movRegReg(.w64, dst, reg);
@@ -500,7 +501,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Emit a single stack argument for aarch64.
         /// Stores the arg value at [SP + uoffset * 8] using SCRATCH_REG as temp.
-        fn emitStackArgAarch64(self: *Self, arg: ArgSource, uoffset: u12) !void {
+        fn emitStackArgAarch64(self: *Self, arg: ArgSource, uoffset: u12) Allocator.Error!void {
             switch (arg) {
                 .from_reg => |reg| {
                     try self.emit.strRegMemUoff(.w64, reg, CC_EMIT.STACK_PTR, uoffset);
@@ -526,7 +527,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// If stack args will use SCRATCH_REG as a temp, and a deferred register arg
         /// sources from SCRATCH_REG, save SCRATCH_REG to the caller's frame and
         /// redirect the deferred arg to load from memory instead.
-        fn saveScratchIfConflict(self: *Self) !void {
+        fn saveScratchIfConflict(self: *Self) Allocator.Error!void {
             if (comptime !is_x86_64) return;
 
             // Check if any stack arg needs SCRATCH_REG as a temp
@@ -557,7 +558,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// register arguments. Direct, indirect, and relocatable calls are all one
         /// simultaneous ABI assignment from original argument sources to parameter
         /// registers.
-        fn stabilizeDeferredMemorySources(self: *Self) !void {
+        fn stabilizeDeferredMemorySources(self: *Self) Allocator.Error!void {
             if (self.reg_arg_count == 0) return;
 
             var has_dst_reg = [_]bool{false} ** 32;
@@ -622,7 +623,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Resolve deferred register arguments using Rideau-Serpette-Leroy parallel move algorithm.
         /// This handles arbitrary permutations of param registers without clobbering,
         /// using SCRATCH_REG to break cycles. At most one scratch save per cycle.
-        fn emitDeferredRegArgs(self: *Self) !void {
+        fn emitDeferredRegArgs(self: *Self) Allocator.Error!void {
             if (self.reg_arg_count == 0) return;
 
             var statuses = [_]MoveStatus{.to_move} ** CC_EMIT.PARAM_REGS.len;
@@ -640,7 +641,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Process a single deferred register arg, recursing to resolve dependencies first.
-        fn moveOne(self: *Self, i: usize, statuses: *[CC_EMIT.PARAM_REGS.len]MoveStatus, sources: *[CC_EMIT.PARAM_REGS.len]ArgSource) !void {
+        fn moveOne(self: *Self, i: usize, statuses: *[CC_EMIT.PARAM_REGS.len]MoveStatus, sources: *[CC_EMIT.PARAM_REGS.len]ArgSource) Allocator.Error!void {
             statuses[i] = .being_moved;
             const dst = CC_EMIT.PARAM_REGS[self.reg_args[i].dst_index];
 
@@ -673,7 +674,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Emit call instruction and handle cleanup.
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
-        pub fn call(self: *Self, fn_addr: usize) !void {
+        pub fn call(self: *Self, fn_addr: usize) Allocator.Error!void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -772,7 +773,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Call through a register (for indirect calls).
         /// If R12 save was configured via init(), R12 is automatically
         /// restored after the call returns.
-        pub fn callReg(self: *Self, target: GeneralReg) !void {
+        pub fn callReg(self: *Self, target: GeneralReg) Allocator.Error!void {
             // Calculate total stack space needed
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;
@@ -865,7 +866,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         ///
         /// Note: On x86_64, this emits `call rel32` (E8 xx xx xx xx).
         ///       On aarch64, this emits `bl offset` (26-bit signed offset).
-        pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) !void {
+        pub fn callRelocatable(self: *Self, symbol_name: []const u8, allocator: std.mem.Allocator, relocations: *std.ArrayList(Relocation)) Allocator.Error!void {
             // Calculate total stack space needed (same as call/callReg)
             const stack_args_space: u32 = @intCast(self.stack_arg_count * 8);
             const total_unaligned: u32 = CC_EMIT.SHADOW_SPACE + stack_args_space;

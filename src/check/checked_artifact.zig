@@ -4431,7 +4431,7 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     return null;
 }
 
-fn testTypeDeclSourceDeclForIdent(module_env: *const ModuleEnv, type_ident: base.Ident.Idx) !u32 {
+fn testTypeDeclSourceDeclForIdent(module_env: *const ModuleEnv, type_ident: base.Ident.Idx) error{MissingTestTypeDecl}!u32 {
     for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
         const source_decl = @intFromEnum(statement_idx);
         const candidate = sourceDeclTypeIdent(module_env, source_decl) orelse continue;
@@ -17436,7 +17436,7 @@ const ProvidedExportKindExpectation = struct {
 fn expectProvidedExportKind(
     source: []const u8,
     expected: ProvidedExportKindExpectation,
-) !void {
+) anyerror!void {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;

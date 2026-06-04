@@ -1,13 +1,14 @@
 //! Tests for the LSP syntax checker integration.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
 const uri_util = @import("../uri.zig");
 const completion_handler = @import("../handlers/completion.zig");
 const CompletionItem = completion_handler.CompletionItem;
 const completion_context = @import("../completion/context.zig");
 
-fn platformPath(allocator: std.mem.Allocator) ![]u8 {
+fn platformPath(allocator: std.mem.Allocator) anyerror![]u8 {
     // Resolve from repo root to ensure absolute path
     const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(repo_root);
@@ -33,7 +34,7 @@ const TestHarness = struct {
     file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
 
-    fn init() !TestHarness {
+    fn init() anyerror!TestHarness {
         const allocator = std.testing.allocator;
         return .{
             .allocator = allocator,
@@ -52,12 +53,12 @@ const TestHarness = struct {
     }
 
     /// Format a Roc source template, substituting the platform path for `{s}`.
-    fn formatSource(self: *TestHarness, comptime fmt: []const u8) ![]u8 {
+    fn formatSource(self: *TestHarness, comptime fmt: []const u8) Allocator.Error![]u8 {
         return std.fmt.allocPrint(self.allocator, fmt, .{self.platform_path});
     }
 
     /// Write a file to the tmp directory and register its path and URI.
-    fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) !void {
+    fn writeFile(self: *TestHarness, filename: []const u8, data: []const u8) anyerror!void {
         try self.tmp.dir.writeFile(std.testing.io, .{ .sub_path = filename, .data = data });
         if (self.file_path) |f| self.allocator.free(f);
         if (self.uri) |u| self.allocator.free(u);
@@ -66,7 +67,7 @@ const TestHarness = struct {
     }
 
     /// Build the file to populate the snapshot env. Discards diagnostics.
-    fn check(self: *TestHarness, override_text: ?[]const u8) !void {
+    fn check(self: *TestHarness, override_text: ?[]const u8) anyerror!void {
         const publish_sets = try self.checker.check(self.uri.?, override_text, null);
         for (publish_sets) |*set| set.deinit(self.allocator);
         self.allocator.free(publish_sets);
@@ -74,14 +75,14 @@ const TestHarness = struct {
 
     /// Get completion items at a line/character position.
     /// Fails the test if no completions are returned.
-    fn getCompletions(self: *TestHarness, source: []const u8, line: u32, character: u32) ![]const CompletionItem {
+    fn getCompletions(self: *TestHarness, source: []const u8, line: u32, character: u32) anyerror![]const CompletionItem {
         const result = try self.checker.getCompletionsAtPosition(self.uri.?, source, line, character);
         if (result) |r| return r.items;
         return error.TestUnexpectedResult;
     }
 
     /// Get hover information at a line/character position.
-    fn getHover(self: *TestHarness, source: []const u8, line: u32, character: u32) !?[]const u8 {
+    fn getHover(self: *TestHarness, source: []const u8, line: u32, character: u32) anyerror!?[]const u8 {
         const result = try self.checker.getTypeAtPosition(self.uri.?, source, line, character);
         if (result) |r| return r.type_str;
         return null;
@@ -100,7 +101,7 @@ const TestHarness = struct {
     }
 
     /// Assert that every label in `expected` appears in `items`.
-    fn expectHasLabels(items: []const CompletionItem, expected: []const []const u8) !void {
+    fn expectHasLabels(items: []const CompletionItem, expected: []const []const u8) anyerror!void {
         for (expected) |label| {
             var found = false;
             for (items) |item| {

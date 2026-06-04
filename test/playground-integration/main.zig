@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 const build_options = @import("build_options");
 
@@ -277,7 +278,7 @@ const TestStats = struct {
 
 /// Helper to allocate source code for our test cases.
 const TestData = struct {
-    pub fn happyPathRocCode(allocator: std.mem.Allocator) ![]u8 {
+    pub fn happyPathRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
             \\module [foo]
             \\
@@ -285,14 +286,14 @@ const TestData = struct {
         );
     }
 
-    pub fn syntaxErrorRocCode(allocator: std.mem.Allocator) ![]u8 {
+    pub fn syntaxErrorRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
             \\module [main]
             \\main = [1, 2, 3
         );
     }
 
-    pub fn typeErrorRocCode(allocator: std.mem.Allocator) ![]u8 {
+    pub fn typeErrorRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
         return allocator.dupe(u8,
             \\module [main]
             \\main = "hello" + 123
@@ -301,7 +302,7 @@ const TestData = struct {
 };
 
 /// Helper to send a message to the WASM Playground and get a response.
-fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) !WasmResponse {
+fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Allocator, message: WasmMessage) anyerror!WasmResponse {
     // Serialize message to JSON
     var message_json_buffer: std.Io.Writer.Allocating = .init(allocator);
     defer message_json_buffer.deinit();
@@ -402,7 +403,7 @@ fn sendMessageToWasm(wasm_interface: *const WasmInterface, allocator: std.mem.Al
     return parsed_response.value;
 }
 
-fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []const u8) !std.json.Parsed(WasmResponse) {
+fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []const u8) anyerror!std.json.Parsed(WasmResponse) {
     const parse_options = std.json.ParseOptions{
         .allocate = .alloc_always,
     };
@@ -449,7 +450,7 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
 /// - `gpa` allocator is the DebugAllocator, intended for bytebox VM.
 /// - `arena` allocator is the ArenaAllocator, used for other test harness allocations.
 /// - `wasm_path` is the path to the WASM file to load.
-fn setupWasm(std_io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
+fn setupWasm(std_io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) anyerror!WasmInterface {
     const wasm_data: []const u8 = std.Io.Dir.cwd().readFileAlloc(std_io, wasm_path, arena, .unlimited) catch |err| {
         logDebug("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
@@ -863,7 +864,7 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
 // - `arena` allocator is for test harness allocations.
 // - `gpa` allocator is for the bytebox VM.
 // - `wasm_path` is the path to the WASM file to load.
-fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) !TestStats {
+fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) Allocator.Error!TestStats {
     var stats = TestStats{
         .total = test_cases.len,
         .start_time = nanoTimestamp(),
@@ -930,7 +931,7 @@ fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, te
 }
 
 // Helper function to create a simple test case with INIT, LOAD_SOURCE, and optional QUERY_TYPES
-fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []const u8, expected_diag: ?MessageStep.DiagnosticExpectation, query_types: bool) !TestCase {
+fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []const u8, expected_diag: ?MessageStep.DiagnosticExpectation, query_types: bool) Allocator.Error!TestCase {
     var steps = try allocator.alloc(MessageStep, if (query_types) 3 else 2);
     steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     steps[1] = .{
@@ -946,7 +947,7 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
     return TestCase{ .name = name, .steps = steps };
 }
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void {
     const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
     var gpa = std.heap.DebugAllocator(.{}){};

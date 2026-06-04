@@ -6,6 +6,7 @@
 //! - Error handling
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
 const base58 = @import("base58");
@@ -386,7 +387,7 @@ test "downloadAndExtract with bad archive returns error without crash" {
             };
         }
 
-        fn runImpl(ctx: *@This()) !void {
+        fn runImpl(ctx: *@This()) anyerror!void {
             const thread_io = testing.io;
 
             const stream = ctx.server.accept(thread_io) catch return;

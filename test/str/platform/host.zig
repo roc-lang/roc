@@ -1,6 +1,7 @@
 //! Simple platform host that calls into a simplified Roc entrypoint and prints a string result.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 
@@ -140,7 +141,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
-fn platform_main() !void {
+fn platform_main() error{TestFailed}!void {
     var host_env = HostEnv{
         .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
     };

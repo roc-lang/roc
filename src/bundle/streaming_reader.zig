@@ -4,6 +4,7 @@
 //! simultaneously computing and verifying BLAKE3 hashes for data integrity.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
@@ -36,7 +37,7 @@ pub const DecompressingHashReader = struct {
         expected_hash: [32]u8,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
-    ) !Self {
+    ) Allocator.Error!Self {
         const custom_mem = c.ZSTD_customMem{
             .customAlloc = allocForZstd,
             .customFree = freeForZstd,
@@ -154,7 +155,7 @@ pub const DecompressingHashReader = struct {
 
     /// Verify that the hash matches. This should be called after reading is complete.
     /// If there is remaining data, it will be discarded.
-    pub fn verifyComplete(self: *Self) !void {
+    pub fn verifyComplete(self: *Self) error{HashMismatch}!void {
         _ = self.interface.discardRemaining() catch |err| switch (err) {
             error.ReadFailed => 0,
         };

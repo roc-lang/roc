@@ -5,6 +5,7 @@
 //! MachO format requires underscore prefix on all C symbols.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Builder = std.zig.llvm.Builder;
 const WipFunction = Builder.WipFunction;
 const RocTarget = @import("target.zig").RocTarget;
@@ -30,7 +31,7 @@ pub const EntryPoint = struct {
 /// Roc platform functions will delegate to. The Roc interpreter provides
 /// the actual implementation of this function, which acts as a dispatcher
 /// based on the entry_idx parameter.
-fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
+fn addRocEntrypoint(builder: *Builder, target: RocTarget) Allocator.Error!Builder.Function.Index {
     // For wasm32, use i32 explicitly for pointer parameters (wasm32 C ABI uses 32-bit pointers)
     // For other targets, use opaque pointer type which LLVM sizes based on target
     const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
@@ -61,7 +62,7 @@ fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Inde
 /// Embedded interpreter builds pass an already-lowered LIR image as a
 /// pointer/length pair. The interpreter shim views that image directly; it does
 /// not rebuild compiler data or perform compiler lowering.
-fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
+fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) Allocator.Error!Builder.Function.Index {
     const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
     const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
 
@@ -82,7 +83,7 @@ fn addEmbeddedRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Funct
     return entrypoint_fn;
 }
 
-fn addLirImageGlobal(builder: *Builder, lir_image: []const u8) !Builder.Variable.Index {
+fn addLirImageGlobal(builder: *Builder, lir_image: []const u8) Allocator.Error!Builder.Variable.Index {
     const image_string = try builder.string(lir_image);
     const image_const = try builder.stringConst(image_string);
     const image_name = try builder.strtabString("roc_lir_image");
@@ -113,7 +114,7 @@ fn addLirImageGlobal(builder: *Builder, lir_image: []const u8) !Builder.Variable
 /// 2. The pre-built Roc interpreter to handle all calls through a single dispatch mechanism
 /// 3. Efficient code generation since each wrapper is just a simple function call
 /// 4. Easy addition/removal of platform functions without changing the pre-built interpreter binary which is embedded in the roc cli executable.
-fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Index, name: []const u8, entry_idx: u32, target: RocTarget) !Builder.Function.Index {
+fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Index, name: []const u8, entry_idx: u32, target: RocTarget) Allocator.Error!Builder.Function.Index {
     // For wasm32, use i32 explicitly for pointer parameters (wasm32 C ABI uses 32-bit pointers)
     // For other targets, use opaque pointer type which LLVM sizes based on target
     const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
@@ -178,7 +179,7 @@ fn addEmbeddedRocExportedFunction(
     name: []const u8,
     entry_idx: u32,
     target: RocTarget,
-) !Builder.Function.Index {
+) Allocator.Error!Builder.Function.Index {
     const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
     const usize_type: Builder.Type = if (target.ptrBitWidth() == 32) .i32 else .i64;
 
@@ -255,7 +256,7 @@ fn addEmbeddedRocExportedFunction(
 ///
 /// The generated library is then compiled using LLVM to an object file and linked with
 /// both the host and the Roc interpreter to create a dev build executable.
-pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget) !void {
+pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget) Allocator.Error!void {
     // Add the extern roc_entrypoint declaration
     const entrypoint_fn = try addRocEntrypoint(builder, target);
 
@@ -271,7 +272,7 @@ pub fn createEmbeddedInterpreterShim(
     entrypoints: []const EntryPoint,
     target: RocTarget,
     lir_image: []const u8,
-) !void {
+) Allocator.Error!void {
     const lir_image_global = try addLirImageGlobal(builder, lir_image);
     const entrypoint_fn = try addEmbeddedRocEntrypoint(builder, target);
 

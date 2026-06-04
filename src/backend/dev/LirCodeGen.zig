@@ -5385,7 +5385,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             };
 
                             const saveIfClobbered = struct {
-                                fn f(s: *Self, reg: GeneralReg, sentinel: u32) !SavedReg {
+                                fn f(s: *Self, reg: GeneralReg, sentinel: u32) Allocator.Error!SavedReg {
                                     if (reg == .RAX or reg == .RDX) {
                                         const saved = try s.codegen.allocGeneralFor(sentinel);
                                         try s.codegen.emit.movRegReg(.w64, saved, reg);
@@ -6269,7 +6269,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// For signed values, arithmetic-shift-right the low register by 63 to
         /// produce all-1s (negative) or all-0s (positive) in the high register.
         /// For unsigned values, simply zero the high register.
-        fn emitSignExtendHighReg(self: *Self, high_reg: GeneralReg, low_reg: GeneralReg, signedness: std.builtin.Signedness) !void {
+        fn emitSignExtendHighReg(self: *Self, high_reg: GeneralReg, low_reg: GeneralReg, signedness: std.builtin.Signedness) Allocator.Error!void {
             switch (signedness) {
                 .signed => {
                     try self.emitMovRegReg(high_reg, low_reg);
@@ -7432,7 +7432,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Move register to register (architecture-specific)
-        fn emitMovRegReg(self: *Self, dst: GeneralReg, src: GeneralReg) !void {
+        fn emitMovRegReg(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.codegen.emit.movRegReg(.w64, dst, src);
         }
 
@@ -8139,7 +8139,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a call instruction to a specific code offset.
         /// Records the call position so it can be re-patched if the surrounding
         /// code is shifted by deferred-prologue proc compilation.
-        fn emitCallToOffset(self: *Self, target_offset: usize) !void {
+        fn emitCallToOffset(self: *Self, target_offset: usize) Allocator.Error!void {
             const current = self.codegen.currentOffset();
 
             // Record this call so we can re-patch it after body shifts
@@ -8294,7 +8294,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitInternalCodeAddress(self: *Self, target_offset: usize, dst_reg: GeneralReg) !void {
+        fn emitInternalCodeAddress(self: *Self, target_offset: usize, dst_reg: GeneralReg) Allocator.Error!void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
                 // ADR alone has only ±1 MB range, which is exceeded by larger programs.
@@ -8320,7 +8320,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Layout (12 bytes): ADR Xd, anchor (offset 0) — ADD/SUB Xd, Xd, #hi12, LSL #12 — ADD/SUB Xd, Xd, #lo12.
         /// `anchor` is the address of the ADR instruction. The final value of Xd equals
         /// `anchor + (target_off - anchor)`. Caller must ensure |target_off - anchor| ≤ 0xFFFFFF.
-        fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, anchor: usize, target_off: usize) !void {
+        fn emitAarch64PcRelAddress(self: *Self, dst: GeneralReg, anchor: usize, target_off: usize) Allocator.Error!void {
             const rel: i64 = @as(i64, @intCast(target_off)) - @as(i64, @intCast(anchor));
             const negative = rel < 0;
             const abs_rel: u64 = if (negative) @intCast(-rel) else @intCast(rel);
@@ -8337,7 +8337,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) !void {
+        fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) Allocator.Error!void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
                 // Reserve a 3-instruction (12-byte) PC-relative address sequence so the
@@ -10046,7 +10046,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy a value location to a stack slot.
-        fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) !void {
+        fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 // CMP reg, #imm12
                 try self.codegen.emit.cmpRegImm12(.w64, reg, @intCast(value));
@@ -10077,7 +10077,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// overwrites the placeholder before execution.
         ///
         /// RETURNS: The patch location (where the displacement bytes are) for later patching.
-        fn emitJumpIfNotEqual(self: *Self) !usize {
+        fn emitJumpIfNotEqual(self: *Self) Allocator.Error!usize {
             if (comptime target.toCpuArch() == .aarch64) {
                 // B.NE (branch if not equal) with placeholder offset
                 // On aarch64, the entire 4-byte instruction encodes the offset
@@ -10095,7 +10095,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a conditional jump for unsigned less than (for list length comparisons)
-        fn emitJumpIfEqual(self: *Self) !usize {
+        fn emitJumpIfEqual(self: *Self) Allocator.Error!usize {
             if (comptime target.toCpuArch() == .aarch64) {
                 // B.EQ (branch if equal) with placeholder offset
                 const patch_loc = self.codegen.currentOffset();
@@ -10228,7 +10228,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
-        fn emitPendingCallToProc(self: *Self, target_proc: lir.LIR.LirProcSpecId) !void {
+        fn emitPendingCallToProc(self: *Self, target_proc: lir.LIR.LirProcSpecId) Allocator.Error!void {
             const call_site = self.codegen.currentOffset();
             try self.pending_calls.append(self.allocator, .{
                 .call_site = call_site,
@@ -11353,7 +11353,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.ldrRegMemSoff(width, dst, base_reg, offset);
             } else {
@@ -11361,7 +11361,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.strRegMemSoff(width, src, base_reg, offset);
             } else {
@@ -11369,7 +11369,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLoadW8(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+        fn emitLoadW8(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 if (offset >= -256 and offset <= 255) {
                     try self.codegen.emit.ldurbRegMem(dst, base_reg, @intCast(offset));
@@ -11384,7 +11384,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLoadW16(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) !void {
+        fn emitLoadW16(self: *Self, dst: GeneralReg, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 if (offset >= -256 and offset <= 255) {
                     try self.codegen.emit.ldurhRegMem(dst, base_reg, @intCast(offset));
@@ -11399,7 +11399,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStoreW8(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+        fn emitStoreW8(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 if (offset >= -256 and offset <= 255) {
                     try self.codegen.emit.sturbRegMem(src, base_reg, @intCast(offset));
@@ -11414,7 +11414,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStoreW16(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) !void {
+        fn emitStoreW16(self: *Self, base_reg: GeneralReg, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 if (offset >= -256 and offset <= 255) {
                     try self.codegen.emit.sturhRegMem(src, base_reg, @intCast(offset));
@@ -11429,7 +11429,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAddRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        fn emitAddRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.addRegRegReg(width, dst, src1, src2);
@@ -11438,7 +11438,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.mulRegRegReg(width, dst, src1, src2);
@@ -11447,7 +11447,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.subRegRegReg(width, dst, src1, src2);
@@ -11456,7 +11456,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAndRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+        fn emitAndRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.andRegRegReg(width, dst, src1, src2);
@@ -11465,7 +11465,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLoadStackW8(self: *Self, dst: GeneralReg, offset: i32) !void {
+        fn emitLoadStackW8(self: *Self, dst: GeneralReg, offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emitLoadStackByte(dst, offset);
             } else {
@@ -11473,7 +11473,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLoadStackW16(self: *Self, dst: GeneralReg, offset: i32) !void {
+        fn emitLoadStackW16(self: *Self, dst: GeneralReg, offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emitLoadStackHalfword(dst, offset);
             } else {
@@ -11481,7 +11481,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitShlImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+        fn emitShlImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.lslRegRegImm(width, dst, src, @intCast(amount));
             } else {
@@ -11490,7 +11490,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+        fn emitLsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.lsrRegRegImm(width, dst, src, @intCast(amount));
             } else {
@@ -11499,7 +11499,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) !void {
+        fn emitAsrImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.asrRegRegImm(width, dst, src, @intCast(amount));
             } else {
@@ -11508,7 +11508,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitShlReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+        fn emitShlReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.lslRegReg(width, dst, src, amount);
             } else {
@@ -11516,7 +11516,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+        fn emitLsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.lsrRegReg(width, dst, src, amount);
             } else {
@@ -11524,7 +11524,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) !void {
+        fn emitAsrReg(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.asrRegReg(width, dst, src, amount);
             } else {
@@ -11534,7 +11534,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         const ShiftOp = enum { shl, shr, sar };
 
-        fn emitShiftRegX86(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg, comptime op: ShiftOp) !void {
+        fn emitShiftRegX86(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg, comptime op: ShiftOp) Allocator.Error!void {
             if (dst == .RCX) {
                 if (src == .RCX and amount == .R11) {
                     try self.codegen.emit.xchgRegReg(.w64, .RCX, .R11);
@@ -11562,7 +11562,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.cmpRegReg(.w64, a, b);
                 try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
@@ -11576,7 +11576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAddImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+        fn emitAddImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
             } else {
@@ -11585,7 +11585,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAddPtrImmAny(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+        fn emitAddPtrImmAny(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
             if (imm == 0) {
                 if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
                 return;
@@ -11607,7 +11607,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitAddImm(dst, src, imm);
         }
 
-        fn emitSubImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: i32) !void {
+        fn emitSubImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.subRegRegImm12(width, dst, src, @intCast(imm));
             } else {
@@ -11616,7 +11616,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitXorImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: u8) !void {
+        fn emitXorImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: u8) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.eorRegRegImm(width, dst, src, @as(u64, imm));
             } else {
@@ -11625,7 +11625,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) !void {
+        fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.cset(.w64, dst, cond);
             } else {
@@ -11634,7 +11634,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLeaStack(self: *Self, dst: GeneralReg, offset: i32) !void {
+        fn emitLeaStack(self: *Self, dst: GeneralReg, offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 if (offset >= 0 and offset <= 4095) {
                     try self.codegen.emit.addRegRegImm12(.w64, dst, frame_ptr, @intCast(offset));
@@ -11647,7 +11647,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitAddStackPtr(self: *Self, imm: i32) !void {
+        fn emitAddStackPtr(self: *Self, imm: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, stack_ptr, @intCast(imm));
             } else {
@@ -11728,7 +11728,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) !void {
+        fn emitStoreToPtr(self: *Self, comptime width: anytype, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 const shift = comptime switch (width) {
                     .w64 => @as(u5, 3),
@@ -11743,7 +11743,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStoreStackW8(self: *Self, offset: i32, src: GeneralReg) !void {
+        fn emitStoreStackW8(self: *Self, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emitStoreStackByte(offset, src);
             } else {
@@ -11751,7 +11751,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStoreStackW16(self: *Self, offset: i32, src: GeneralReg) !void {
+        fn emitStoreStackW16(self: *Self, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
                 try self.codegen.emitStoreStackHalfword(offset, src);
             } else {
@@ -11760,11 +11760,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store general register to memory at [ptr_reg] (architecture-specific)
-        fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) !void {
+        fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) Allocator.Error!void {
             try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0);
         }
 
-        fn emitStoreScalarToPtr(self: *Self, ptr_reg: GeneralReg, src_reg: GeneralReg, size: u32) !void {
+        fn emitStoreScalarToPtr(self: *Self, ptr_reg: GeneralReg, src_reg: GeneralReg, size: u32) Allocator.Error!void {
             switch (size) {
                 0 => {},
                 1 => {
@@ -11790,7 +11790,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store float register to memory at [ptr_reg] (architecture-specific)
-        fn emitStoreFloatToMem(self: *Self, ptr_reg: anytype, src_reg: FloatReg) !void {
+        fn emitStoreFloatToMem(self: *Self, ptr_reg: anytype, src_reg: FloatReg) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.fstrRegMemUoff(.double, src_reg, ptr_reg, 0);
             } else {
@@ -14419,7 +14419,7 @@ const TestLayoutState = struct {
     layout_store: layout.Store,
     module_env: *@import("can").ModuleEnv,
 
-    fn init(allocator: Allocator) !TestLayoutState {
+    fn init(allocator: Allocator) Allocator.Error!TestLayoutState {
         const module_env = try allocator.create(@import("can").ModuleEnv);
         module_env.* = try @import("can").ModuleEnv.init(allocator, "");
         const layout_store = try layout.Store.init(allocator, base.target.TargetUsize.native);
@@ -14515,11 +14515,11 @@ const TestRocOps = struct {
     }
 };
 
-fn addLocal(store: *LirStore, layout_idx: layout.Idx) !LocalId {
+fn addLocal(store: *LirStore, layout_idx: layout.Idx) Allocator.Error!LocalId {
     return try store.addLocal(.{ .layout_idx = layout_idx });
 }
 
-fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .args = LocalSpan.empty(),
@@ -14528,7 +14528,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) !lir.L
     });
 }
 
-fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .args = try store.addLocalSpan(args),
@@ -14537,7 +14537,7 @@ fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: 
     });
 }
 
-fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     const result = try addLocal(store, ret_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const assign = try store.addCFStmt(.{ .assign_literal = .{
@@ -14548,7 +14548,7 @@ fn addLiteralProc(store: *LirStore, value: lir.LiteralValue, ret_layout: layout.
     return try addNoArgProc(store, assign, ret_layout);
 }
 
-fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, operand_layout: layout.Idx, ret_layout: layout.Idx) !lir.LIR.LirProcSpecId {
+fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, operand_layout: layout.Idx, ret_layout: layout.Idx) Allocator.Error!lir.LIR.LirProcSpecId {
     const operand = try addLocal(store, operand_layout);
     const result = try addLocal(store, ret_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
@@ -14575,7 +14575,7 @@ fn addBinaryLowLevelProc(
     rhs_value: i64,
     operand_layout: layout.Idx,
     ret_layout: layout.Idx,
-) !lir.LIR.LirProcSpecId {
+) Allocator.Error!lir.LIR.LirProcSpecId {
     const lhs = try addLocal(store, operand_layout);
     const rhs = try addLocal(store, operand_layout);
     const result = try addLocal(store, ret_layout);
@@ -14601,7 +14601,7 @@ fn addBinaryLowLevelProc(
     return try addNoArgProc(store, assign_lhs, ret_layout);
 }
 
-fn compileRoot(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) !struct {
+fn compileRoot(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) Allocator.Error!struct {
     code: []const u8,
     entry_offset: usize,
 } {
@@ -14614,7 +14614,7 @@ fn compileRoot(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR
     return .{ .code = result.code, .entry_offset = result.entry_offset };
 }
 
-fn runRootI64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId) !i64 {
+fn runRootI64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!i64 {
     const allocator = std.testing.allocator;
     const compiled = try compileRoot(store, layout_store, root_proc, .i64);
     defer allocator.free(compiled.code);
@@ -14629,7 +14629,7 @@ fn runRootI64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.
     return out;
 }
 
-fn runRootU64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) !u64 {
+fn runRootU64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!u64 {
     const allocator = std.testing.allocator;
     const compiled = try compileRoot(store, layout_store, root_proc, ret_layout);
     defer allocator.free(compiled.code);
@@ -14644,7 +14644,7 @@ fn runRootU64(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.
     return out;
 }
 
-fn runRootU8(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) !u8 {
+fn runRootU8(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.LirProcSpecId, ret_layout: layout.Idx) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!u8 {
     const allocator = std.testing.allocator;
     const compiled = try compileRoot(store, layout_store, root_proc, ret_layout);
     defer allocator.free(compiled.code);

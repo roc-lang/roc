@@ -6,6 +6,7 @@
 //! definitions are NOT allowed and are reported with dedicated diagnostics.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const testing = std.testing;
@@ -15,7 +16,7 @@ const Counts = struct {
     mutual: usize = 0,
 };
 
-fn scopingDiagnosticCounts(source: []const u8) !Counts {
+fn scopingDiagnosticCounts(source: []const u8) anyerror!Counts {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 

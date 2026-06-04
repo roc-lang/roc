@@ -4,6 +4,7 @@
 //! constructs into a simplified, normalized form suitable for type inference.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
@@ -788,7 +789,7 @@ fn populateBuiltinAutoImportedTypes(
     gpa: std.mem.Allocator,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
-) !void {
+) Allocator.Error!void {
     // All auto-imported types with their statement index and fully-qualified ident
     // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
     // Nested types under Num: "Builtin.Num.U8", etc.
@@ -847,7 +848,7 @@ pub fn populateModuleEnvs(
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
-) !void {
+) Allocator.Error!void {
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
@@ -4155,7 +4156,7 @@ const TypeAnnoIdent = struct {
     anno_region: Region,
 };
 
-fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
+fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
     const pattern = self.env.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => {
@@ -4215,7 +4216,7 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
     }
 }
 
-fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
+fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
     const pattern = self.env.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => {
@@ -6035,7 +6036,7 @@ fn canonicalizeRecordField(
 }
 
 /// Parse an integer with underscores.
-pub fn parseIntWithUnderscores(allocator: std.mem.Allocator, comptime T: type, text: []const u8, int_base: u8) !T {
+pub fn parseIntWithUnderscores(allocator: std.mem.Allocator, comptime T: type, text: []const u8, int_base: u8) (Allocator.Error || error{ InvalidCharacter, Overflow })!T {
     const buf = try allocator.alloc(u8, text.len);
     defer allocator.free(buf);
 
@@ -13685,7 +13686,7 @@ fn currentScopeIdx(self: *Self) usize {
 }
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
-pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx {
+pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) Allocator.Error!Expr.Idx {
     // then in the final slot the actual expr is inserted
     const expr_idx = try self.env.addExpr(
         CIR.Expr{
@@ -14456,7 +14457,7 @@ fn setExternalTypeBinding(
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
     module_found_status: ModuleFoundStatus,
-) !void {
+) Allocator.Error!void {
     // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
     if (scope.type_bindings.get(local_ident)) |existing_binding| {
         // Extract the original region from the existing binding for the diagnostic

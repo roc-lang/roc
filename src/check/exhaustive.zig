@@ -26,6 +26,7 @@
 //! - Original Rust implementation in `crates/compiler/exhaustive/`
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
@@ -127,7 +128,7 @@ pub const HumanIndex = struct {
     }
 
     /// Returns ordinal string: "1st", "2nd", "3rd", "4th", etc.
-    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) ![]const u8 {
+    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) Allocator.Error![]const u8 {
         const n = self.toHuman();
         const suffix = switch (n % 100) {
             11, 12, 13 => "th",
@@ -1123,7 +1124,7 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 
 /// Push work items for AND semantics: all types must be inhabited.
 /// Pushes AndCombine(N) followed by CheckType for each var.
-fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars: []const Var) !void {
+fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars: []const Var) Allocator.Error!void {
     const count: u32 = @intCast(vars.len);
     if (count == 0) {
         // Empty AND is true - push result directly
@@ -1140,7 +1141,7 @@ fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars
 
 /// Push work items for a tag union: OR semantics across tags, AND within each tag's args.
 /// Also handles extension chain following.
-fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *std.ArrayList(WorkItem), initial_tag_union: types.TagUnion) !void {
+fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *std.ArrayList(WorkItem), initial_tag_union: types.TagUnion) Allocator.Error!void {
     // First, collect all tags by following the extension chain
     var all_tag_args: std.ArrayList(Var.SafeList.Range) = .empty;
     defer all_tag_args.deinit(gpa);
@@ -1912,7 +1913,7 @@ pub const ColumnTypes = struct {
         self: ColumnTypes,
         allocator: std.mem.Allocator,
         elem_count: usize,
-    ) !ColumnTypes {
+    ) Allocator.Error!ColumnTypes {
         if (self.types.len == 0) {
             return .{ .types = &[_]Var{}, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
         }
@@ -1936,7 +1937,7 @@ pub const ColumnTypes = struct {
 fn buildListCtorsForChecking(
     allocator: std.mem.Allocator,
     pattern_arities: []const ListArity,
-) ![]const ListArity {
+) Allocator.Error![]const ListArity {
     // Find the maximum lengths we need to consider
     var max_exact_len: usize = 0;
     var has_slice = false;

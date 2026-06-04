@@ -102,7 +102,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
+    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) anyerror![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
         self.mutex.lockUncancelable(self.std_io);
@@ -232,7 +232,7 @@ pub const SyntaxChecker = struct {
 
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
-    fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnvHandle {
+    fn createFreshBuildEnv(self: *SyntaxChecker) anyerror!*BuildEnvHandle {
         self.logDebug(.build, "createFreshBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
 
         // Release the previous_build_env owner first.
@@ -387,7 +387,7 @@ pub const SyntaxChecker = struct {
     /// Get all imported ModuleEnvs for a given module.
     /// Returns a slice of ModuleEnv pointers for the module's imports.
     /// Caller must free the returned slice.
-    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) !?[]*ModuleEnv {
+    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) Allocator.Error!?[]*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
 
         // First, find the module and its scheduler
@@ -514,7 +514,7 @@ pub const SyntaxChecker = struct {
         });
     }
 
-    fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) !Diagnostics.Diagnostic {
+    fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
         const range = self.rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
@@ -687,7 +687,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?HoverResult {
+    ) anyerror!?HoverResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -865,7 +865,7 @@ pub const SyntaxChecker = struct {
     /// Find documentation comments for the symbol at the given region/offset.
     /// First checks if the cursor is on a lookup expression and resolves it to
     /// the actual definition. Otherwise searches defs and statements by region.
-    fn findDocumentationForRegion(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, region: Region, target_offset: u32) !?[]const u8 {
+    fn findDocumentationForRegion(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, region: Region, target_offset: u32) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
@@ -1224,7 +1224,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?DefinitionResult {
+    ) anyerror!?DefinitionResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -1817,7 +1817,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?HighlightResult {
+    ) anyerror!?HighlightResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -1871,7 +1871,7 @@ pub const SyntaxChecker = struct {
         allocator: std.mem.Allocator,
         uri: []const u8,
         source: []const u8,
-    ) ![]document_symbol_handler.SymbolInformation {
+    ) anyerror![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
         self.mutex.lockUncancelable(self.std_io);
@@ -2213,7 +2213,7 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?completion_handler.CompletionResult {
+    ) anyerror!?completion_handler.CompletionResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 

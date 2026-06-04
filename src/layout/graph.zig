@@ -2,6 +2,7 @@
 //! shared canonical layout commit.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const layout = @import("./layout.zig");
 
 /// Canonical layout index reused by graph refs that already exist in the store.
@@ -80,7 +81,7 @@ pub const Graph = struct {
     }
 
     /// Reserve a local node id before its final shape is known.
-    pub fn reserveNode(self: *Graph, allocator: std.mem.Allocator) !NodeId {
+    pub fn reserveNode(self: *Graph, allocator: std.mem.Allocator) Allocator.Error!NodeId {
         const id: NodeId = @enumFromInt(self.nodes.items.len);
         try self.nodes.append(allocator, .pending);
         return id;
@@ -92,7 +93,7 @@ pub const Graph = struct {
     }
 
     /// Append a field slice and return a stable span to it.
-    pub fn appendFields(self: *Graph, allocator: std.mem.Allocator, fields: []const Field) !FieldSpan {
+    pub fn appendFields(self: *Graph, allocator: std.mem.Allocator, fields: []const Field) Allocator.Error!FieldSpan {
         if (fields.len == 0) return .empty();
 
         const start: u32 = @intCast(self.fields.items.len);
@@ -104,7 +105,7 @@ pub const Graph = struct {
     }
 
     /// Append a ref slice and return a stable span to it.
-    pub fn appendRefs(self: *Graph, allocator: std.mem.Allocator, refs: []const Ref) !RefSpan {
+    pub fn appendRefs(self: *Graph, allocator: std.mem.Allocator, refs: []const Ref) Allocator.Error!RefSpan {
         if (refs.len == 0) return .empty();
 
         const start: u32 = @intCast(self.refs.items.len);

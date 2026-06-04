@@ -1,6 +1,8 @@
 //! Integration tests for let-polymorphism that parse, canonicalize, and type-check
 //! actual code to ensure polymorphic values work correctly in practice.
 
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const TestEnv = @import("./TestEnv.zig");
 
 test "direct polymorphic identity usage" {
@@ -249,7 +251,7 @@ test "polymorphic identity with if-else - all intermediate types" {
 }
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
-fn typeCheck(comptime source_expr: []const u8, expected_type: []const u8) !void {
+fn typeCheck(comptime source_expr: []const u8, expected_type: []const u8) anyerror!void {
     var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
     return test_env.assertLastDefType(expected_type);

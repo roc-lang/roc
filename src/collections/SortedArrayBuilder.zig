@@ -91,7 +91,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Clone this builder into fresh owned memory.
-        pub fn clone(self: *const Self, allocator: Allocator) !Self {
+        pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
             var cloned = Self.init();
             errdefer cloned.deinit(allocator);
             try cloned.entries.ensureTotalCapacity(allocator, self.entries.items.len);
@@ -111,7 +111,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Add a key-value pair
-        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) !void {
+        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) Allocator.Error!void {
             const new_key = if (K == []const u8) try allocator.dupe(u8, key) else key;
 
             // Check if we need to maintain sorted order
@@ -239,7 +239,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Detect duplicates without modifying the array - returns list of duplicate keys
-        pub fn detectDuplicates(self: *Self, allocator: Allocator) ![]K {
+        pub fn detectDuplicates(self: *Self, allocator: Allocator) Allocator.Error![]K {
             var duplicates = std.array_list.Managed(K).init(allocator);
 
             if (self.entries.items.len <= 1) return duplicates.toOwnedSlice();

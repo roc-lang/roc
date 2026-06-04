@@ -113,7 +113,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).
-    pub fn addItem(self: *CompletionBuilder, item: CompletionItem) !bool {
+    pub fn addItem(self: *CompletionBuilder, item: CompletionItem) Allocator.Error!bool {
         // Check for duplicates
         if (self.seen_labels.contains(item.label)) {
             // Avoid leaking owned optional fields on duplicate rejection.
@@ -170,7 +170,7 @@ pub const CompletionBuilder = struct {
     // Module Name Completions
 
     /// Add module name completions from all loaded packages/modules in BuildEnv.
-    pub fn addModuleNameCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) !void {
+    pub fn addModuleNameCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) Allocator.Error!void {
         // Surface builtin modules (Str, List, etc.) even when they are not
         // present in schedulers. This keeps completions available while
         // preserving real backing data for members/types.
@@ -193,7 +193,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add module name completions from the current module's import statements.
-    pub fn addModuleNameCompletions(self: *CompletionBuilder, module_env: *ModuleEnv) !void {
+    pub fn addModuleNameCompletions(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!void {
         // Add imported module names from import statements
         const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (import_statements_slice) |stmt_idx| {
@@ -223,7 +223,7 @@ pub const CompletionBuilder = struct {
         env: *BuildEnv,
         module_name: []const u8,
         module_env_opt: ?*ModuleEnv,
-    ) !void {
+    ) Allocator.Error!void {
         // Builtins are backed by a single Builtin module env. Treat builtin type
         // names (Str, List, etc.) as top-level modules for member completions.
         if (builtin_completion.isBuiltinType(module_name)) {
@@ -254,7 +254,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add builtin module name completions (Str, List, Bool, etc.).
-    fn addBuiltinModuleNameCompletions(self: *CompletionBuilder) !void {
+    fn addBuiltinModuleNameCompletions(self: *CompletionBuilder) Allocator.Error!void {
         // We use the builtin type list as module names, because builtin modules
         // are surfaced as top-level namespaces for completion.
         for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
@@ -271,7 +271,7 @@ pub const CompletionBuilder = struct {
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
         module_name: []const u8,
-    ) !void {
+    ) Allocator.Error!void {
         var type_writer = module_env.initTypeWriter() catch null;
         defer if (type_writer) |*tw| tw.deinit();
 
@@ -351,7 +351,7 @@ pub const CompletionBuilder = struct {
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
         namespace_chain: []const u8,
-    ) !bool {
+    ) Allocator.Error!bool {
         var added_any = false;
 
         // Top-level defs.
@@ -400,12 +400,12 @@ pub const CompletionBuilder = struct {
     // Type Completions
 
     /// Add type completions for type annotation context.
-    pub fn addTypeCompletions(self: *CompletionBuilder, module_env: *ModuleEnv) !void {
+    pub fn addTypeCompletions(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!void {
         try self.addTypeNamesFromModuleEnv(module_env);
     }
 
     /// Add type completions from all modules in BuildEnv.
-    pub fn addTypeCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) !void {
+    pub fn addTypeCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) Allocator.Error!void {
         var sched_it = env.schedulers.iterator();
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
@@ -418,7 +418,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add type names (aliases and nominals) from a ModuleEnv.
-    fn addTypeNamesFromModuleEnv(self: *CompletionBuilder, module_env: *ModuleEnv) !void {
+    fn addTypeNamesFromModuleEnv(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!void {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
@@ -456,7 +456,7 @@ pub const CompletionBuilder = struct {
     // Local Completions
 
     /// Add local definition completions (variables, functions in scope).
-    pub fn addLocalCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, cursor_offset: u32) !void {
+    pub fn addLocalCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, cursor_offset: u32) Allocator.Error!void {
         // Initialize type writer for formatting types
         var type_writer = module_env.initTypeWriter() catch null;
         defer if (type_writer) |*tw| tw.deinit();
@@ -622,7 +622,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         variable_name: []const u8,
         variable_start: u32,
-    ) !void {
+    ) Allocator.Error!void {
         self.logDebug("addRecordFieldCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
 
         // Look up the definition by name in top-level defs/statements.
@@ -688,7 +688,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Extract and add record fields from a type variable.
-    pub fn addFieldsFromTypeVar(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) !void {
+    pub fn addFieldsFromTypeVar(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) Allocator.Error!void {
         const type_store = &module_env.types;
 
         var resolved = type_store.resolveVar(type_var);
@@ -734,7 +734,7 @@ pub const CompletionBuilder = struct {
 
     /// Extract and add tuple element index completions from a type variable.
     /// For tuple types, adds completions like "0", "1", "2" for each element.
-    pub fn addTupleIndexCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) !void {
+    pub fn addTupleIndexCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) Allocator.Error!void {
         const type_store = &module_env.types;
 
         var resolved = type_store.resolveVar(type_var);
@@ -802,7 +802,7 @@ pub const CompletionBuilder = struct {
     /// This is used for module member accesses (e.g., Module.value.) where the
     /// member is a record. We resolve the member's type from the module's
     /// definition table, then extract its record fields.
-    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) !bool {
+    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) Allocator.Error!bool {
         if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
             const type_var = ModuleEnv.varFrom(def_info.pattern_idx);
             try self.addFieldsFromTypeVar(module_env, type_var);
@@ -864,7 +864,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         content: types.Content,
         depth: usize,
-    ) !void {
+    ) Allocator.Error!void {
         const type_store = &module_env.types;
 
         self.logDebug("addFieldsFromContent: content tag={s}", .{@tagName(content)});
@@ -897,7 +897,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add completion items for fields in a record type.
-    fn addFieldsFromRecord(self: *CompletionBuilder, module_env: *ModuleEnv, record: types.Record) !void {
+    fn addFieldsFromRecord(self: *CompletionBuilder, module_env: *ModuleEnv, record: types.Record) Allocator.Error!void {
         const type_store = &module_env.types;
 
         // Get the record fields
@@ -963,7 +963,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         variable_name: []const u8,
         variable_start: u32,
-    ) !void {
+    ) Allocator.Error!void {
         self.logDebug("addMethodCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
 
         const scope = self.getOrBuildScope(module_env);
@@ -1050,7 +1050,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Extract methods available for a type variable and add them as completions.
-    pub fn addMethodsFromTypeVar(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) !void {
+    pub fn addMethodsFromTypeVar(self: *CompletionBuilder, module_env: *ModuleEnv, type_var: types.Var) Allocator.Error!void {
         const type_store = &module_env.types;
 
         self.logDebug("addMethodsFromTypeVar: type_var={}", .{type_var});
@@ -1127,7 +1127,7 @@ pub const CompletionBuilder = struct {
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
-    ) !void {
+    ) Allocator.Error!void {
         if (constraints.isEmpty()) {
             self.logDebug("addMethodsFromConstraints: empty", .{});
             return;
@@ -1194,7 +1194,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add methods for a specific source declaration owner by searching method_idents.
-    fn addMethodsForOwnerInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) !void {
+    fn addMethodsForOwnerInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) Allocator.Error!void {
         // Initialize type writer for formatting method signatures
         var type_writer = module_env.initTypeWriter() catch null;
         defer if (type_writer) |*tw| tw.deinit();
@@ -1362,7 +1362,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         type_name: []const u8,
         requesting_module_name: ?[]const u8, // null = same module (always allowed)
-    ) !bool {
+    ) Allocator.Error!bool {
         // Search all_statements for s_nominal_decl matching type_name
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
@@ -1396,7 +1396,7 @@ pub const CompletionBuilder = struct {
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
         anno: CIR.TypeAnno,
-    ) !bool {
+    ) Allocator.Error!bool {
         switch (anno) {
             .tag_union => |tu| {
                 const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
@@ -1435,7 +1435,7 @@ pub const CompletionBuilder = struct {
         return self.formatTagSignatureInner(module_env, tag_name, args_slice) catch null;
     }
 
-    fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) ![]const u8 {
+    fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) Allocator.Error![]const u8 {
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(self.allocator);
         try buf.appendSlice(self.allocator, tag_name);
@@ -1551,7 +1551,7 @@ pub const CompletionBuilder = struct {
     pub fn addAmbientTagCompletions(
         self: *CompletionBuilder,
         module_env: *ModuleEnv,
-    ) !void {
+    ) Allocator.Error!void {
         // Iterate all tags in the type store
         const tag_names = module_env.types.tags.items.items(.name);
         for (tag_names) |name_idx| {

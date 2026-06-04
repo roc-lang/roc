@@ -4,6 +4,7 @@
 //! imported module exports, and local variables in scope.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 
 /// CompletionItemKind values as defined by the LSP specification.
@@ -38,7 +39,7 @@ pub const CompletionItemKind = enum(u32) {
 /// Handler for `textDocument/completion` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "completion requires params");
                 return;

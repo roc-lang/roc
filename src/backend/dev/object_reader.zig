@@ -538,7 +538,7 @@ pub const RelocatedCode = struct {
 /// Extract all loadable sections from an ELF object file, lay them out
 /// in a contiguous buffer, apply all aarch64 relocations, and return
 /// the result ready for execution.
-pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) !RelocatedCode {
+pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) Allocator.Error!RelocatedCode {
     if (object_bytes.len < 64) return error.InvalidObjectFile;
     if (object_bytes[0] != 0x7F or object_bytes[1] != 'E' or object_bytes[2] != 'L' or object_bytes[3] != 'F')
         return error.UnsupportedFormat;

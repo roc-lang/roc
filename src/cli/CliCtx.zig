@@ -186,7 +186,7 @@ pub const CliCtx = struct {
     }
 
     /// Add a problem to the context
-    pub fn addProblem(self: *Self, problem: CliProblem) !void {
+    pub fn addProblem(self: *Self, problem: CliProblem) Allocator.Error!void {
         try self.problems.append(self.gpa, problem);
 
         // Update exit code based on severity
@@ -263,7 +263,7 @@ pub const CliCtx = struct {
     }
 
     /// Render all problems to a writer
-    pub fn renderProblemsTo(self: *Self, writer: anytype) !void {
+    pub fn renderProblemsTo(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
         const config = ReportingConfig.initColorTerminal();
 
         for (self.problems.items) |problem| {
@@ -274,7 +274,7 @@ pub const CliCtx = struct {
     }
 
     /// Render all problems and return whether there were any errors
-    pub fn renderAndCheck(self: *Self, writer: anytype) !bool {
+    pub fn renderAndCheck(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!bool {
         try self.renderProblemsTo(writer);
         return self.hasErrors();
     }

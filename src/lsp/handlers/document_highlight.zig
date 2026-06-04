@@ -5,6 +5,7 @@
 //! Falls back to token-based matching when CIR is unavailable.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
@@ -13,7 +14,7 @@ const Token = parse.tokenize.Token;
 /// Handler for `textDocument/documentHighlight` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "documentHighlight requires params");
                 return;
@@ -145,7 +146,7 @@ const DocumentHighlight = struct {
 
 /// Fallback: find all highlights by matching token text.
 /// Used when CIR is not available (e.g., parse errors).
-fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) ![]DocumentHighlight {
+fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) Allocator.Error![]DocumentHighlight {
     // Build line offset table
     const line_offsets = buildLineOffsets(source);
 

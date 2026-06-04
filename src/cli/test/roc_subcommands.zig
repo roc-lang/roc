@@ -1,9 +1,10 @@
 //! End-to-end integration tests for roc subcommands using the actual roc CLI binary.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const util = @import("util.zig");
 
-fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.Environ.Map {
+fn createPerTestCacheEnv(allocator: std.mem.Allocator) Allocator.Error!std.process.Environ.Map {
     return util.buildIsolatedTestEnvMap(allocator, null);
 }
 
@@ -38,7 +39,7 @@ fn writeGeneratedModuleGraphProject(
     allocator: std.mem.Allocator,
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
-) !void {
+) Allocator.Error!void {
     try std.testing.expect(config.roc_file_count > 0);
     try std.testing.expect(config.symbols_per_file > 0);
 
@@ -53,7 +54,7 @@ fn writeGeneratedModuleGraphProject(
 fn writeGeneratedPackageModule(
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
-) !void {
+) Allocator.Error!void {
     var file = try dir.createFile(std.testing.io, "main.roc", .{});
     defer file.close(std.testing.io);
 
@@ -98,7 +99,7 @@ fn writeGeneratedTypeModule(
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
     module_idx: usize,
-) !void {
+) Allocator.Error!void {
     const file_name = try std.fmt.allocPrint(allocator, "T{d}.roc", .{module_idx});
     defer allocator.free(file_name);
 
@@ -137,7 +138,7 @@ fn writeGeneratedTypeModule(
 fn runGeneratedModuleGraphCheck(
     allocator: std.mem.Allocator,
     config: GeneratedModuleGraphConfig,
-) !void {
+) Allocator.Error!void {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -202,7 +203,7 @@ fn runGeneratedModuleGraphCheck(
     try std.testing.expectEqual(config.roc_file_count, cached_module_count);
 }
 
-fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) !usize {
+fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) Allocator.Error!usize {
     var cache_dir = std.Io.Dir.cwd().openDir(std.testing.io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return 0,
         else => return err,
@@ -889,7 +890,7 @@ test "roc check test/int/app.roc does not panic" {
     try testing.expect(!has_panic_text);
 }
 
-fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) !void {
+fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) Allocator.Error!void {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const result = try util.runRoc(gpa, &.{ opt, "--no-cache" }, roc_file);
@@ -1179,7 +1180,7 @@ test "roc build glibc target gives helpful error on non-Linux" {
     try testing.expect(suggests_musl);
 }
 
-fn testCachesPassingResults(opt: []const u8) !void {
+fn testCachesPassingResults(opt: []const u8) Allocator.Error!void {
     const gpa = std.testing.allocator;
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
@@ -1203,7 +1204,7 @@ test "roc test caches passing results (dev)" {
     try testCachesPassingResults("--opt=dev");
 }
 
-fn testCachesFailingResults(opt: []const u8) !void {
+fn testCachesFailingResults(opt: []const u8) Allocator.Error!void {
     const gpa = std.testing.allocator;
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
@@ -1323,7 +1324,7 @@ test "roc test cache invalidated by source change (dev)" {
     try testing.expect(std.mem.find(u8, result2.stdout, "(cached)") == null);
 }
 
-fn testVerboseWorksFromCache(opt: []const u8) !void {
+fn testVerboseWorksFromCache(opt: []const u8) Allocator.Error!void {
     const gpa = std.testing.allocator;
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
@@ -1348,7 +1349,7 @@ test "roc test --verbose works from cache (dev)" {
     try testVerboseWorksFromCache("--opt=dev");
 }
 
-fn testVerboseCachesFailureReports(opt: []const u8) !void {
+fn testVerboseCachesFailureReports(opt: []const u8) Allocator.Error!void {
     const gpa = std.testing.allocator;
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
@@ -1374,7 +1375,7 @@ test "roc test --verbose caches failure reports (dev)" {
     try testVerboseCachesFailureReports("--opt=dev");
 }
 
-fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
+fn testNonVerboseCachesVerboseReports(opt: []const u8) Allocator.Error!void {
     const gpa = std.testing.allocator;
     var env_map = try createPerTestCacheEnv(gpa);
     defer env_map.deinit();
@@ -1431,7 +1432,7 @@ test "roc test with nested list chunks does not panic on layout upgrade (dev)" {
     return error.SkipZigTest;
 }
 
-fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
+fn testFailureOutputContainsSourceSnippet(opt: []const u8) Allocator.Error!void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -1454,7 +1455,7 @@ test "roc test failure output contains source snippet (dev)" {
     try testFailureOutputContainsSourceSnippet("--opt=dev");
 }
 
-fn testFailureOutputContainsDocComment(opt: []const u8) !void {
+fn testFailureOutputContainsDocComment(opt: []const u8) Allocator.Error!void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -1477,7 +1478,7 @@ test "roc test failure output contains doc comment (dev)" {
     try testFailureOutputContainsDocComment("--opt=dev");
 }
 
-fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
+fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) Allocator.Error!void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -2004,7 +2005,7 @@ test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
     try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
 }
 
-fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) !void {
+fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) Allocator.Error!void {
     try std.testing.expect(result.term == .exited and result.term.exited == 0);
     try std.testing.expect(std.mem.find(u8, result.stdout, expected_pass_count) != null);
     try std.testing.expect(std.mem.find(u8, result.stdout, "failed") == null);

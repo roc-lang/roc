@@ -1129,7 +1129,7 @@ pub fn replaceExprWithZeroArgumentTag(
     variant_var: types.Var,
     ext_var: types.Var,
     name: Ident.Idx,
-) !void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
@@ -1156,7 +1156,7 @@ pub fn replaceExprWithTuple(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
     elem_indices: []const CIR.Expr.Idx,
-) !void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     // Store element indices in index_data
@@ -1293,7 +1293,7 @@ pub fn replaceExprWithTag(
     expr_idx: CIR.Expr.Idx,
     name: Ident.Idx,
     arg_indices: []const CIR.Expr.Idx,
-) !void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     // Store argument indices in index_data

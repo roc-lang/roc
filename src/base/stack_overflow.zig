@@ -1,6 +1,7 @@
 //! Signal handling for the Roc compiler process.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
 const signal_handler = @import("signal_handler.zig");
@@ -169,7 +170,7 @@ test "worker thread installs stack overflow handler" {
     try testCrashInChildProcess("thread-stack-overflow", "overflowed its stack memory", 134);
 }
 
-fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code: u8) !void {
+fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code: u8) anyerror!void {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -195,7 +196,7 @@ fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code
     try verifyHandlerOutput(result.term, result.stderr, expected, expected_code);
 }
 
-fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, expected: []const u8, expected_code: u8) !void {
+fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, expected: []const u8, expected_code: u8) anyerror!void {
     const has_expected_msg = std.mem.find(u8, stderr_output, expected) != null;
     const has_wrong_stack_msg = std.mem.find(u8, stderr_output, "overflowed its stack memory") != null and
         !std.mem.eql(u8, expected, "overflowed its stack memory");

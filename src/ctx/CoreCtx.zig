@@ -512,7 +512,7 @@ pub fn testing(gpa: Allocator, arena: Allocator) Self {
 
 /// Write data to a file path relative to the current working directory.
 /// Exposed so backend/eval code can write files without a full CoreCtx instance.
-pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) !void {
+pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) anyerror!void {
     return std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sub_path, .data = data });
 }
 

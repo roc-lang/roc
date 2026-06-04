@@ -2,6 +2,7 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
 const TestEnv = @import("./TestEnv.zig");
@@ -3918,7 +3919,7 @@ fn checkTypesModule(
     comptime source_expr: []const u8,
     comptime expectation: ModuleExpectation,
     comptime expected: []const u8,
-) !void {
+) anyerror!void {
     var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
@@ -3953,7 +3954,7 @@ const DefAndExpectation = struct {
 fn checkTypesModuleDefs(
     comptime source_expr: []const u8,
     comptime expectations: []const DefAndExpectation,
-) !void {
+) anyerror!void {
     var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
@@ -3979,7 +3980,7 @@ fn checkTypesExpr(
     comptime source_expr: []const u8,
     comptime expectation: ExprExpectation,
     comptime expected: []const u8,
-) !void {
+) anyerror!void {
     var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
 

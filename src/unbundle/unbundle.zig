@@ -5,6 +5,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base58 = @import("base58");
 const zstd = std.compress.zstd;
 
@@ -464,7 +465,7 @@ const DecompressingHashReader = struct {
         allocator: std.mem.Allocator,
         input_reader: *std.Io.Reader,
         expected_hash: [32]u8,
-    ) !*Self {
+    ) Allocator.Error!*Self {
         // Allocate the struct itself on the heap so pointers remain stable
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
@@ -514,7 +515,7 @@ const DecompressingHashReader = struct {
     }
 
     /// Verify that the hash matches. This should be called after reading is complete.
-    pub fn verifyComplete(self: *Self) !void {
+    pub fn verifyComplete(self: *Self) error{HashMismatch}!void {
         // Drain remaining compressed data through the hashing reader
         // This ensures all compressed bytes are hashed even if tar didn't need them
         while (true) {
@@ -647,7 +648,7 @@ pub fn unbundleStream(
 /// Validate a base58-encoded hash string and decode it.
 ///
 /// Returns the decoded hash if valid, or null if invalid.
-pub fn validateBase58Hash(base58_str: []const u8) !?[32]u8 {
+pub fn validateBase58Hash(base58_str: []const u8) Allocator.Error!?[32]u8 {
     // Valid base58 hash should be 32-44 characters
     if (base58_str.len < 32 or base58_str.len > 44) {
         return null;

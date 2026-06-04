@@ -6,6 +6,7 @@
 //! clean up any surviving runtime allocations at the end of a run.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 
@@ -69,7 +70,7 @@ pub const RecordedRun = struct {
     termination: Termination,
     allocation_count: u32,
 
-    pub fn dupe(self: RecordedRun, allocator: std.mem.Allocator) !RecordedRun {
+    pub fn dupe(self: RecordedRun, allocator: std.mem.Allocator) Allocator.Error!RecordedRun {
         var out = try allocator.alloc(HostEvent, self.events.len);
         errdefer allocator.free(out);
 
@@ -196,7 +197,7 @@ pub fn crashState(self: *const RuntimeHostEnv) CrashState {
 }
 
 /// Public function `snapshot`.
-pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) !RecordedRun {
+pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) Allocator.Error!RecordedRun {
     return RecordedRun.dupe(.{
         .events = self.events.items,
         .termination = self.termination,

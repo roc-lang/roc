@@ -26,7 +26,7 @@ const SidebarNode = struct {
     children: std.ArrayList(*SidebarNode),
     owns_full_path: bool, // Whether we own the full_path allocation
 
-    fn init(gpa: Allocator, name: []const u8, full_path: []const u8, owns_full_path: bool) !*SidebarNode {
+    fn init(gpa: Allocator, name: []const u8, full_path: []const u8, owns_full_path: bool) Allocator.Error!*SidebarNode {
         const node = try gpa.create(SidebarNode);
         const children = try std.ArrayList(*SidebarNode).initCapacity(gpa, 0);
         node.* = .{
@@ -133,7 +133,7 @@ const RenderContext = struct {
         start_line: u32 = 0,
     };
 
-    fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) !RenderContext {
+    fn init(package_docs: *const DocModel.PackageDocs, gpa: Allocator) Allocator.Error!RenderContext {
         var known = std.StringHashMapUnmanaged(void){};
         errdefer known.deinit(gpa);
         var documenting_builtin = false;
@@ -226,7 +226,7 @@ const RenderContext = struct {
     /// anchor map from the new module's entries. Anchor map keys and values
     /// are slices into entry names owned by `PackageDocs`, so clearing the map
     /// retains the storage but invalidates no memory we own.
-    fn enterModule(self: *RenderContext, gpa: Allocator, mod: *const DocModel.ModuleDocs) !void {
+    fn enterModule(self: *RenderContext, gpa: Allocator, mod: *const DocModel.ModuleDocs) Allocator.Error!void {
         self.current_module = mod.name;
         self.current_module_entries = mod.entries;
         self.current_source_path.* = mod.source_path orelse "";
@@ -267,7 +267,7 @@ fn populateAnchorMap(
     module_name: []const u8,
     entries: []const DocModel.DocEntry,
     parent_rel_path: []const u8,
-) !void {
+) Allocator.Error!void {
     for (entries) |entry| {
         const local_name = moduleRelativeEntryName(module_name, entry.name);
         const entry_rel_path = if (parent_rel_path.len == 0)
@@ -324,7 +324,7 @@ fn addAnchor(
     gpa: Allocator,
     arena: Allocator,
     name: []const u8,
-) !void {
+) Allocator.Error!void {
     const result = try set.getOrPut(gpa, name);
     if (!result.found_existing) {
         result.key_ptr.* = try arena.dupe(u8, name);
@@ -345,7 +345,7 @@ fn collectAnchorsForEntries(
     module_name: []const u8,
     entries: []const DocModel.DocEntry,
     parent_path: []const u8,
-) !void {
+) Allocator.Error!void {
     for (entries) |entry| {
         const full_path = if (parent_path.len == 0) blk: {
             if (entryNameHasModulePrefix(module_name, entry.name)) {
@@ -390,7 +390,7 @@ pub fn renderPackageDocs(
     package_docs: *const DocModel.PackageDocs,
     output_dir_path: []const u8,
     broken_links_out: ?*std.ArrayListUnmanaged(BrokenLink),
-) !void {
+) anyerror!void {
     // Ensure the output directory exists
     std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -427,13 +427,13 @@ pub fn renderPackageDocs(
     }
 }
 
-fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) !void {
+fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) anyerror!void {
     try dir.writeFile(io, .{ .sub_path = "styles.css", .data = embedded_css });
     try dir.writeFile(io, .{ .sub_path = "search.js", .data = embedded_js });
     try dir.writeFile(io, .{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
-fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) !void {
+fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) anyerror!void {
     const file = try dir.createFile(io, "index.html", .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;
@@ -469,7 +469,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     try bw.interface.flush();
 }
 
-fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) !void {
+fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) anyerror!void {
     // Create module subdirectory
     dir.createDirPath(io, mod.name) catch |err| switch (err) {
         error.PathAlreadyExists => {},
@@ -484,7 +484,7 @@ fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: s
 
 /// Write a module's documentation page as index.html in the given directory.
 /// `base` is the relative path prefix for static assets (e.g. "" for root, "../" for subdirs).
-fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) !void {
+fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs, base: []const u8) anyerror!void {
     const file = try dir.createFile(io, "index.html", .{});
     defer file.close(io);
     var buf: [4096]u8 = undefined;
@@ -545,7 +545,7 @@ fn writeModulePageToDir(ctx: *const RenderContext, gpa: Allocator, io: std.Io, d
     try bw.interface.flush();
 }
 
-fn writeHtmlHead(w: Writer, title: []const u8, base: []const u8) !void {
+fn writeHtmlHead(w: Writer, title: []const u8, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
     try w.writeAll("    <meta charset=\"utf-8\">\n");
     try w.writeAll("    <title>");
@@ -578,13 +578,13 @@ const link_svg_use =
     \\<svg class="link-icon"><use href="#link-icon"/></svg>
 ;
 
-fn writeBodyOpen(w: Writer) !void {
+fn writeBodyOpen(w: Writer) error{WriteFailed}!void {
     try w.writeAll("<body>\n");
     try w.writeAll(link_svg_defs);
     try w.writeAll("\n");
 }
 
-fn writeBodyClose(w: Writer) !void {
+fn writeBodyClose(w: Writer) error{WriteFailed}!void {
     try w.writeAll("</body>\n</html>\n");
 }
 
@@ -594,7 +594,7 @@ const menu_toggle_svg =
     \\</svg>
 ;
 
-fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
+fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("    <main>\n");
     try w.writeAll("        <form id=\"module-search-form\">\n");
     try w.writeAll("            <input type=\"search\" id=\"module-search\" placeholder=\"Search Documentation\" autocomplete=\"off\" />\n");
@@ -615,7 +615,7 @@ fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("        <div class=\"main-content\">\n");
 }
 
-fn writeFooter(w: Writer) !void {
+fn writeFooter(w: Writer) error{WriteFailed}!void {
     try w.writeAll("        </div>\n");
     try w.writeAll("        <footer><p>Made by people who like to make nice things.</p></footer>\n");
 }
@@ -650,7 +650,7 @@ const EntryTree = struct {
     }
 };
 
-fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8) !EntryTree {
+fn buildEntryTree(gpa: Allocator, entries: []const DocModel.DocEntry, module_name: []const u8) Allocator.Error!EntryTree {
     const root = try SidebarNode.init(gpa, "", "", false);
 
     for (entries) |*entry| {
@@ -742,7 +742,7 @@ fn addChildToEntryTree(
     parent_node: *SidebarNode,
     parent_entry_name: []const u8,
     child_entry: *const DocModel.DocEntry,
-) !void {
+) Allocator.Error!void {
     var current = parent_node;
 
     // Split child name by dots
@@ -802,7 +802,7 @@ fn addChildToEntryTree(
     }
 }
 
-fn writeIndent(w: Writer, level: usize) !void {
+fn writeIndent(w: Writer, level: usize) error{WriteFailed}!void {
     const max_indent = "                                        "; // 40 spaces (10 levels of 4)
     const spaces = @min(level * 4, max_indent.len);
     try w.writeAll(max_indent[0..spaces]);
@@ -814,7 +814,7 @@ fn renderEntryTree(
     gpa: Allocator,
     node: *const SidebarNode,
     depth: usize,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     // Skip the root node (empty name), process its children
     if (depth == 0) {
         for (node.children.items) |child| {
@@ -946,7 +946,7 @@ fn renderSidebarTree(
     module_link_prefix: []const u8,
     node: *SidebarNode,
     depth: usize,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     // Skip root node
     if (depth > 0) {
         if (node.children.items.len > 0) {
@@ -1035,7 +1035,7 @@ fn renderSidebarEntries(
     module_link_prefix: []const u8,
     entries: []const DocModel.DocEntry,
     _depth: usize,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     _ = _depth; // No longer needed
 
     const entry_tree = try buildEntryTree(gpa, entries, module_name);
@@ -1044,7 +1044,7 @@ fn renderSidebarEntries(
     try renderSidebarTree(w, module_name, module_link_prefix, entry_tree.root, 0);
 }
 
-fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
+fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("    <nav id=\"sidebar-nav\">\n");
     try w.writeAll("        <div class=\"pkg-and-logo\">\n");
     try w.writeAll("            <a class=\"logo\" href=\"");
@@ -1121,7 +1121,7 @@ fn renderSidebar(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("    </nav>\n");
 }
 
-fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) !void {
+fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     for (ctx.package_docs.modules) |mod| {
         const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name);
         defer entry_tree.deinit(gpa);
@@ -1138,7 +1138,7 @@ fn renderSearchTree(
     module_name: []const u8,
     node: *const SidebarNode,
     base: []const u8,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     if (node.entry) |entry| {
         try w.writeAll("            <li class=\"hidden\"><a class=\"type-ahead-link\" href=\"");
         if (ctx.single_module_at_root) {
@@ -1215,7 +1215,7 @@ fn renderSearchTree(
     }
 }
 
-fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, entry: *const DocModel.DocEntry, anchor_id: []const u8) !void {
+fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, entry: *const DocModel.DocEntry, anchor_id: []const u8) (Allocator.Error || error{WriteFailed})!void {
     // Display only the identifier (last component) of the entry name
     // For "Builtin.Str.Utf8Problem.is_eq", display as "is_eq"
     const display_name = if (std.mem.findScalarLast(u8, entry.name, '.')) |idx|
@@ -1250,7 +1250,7 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, en
     }
 }
 
-fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8, start_line: u32) !void {
+fn renderDocComment(w: Writer, ctx: *const RenderContext, doc: []const u8, start_line: u32) (Allocator.Error || error{WriteFailed})!void {
     // Track the active doc so writeDocRefHref can resolve a `[label]` byte
     // offset within `doc` back to a 1-based source line. Restored on exit
     // to support nested rendering (e.g. a module doc above an entry doc).
@@ -1329,7 +1329,7 @@ fn skipLine(doc: []const u8, pos: usize) usize {
 }
 
 /// Splits `text` on blank lines and emits each non-empty paragraph as a `<p>` element.
-fn renderParagraphs(w: Writer, ctx: *const RenderContext, text: []const u8) !void {
+fn renderParagraphs(w: Writer, ctx: *const RenderContext, text: []const u8) (Allocator.Error || error{WriteFailed})!void {
     var start: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
@@ -1363,7 +1363,7 @@ fn renderParagraphs(w: Writer, ctx: *const RenderContext, text: []const u8) !voi
 /// [label](url) markdown links as <a href> elements, and [ref] shorthand links
 /// to other doc entries (e.g. [Str], [Str.reserve]) as same-page or cross-module
 /// anchors.
-fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) !void {
+fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) (Allocator.Error || error{WriteFailed})!void {
     var i: usize = 0;
     var plain_start: usize = 0;
     while (i < text.len) {
@@ -1524,7 +1524,7 @@ fn isIdentCont(c: u8) bool {
 /// `ctx.reportBrokenLink` (with the source line derived from
 /// `bracket_offset`). The href is still written so output is unchanged —
 /// broken-link collection is observational.
-fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, bracket_offset: usize) !void {
+fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, bracket_offset: usize) (Allocator.Error || error{WriteFailed})!void {
     const first_dot = std.mem.findScalar(u8, label, '.');
     const head = if (first_dot) |d| label[0..d] else label;
 
@@ -1626,7 +1626,7 @@ fn renderDocTypeHtml(
     gpa: Allocator,
     doc_type: *const DocType,
     needs_parens: bool,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     const RenderFrame = union(enum) {
         doc_type: struct {
             value: *const DocType,
@@ -1807,7 +1807,7 @@ fn writeTypeLink(
     ctx: *const RenderContext,
     module_path: []const u8,
     type_name: []const u8,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     // An empty module_path comes from `resolveModulePathFromBase` for `.builtin`
     // references (Str, List, Bool, etc). When we are not documenting Builtin
     // itself, point at the published Builtin docs instead of a same-page anchor.
@@ -1872,7 +1872,7 @@ fn writeTypeLink(
     try writeHtmlEscaped(w, tail);
 }
 
-fn writeHtmlEscaped(w: Writer, text: []const u8) !void {
+fn writeHtmlEscaped(w: Writer, text: []const u8) (Allocator.Error || error{WriteFailed})!void {
     for (text) |c| {
         switch (c) {
             '<' => try w.writeAll("&lt;"),

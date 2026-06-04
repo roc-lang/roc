@@ -1,6 +1,7 @@
 //! Utilities for formatting source code regions in diagnostic reports
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
 /// Calculate the width needed to display a line number
@@ -10,7 +11,7 @@ pub fn calculateLineNumberWidth(max_line: u32) u32 {
 }
 
 /// Format a line number with the given width
-pub fn formatLineNumber(writer: anytype, line_num: u32, width: u32) !void {
+pub fn formatLineNumber(writer: anytype, line_num: u32, width: u32) error{WriteFailed}!void {
     try writer.print("{d: >[1]}", .{ line_num, width });
 }
 
@@ -25,7 +26,7 @@ pub fn calculateUnderlineLength(start_column: u32, end_column: u32) u32 {
 }
 
 /// Print spaces for indentation
-pub fn printSpaces(writer: anytype, count: u32) !void {
+pub fn printSpaces(writer: anytype, count: u32) error{WriteFailed}!void {
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         try writer.writeAll(" ");
@@ -41,7 +42,7 @@ pub fn printSpaces(writer: anytype, count: u32) !void {
 /// - writer: The output writer
 /// - line: The source line text
 /// - target_column: The 1-based column to print up to (exclusive)
-pub fn printLeadingWhitespace(writer: anytype, line: []const u8, target_column: u32) !void {
+pub fn printLeadingWhitespace(writer: anytype, line: []const u8, target_column: u32) error{WriteFailed}!void {
     if (target_column <= 1) return;
 
     const chars_to_print = target_column - 1;

@@ -141,7 +141,7 @@ pub fn deinit(self: *AST) void {
 }
 
 /// Convert a tokenize diagnostic to a Report for rendering
-pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) !reporting.Report {
+pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator, filename: ?[]const u8) Allocator.Error!reporting.Report {
     const title = switch (diagnostic.tag) {
         .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
         .AsciiControl => "ASCII CONTROL CHARACTER",
@@ -243,7 +243,7 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
 }
 
 /// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!reporting.Report {
     const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
 
     // Ensure region bounds are valid for source slicing
@@ -925,7 +925,7 @@ test {
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
-pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: anytype) !void {
+pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
     const file = ast.store.getFile();
 
     var tree = SExprTree.init(gpa);
@@ -2770,7 +2770,7 @@ pub const Expr = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn as_string_part_region(self: @This()) !TokenizedRegion {
+    pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
         switch (self) {
             .string_part => |part| return part.region,
             else => return error.ExpectedStringPartRegion,

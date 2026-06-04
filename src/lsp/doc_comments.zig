@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 /// Multiple consecutive doc comment lines are joined with newlines.
 ///
 /// The caller owns the returned memory and must free it with the provided allocator.
-pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset: u32) !?[]const u8 {
+pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset: u32) Allocator.Error!?[]const u8 {
     if (source.len == 0 or offset == 0) return null;
 
     // Clamp offset to source bounds
@@ -188,12 +188,12 @@ pub fn docOffsetForStatement(store: *const NodeStore, stmt: CIR.Statement, stmt_
 }
 
 /// Extract doc comments for a Def (combines offset computation + source extraction).
-pub fn extractDocForDef(allocator: Allocator, source: []const u8, store: *const NodeStore, def: CIR.Def) !?[]const u8 {
+pub fn extractDocForDef(allocator: Allocator, source: []const u8, store: *const NodeStore, def: CIR.Def) Allocator.Error!?[]const u8 {
     return extractDocCommentBefore(allocator, source, docOffsetForDef(store, def));
 }
 
 /// Extract doc comments for a Statement (combines offset computation + source extraction).
-pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) !?[]const u8 {
+pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) Allocator.Error!?[]const u8 {
     return extractDocCommentBefore(allocator, source, docOffsetForStatement(store, stmt, stmt_idx));
 }
 

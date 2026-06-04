@@ -628,7 +628,7 @@ const Env = struct {
     }
 
     /// Resets internal state of env and set rank to generalized
-    fn reset(self: *Env, to: Rank) !void {
+    fn reset(self: *Env, to: Rank) Allocator.Error!void {
         self.var_pool.current_rank = to;
         self.var_pool.clearRetainingCapacity();
         try self.var_pool.ensureRanksThrough(to);
@@ -1557,7 +1557,7 @@ fn mkFlexWithFromNumeralConstraint(
     source_node: ?CIR.Node.Idx,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
-) !Var {
+) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1909,7 +1909,7 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
 /// This is necessary because type variables are module-specific - we can't use Vars from
 /// other modules directly. The Bool and Try types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
-fn copyBuiltinTypes(self: *Self) !void {
+fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -10799,7 +10799,7 @@ fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Va
 }
 
 /// Mark a constraint function's return type as error
-fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) !void {
+fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.unifyWith(constraint.fn_var, .err, env);
@@ -10823,7 +10823,7 @@ fn reportConstraintError(
     },
     env: *Env,
     is_numeric_default_pass: bool,
-) !void {
+) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{
@@ -10858,7 +10858,7 @@ fn reportEqualityError(
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
-) !void {
+) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{

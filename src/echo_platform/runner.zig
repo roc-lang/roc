@@ -116,7 +116,7 @@ pub const RunOptions = struct {
 /// while the program otherwise returned 0). On compilation/runtime error,
 /// emits a labelled diagnostic through `opts.diagnostics` and propagates
 /// the error so the caller can decide on an exit code.
-pub fn runEcho(opts: RunOptions) !u8 {
+pub fn runEcho(opts: RunOptions) anyerror!u8 {
     const allocator = opts.runtime_fba.allocator();
     const diag = opts.diagnostics;
 
@@ -252,7 +252,7 @@ fn runEchoView(
     view: *const lir.LirImage.ProgramView,
     diag: Diagnostics,
     std_io: std.Io,
-) !u8 {
+) (Allocator.Error || error{ EvaluationFailed, EntrypointNotFound, Crash, DivisionByZero, RuntimeError })!u8 {
     // HostedFn array order matters: the interpreter calls
     // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
     // alphabetically by fully-qualified `Module.fn_name` (with trailing `!`

@@ -1,11 +1,12 @@
 //! Handler for LSP `textDocument/didOpen` notifications.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Handler for `textDocument/didOpen` notifications.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, params_value: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, params_value: ?std.json.Value) Allocator.Error!void {
             const params = params_value orelse return;
             const obj = switch (params) {
                 .object => |o| o,

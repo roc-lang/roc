@@ -8,6 +8,7 @@
 //! implementation for x86_64 Windows.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// x86_64 machine code for ___chkstk_ms (stack probe without SP adjustment)
 /// This probes stack pages in 4KB increments to ensure they are committed.
@@ -63,7 +64,7 @@ const COFF = struct {
 
 /// Generate a minimal COFF object file containing ___chkstk_ms for x86_64 Windows.
 /// Returns the object file bytes.
-pub fn generateStackProbeObject(allocator: std.mem.Allocator) ![]u8 {
+pub fn generateStackProbeObject(allocator: std.mem.Allocator) Allocator.Error![]u8 {
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
@@ -85,21 +86,21 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) ![]u8 {
 
     // Helper to write little-endian integers
     const writeU16 = struct {
-        fn f(out: *std.ArrayList(u8), alloc: std.mem.Allocator, val: u16) !void {
+        fn f(out: *std.ArrayList(u8), alloc: std.mem.Allocator, val: u16) Allocator.Error!void {
             var buf: [2]u8 = undefined;
             std.mem.writeInt(u16, &buf, val, .little);
             try out.appendSlice(alloc, &buf);
         }
     }.f;
     const writeU32 = struct {
-        fn f(out: *std.ArrayList(u8), alloc: std.mem.Allocator, val: u32) !void {
+        fn f(out: *std.ArrayList(u8), alloc: std.mem.Allocator, val: u32) Allocator.Error!void {
             var buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &buf, val, .little);
             try out.appendSlice(alloc, &buf);
         }
     }.f;
     const writeI16 = struct {
-        fn f(out: *std.ArrayList(u8), alloc: std.mem.Allocator, val: i16) !void {
+        fn f(out: *std.ArrayList(u8), alloc: std.mem.Allocator, val: i16) Allocator.Error!void {
             var buf: [2]u8 = undefined;
             std.mem.writeInt(i16, &buf, val, .little);
             try out.appendSlice(alloc, &buf);
@@ -151,7 +152,7 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) ![]u8 {
 }
 
 /// Write the stack probe object file to a path.
-pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) !void {
+pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) Allocator.Error!void {
     const obj_bytes = try generateStackProbeObject(allocator);
     defer allocator.free(obj_bytes);
 

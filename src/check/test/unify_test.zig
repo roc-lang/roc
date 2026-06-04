@@ -1,5 +1,6 @@
 //! TODO
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
 const types_mod = @import("types");
@@ -1974,7 +1975,7 @@ test "unify order - resulting type is order-independent for recursive types" {
     // regardless of order.
     const gpa = std.testing.allocator;
     const Helper = struct {
-        fn run(e_first: bool) !bool {
+        fn run(e_first: bool) anyerror!bool {
             var env = try TestEnv.init(gpa);
             defer env.deinit();
             const ts = &env.module_env.types;
@@ -2013,7 +2014,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
     const gpa = std.testing.allocator;
     const Helper = struct {
         // Resolved root var-id that the deferred constraint is attached to.
-        fn run(flex_first: bool) !u32 {
+        fn run(flex_first: bool) anyerror!u32 {
             var env = try TestEnv.init(gpa);
             defer env.deinit();
             const ts = &env.module_env.types;

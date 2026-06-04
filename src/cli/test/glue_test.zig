@@ -1,6 +1,7 @@
 //! Integration tests for the roc glue command.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const util = @import("util.zig");
 
 /// Run `roc glue` with given opt level and glue spec, returning result and tmp_dir.
@@ -11,7 +12,7 @@ fn runGlueCommand(
     opt: []const u8,
     glue_spec: []const u8,
     tmp_path: []const u8,
-) !util.RocResult {
+) Allocator.Error!util.RocResult {
     const result = try util.runRocCommand(allocator, &.{
         "glue",
         opt,
@@ -25,7 +26,7 @@ fn runGlueCommand(
     return result;
 }
 
-fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
+fn checkGlueSuccess(result: util.RocResult, label: []const u8) Allocator.Error!void {
     if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("\n{s} command failed!\nstderr:\n{s}\nstdout:\n{s}\nExit term: {}\n", .{
             label, result.stderr, result.stdout, result.term,

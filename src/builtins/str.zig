@@ -5,6 +5,7 @@
 //! memory management. It defines the RocStr structure and associated functions
 //! that are called from compiled Roc code to handle string operations efficiently.
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 const RocList = @import("list.zig").RocList;
@@ -1924,7 +1925,7 @@ pub fn strReleaseExcessCapacity(
     }
 }
 
-fn expectOk(result: FromUtf8Try) !void {
+fn expectOk(result: FromUtf8Try) anyerror!void {
     try std.testing.expectEqual(result.is_ok, true);
 }
 
@@ -2852,7 +2853,7 @@ fn expectErr(
     err: Utf8DecodeError,
     problem: Utf8ByteProblem,
     test_env: *TestEnv,
-) !void {
+) anyerror!void {
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
 

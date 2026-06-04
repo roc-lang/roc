@@ -632,7 +632,7 @@ pub const PackageEnv = struct {
     /// modules exist in a cache directory, not the app's directory.
     /// `qualified_name` is the full name like "pf.Stdout"
     /// `import_name` is the import path for resolver lookup (e.g., "pf.Stdout")
-    pub fn addKnownModule(self: *PackageEnv, qualified_name: []const u8, import_name: []const u8) !void {
+    pub fn addKnownModule(self: *PackageEnv, qualified_name: []const u8, import_name: []const u8) Allocator.Error!void {
         const qualified_copy = try self.gpa.dupe(u8, qualified_name);
         const import_copy = try self.gpa.dupe(u8, import_name);
         try self.additional_known_modules.append(self.gpa, .{
@@ -707,7 +707,7 @@ pub const PackageEnv = struct {
         return module.semanticData();
     }
 
-    fn internModuleName(self: *PackageEnv, name: []const u8) !ModuleId {
+    fn internModuleName(self: *PackageEnv, name: []const u8) Allocator.Error!ModuleId {
         const gop = try self.module_names.getOrPut(self.gpa, name);
         if (!gop.found_existing) {
             const id: ModuleId = @intCast(self.modules.items.len);
@@ -719,7 +719,7 @@ pub const PackageEnv = struct {
         return gop.value_ptr.*;
     }
 
-    pub fn buildRoot(self: *PackageEnv, root_file_path: []const u8) !void {
+    pub fn buildRoot(self: *PackageEnv, root_file_path: []const u8) Allocator.Error!void {
         const name = moduleNameFromPath(root_file_path);
         const prev_module_count = self.modules.items.len;
         const module_id = try self.ensureModule(name, root_file_path);
@@ -757,7 +757,7 @@ pub const PackageEnv = struct {
         try self.tryEmitReady();
     }
 
-    fn runSingleThread(self: *PackageEnv) !void {
+    fn runSingleThread(self: *PackageEnv) Allocator.Error!void {
         while (true) {
             if (self.injector.items.len > 0) {
                 const idx = self.injector.items.len - 1;
@@ -773,7 +773,7 @@ pub const PackageEnv = struct {
         }
     }
 
-    fn runMultiThread(self: *PackageEnv) !void {
+    fn runMultiThread(self: *PackageEnv) Allocator.Error!void {
         const options = parallel.ProcessOptions{
             .max_threads = if (self.max_threads == 0)
                 threading.getCpuCount()
@@ -828,7 +828,7 @@ pub const PackageEnv = struct {
         } else ctx.sched.injector.items.len = 0;
     }
 
-    pub fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
+    pub fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) Allocator.Error!ModuleId {
         // In multi-threaded mode, lock to prevent race conditions when growing arrays
         const needs_lock = self.mode == .multi_threaded and !threading.is_freestanding;
         if (needs_lock) self.lock.lockUncancelable(self.roc_ctx.std_io);
@@ -852,7 +852,7 @@ pub const PackageEnv = struct {
     }
 
     /// Public API for cross-package schedulers: ensure a module exists, set its depth, and enqueue it
-    pub fn scheduleModule(self: *PackageEnv, name: []const u8, path: []const u8, depth: u32) !void {
+    pub fn scheduleModule(self: *PackageEnv, name: []const u8, path: []const u8, depth: u32) Allocator.Error!void {
         const prev_module_count = self.modules.items.len;
         const module_id = try self.ensureModule(name, path);
         const is_new = module_id >= prev_module_count;
@@ -865,19 +865,19 @@ pub const PackageEnv = struct {
         try self.enqueue(module_id);
     }
 
-    fn setDepthIfSmaller(self: *PackageEnv, module_id: ModuleId, depth: u32) !void {
+    fn setDepthIfSmaller(self: *PackageEnv, module_id: ModuleId, depth: u32) Allocator.Error!void {
         const st = &self.modules.items[module_id];
         if (depth < st.depth) st.depth = depth;
     }
 
     /// Public API to adjust a module's depth from an external coordinator
-    pub fn setModuleDepthIfSmaller(self: *PackageEnv, name: []const u8, depth: u32) !void {
+    pub fn setModuleDepthIfSmaller(self: *PackageEnv, name: []const u8, depth: u32) Allocator.Error!void {
         if (self.module_names.get(name)) |module_id| {
             try self.setDepthIfSmaller(module_id, depth);
         }
     }
 
-    fn enqueue(self: *PackageEnv, module_id: ModuleId) !void {
+    fn enqueue(self: *PackageEnv, module_id: ModuleId) Allocator.Error!void {
         const st = &self.modules.items[module_id];
         // In multi_threaded mode with a non-noop schedule_hook, forward to the global queue
         if (self.mode == .multi_threaded and !self.schedule_hook.isNoOp()) {
@@ -942,13 +942,13 @@ pub const PackageEnv = struct {
     }
 
     /// Public API for processing a module by name (used by BuildEnv)
-    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) !void {
+    pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) anyerror!void {
         if (self.module_names.get(module_name)) |module_id| {
             try self.process(.{ .module_id = module_id });
         }
     }
 
-    pub fn process(self: *PackageEnv, task: Task) !void {
+    pub fn process(self: *PackageEnv, task: Task) anyerror!void {
         // In dispatch-only mode, this method is invoked by the global scheduler.
         // In local mode, it's invoked by the internal run* loops.
 
@@ -1014,7 +1014,7 @@ pub const PackageEnv = struct {
         try self.tryEmitReady();
     }
 
-    fn doParse(self: *PackageEnv, module_id: ModuleId) !void {
+    fn doParse(self: *PackageEnv, module_id: ModuleId) (Allocator.Error || error{FileNotFound})!void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
         const src = self.readModuleSource(st.path) catch |read_err| {
@@ -1173,7 +1173,7 @@ pub const PackageEnv = struct {
         try self.enqueue(module_id);
     }
 
-    fn readModuleSource(self: *PackageEnv, path: []const u8) ![]u8 {
+    fn readModuleSource(self: *PackageEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
         const data = self.roc_ctx.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
@@ -1186,7 +1186,7 @@ pub const PackageEnv = struct {
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
-    fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {
+    fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) Allocator.Error!void {
         var st = &self.modules.items[module_id];
         var env = st.moduleEnv().?;
 
@@ -1363,7 +1363,7 @@ pub const PackageEnv = struct {
         try self.enqueue(module_id);
     }
 
-    fn tryUnblock(self: *PackageEnv, module_id: ModuleId) !void {
+    fn tryUnblock(self: *PackageEnv, module_id: ModuleId) Allocator.Error!void {
         var st = &self.modules.items[module_id];
         // If all imports are Done, move to Canonicalize
         var ready = true;
@@ -1423,7 +1423,7 @@ pub const PackageEnv = struct {
         module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
         source_dir: ?[]const u8,
         validation_mode: SnapshotValidationMode,
-    ) !Check {
+    ) Allocator.Error!Check {
         // Canonicalize
         var czer = try Can.initModule(roc_ctx, env, parse_ast, .{
             .builtin_types = .{
@@ -1502,7 +1502,7 @@ pub const PackageEnv = struct {
         resolver: ?ImportResolver,
         additional_known_modules: []const KnownModule,
         pre_resolved_imports: []const messages.CanonicalizeImport,
-    ) !void {
+    ) Allocator.Error!void {
         const gpa = roc_ctx.gpa;
 
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
@@ -1655,7 +1655,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    ) !TypeCheckOutput {
+    ) anyerror!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
 
@@ -1740,7 +1740,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) !CheckedArtifact.CheckedModuleArtifact {
+    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
         return publishCheckedArtifactFromCheckedModuleWithStorage(
             gpa,
             env,
@@ -1758,7 +1758,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         publication: ArtifactPublicationInputs,
-    ) !CheckedArtifact.CheckedModuleArtifact {
+    ) anyerror!CheckedArtifact.CheckedModuleArtifact {
         var imported_source_count: usize = 0;
         for (imported_envs) |imported_env| {
             if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
@@ -1799,7 +1799,7 @@ pub const PackageEnv = struct {
         );
     }
 
-    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
+    fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) anyerror!void {
         var st = &self.modules.items[module_id];
         var env = st.moduleEnv().?;
 
@@ -1924,7 +1924,7 @@ pub const PackageEnv = struct {
     fn buildAvailableArtifactViewsForImports(
         self: *PackageEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    ) ![]const CheckedArtifact.ImportedModuleView {
+    ) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
         var views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(self.gpa);
 
@@ -1977,7 +1977,7 @@ pub const PackageEnv = struct {
         return null;
     }
 
-    fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) ![]const u8 {
+    fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) Allocator.Error![]const u8 {
         // Allow resolver to provide local path resolution if present
         if (self.resolver) |r| {
             return r.resolveLocalPath(r.ctx, self.package_name, self.root_dir, mod_name);
@@ -2023,7 +2023,7 @@ pub const PackageEnv = struct {
 
     // On-demand DFS to find a path from start -> target along import edges.
     // Returns an owned slice of module IDs.
-    fn findPath(self: *PackageEnv, start: ModuleId, target: ModuleId) !?[]const ModuleId {
+    fn findPath(self: *PackageEnv, start: ModuleId, target: ModuleId) Allocator.Error!?[]const ModuleId {
         var visited = std.bit_set.DynamicBitSetUnmanaged{};
         defer visited.deinit(self.gpa);
         try visited.resize(self.gpa, self.modules.items.len, false);
@@ -2073,7 +2073,7 @@ pub const PackageEnv = struct {
         return base.module_path.getModuleName(path);
     }
 
-    pub fn tryEmitReady(self: *PackageEnv) !void {
+    pub fn tryEmitReady(self: *PackageEnv) Allocator.Error!void {
         // Sort discovered modules by (depth, name) each time; emit in prefix order
         if (self.discovered.items.len == 0) return;
 

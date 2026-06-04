@@ -2,6 +2,7 @@
 //! (or http if the URL host is `localhost`, `127.0.0.1`, or `::1`)
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const unbundle = @import("unbundle.zig");
 const localhost = @import("localhost.zig");
@@ -27,10 +28,10 @@ fn generateRandomSuffix(io: std.Io, buf: *[RANDOM_SUFFIX_LEN]u8) void {
 
 /// Get a handle to the system temp directory.
 /// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
-fn getTempDir(allocator: std.mem.Allocator, io: std.Io) !std.Io.Dir {
+fn getTempDir(allocator: std.mem.Allocator, io: std.Io) Allocator.Error!std.Io.Dir {
     // Try a named env var; returns an opened dir or null if env var is unset.
     const tryEnv = struct {
-        fn call(alloc: std.mem.Allocator, io_inner: std.Io, name: []const u8) !?std.Io.Dir {
+        fn call(alloc: std.mem.Allocator, io_inner: std.Io, name: []const u8) Allocator.Error!?std.Io.Dir {
             const path = std.process.getEnvVarOwned(alloc, name) catch |err| switch (err) {
                 error.EnvironmentVariableNotFound => return null,
                 error.InvalidWtf8 => return null,
