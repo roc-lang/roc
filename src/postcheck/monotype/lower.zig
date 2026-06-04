@@ -6574,6 +6574,12 @@ const BodyContext = struct {
         Common.invariant("checked structural equality operand type was not concrete after equality relation instantiation");
     }
 
+    /// Resolves the Monotype an equality operand evaluates to, when that operand is a
+    /// result-producing expression (call, dispatch, lookup, field access). The shared
+    /// equality operand type is taken from this result so an open tag literal on the other
+    /// side cannot narrow it. Returns null for any other expression shape (e.g. a tag
+    /// literal): the caller then falls through to the concrete-shape ladder in
+    /// structuralEqualityOperandType, so this must not fall back to lowerType itself.
     fn structuralEqualityExprResultType(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
