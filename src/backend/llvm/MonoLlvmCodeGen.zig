@@ -864,11 +864,7 @@ pub const MonoLlvmCodeGen = struct {
             const dst = try self.offsetPtr(bytes_ptr, @as(u32, @intCast(i)) * abi.elem_size);
             try self.copyBytes(dst, self.slot(elem_local).ptr, abi.elem_size, self.alignmentForLayout(abi.elem_layout_idx.?));
         }
-        try self.storeScalar(
-            try self.offsetPtr(target_ptr, self.rocListLenOffset()),
-            .u64,
-            builder.intValue(self.ptrSizedIntType(), elem_locals.len) catch return error.OutOfMemory,
-        );
+        try self.storeListLen(target_ptr, builder.intValue(self.ptrSizedIntType(), elem_locals.len) catch return error.OutOfMemory);
     }
 
     fn emitStructLiteral(self: *MonoLlvmCodeGen, target: LocalId, fields: LocalSpan) Error!void {
@@ -1852,12 +1848,8 @@ pub const MonoLlvmCodeGen = struct {
             const total_len = (self.wip orelse return error.CompilationFailed).bin(.add, lhs_len, rhs_len, "") catch return error.CompilationFailed;
             const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
             try self.storePointer(self.slot(target).ptr, null_ptr);
-            try self.storeScalar(try self.offsetPtr(self.slot(target).ptr, self.rocListLenOffset()), .u64, total_len);
-            try self.storeScalar(
-                try self.offsetPtr(self.slot(target).ptr, self.rocListCapacityOffset()),
-                .u64,
-                (self.wip orelse return error.CompilationFailed).bin(.shl, total_len, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed,
-            );
+            try self.storeListLen(self.slot(target).ptr, total_len);
+            try self.storeListCapacity(self.slot(target).ptr, (self.wip orelse return error.CompilationFailed).bin(.shl, total_len, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed);
             return;
         }
         var call_args = try self.rocListArgs1(args[0]);
@@ -2718,6 +2710,14 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, value, ptr, self.targetPointerAlignment()) catch return error.CompilationFailed;
     }
 
+    fn storeListLen(self: *MonoLlvmCodeGen, list_ptr: LlvmBuilder.Value, value: LlvmBuilder.Value) Error!void {
+        try self.storeUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()), value);
+    }
+
+    fn storeListCapacity(self: *MonoLlvmCodeGen, list_ptr: LlvmBuilder.Value, value: LlvmBuilder.Value) Error!void {
+        try self.storeUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()), value);
+    }
+
     fn storeRawInt(self: *MonoLlvmCodeGen, base: LlvmBuilder.Value, offset: u32, ty: LlvmBuilder.Type, value: u64, alignment: u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -3015,8 +3015,8 @@ pub const MonoLlvmCodeGen = struct {
     fn storeListFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, bytes: LlvmBuilder.Value, len: usize, cap: usize) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         try self.storePointer(ptr, bytes);
-        try self.storeScalar(try self.offsetPtr(ptr, self.rocListLenOffset()), .u64, builder.intValue(self.ptrSizedIntType(), len) catch return error.OutOfMemory);
-        try self.storeScalar(try self.offsetPtr(ptr, self.rocListCapacityOffset()), .u64, builder.intValue(self.ptrSizedIntType(), cap) catch return error.OutOfMemory);
+        try self.storeListLen(ptr, builder.intValue(self.ptrSizedIntType(), len) catch return error.OutOfMemory);
+        try self.storeListCapacity(ptr, builder.intValue(self.ptrSizedIntType(), cap) catch return error.OutOfMemory);
     }
 
     fn entrypointParamSlotSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {

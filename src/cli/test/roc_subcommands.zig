@@ -1682,6 +1682,38 @@ test "roc run --opt=dev rejects non executable targets" {
     try testing.expect(has_expected_error);
 }
 
+test "roc build --opt=size uses wasm32 static_lib link spec" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "static_lib_app.wasm" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(gpa, &.{ "build", "--opt=size", "--target=wasm32", output_arg }, "test/wasm/static_lib_app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    if (result.term != .exited or result.term.exited != 0) {
+        std.debug.print("stdout: {s}\nstderr: {s}\n", .{ result.stdout, result.stderr });
+    }
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+
+    const stat = tmp_dir.dir.statFile(std.testing.io, "static_lib_app.wasm", .{}) catch |err| {
+        std.debug.print("Failed to stat wasm output: {}\nstdout: {s}\nstderr: {s}\n", .{ err, result.stdout, result.stderr });
+        return err;
+    };
+    try testing.expect(stat.size > 0);
+}
+
 test "roc build returns exit code 2 for warnings (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;

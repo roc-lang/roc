@@ -3587,6 +3587,7 @@ fn mergeLlvmStaticDataWasmModule(
 fn rocBuildWasmLlvm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
+    link_type: roc_target.LinkType,
     final_output_path: []const u8,
     build_cache_dir: []const u8,
     platform_dir: []const u8,
@@ -3650,7 +3651,7 @@ fn rocBuildWasmLlvm(
         return;
     }
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, .wasm32, .exe);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, .wasm32, link_type);
     if (link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
         try ctx.io.stderr().writeAll("Error: wasm32 LLVM builds require a relocatable wasm platform file or archive.\n");
         return error.UnsupportedTarget;
@@ -3964,6 +3965,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         try rocBuildWasmLlvm(
             ctx,
             args,
+            link_type,
             final_output_path,
             build_cache_dir,
             platform_dir,
