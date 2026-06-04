@@ -5949,8 +5949,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // This must happen *before* checking against the expected type so
             // all the pattern types are inferred
             const arg_count = lambda.args.span.len;
-            const arg_vars = try self.gpa.alloc(Var, arg_count);
-            defer self.gpa.free(arg_vars);
+            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.get();
+            const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
+            defer arg_vars_alloc.free(arg_vars);
             const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
             for (0..arg_count) |i| {
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
@@ -6390,8 +6392,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
 
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
-            const arg_vars = try self.gpa.alloc(Var, arg_expr_idxs.len);
-            defer self.gpa.free(arg_vars);
+            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.get();
+            const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
+            defer arg_vars_alloc.free(arg_vars);
 
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
@@ -6447,8 +6451,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
         },
         .e_method_eq => |eq| {
-            const arg_vars = try self.gpa.alloc(Var, 1);
-            defer self.gpa.free(arg_vars);
+            var arg_vars_sfa = std.heap.stackFallback(@sizeOf(Var), self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.get();
+            const arg_vars = try arg_vars_alloc.alloc(Var, 1);
+            defer arg_vars_alloc.free(arg_vars);
 
             self.checking_call_arg = true;
             does_fx = try self.checkExpr(eq.lhs, env, Expected.none()) or does_fx;
@@ -6482,8 +6488,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_type_method_call => |method_call| {
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
-            const arg_vars = try self.gpa.alloc(Var, arg_expr_idxs.len);
-            defer self.gpa.free(arg_vars);
+            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.get();
+            const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
+            defer arg_vars_alloc.free(arg_vars);
 
             var did_err = false;
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
@@ -8608,8 +8616,10 @@ fn mkReceiverDispatchConstraint(
     region: Region,
     method_expr_idx: ?CIR.Expr.Idx,
 ) Allocator.Error!Var {
-    const all_args = try self.gpa.alloc(Var, arg_vars.len + 1);
-    defer self.gpa.free(all_args);
+    var all_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const all_args_alloc = all_args_sfa.get();
+    const all_args = try all_args_alloc.alloc(Var, arg_vars.len + 1);
+    defer all_args_alloc.free(all_args);
     all_args[0] = receiver_var;
     @memcpy(all_args[1..], arg_vars);
 

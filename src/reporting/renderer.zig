@@ -159,7 +159,8 @@ pub fn renderDocument(document: *const Document, writer: *std.Io.Writer, target:
 
 /// Render a document to terminal with color support.
 pub fn renderDocumentToTerminal(document: *const Document, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
-    var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
+    var ann_sfa = std.heap.stackFallback(16 * @sizeOf(Annotation), document.allocator);
+    var annotation_stack = std.array_list.Managed(Annotation).init(ann_sfa.get());
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
@@ -176,7 +177,8 @@ pub fn renderDocumentToMarkdown(document: *const Document, writer: *std.Io.Write
 
 /// Render a document to HTML.
 pub fn renderDocumentToHtml(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
-    var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
+    var ann_sfa = std.heap.stackFallback(16 * @sizeOf(Annotation), document.allocator);
+    var annotation_stack = std.array_list.Managed(Annotation).init(ann_sfa.get());
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {

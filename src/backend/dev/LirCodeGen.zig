@@ -9721,10 +9721,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc_spec = self.store.getProcSpec(call.proc);
             const arg_refs = self.store.getLocalSpan(call.args);
             const param_refs = self.store.getLocalSpan(proc_spec.args);
-            var arg_locs = try self.allocator.alloc(ValueLocation, arg_refs.len);
-            defer self.allocator.free(arg_locs);
-            var arg_layouts = try self.allocator.alloc(layout.Idx, arg_refs.len);
-            defer self.allocator.free(arg_layouts);
+            var args_sfa = std.heap.stackFallback(8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx)), self.allocator);
+            const args_alloc = args_sfa.get();
+            var arg_locs = try args_alloc.alloc(ValueLocation, arg_refs.len);
+            defer args_alloc.free(arg_locs);
+            var arg_layouts = try args_alloc.alloc(layout.Idx, arg_refs.len);
+            defer args_alloc.free(arg_layouts);
 
             if (builtin.mode == .Debug and param_refs.len != arg_refs.len) {
                 std.debug.panic(
@@ -9783,10 +9785,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_refs = self.store.getLocalSpan(call_args);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-            var arg_layouts = try self.allocator.alloc(layout.Idx, arg_refs.len);
-            defer self.allocator.free(arg_layouts);
-            var arg_locs = try self.allocator.alloc(ValueLocation, arg_refs.len);
-            defer self.allocator.free(arg_locs);
+            var args_sfa = std.heap.stackFallback(8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx)), self.allocator);
+            const args_alloc = args_sfa.get();
+            var arg_layouts = try args_alloc.alloc(layout.Idx, arg_refs.len);
+            defer args_alloc.free(arg_layouts);
+            var arg_locs = try args_alloc.alloc(ValueLocation, arg_refs.len);
+            defer args_alloc.free(arg_locs);
 
             for (arg_refs, 0..) |arg_ref, i| {
                 const arg_layout = self.localLayout(arg_ref);
