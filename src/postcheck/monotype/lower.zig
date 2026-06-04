@@ -8101,7 +8101,7 @@ const BodyContext = struct {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
-        const step = self.iteratorStepShape(plan.step_ty);
+        const step = try self.iteratorStepShape(plan.step_ty);
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
         const iterator_ty = self.builder.program.exprs.items[@intFromEnum(initial_iterator)].ty;
         try self.constrainTypeToMono(plan.iterator_ty, iterator_ty, "checked iterator type conflicted with an existing Monotype constraint");
@@ -8895,10 +8895,10 @@ const BodyContext = struct {
         skip_rest: checked.CheckedRecordField,
     };
 
-    fn iteratorStepShape(self: *BodyContext, step_ty: checked.CheckedTypeId) IterStepShape {
+    fn iteratorStepShape(self: *BodyContext, step_ty: checked.CheckedTypeId) Allocator.Error!IterStepShape {
         const step_payload = resolvedPayload(self.view, step_ty).payload;
-        const tags = switch (step_payload) {
-            .tag_union => |tag_union| tag_union.tags,
+        const step_tag_union = switch (step_payload) {
+            .tag_union => |tag_union| tag_union,
             else => Common.invariant("iterator .next plan did not return a tag union"),
         };
 
@@ -8908,19 +8908,50 @@ const BodyContext = struct {
         var one_payload_ty: ?checked.CheckedTypeId = null;
         var skip_payload_ty: ?checked.CheckedTypeId = null;
 
-        for (tags) |tag| {
-            const tag_text = self.view.names.tagLabelText(tag.name);
-            if (Ident.textEql(tag_text, "Done")) {
-                if (tag.args.len != 0) Common.invariant("iterator Done step carried payloads");
-                done_tag = tag.name;
-            } else if (Ident.textEql(tag_text, "One")) {
-                if (tag.args.len != 1) Common.invariant("iterator One step did not carry one payload");
-                one_tag = tag.name;
-                one_payload_ty = tag.args[0];
-            } else if (Ident.textEql(tag_text, "Skip")) {
-                if (tag.args.len != 1) Common.invariant("iterator Skip step did not carry one payload");
-                skip_tag = tag.name;
-                skip_payload_ty = tag.args[0];
+        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        var tags = step_tag_union.tags;
+        var current: ?checked.CheckedTypeId = step_tag_union.ext;
+        while (true) {
+            for (tags) |tag| {
+                const tag_text = self.view.names.tagLabelText(tag.name);
+                if (Ident.textEql(tag_text, "Done")) {
+                    if (tag.args.len != 0) Common.invariant("iterator Done step carried payloads");
+                    if (done_tag != null) Common.invariant("iterator step type had duplicate Done tags");
+                    done_tag = tag.name;
+                } else if (Ident.textEql(tag_text, "One")) {
+                    if (tag.args.len != 1) Common.invariant("iterator One step did not carry one payload");
+                    if (one_tag != null) Common.invariant("iterator step type had duplicate One tags");
+                    one_tag = tag.name;
+                    one_payload_ty = tag.args[0];
+                } else if (Ident.textEql(tag_text, "Skip")) {
+                    if (tag.args.len != 1) Common.invariant("iterator Skip step did not carry one payload");
+                    if (skip_tag != null) Common.invariant("iterator step type had duplicate Skip tags");
+                    skip_tag = tag.name;
+                    skip_payload_ty = tag.args[0];
+                }
+            }
+
+            const ext = current orelse break;
+            if (seen.contains(ext)) break;
+            try seen.put(ext, {});
+
+            switch (checkedPayload(self.view, ext)) {
+                .alias => |alias| {
+                    tags = &.{};
+                    current = alias.backing;
+                },
+                .empty_tag_union => break,
+                .flex, .rigid => |variable| {
+                    if (variable.row_default == .empty_tag_union) break;
+                    Common.invariant("open non-tag iterator step row reached Monotype lowering");
+                },
+                .tag_union => |tag_union| {
+                    tags = tag_union.tags;
+                    current = tag_union.ext;
+                },
+                else => Common.invariant("open or non-tag iterator step row reached Monotype lowering"),
             }
         }
 
