@@ -1819,6 +1819,59 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
 
 // updating vars //
 
+/// Whether the fresh var built by `unifyWithFresh` uses the current
+/// generalization rank or the target var's own rank.
+const FreshRank = enum { current, target };
+
+/// Unify `target_var` against freshly-built `content`. When `target_var` is a
+/// root flex placeholder we mutate its descriptor in place (the common case),
+/// saving a typeslot and a full unification run.
+fn unifyWithFresh(
+    self: *Self,
+    target_var: Var,
+    content: types_mod.Content,
+    env: *Env,
+    comptime rank_policy: FreshRank,
+) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const resolved_target = self.types.resolveVar(target_var);
+    switch (rank_policy) {
+        .current => {
+            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
+                // The vast majority of the time, we call unify with on a placeholder
+                // CIR var. In this case, we can safely replace the type descriptor
+                // directly, saving a typeslot and unifcation run
+                var desc = resolved_target.desc;
+                desc.content = content;
+                try self.types.dangerousSetVarDesc(target_var, desc);
+                return;
+            }
+            const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
+            if (builtin.mode == .Debug) {
+                const target_var_rank = self.types.resolveVar(target_var).desc.rank;
+                const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
+                if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
+                    std.debug.panic("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+                }
+            }
+            _ = try self.unify(target_var, fresh_var, env);
+        },
+        .target => {
+            if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+                var desc = resolved_target.desc;
+                desc.content = content;
+                try self.types.dangerousSetVarDesc(target_var, desc);
+                return;
+            }
+            const target_rank = resolved_target.desc.rank;
+            const fresh_var = try self.freshFromContentAtRank(content, env, self.getRegionAt(target_var), target_rank);
+            _ = try self.unify(target_var, fresh_var, env);
+        },
+    }
+}
+
 /// Unify the provided variable with the provided content
 ///
 /// If the var is a flex at the current rank, skip unifcation and simply update
@@ -1826,42 +1879,11 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
 ///
 /// This should primarily be use to set CIR node vars that were initially filled with placeholders
 fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const resolved_target = self.types.resolveVar(target_var);
-    if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
-        // The vast majority of the time, we call unify with on a placeholder
-        // CIR var. In this case, we can safely replace the type descriptor
-        // directly, saving a typeslot and unifcation run
-        var desc = resolved_target.desc;
-        desc.content = content;
-        try self.types.dangerousSetVarDesc(target_var, desc);
-    } else {
-        const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
-        if (builtin.mode == .Debug) {
-            const target_var_rank = self.types.resolveVar(target_var).desc.rank;
-            const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
-            if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
-                std.debug.panic("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
-            }
-        }
-        _ = try self.unify(target_var, fresh_var, env);
-    }
+    return self.unifyWithFresh(target_var, content, env, .current);
 }
 
 fn unifyWithTargetRank(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
-    const resolved_target = self.types.resolveVar(target_var);
-    if (resolved_target.is_root and resolved_target.desc.content == .flex) {
-        var desc = resolved_target.desc;
-        desc.content = content;
-        try self.types.dangerousSetVarDesc(target_var, desc);
-        return;
-    }
-
-    const target_rank = self.types.resolveVar(target_var).desc.rank;
-    const fresh_var = try self.freshFromContentAtRank(content, env, self.getRegionAt(target_var), target_rank);
-    _ = try self.unify(target_var, fresh_var, env);
+    return self.unifyWithFresh(target_var, content, env, .target);
 }
 
 /// Give a var, ensure it's not a redirect and set its rank.
