@@ -9,6 +9,12 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
+const mib: usize = 1024 * 1024;
+const gib: usize = 1024 * mib;
+const rss_medium: usize = 1 * gib;
+const rss_large: usize = 2 * gib;
+const rss_xlarge: usize = 8 * gib;
+
 // Cross-compile target definitions
 
 /// Cross-compile target specification
@@ -274,6 +280,7 @@ const AutoTestRunOptions = struct {
     tests_summary: ?*TestsSummaryStep = null,
     run_args: []const []const u8 = &.{},
     partition_count: usize,
+    max_rss: usize = 0,
     use_runner_partitions: bool = true,
     label: ?[]const u8 = null,
 };
@@ -323,6 +330,7 @@ fn addAutoTestRuns(b: *std.Build, options: AutoTestRunOptions) []const *Step.Run
             b.fmt("run {s} tests", .{label})
         else
             b.fmt("run {s} tests ({d}/{d})", .{ label, partition_i + 1, options.partition_count });
+        run.step.max_rss = options.max_rss;
 
         if (options.use_runner_partitions and options.partition_count != 1) {
             run.addArg(b.fmt("--roc-test-partition-index={d}", .{partition_i}));
@@ -1683,6 +1691,120 @@ const CheckFxStep = struct {
     }
 };
 
+const ZigRunCheckStep = struct {
+    step: Step,
+    script: []const u8,
+    args: []const []const u8,
+    label: []const u8,
+    failure_message: []const u8,
+    abnormal_message: []const u8,
+
+    fn create(
+        b: *std.Build,
+        name: []const u8,
+        script: []const u8,
+        args: []const []const u8,
+        label: []const u8,
+        failure_message: []const u8,
+        abnormal_message: []const u8,
+    ) *ZigRunCheckStep {
+        const self = b.allocator.create(ZigRunCheckStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = name,
+                .owner = b,
+                .makeFn = make,
+            }),
+            .script = script,
+            .args = args,
+            .label = label,
+            .failure_message = failure_message,
+            .abnormal_message = abnormal_message,
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *ZigRunCheckStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        std.debug.print("---- {s} ----\n", .{self.label});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, b.graph.zig_exe);
+        try child_argv.append(b.allocator, "run");
+        try child_argv.append(b.allocator, self.script);
+        for (self.args) |arg| {
+            try child_argv.append(b.allocator, arg);
+        }
+
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
+        const term = try child.wait(b.graph.io);
+
+        switch (term) {
+            .exited => |code| {
+                if (code != 0) return step.fail("{s}", .{self.failure_message});
+            },
+            else => return step.fail("{s}", .{self.abnormal_message}),
+        }
+    }
+};
+
+const GitDiffStep = struct {
+    step: Step,
+    path: []const u8,
+
+    fn create(b: *std.Build, name: []const u8, path: []const u8) *GitDiffStep {
+        const self = b.allocator.create(GitDiffStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = name,
+                .owner = b,
+                .makeFn = make,
+            }),
+            .path = path,
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *GitDiffStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+
+        std.Io.Dir.cwd().access(b.graph.io, ".git", .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.debug.print("Skipping snapshot diff outside a Git worktree.\n", .{});
+                return;
+            },
+            else => return err,
+        };
+
+        var child = try std.process.spawn(b.graph.io, .{
+            .argv = &.{ "git", "diff", "--exit-code", self.path },
+            .environ_map = &b.graph.environ_map,
+        });
+        const term = try child.wait(b.graph.io);
+
+        switch (term) {
+            .exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Snapshots in '{s}' have changed. Run 'zig build snapshot' locally, review the updates, and commit the changes.",
+                        .{self.path},
+                    );
+                }
+            },
+            else => return step.fail("git diff terminated abnormally", .{}),
+        }
+    }
+};
+
 const TidyStep = struct {
     step: Step,
 
@@ -2310,7 +2432,11 @@ pub fn build(b: *std.Build) void {
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const tidy_step = b.step("tidy", "Run code tidiness checks (control chars, line length, etc.)");
     const git_lints_step = b.step("git-lints", "Run Git-backed code checks");
+    const zig_lints_step = b.step("zig-lints", "Run Zig-specific code lints");
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
+    const check_test_wiring_step = b.step("check-test-wiring", "Check that Zig test files are wired into build steps");
+    const check_builtin_format_step = b.step("check-builtin-format", "Check formatting of src/build/roc/Builtin.roc");
+    const check_snapshots_step = b.step("check-snapshots", "Check that snapshot generation is up to date");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const check_postcheck_architecture_step = b.step("check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
@@ -2320,6 +2446,7 @@ pub fn build(b: *std.Build) void {
     const eval_host_effects_step = b.step("test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    const playground_release_fast_test_step = b.step("test-playground-releasefast", "Build and run playground integration tests in ReleaseFast");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
@@ -2603,8 +2730,18 @@ pub fn build(b: *std.Build) void {
     wasm_host_fixture_files.step.dependOn(wasm_host_step);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
+    roc_exe.step.max_rss = rss_xlarge;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
+
+    {
+        const check_builtin_format = b.addRunArtifact(roc_exe);
+        check_builtin_format.setName("check Builtin.roc formatting");
+        check_builtin_format.step.max_rss = rss_large;
+        check_builtin_format.addArgs(&.{ "fmt", "--check", "src/build/roc/Builtin.roc" });
+        check_builtin_format.addFileInput(b.path("src/build/roc/Builtin.roc"));
+        check_builtin_format_step.dependOn(&check_builtin_format.step);
+    }
 
     // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -2687,9 +2824,11 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
+        parallel_cli_runner_exe.step.max_rss = rss_large;
         parallel_cli_runner_exe.root_module.link_libc = true;
 
         const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
+        run_parallel_cli.step.max_rss = rss_large;
         run_parallel_cli.addArg("zig-out/bin/roc");
         for (test_filters) |f| {
             run_parallel_cli.addArg("--filter");
@@ -2702,7 +2841,8 @@ pub fn build(b: *std.Build) void {
         // platforms to be available.
         if (platform_filter == null) {
             test_platforms_step.dependOn(&run_parallel_cli.step);
-        } else {
+        }
+        if (platform_filter != null) {
             test_platforms_step.dependOn(build_test_hosts_step);
         }
 
@@ -2719,12 +2859,14 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
+        roc_subcommands_test.step.max_rss = rss_large;
 
         const roc_subcommands_runs = addAutoTestRuns(b, .{
             .test_step = roc_subcommands_test,
             .parent_step = test_subcommands_step,
             .run_args = run_args,
             .partition_count = expensive_test_partition_count,
+            .max_rss = rss_large,
             .label = "roc subcommands",
         });
         for (roc_subcommands_runs) |run| {
@@ -2745,6 +2887,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
+        echo_tests.step.max_rss = rss_medium;
 
         // Print "All N tests passed" via the same summary step the rest of the suite uses.
         const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
@@ -2753,6 +2896,7 @@ pub fn build(b: *std.Build) void {
             .tests_summary = echo_tests_summary,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_medium,
             .label = "echo",
         });
         for (echo_runs) |run| {
@@ -2774,6 +2918,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
+        glue_test.step.max_rss = rss_large;
 
         const glue_test_runtime_step = createNoopStep(b, "glue-test-runtime-host");
         const glue_runs = addAutoTestRuns(b, .{
@@ -2781,6 +2926,7 @@ pub fn build(b: *std.Build) void {
             .parent_step = test_glue_step,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_large,
             .label = "glue",
         });
         for (glue_runs) |run| {
@@ -2812,9 +2958,11 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
+        bughunt_cli_runner_exe.step.max_rss = rss_large;
         bughunt_cli_runner_exe.root_module.link_libc = true;
 
         const run_bughunt_cli = b.addRunArtifact(bughunt_cli_runner_exe);
+        run_bughunt_cli.step.max_rss = rss_large;
         run_bughunt_cli.addArg("zig-out/bin/roc");
         for (test_filters) |f| {
             run_bughunt_cli.addArg("--filter");
@@ -2938,6 +3086,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    snapshot_exe.step.max_rss = rss_xlarge;
     configureBackend(snapshot_exe, target);
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -2961,6 +3110,9 @@ pub fn build(b: *std.Build) void {
 
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     const snapshot_exe_install = install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
+    const snapshot_diff = GitDiffStep.create(b, "snapshot-diff", "test/snapshots");
+    snapshot_diff.step.dependOn(snapshot_step);
+    check_snapshots_step.dependOn(&snapshot_diff.step);
 
     // Add parallel eval test runner
     const eval_test_exe = b.addExecutable(.{
@@ -2972,6 +3124,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true, // needed for sljmp/setjmp
         }),
     });
+    eval_test_exe.step.max_rss = rss_xlarge;
     // The deepest eval test recurses ~1000 frames; Zig 0.16 codegen pushes that past
     // the 1 MiB Windows default. Reserve a generous stack so recursive eval tests
     // don't trip our SetUnhandledExceptionFilter stack-overflow handler.
@@ -3028,6 +3181,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    eval_host_effects_exe.step.max_rss = rss_xlarge;
     configureBackend(eval_host_effects_exe, target);
     roc_modules.addAll(eval_host_effects_exe);
     eval_host_effects_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -3083,6 +3237,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    playground_exe.step.max_rss = rss_large;
     configureBackend(playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
@@ -3102,6 +3257,35 @@ pub fn build(b: *std.Build) void {
 
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     playground_step.dependOn(&playground_install.step);
+
+    const playground_release_fast_exe = b.addExecutable(.{
+        .name = "playground_releasefast",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/playground_wasm/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = .ReleaseFast,
+        }),
+    });
+    configureBackend(playground_release_fast_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }));
+    playground_release_fast_exe.step.max_rss = rss_large;
+    playground_release_fast_exe.entry = .disabled;
+    playground_release_fast_exe.rdynamic = true;
+    playground_release_fast_exe.link_function_sections = true;
+    playground_release_fast_exe.import_memory = false;
+    roc_modules.addAll(playground_release_fast_exe);
+    playground_release_fast_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    playground_release_fast_exe.step.dependOn(&write_compiled_builtins.step);
+
+    add_tracy(b, roc_modules.build_options, playground_release_fast_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }), false, null);
 
     // Build echo.wasm — echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.
@@ -3217,6 +3401,7 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
             }),
         });
+        playground_integration_test_exe.step.max_rss = rss_large;
         configureBackend(playground_integration_test_exe, target);
         playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
@@ -3228,6 +3413,7 @@ pub fn build(b: *std.Build) void {
         playground_test_step.dependOn(&install.step);
 
         const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+        run_playground_test.step.max_rss = rss_large;
         if (run_args.len != 0) {
             run_playground_test.addArgs(run_args);
         }
@@ -3236,6 +3422,35 @@ pub fn build(b: *std.Build) void {
 
         break :blk install;
     };
+
+    {
+        const playground_integration_release_fast_exe = b.addExecutable(.{
+            .name = "playground_integration_test_releasefast",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/playground-integration/main.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+            }),
+        });
+        playground_integration_release_fast_exe.step.max_rss = rss_large;
+        configureBackend(playground_integration_release_fast_exe, target);
+        playground_integration_release_fast_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        playground_integration_release_fast_exe.root_module.addImport("build_options", build_options.createModule());
+        roc_modules.addAll(playground_integration_release_fast_exe);
+
+        const install = b.addInstallArtifact(playground_integration_release_fast_exe, .{});
+        playground_release_fast_test_step.dependOn(&install.step);
+
+        const run_playground_test = b.addRunArtifact(playground_integration_release_fast_exe);
+        run_playground_test.step.max_rss = rss_large;
+        run_playground_test.addArg("--wasm-path");
+        run_playground_test.addFileArg(playground_release_fast_exe.getEmittedBin());
+        if (run_args.len != 0) {
+            run_playground_test.addArgs(run_args);
+        }
+        run_playground_test.step.dependOn(&install.step);
+        playground_release_fast_test_step.dependOn(&run_playground_test.step);
+    }
 
     // Add serialization size check
     // This verifies that Serialized types have the same size on 32-bit and 64-bit platforms
@@ -3312,9 +3527,27 @@ pub fn build(b: *std.Build) void {
     const checkfx_inner = CheckFxStep.create(b);
     checkfx_step.dependOn(&checkfx_inner.step);
 
-    // Mini CI convenience step: runs a sequence of common build and test commands in order.
-    const minici_inner = ci_steps.MiniCiStep.create(b, checkFxPlatformTestCoverage);
-    minici_step.dependOn(&minici_inner.step);
+    const zig_lints_inner = ZigRunCheckStep.create(
+        b,
+        "zig-lints-inner",
+        "ci/zig_lints.zig",
+        &.{},
+        "zig lints: running Zig-specific code checks",
+        "Zig lints failed. Run 'zig run ci/zig_lints.zig' to see details.",
+        "zig run ci/zig_lints.zig terminated abnormally",
+    );
+    zig_lints_step.dependOn(&zig_lints_inner.step);
+
+    const check_test_wiring_inner = ZigRunCheckStep.create(
+        b,
+        "check-test-wiring-inner",
+        "ci/check_test_wiring.zig",
+        &.{},
+        "test wiring: checking Zig test roots",
+        "Test wiring check failed. Run 'zig run ci/check_test_wiring.zig' to see details.",
+        "zig run ci/check_test_wiring.zig terminated abnormally",
+    );
+    check_test_wiring_step.dependOn(&check_test_wiring_inner.step);
 
     // Tidy step: run code tidiness checks
     const tidy_inner = TidyStep.create(b);
@@ -3350,6 +3583,8 @@ pub fn build(b: *std.Build) void {
     }
 
     for (module_tests_result.tests) |module_test| {
+        module_test.test_step.step.max_rss = rss_large;
+
         // Add compiled builtins to tests that canonicalize ordinary modules.
         if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -3362,6 +3597,7 @@ pub fn build(b: *std.Build) void {
 
         // Add bytebox and wasm32 builtins to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
+            module_test.test_step.step.max_rss = rss_xlarge;
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
             module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
             const compile_build_module = b.createModule(.{
@@ -3407,6 +3643,7 @@ pub fn build(b: *std.Build) void {
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "repl")) {
+            module_test.test_step.step.max_rss = rss_xlarge;
             try addLlvmSupportToStep(
                 b,
                 module_test.test_step,
@@ -3431,6 +3668,7 @@ pub fn build(b: *std.Build) void {
             .tests_summary = tests_summary,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_medium,
             .label = test_exe_name,
         });
         if (std.mem.eql(u8, module_test.test_step.name, "base")) {
@@ -3461,6 +3699,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
+        snapshot_test.step.max_rss = rss_xlarge;
         roc_modules.addAll(snapshot_test);
         snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_test.step.dependOn(&write_compiled_builtins.step);
@@ -3488,6 +3727,7 @@ pub fn build(b: *std.Build) void {
             .tests_summary = tests_summary,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_large,
             .label = "snapshot",
         });
         if (snapshot_exe_install) |install| {
@@ -3526,12 +3766,14 @@ pub fn build(b: *std.Build) void {
                 flag_enable_tracy,
                 test_runner,
             );
+            builtin_doc_test.step.max_rss = rss_xlarge;
             _ = addFocusedAndSummaryTestRuns(b, .{
                 .test_step = builtin_doc_test,
                 .parent_step = builtin_doc_test_step,
                 .tests_summary = tests_summary,
                 .run_args = run_args,
                 .partition_count = balanced_test_partition_count,
+                .max_rss = rss_large,
                 .label = "builtin doc",
             });
         } else {
@@ -3552,8 +3794,10 @@ pub fn build(b: *std.Build) void {
                 flag_enable_tracy,
                 test_runner,
             );
+            builtin_doc_blocks_test.step.max_rss = rss_xlarge;
             for (0..expensive_test_partition_count) |run_i| {
                 const run = b.addRunArtifact(builtin_doc_blocks_test);
+                run.step.max_rss = rss_large;
                 run.step.name = b.fmt("run builtin doc block tests ({d}/{d})", .{ run_i + 1, expensive_test_partition_count });
                 run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_INDEX", b.fmt("{d}", .{run_i}));
                 run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_COUNT", b.fmt("{d}", .{expensive_test_partition_count}));
@@ -3564,6 +3808,7 @@ pub fn build(b: *std.Build) void {
             }
             for (0..expensive_test_partition_count) |run_i| {
                 const run = b.addRunArtifact(builtin_doc_blocks_test);
+                run.step.max_rss = rss_large;
                 run.step.name = b.fmt("run builtin doc block summary tests ({d}/{d})", .{ run_i + 1, expensive_test_partition_count });
                 run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_INDEX", b.fmt("{d}", .{run_i}));
                 run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_COUNT", b.fmt("{d}", .{expensive_test_partition_count}));
@@ -3591,12 +3836,14 @@ pub fn build(b: *std.Build) void {
                 flag_enable_tracy,
                 test_runner,
             );
+            builtin_doc_harness_test.step.max_rss = rss_xlarge;
             _ = addFocusedAndSummaryTestRuns(b, .{
                 .test_step = builtin_doc_harness_test,
                 .parent_step = builtin_doc_test_step,
                 .tests_summary = tests_summary,
                 .run_args = run_args,
                 .partition_count = 1,
+                .max_rss = rss_medium,
                 .label = "builtin doc harness",
             });
         }
@@ -3616,6 +3863,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
+        cli_test.step.max_rss = rss_xlarge;
         roc_modules.addAll(cli_test);
         cli_test.root_module.linkLibrary(zstd.artifact("zstd"));
         try addLlvmSupportToStep(
@@ -3643,6 +3891,7 @@ pub fn build(b: *std.Build) void {
             .tests_summary = tests_summary,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_large,
             .label = "cli",
         });
     }
@@ -3670,12 +3919,14 @@ pub fn build(b: *std.Build) void {
             flag_enable_tracy,
             test_runner,
         );
+        repl_test.step.max_rss = rss_xlarge;
         _ = addFocusedAndSummaryTestRuns(b, .{
             .test_step = repl_test,
             .parent_step = repl_test_step,
             .tests_summary = tests_summary,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_large,
             .label = "repl",
         });
     }
@@ -3694,6 +3945,7 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
+        watch_test.step.max_rss = rss_medium;
         roc_modules.addAll(watch_test);
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
 
@@ -3710,6 +3962,7 @@ pub fn build(b: *std.Build) void {
             .tests_summary = tests_summary,
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
+            .max_rss = rss_medium,
             .label = "watch",
         });
     }
@@ -3792,6 +4045,7 @@ pub fn build(b: *std.Build) void {
                 }),
                 .test_runner = test_runner,
             });
+            parse_unit_test.step.max_rss = rss_medium;
             roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
             // Install all artifacts
@@ -3827,6 +4081,7 @@ pub fn build(b: *std.Build) void {
 
             // Run kcov on parse unit tests
             const run_parse_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            run_parse_coverage.step.max_rss = rss_large;
             // kcov includes all compiled files (including zig stdlib) in coverage.
             // Use --include-pattern to filter to only src/parse files.
             run_parse_coverage.addArg("--include-pattern=/src/parse/");
@@ -3859,6 +4114,7 @@ pub fn build(b: *std.Build) void {
                         .link_libc = true,
                     }),
                 });
+                eval_coverage_exe.step.max_rss = rss_xlarge;
                 configureBackend(eval_coverage_exe, target);
                 roc_modules.addAll(eval_coverage_exe);
                 eval_coverage_exe.root_module.addOptions("coverage_options", blk: {
@@ -3908,6 +4164,7 @@ pub fn build(b: *std.Build) void {
                 }
 
                 const run_eval_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+                run_eval_coverage.step.max_rss = rss_xlarge;
                 run_eval_coverage.addArg("--include-pattern=/src/eval/");
                 run_eval_coverage.addArgs(&.{
                     "kcov-output/eval",
@@ -4089,6 +4346,7 @@ pub fn build(b: *std.Build) void {
                 true,
                 test_runner,
             );
+            fx_platform_test.step.max_rss = rss_large;
 
             const fx_runs = addFocusedAndSummaryTestRuns(b, .{
                 .test_step = fx_platform_test,
@@ -4096,6 +4354,7 @@ pub fn build(b: *std.Build) void {
                 .tests_summary = tests_summary,
                 .run_args = run_args,
                 .partition_count = balanced_test_partition_count,
+                .max_rss = rss_large,
                 .label = "fx platform",
             });
             for (fx_runs.focused) |run| {
@@ -4118,12 +4377,14 @@ pub fn build(b: *std.Build) void {
                 false,
                 test_runner,
             );
+            fx_platform_misc.step.max_rss = rss_large;
             const fx_misc_runs = addFocusedAndSummaryTestRuns(b, .{
                 .test_step = fx_platform_misc,
                 .parent_step = fx_platform_test_step,
                 .tests_summary = tests_summary,
                 .run_args = run_args,
                 .partition_count = balanced_test_partition_count,
+                .max_rss = rss_large,
                 .label = "fx platform misc",
             });
             for (fx_misc_runs.focused) |run| {
@@ -4147,12 +4408,14 @@ pub fn build(b: *std.Build) void {
                 true,
                 test_runner,
             );
+            fx_platform_interpreter.step.max_rss = rss_large;
             const fx_interpreter_runs = addFocusedAndSummaryTestRuns(b, .{
                 .test_step = fx_platform_interpreter,
                 .parent_step = fx_platform_test_step,
                 .tests_summary = tests_summary,
                 .run_args = run_args,
                 .partition_count = fx_io_partition_count,
+                .max_rss = rss_large,
                 .use_runner_partitions = false,
                 .label = "fx platform IO interpreter",
             });
@@ -4181,12 +4444,14 @@ pub fn build(b: *std.Build) void {
                 true,
                 test_runner,
             );
+            fx_platform_dev.step.max_rss = rss_large;
             const fx_dev_runs = addFocusedAndSummaryTestRuns(b, .{
                 .test_step = fx_platform_dev,
                 .parent_step = fx_platform_test_step,
                 .tests_summary = tests_summary,
                 .run_args = run_args,
                 .partition_count = fx_io_partition_count,
+                .max_rss = rss_large,
                 .use_runner_partitions = false,
                 .label = "fx platform IO dev",
             });
@@ -4277,6 +4542,26 @@ pub fn build(b: *std.Build) void {
             }
         }
     }
+
+    // Mini CI convenience step. Keep this as a graph umbrella rather than a
+    // serial driver so Zig can schedule independent checks and tests in
+    // parallel. Use the non-mutating formatting check here; the mutating
+    // `fmt` step remains available as an explicit developer command.
+    minici_step.dependOn(check_fmt_step);
+    minici_step.dependOn(zig_lints_step);
+    minici_step.dependOn(tidy_step);
+    minici_step.dependOn(check_semantic_audit_step);
+    minici_step.dependOn(check_postcheck_architecture_step);
+    minici_step.dependOn(check_test_wiring_step);
+    minici_step.dependOn(b.default_step);
+    minici_step.dependOn(check_builtin_format_step);
+    minici_step.dependOn(check_snapshots_step);
+    minici_step.dependOn(checkfx_step);
+    minici_step.dependOn(test_step);
+    minici_step.dependOn(playground_release_fast_test_step);
+    minici_step.dependOn(serialization_size_step);
+    minici_step.dependOn(test_cli_step);
+    minici_step.dependOn(coverage_step);
 
     var build_afl = false;
     if (!isNativeishOrMusl(target)) {
@@ -4656,6 +4941,7 @@ fn install_and_run(
         b.getInstallStep().dependOn(&install.step);
 
         const run = b.addRunArtifact(exe);
+        run.step.max_rss = exe.step.max_rss;
         run.step.dependOn(&install.step);
         if (run_args.len != 0) {
             run.addArgs(run_args);
