@@ -704,6 +704,57 @@ fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinkin
     return null;
 }
 
+fn isUndefinedFunctionNamed(self: *const Self, sym: WasmLinking.SymInfo, name: []const u8) bool {
+    if (sym.kind != .function or !sym.isUndefined()) return false;
+    const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return false;
+    return std.mem.eql(u8, sym_name, name);
+}
+
+fn resolveUndefinedFunctionSymbols(
+    self: *Self,
+    name: []const u8,
+    defined_function_index: u32,
+    defined_flags: u32,
+    defined_name: ?[]const u8,
+) !?u32 {
+    const import_count = self.importCount();
+    if (defined_function_index < import_count) return error.InvalidSection;
+
+    const defined_local_index = defined_function_index - import_count;
+    if (defined_local_index >= self.func_type_indices.items.len) return error.InvalidSection;
+    const defined_type = self.func_type_indices.items[defined_local_index];
+
+    var first_match: ?u32 = null;
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (!self.isUndefinedFunctionNamed(sym, name)) continue;
+        if (sym.index >= self.imports.items.len) return error.InvalidSection;
+        if (self.imports.items[sym.index].type_idx != defined_type) return error.FunctionTypeMismatch;
+        if (first_match == null) first_match = @intCast(i);
+    }
+
+    if (first_match == null) return null;
+
+    for (self.linking.symbol_table.items) |*sym| {
+        if (!self.isUndefinedFunctionNamed(sym.*, name)) continue;
+        const imported_function_index = sym.index;
+        for (self.table_func_indices.items) |*table_function_index| {
+            if (table_function_index.* == imported_function_index) {
+                table_function_index.* = defined_function_index;
+            }
+        }
+        for (self.exports.items) |*exp| {
+            if (exp.kind == .func and exp.idx == imported_function_index) {
+                exp.idx = defined_function_index;
+            }
+        }
+        sym.flags = defined_flags & ~WasmLinking.SymFlag.UNDEFINED;
+        sym.name = defined_name orelse name;
+        sym.index = defined_function_index;
+    }
+
+    return first_match;
+}
+
 /// Return the wasm type index for an imported or defined function.
 pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
     const raw = function.raw();
@@ -1460,6 +1511,19 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) !Merge
                     symbol_remap[src_sym_idx] = new_sym_idx;
                 } else {
                     // Defined function in source — add as defined in self.
+                    if (!src_sym.isLocal()) {
+                        if (src_name) |name| {
+                            if (try self.resolveUndefinedFunctionSymbols(
+                                name,
+                                func_remap[src_sym.index],
+                                src_sym.flags,
+                                src_sym.name,
+                            )) |existing| {
+                                symbol_remap[src_sym_idx] = existing;
+                                continue;
+                            }
+                        }
+                    }
                     const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     try self.linking.symbol_table.append(gpa, .{
                         .kind = .function,
@@ -5079,6 +5143,71 @@ test "mergeModule — undefined symbol in builtins resolved to host's roc_alloc 
 
     // No new import should be added (roc_alloc already exists in host)
     try std.testing.expectEqual(@as(usize, 2), host.imports.items.len);
+}
+
+test "mergeModule — later weak definition resolves earlier undefined function import" {
+    const allocator = std.testing.allocator;
+
+    var host = Self.init(allocator);
+    defer host.deinit();
+    _ = try host.addFuncType(&.{}, &.{});
+    _ = try host.addImport("env", "__multi3", 0);
+    host.import_fn_count = 1;
+
+    try host.func_type_indices.append(allocator, 0);
+    try host.code_bytes.appendSlice(allocator, &.{0x08});
+    try host.code_bytes.append(allocator, 0x00);
+    try host.code_bytes.append(allocator, Op.call);
+    try appendPaddedU32(allocator, &host.code_bytes, 0);
+    try host.code_bytes.append(allocator, Op.end);
+    try host.function_offsets.append(allocator, 0);
+    try host.table_func_indices.append(allocator, 0);
+    try host.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = 0, .name = "host_start", .index = 1 },
+    });
+    try host.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .function_index_leb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    var compiler_rt = Self.init(allocator);
+    defer compiler_rt.deinit();
+    _ = try compiler_rt.addFuncType(&.{}, &.{});
+    try compiler_rt.func_type_indices.append(allocator, 0);
+    try compiler_rt.code_bytes.appendSlice(allocator, &.{ 0x02, 0x00, Op.end });
+    try compiler_rt.function_offsets.append(allocator, 0);
+    try compiler_rt.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.BINDING_WEAK,
+        .name = "__multi3",
+        .index = 0,
+    });
+
+    var result = try host.mergeModule(&compiler_rt);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), result.symbol_remap[0]);
+    const multi3_sym = host.linking.symbol_table.items[0];
+    try std.testing.expect(!multi3_sym.isUndefined());
+    try std.testing.expectEqual(@as(u32, 2), multi3_sym.index);
+    try std.testing.expectEqualStrings("__multi3", multi3_sym.name.?);
+    try std.testing.expect((multi3_sym.flags & WasmLinking.SymFlag.BINDING_WEAK) != 0);
+    try std.testing.expectEqual(@as(u32, 2), host.table_func_indices.items[0]);
+
+    host.resolveRelocations();
+    var expected = [_]u8{0} ** 5;
+    overwritePaddedU32(&expected, 0, 2);
+    try std.testing.expectEqualSlices(u8, &expected, host.code_bytes.items[3..8]);
+
+    const called_fns = try allocator.alloc(bool, host.liveFunctionCount());
+    defer allocator.free(called_fns);
+    @memset(called_fns, false);
+    called_fns[1] = true;
+    try host.eliminateDeadCode(called_fns);
+
+    try std.testing.expectEqual(@as(usize, 0), host.imports.items.len);
 }
 
 test "mergeModule — relocation offsets shifted by base_code_offset" {
