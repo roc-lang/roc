@@ -55,7 +55,7 @@ fn shimIo() std.Io {
 }
 
 fn allocator() Allocator {
-    return std.heap.smp_allocator;
+    return std.heap.page_allocator;
 }
 
 fn openRuntimeState(gpa: Allocator) !RuntimeState {
