@@ -646,7 +646,8 @@ const Env = struct {
 /// constructed per call and inlined.
 fn unifyEnv(self: *Self) unifier.Env {
     return .{
-        .gpa = self.cir.gpa,
+        // problems is owned by self.gpa.
+        .problems_gpa = self.gpa,
         .ident_store = self.cir.getIdentStoreConst(),
         .qualified_module_ident = self.cir.qualified_module_ident,
         .types = self.types,

@@ -111,7 +111,9 @@ pub const Result = union(enum) {
 /// Borrowed bundle of the stable dependencies every unification needs.
 /// All fields are borrowed; construct cheaply from the owner on each call.
 pub const Env = struct {
-    gpa: Allocator,
+    /// Allocator that owns `problems`; used to grow it. Must be the same
+    /// allocator that created the problem store (see `appendProblem` below).
+    problems_gpa: Allocator,
     ident_store: *const Ident.Store,
     qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
@@ -166,7 +168,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
-        const problem_idx = try env.problems.appendProblem(env.gpa, .{ .type_mismatch = .{
+        const problem_idx = try env.problems.appendProblem(env.problems_gpa, .{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
                 .expected_snapshot = expected_snapshot,
