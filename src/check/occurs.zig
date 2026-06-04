@@ -51,16 +51,11 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
 
     var result: Result = .not_recursive;
 
-    // Check if we're starting from a nominal type
-    const root = types_store.resolveVar(var_);
-    const initial_context = if (root.desc.content == .structure and root.desc.content.structure == .nominal_type)
-        Context.init().markNominal()
-    else
-        Context.init();
-
-    // Check for recursion
+    // Check for recursion. The root has no incoming edge, so it starts with the
+    // empty edge. Whether the recursion is nominal/anonymous/infinite is decided
+    // from the edges *within* the detected cycle, not from the root downward.
     var check_occurs = CheckOccurs.init(types_store, scratch);
-    check_occurs.occurs(var_, initial_context) catch |err| switch (err) {
+    check_occurs.occurs(var_, Edge.none) catch |err| switch (err) {
         error.AllocatorError => {
             return error.OutOfMemory;
         },
@@ -112,79 +107,69 @@ const CheckOccurs = struct {
     ///
     /// This method appends intermediate error chain information to the `scratch`,
     /// which can be queried after the run.
-    fn occurs(self: *Self, var_: Var, ctx: Context) Error!void {
+    fn occurs(self: *Self, var_: Var, edge: Edge) Error!void {
         const root = self.types_store.resolveVar(var_);
         const root_var = root.var_;
 
         if (self.scratch.hasVisited(root.desc_idx)) {
             // If we've already visited this var and not errored, then it's not recursive
             return;
-        } else if (self.scratch.hasSeenVar(root_var)) {
+        } else if (self.scratch.hasSeenVar(root_var)) |match_idx| {
             // Recursion point! We've already seen this var during traversal.
-            if (ctx.recursion_allowed and ctx.seen_nominal) {
-                // If recursion is allowed (we've passed through a Box, List or
-                // Tag Union) AND at somepoint in the chain we've seen a nominal
-                // type, then this recursion is okay
-                return error.RecursiveNominal;
-            } else if (ctx.recursion_allowed and !ctx.seen_nominal) {
-                // If recursion is allowed (we've passed through a Box, List or
-                // Tag Union) BUT we haven't seen any nominal types, then this
-                // recursion is anonymous and not okay
-                return error.RecursiveAnonymous;
-            } else {
-                // Otherwise, this is an infinite type
-                return error.InfiniteType;
-            }
+            // `edge` is the edge that closes the cycle (from the current parent
+            // back to `root_var`); `match_idx` is where `root_var` sits on the
+            // seen stack. Classify using only the edges inside that cycle.
+            return self.classifyCycle(match_idx, edge);
         } else {
-            self.scratch.appendSeen(root_var) catch return Error.AllocatorError;
+            self.scratch.pushSeen(root_var, edge) catch return Error.AllocatorError;
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .tuple => |tuple| {
                             const elems = self.types_store.sliceVars(tuple.elems);
-                            try self.occursSubVars(root, elems, ctx);
+                            try self.occursSubVars(root, elems, Edge.none);
                         },
                         .nominal_type => |nominal_type| {
-                            // Check all argument vars using iterator
+                            // Arguments are ordinary positions; only the backing
+                            // var is "through" the nominal.
                             var arg_iter = self.types_store.iterNominalArgs(nominal_type);
                             while (arg_iter.next()) |arg_var| {
-                                try self.occursSubVar(root, arg_var, ctx);
+                                try self.occursSubVar(root, arg_var, Edge.none);
                             }
-                            // Check backing var using helper method
                             const backing_var = self.types_store.getNominalBackingVar(nominal_type);
-                            try self.occursSubVar(root, backing_var, ctx.markNominal());
+                            try self.occursSubVar(root, backing_var, Edge.nominal);
                         },
                         .fn_pure => |func| {
                             const args = self.types_store.sliceVars(func.args);
-                            try self.occursSubVars(root, args, ctx);
-                            try self.occursSubVar(root, func.ret, ctx);
+                            try self.occursSubVars(root, args, Edge.none);
+                            try self.occursSubVar(root, func.ret, Edge.none);
                         },
                         .fn_effectful => |func| {
                             const args = self.types_store.sliceVars(func.args);
-                            try self.occursSubVars(root, args, ctx);
-                            try self.occursSubVar(root, func.ret, ctx);
+                            try self.occursSubVars(root, args, Edge.none);
+                            try self.occursSubVar(root, func.ret, Edge.none);
                         },
                         .fn_unbound => |func| {
                             const args = self.types_store.sliceVars(func.args);
-                            try self.occursSubVars(root, args, ctx);
-                            try self.occursSubVar(root, func.ret, ctx);
+                            try self.occursSubVars(root, args, Edge.none);
+                            try self.occursSubVar(root, func.ret, Edge.none);
                         },
                         .record => |record| {
                             const fields = self.types_store.getRecordFieldsSlice(record.fields);
-                            try self.occursSubVars(root, fields.items(.var_), ctx.allowRecursion());
-                            try self.occursSubVar(root, record.ext, ctx);
+                            try self.occursSubVars(root, fields.items(.var_), Edge.recursion);
+                            try self.occursSubVar(root, record.ext, Edge.none);
                         },
                         .record_unbound => |fields| {
                             const fields_slice = self.types_store.getRecordFieldsSlice(fields);
-                            try self.occursSubVars(root, fields_slice.items(.var_), ctx.allowRecursion());
+                            try self.occursSubVars(root, fields_slice.items(.var_), Edge.recursion);
                         },
                         .tag_union => |tag_union| {
                             const tags = self.types_store.getTagsSlice(tag_union.tags);
                             for (tags.items(.args)) |tag_args| {
                                 const args = self.types_store.sliceVars(tag_args);
-                                try self.occursSubVars(root, args, ctx.allowRecursion());
+                                try self.occursSubVars(root, args, Edge.recursion);
                             }
-                            try self.occursSubVar(root, tag_union.ext, ctx);
+                            try self.occursSubVar(root, tag_union.ext, Edge.none);
                         },
                         .empty_record => {},
                         .empty_tag_union => {},
@@ -194,10 +179,10 @@ const CheckOccurs = struct {
                     // Check all argument vars using iterator
                     var arg_iter = self.types_store.iterAliasArgs(alias);
                     while (arg_iter.next()) |arg_var| {
-                        try self.occursSubVar(root, arg_var, ctx);
+                        try self.occursSubVar(root, arg_var, Edge.none);
                     }
                     const backing_var = self.types_store.getAliasBackingVar(alias);
-                    try self.occursSubVar(root, backing_var, ctx);
+                    try self.occursSubVar(root, backing_var, Edge.none);
                 },
                 .flex => {
                     // Flex variables are not checked for cycles - they are allowed to have
@@ -212,10 +197,42 @@ const CheckOccurs = struct {
         }
     }
 
+    /// Classify a detected cycle using only the edges that lie *within* it.
+    ///
+    /// The cycle consists of the seen-stack frames `match_idx+1 ..= top` (each
+    /// carrying the edge that pushed it) plus the `closing` edge from the current
+    /// parent back to the cycle head at `match_idx`. Edges above the cycle (the
+    /// head's own incoming edge and anything before it) are intentionally ignored
+    /// so an enclosing nominal/container can't reclassify an unrelated cycle.
+    fn classifyCycle(self: *Self, match_idx: usize, closing: Edge) Error!void {
+        var recursion_allowed = closing.recursion_allowed;
+        var nominal = closing.nominal_backing;
+
+        const entries = self.scratch.seen.items.items;
+        var k = match_idx + 1;
+        while (k < entries.len) : (k += 1) {
+            recursion_allowed = recursion_allowed or entries[k].edge.recursion_allowed;
+            nominal = nominal or entries[k].edge.nominal_backing;
+        }
+
+        if (recursion_allowed and nominal) {
+            // The cycle passes through a recursion-allowed position (record, tag
+            // union) AND a nominal's backing: valid recursion through a nominal.
+            return error.RecursiveNominal;
+        } else if (recursion_allowed) {
+            // Through a recursion-allowed position but no nominal: anonymous
+            // recursion, which Roc rejects.
+            return error.RecursiveAnonymous;
+        } else {
+            // No recursion-allowed position in the cycle: structurally infinite.
+            return error.InfiniteType;
+        }
+    }
+
     /// Check if a sub var is recursive
     /// In the event of an error, append the root var to the chain
-    fn occursSubVar(self: *Self, root: ResolvedVarDesc, sub_var: Var, ctx: Context) Error!void {
-        self.occurs(sub_var, ctx) catch |err| {
+    fn occursSubVar(self: *Self, root: ResolvedVarDesc, sub_var: Var, edge: Edge) Error!void {
+        self.occurs(sub_var, edge) catch |err| {
             self.scratch.appendErrChain(root.var_) catch return Error.AllocatorError;
             if (root.desc.content.unwrapNominalType() != null) {
                 self.scratch.appendErrChainNominalVar(root.var_) catch return Error.AllocatorError;
@@ -226,41 +243,41 @@ const CheckOccurs = struct {
 
     /// Check if a slice of sub vars are recursive
     /// In the event of an error, append the root var to the chain
-    fn occursSubVars(self: *Self, root_var: ResolvedVarDesc, sub_vars: []Var, ctx: Context) Error!void {
+    fn occursSubVars(self: *Self, root_var: ResolvedVarDesc, sub_vars: []Var, edge: Edge) Error!void {
         for (sub_vars) |sub_var| {
-            try self.occursSubVar(root_var, sub_var, ctx);
+            try self.occursSubVar(root_var, sub_var, edge);
         }
     }
 };
 
-/// This type represents the context of a recursive branch in the occurs check
+/// A single parent→child edge in the type graph traversal.
 ///
-/// This types is passed down through the occurs check and is modified to keep
-/// track of whatever we've seen so far in this branch.
-const Context = struct {
+/// An `Edge` describes exactly one step and never carries state down from above:
+/// at most one flag is set per edge. Each `seen`-stack frame stores the edge that
+/// pushed it (see `SeenEntry`), and a detected cycle is classified from the edges
+/// inside the cycle only. This is what keeps an enclosing nominal/container from
+/// reclassifying a cycle it isn't actually part of.
+const Edge = struct {
+    /// The child sits in a record field or tag-union argument: a position that
+    /// makes recursion through it well-formed (vs. structurally infinite).
     recursion_allowed: bool,
-    seen_nominal: bool,
+    /// The child is a nominal type's backing var (recursion "through" a nominal).
+    nominal_backing: bool,
 
-    fn init() Context {
-        return .{ .recursion_allowed = false, .seen_nominal = false };
-    }
+    /// No flag set: tuple elems, fn args/ret, nominal args, alias args/backing,
+    /// record/tag-union ext.
+    const none: Edge = .{ .recursion_allowed = false, .nominal_backing = false };
+    /// Edge into a record field or tag-union argument.
+    const recursion: Edge = .{ .recursion_allowed = true, .nominal_backing = false };
+    /// Edge into a nominal type's backing var.
+    const nominal: Edge = .{ .recursion_allowed = false, .nominal_backing = true };
+};
 
-    /// Mark that recursion is allowed
-    /// ie the chain passes through a Box, List or Tag Union
-    fn allowRecursion(self: Context) Context {
-        return .{
-            .recursion_allowed = true,
-            .seen_nominal = self.seen_nominal,
-        };
-    }
-
-    /// Mark that we have seen a nominal type
-    fn markNominal(self: Context) Context {
-        return .{
-            .recursion_allowed = self.recursion_allowed,
-            .seen_nominal = true,
-        };
-    }
+/// A frame on the `seen` traversal stack: a resolved var plus the edge that
+/// pushed it onto the stack.
+const SeenEntry = struct {
+    var_: Var,
+    edge: Edge,
 };
 
 /// Struct to hold intermediate values used during occurs check
@@ -269,7 +286,7 @@ pub const Scratch = struct {
 
     gpa: std.mem.Allocator,
 
-    seen: Var.SafeList,
+    seen: MkSafeList(SeenEntry),
     err_chain: Var.SafeList,
     err_chain_nominal_vars: Var.SafeList,
     visited: MkSafeList(DescStoreIdx),
@@ -283,7 +300,7 @@ pub const Scratch = struct {
         // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
-            .seen = try Var.SafeList.initCapacity(gpa, 32),
+            .seen = try MkSafeList(SeenEntry).initCapacity(gpa, 32),
             .err_chain = try Var.SafeList.initCapacity(gpa, 32),
             .err_chain_nominal_vars = try Var.SafeList.initCapacity(gpa, 8),
             .visited = try MkSafeList(DescStoreIdx).initCapacity(gpa, 64),
@@ -304,11 +321,13 @@ pub const Scratch = struct {
         self.visited.items.clearRetainingCapacity();
     }
 
-    fn hasSeenVar(self: *const Self, var_: Var) bool {
-        for (self.seen.items.items) |seen_var| {
-            if (seen_var == var_) return true;
+    /// Returns the index of `var_` on the seen stack if it's currently being
+    /// traversed (i.e. a cycle), else null. The index marks the cycle head.
+    fn hasSeenVar(self: *const Self, var_: Var) ?usize {
+        for (self.seen.items.items, 0..) |entry, i| {
+            if (entry.var_ == var_) return i;
         }
-        return false;
+        return null;
     }
 
     fn hasVisited(self: *const Self, desc_idx: DescStoreIdx) bool {
@@ -318,8 +337,8 @@ pub const Scratch = struct {
         return false;
     }
 
-    fn appendSeen(self: *Self, var_: Var) std.mem.Allocator.Error!void {
-        _ = try self.seen.append(self.gpa, var_);
+    fn pushSeen(self: *Self, var_: Var, edge: Edge) std.mem.Allocator.Error!void {
+        _ = try self.seen.append(self.gpa, .{ .var_ = var_, .edge = edge });
     }
 
     fn popSeen(self: *Self) void {
@@ -694,4 +713,111 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     try std.testing.expectEqual(2, err_chain_nominal3.len);
     try std.testing.expectEqual(type_b_nominal, err_chain_nominal3[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain_nominal3[1]);
+}
+
+test "occurs: anonymous recursion in a nominal's type argument is not recursive_nominal (regression)" {
+    // Wrapper(Inner) := {}   where   Inner = [ Cons(Inner), Nil ]
+    //
+    // The recursion cycle is `Inner -> Cons -> Inner`. It lives entirely inside
+    // the *type argument* of `Wrapper` and never passes through the nominal
+    // `Wrapper` itself, so this is anonymous recursion (which Roc rejects), NOT
+    // legal recursion-through-a-nominal.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    // Inner = [ Cons(Inner), Nil ]  -- an anonymous, self-recursive tag union
+    const inner = try types_store.fresh();
+    const ext = try types_store.fresh();
+    const cons_tag_args = try types_store.appendVars(&[_]Var{inner});
+    const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
+    try types_store.setRootVarContent(inner, try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
+
+    // Wrapper(Inner) := {}  -- nominal with `inner` as its only type argument
+    const wrapper_backing = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const wrapper = try types_store.fresh();
+    try types_store.setVarContent(wrapper, try types_store.mkNominal(
+        undefined,
+        wrapper_backing,
+        &.{inner},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
+    ));
+
+    const result = occurs(&types_store, &scratch, wrapper);
+    try std.testing.expectEqual(.recursive_anonymous, result);
+}
+
+test "occurs: anonymous recursion below a buried nominal is not recursive_nominal (regression)" {
+    // Root = ( N, )   where   N := Inner   and   Inner = [ Cons(Inner), Nil ]
+    //
+    // `Root` is a tuple, so no nominal edge is crossed at the root. The only
+    // nominal is `N`, buried one level down. The cycle is `Inner -> Cons ->
+    // Inner`, which does NOT pass through `N`. A buggy occurs check that lets the
+    // nominal marking from N's backing leak downward would wrongly classify this
+    // as recursive_nominal. Correct answer: recursive_anonymous.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    // Inner = [ Cons(Inner), Nil ]
+    const inner = try types_store.fresh();
+    const ext = try types_store.fresh();
+    const cons_tag_args = try types_store.appendVars(&[_]Var{inner});
+    const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
+    try types_store.setRootVarContent(inner, try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
+
+    // N := Inner  -- nominal whose backing is the anonymous recursive tag union
+    const n = try types_store.fresh();
+    try types_store.setVarContent(n, try types_store.mkNominal(
+        undefined,
+        inner,
+        &.{},
+        Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
+    ));
+
+    // Root = ( N, )  -- a tuple so the root is NOT a nominal type
+    const elems_range = try types_store.appendVars(&[_]Var{n});
+    const root = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } });
+
+    const result = occurs(&types_store, &scratch, root);
+    try std.testing.expectEqual(.recursive_anonymous, result);
+}
+
+test "occurs: tuple self-cycle below a tag union stays infinite (regression)" {
+    // Outer = [ Wrap(Inner) ]   where   Inner = ( Inner, )
+    //
+    // The cycle is the tuple `Inner = (Inner,)`, which has no recursion-allowed
+    // constructor in it, so it is an infinite type. But `recursion_allowed`, set
+    // when descending into the outer tag union, leaks down into the tuple cycle
+    // and downgrades the result to recursive_anonymous. Correct answer: infinite.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    // Inner = ( Inner, )  -- a tuple that directly contains itself
+    const inner = try types_store.fresh();
+    const tuple_elems = try types_store.appendVars(&[_]Var{inner});
+    try types_store.setRootVarContent(inner, .{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
+
+    // Outer = [ Wrap(Inner) ]  -- a tag union wrapping the tuple
+    const ext = try types_store.fresh();
+    const wrap_args = try types_store.appendVars(&[_]Var{inner});
+    const wrap_tag = types.Tag{ .name = undefined, .args = wrap_args };
+    const outer = try types_store.freshFromContent(try types_store.mkTagUnion(&.{wrap_tag}, ext));
+
+    const result = occurs(&types_store, &scratch, outer);
+    try std.testing.expectEqual(.infinite, result);
 }
