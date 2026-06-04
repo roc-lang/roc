@@ -412,9 +412,10 @@ generate_element_type_structs = |type_table| {
 					var $field_strs = ""
 					for field in rec.fields {
 						zig_type = type_id_to_zig(type_table, field.type_id)
+						field_name = name_to_zig_quoted_ident(field.name)
 						$field_strs = Str.concat(
 							$field_strs,
-							"    ${field.name}: ${zig_type},\n",
+							"    ${field_name}: ${zig_type},\n",
 						)
 					}
 
@@ -724,6 +725,14 @@ name_to_camel = |name| {
 expect name_to_camel("Stdout.line!") == "stdoutLine"
 expect name_to_camel("Echo.line!") == "echoLine"
 expect name_to_camel("PartDef.Idx.get!") == "partDefIdxGet"
+
+## Quote a Roc record field as a Zig identifier without changing its name.
+name_to_zig_quoted_ident : Str -> Str
+name_to_zig_quoted_ident = |name| "@\"${name}\""
+
+expect name_to_zig_quoted_ident("init!") == "@\"init!\""
+expect name_to_zig_quoted_ident("render!") == "@\"render!\""
+expect name_to_zig_quoted_ident("answer") == "@\"answer\""
 
 ## Lowercase the first character of a string
 lowercase_first : Str -> Str
@@ -1133,9 +1142,10 @@ generate_all_record_structs = |hosted_functions, type_table| {
 			var $fields = ""
 			for field in type_table_result.fields {
 				zig_type = type_id_to_zig(type_table, field.type_id)
+				field_name = name_to_zig_quoted_ident(field.name)
 				$fields = Str.concat(
 					$fields,
-					"    ${field.name}: ${zig_type},\n",
+					"    ${field_name}: ${zig_type},\n",
 				)
 			}
 
@@ -1188,9 +1198,10 @@ generate_args_struct = |func, type_table| {
 		var $fields = ""
 		for field in type_table_result.fields {
 			zig_type = type_id_to_zig(type_table, field.type_id)
+			field_name = name_to_zig_quoted_ident(field.name)
 			$fields = Str.concat(
 				$fields,
-				"    ${field.name}: ${zig_type},\n",
+				"    ${field_name}: ${zig_type},\n",
 			)
 		}
 

@@ -3,26 +3,37 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-/// Run `roc glue` with given opt level and glue spec, returning result and tmp_dir.
-/// Caller must free result.stdout, result.stderr, and tmp_path.
-/// tmp_dir is returned for further inspection of generated files.
-fn runGlueCommand(
+/// Run `roc glue` with given opt level, glue spec, and platform file.
+/// Caller must free result.stdout and result.stderr.
+fn runGlueCommandForPlatform(
     allocator: std.mem.Allocator,
     opt: []const u8,
     glue_spec: []const u8,
     tmp_path: []const u8,
+    roc_file: []const u8,
 ) !util.RocResult {
     const result = try util.runRocCommand(allocator, &.{
         "glue",
         opt,
         glue_spec,
         tmp_path,
-        "test/fx/platform/main.roc",
+        roc_file,
     });
     // Common checks: should not panic
     try std.testing.expect(std.mem.find(u8, result.stderr, "PANIC") == null);
     try std.testing.expect(std.mem.find(u8, result.stderr, "unreachable") == null);
     return result;
+}
+
+/// Run `roc glue` against the default fx platform.
+/// Caller must free result.stdout and result.stderr.
+fn runGlueCommand(
+    allocator: std.mem.Allocator,
+    opt: []const u8,
+    glue_spec: []const u8,
+    tmp_path: []const u8,
+) !util.RocResult {
+    return runGlueCommandForPlatform(allocator, opt, glue_spec, tmp_path, "test/fx/platform/main.roc");
 }
 
 fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
@@ -244,6 +255,59 @@ test "glue regression: ZigGlue interpreter succeeds on fx platform" {
     try std.testing.expect(std.mem.find(u8, generated_content, "pub const RocStr") != null);
     try std.testing.expect(std.mem.find(u8, generated_content, "pub const RocOps") != null);
     try std.testing.expect(std.mem.find(u8, generated_content, "Entrypoint") != null);
+}
+
+test "glue regression: ZigGlue quotes bang record fields" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator) catch unreachable;
+    defer allocator.free(tmp_path);
+
+    const result = try runGlueCommandForPlatform(
+        allocator,
+        "--opt=interpreter",
+        "src/glue/src/ZigGlue.roc",
+        tmp_path,
+        "test/postcheck/platform_required_init/platform/main.roc",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try checkGlueSuccess(result, "ZigGlue");
+
+    const generated_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.zig" }) catch unreachable;
+    defer allocator.free(generated_path);
+
+    const generated_content = std.Io.Dir.cwd().readFileAlloc(std.testing.io, generated_path, allocator, .limited(1024 * 1024)) catch |err| {
+        std.debug.print("\nFailed to read generated file '{s}': {}\n", .{ generated_path, err });
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(generated_content);
+
+    try std.testing.expect(std.mem.find(u8, generated_content, "@\"init!\": *anyopaque") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "@\"render!\": *anyopaque") != null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "    init!:") == null);
+    try std.testing.expect(std.mem.find(u8, generated_content, "    render!:") == null);
+
+    const ast_check_result = std.process.run(allocator, std.testing.io, .{
+        .argv = &.{ "zig", "ast-check", generated_path },
+    }) catch |err| {
+        std.debug.print("\nFailed to run zig ast-check: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(ast_check_result.stdout);
+    defer allocator.free(ast_check_result.stderr);
+
+    if (ast_check_result.term != .exited or ast_check_result.term.exited != 0) {
+        std.debug.print("\nzig ast-check failed!\n", .{});
+        std.debug.print("\n--- Compiler stderr ---\n{s}\n", .{ast_check_result.stderr});
+        std.debug.print("\n--- Generated Zig ---\n{s}\n", .{generated_content});
+        try std.testing.expect(false);
+    }
 }
 
 test "glue command with ZigGlue succeeds (dev backend)" {
