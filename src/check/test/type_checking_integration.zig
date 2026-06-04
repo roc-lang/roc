@@ -728,6 +728,30 @@ test "check type - tag - ext - typo" {
     );
 }
 
+test "check type - large open tag union annotation preserves all tags" {
+    // Regression guard for the tag-union arm of generateAnnoTypeInPlace, which
+    // builds the tag union from the scratch_tags buffer. Uses enough tags to
+    // grow scratch_tags past its initial capacity (64) so the buffer
+    // reallocates while building the annotation, ensuring tags are materialized
+    // into the types store rather than read from a stale scratch slice.
+    const lo = "abcdefghijklmnopqrstuvwxyz";
+    const source = comptime blk: {
+        var s: []const u8 = "foo : [";
+        var i: usize = 0;
+        while (i < 80) : (i += 1) {
+            s = s ++ "T" ++ &[_]u8{ lo[i / 26], lo[i % 26] };
+            if (i < 79) s = s ++ ", ";
+        }
+        s = s ++ ", ..ext]\nfoo = Taa";
+        break :blk s;
+    };
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    // The first and last tags must both survive intact in the inferred type.
+    try test_env.assertLastDefTypeContains("Taa");
+    try test_env.assertLastDefTypeContains("Tdb");
+}
+
 // blocks //
 
 test "check type - block - return expr" {
@@ -1744,6 +1768,64 @@ test "check type - if else - different branch types 3" {
         \\x = if True "true" else if False 10 else "last"
     ;
     // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - negative zero is valid for unsigned type" {
+    // `-0` carries the syntactic is_negative flag but has magnitude zero, which
+    // is a valid unsigned value and must not be rejected as a negative.
+    const source =
+        \\x : U8
+        \\x = -0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+}
+
+test "check type - tuple access on non-tuple does not cascade" {
+    // Accessing `.0` on a record is a tuple access against a non-tuple
+    // structure: a single mismatch. The result expression must be poisoned to
+    // `.err` so that conflicting downstream uses do not produce additional,
+    // cascading errors. Without poisoning, the result is a fresh flex var that
+    // unifies with the first use (Str) and then conflicts with the second
+    // (U64), yielding a spurious second TYPE MISMATCH.
+    const source =
+        \\r : { a : Str }
+        \\r = { a: "hello" }
+        \\x = r.0
+        \\y : Str
+        \\y = x
+        \\z : U64
+        \\z = x
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - if else - annotated branch mismatch reports error" {
+    // Exercises the expected-return-type path in checkIfElseExpr (the
+    // isCompatibleWithExpected probe). The else branch (a number) does not
+    // match the annotated Str return type, which must be reported.
+    const source =
+        \\f : Bool -> Str
+        \\f = |b| if b "yes" else 42
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - match branch conflicting with rigid return type reports error" {
+    // Load-bearing case for isCompatibleWithExpected: the `Ok(_) => ""` branch
+    // body (Str) conflicts with the function's rigid annotated return type `e`.
+    // The caller's incompatible path (markErroneousBranchWithExpected) emits no
+    // diagnostic of its own, so the mismatch recorded by the
+    // isCompatibleWithExpected probe is the ONLY error reported. If that probe
+    // were switched to a throwaway problem store, this error would silently
+    // disappear.
+    const source =
+        \\get_err : [Ok(a), Err(e)] -> e
+        \\get_err = |result| match result {
+        \\    Ok(_) => ""
+        \\    Err(e) => e
+        \\}
+    ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
