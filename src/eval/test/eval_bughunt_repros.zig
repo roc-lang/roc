@@ -107,13 +107,12 @@ pub const tests = [_]TestCase{
         .known_bug = true,
     },
     .{
-        .name = "bughunt B022: ellipsis expression is rejected before publication",
+        .name = "bughunt B022: ellipsis expression crashes when reached",
         .source_kind = .module,
         .source =
         \\main = ...
         ,
-        .expected = .{ .problem = {} },
-        .known_bug = true,
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "bughunt B024: nested closure captures enclosing lambda parameter",

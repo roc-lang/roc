@@ -4080,7 +4080,6 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
-            .ellipsis,
             .anno_only,
             .runtime_error,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
@@ -4144,6 +4143,7 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
+            .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
@@ -7961,6 +7961,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
+            .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),

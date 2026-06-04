@@ -6628,7 +6628,9 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_crash => true,
+        .e_crash,
+        .e_ellipsis,
+        => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,
     };
