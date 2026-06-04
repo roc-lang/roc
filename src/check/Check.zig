@@ -6692,7 +6692,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // an error in the return type (making it `I64 -> Error`), the pattern
         // should still get `I64 -> Str` from the annotation.
         self.var_set.clearRetainingCapacity();
-        if (self.varContainsError(expr_var, &self.var_set)) {
+        if (try self.varContainsError(expr_var, &self.var_set)) {
             // If there was an annotation AND the expr contains errors, then unify the
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
@@ -6706,7 +6706,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     self.var_set.clearRetainingCapacity();
     if (mb_anno_vars == null) {
-        if (self.varContainsError(expr_var, &self.var_set)) {
+        if (try self.varContainsError(expr_var, &self.var_set)) {
             try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
         }
     }
@@ -10717,53 +10717,53 @@ fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected
 /// we should use the annotation type for the pattern instead of the expression type.
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
-fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
+fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
 
     // Check if we've already visited this var (cycle detection)
     if (visited.contains(resolved.var_)) {
         return false;
     }
-    visited.put(resolved.var_, {}) catch return false;
+    try visited.put(resolved.var_, {});
 
     return switch (resolved.desc.content) {
         .err => true,
         .flex, .rigid => false,
-        .alias => |alias| self.varContainsError(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat_type| self.flatTypeContainsError(flat_type, visited),
+        .alias => |alias| try self.varContainsError(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat_type| try self.flatTypeContainsError(flat_type, visited),
     };
 }
 
 /// Check if a flat type contains any error types
-fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHashMap(Var, void)) bool {
+fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
-        .tuple => |tuple| self.varsContainError(self.types.sliceVars(tuple.elems), visited),
+        .tuple => |tuple| try self.varsContainError(self.types.sliceVars(tuple.elems), visited),
         .nominal_type => |nominal| blk: {
             var arg_iter = self.types.iterNominalArgs(nominal);
             while (arg_iter.next()) |arg_var| {
-                if (self.varContainsError(arg_var, visited)) break :blk true;
+                if (try self.varContainsError(arg_var, visited)) break :blk true;
             }
-            break :blk self.varContainsError(self.types.getNominalBackingVar(nominal), visited);
+            break :blk try self.varContainsError(self.types.getNominalBackingVar(nominal), visited);
         },
         .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-            if (self.varsContainError(self.types.sliceVars(func.args), visited)) break :blk true;
-            break :blk self.varContainsError(func.ret, visited);
+            if (try self.varsContainError(self.types.sliceVars(func.args), visited)) break :blk true;
+            break :blk try self.varContainsError(func.ret, visited);
         },
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (self.varsContainError(fields.items(.var_), visited)) break :blk true;
-            break :blk self.varContainsError(record.ext, visited);
+            if (try self.varsContainError(fields.items(.var_), visited)) break :blk true;
+            break :blk try self.varContainsError(record.ext, visited);
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk self.varsContainError(fields_slice.items(.var_), visited);
+            break :blk try self.varsContainError(fields_slice.items(.var_), visited);
         },
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |tag_args| {
-                if (self.varsContainError(self.types.sliceVars(tag_args), visited)) break :blk true;
+                if (try self.varsContainError(self.types.sliceVars(tag_args), visited)) break :blk true;
             }
-            break :blk self.varContainsError(tag_union.ext, visited);
+            break :blk try self.varContainsError(tag_union.ext, visited);
         },
         .empty_record, .empty_tag_union => false,
     };
@@ -10791,9 +10791,9 @@ fn has_can_error_diagnostics(self: *Self) bool {
 }
 
 /// Check if any of the given vars contain errors
-fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) bool {
+fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
     for (vars) |v| {
-        if (self.varContainsError(v, visited)) return true;
+        if (try self.varContainsError(v, visited)) return true;
     }
     return false;
 }
