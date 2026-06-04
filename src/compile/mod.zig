@@ -34,11 +34,11 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: std.mem.Allocator, _: CoreCtx) !?CleanupThread {
+    pub fn startBackgroundCleanup(_: []const u8, _: []const u8, _: std.Io) !?CleanupThread {
         return null;
     }
 
-    pub fn deleteTempDir(_: std.mem.Allocator, _: CoreCtx, _: []const u8) void {}
+    pub fn deleteTempDir(_: std.Io, _: []const u8) void {}
 };
 
 pub const CacheManager = manager.CacheManager;

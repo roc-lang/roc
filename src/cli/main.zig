@@ -729,13 +729,25 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     // cleanup completes, the OS will automatically terminate the cleanup thread.
     // This ensures cleanup never delays compilation or execution.
     //
-    // Uses page_allocator instead of GPA to avoid leak detection false positives
-    // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, CoreCtx.default(std.heap.page_allocator, std.heap.page_allocator, std_io))) |_| {
-        // Thread started successfully, will run in background
-    } else |_| {
-        // Non-fatal: cleanup failure shouldn't prevent compilation
-        std.log.debug("Failed to start background cleanup thread", .{});
+    // Resolve the temp/cache locations here using the same resolver the cache
+    // writer uses, so cleanup can never target a different directory than where
+    // artifacts are written. The background thread itself is CoreCtx-free and
+    // allocation-free; it only borrows these base paths (copied in by value).
+    {
+        const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
+        const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
+        const cache_base: []const u8 = blk: {
+            const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+            break :blk cfg.getEffectiveCacheDir(arena) catch "";
+        };
+        if (temp_base.len != 0 or cache_base.len != 0) {
+            if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
+                // Thread started successfully, will run in background
+            } else |_| {
+                // Non-fatal: cleanup failure shouldn't prevent compilation
+                std.log.debug("Failed to start background cleanup thread", .{});
+            }
+        }
     }
 
     // Create I/O interface - this is passed to all command handlers via ctx
@@ -1675,7 +1687,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handl
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -1790,7 +1802,7 @@ fn runWithPosixFdInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handle: Sha
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
