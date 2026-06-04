@@ -770,8 +770,43 @@ fn wrapForBinary(allocator: Allocator, block: *const Block) ![]u8 {
     };
 }
 
-fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) !void {
-    std.debug.assert(shard_index < shard_count);
+const DocBlockRun = struct {
+    index: usize,
+    count: usize,
+};
+
+fn getEnvVarOwned(allocator: Allocator, name: []const u8) !?[]u8 {
+    const environ: std.process.Environ = if (builtin.os.tag == .windows)
+        .{ .block = .global }
+    else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+
+    return environ.getAlloc(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => null,
+        else => err,
+    };
+}
+
+fn docBlockRunFromEnv(allocator: Allocator) !DocBlockRun {
+    const index_text = try getEnvVarOwned(allocator, "ROC_DOC_BLOCK_RUN_INDEX") orelse
+        return .{ .index = 0, .count = 1 };
+    defer allocator.free(index_text);
+
+    const count_text = try getEnvVarOwned(allocator, "ROC_DOC_BLOCK_RUN_COUNT") orelse
+        return error.InvalidDocBlockRun;
+    defer allocator.free(count_text);
+
+    const index = try std.fmt.parseUnsigned(usize, index_text, 10);
+    const count = try std.fmt.parseUnsigned(usize, count_text, 10);
+    if (count == 0 or index >= count) return error.InvalidDocBlockRun;
+
+    return .{ .index = index, .count = count };
+}
+
+fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
+    std.debug.assert(partition_index < partition_count);
 
     const allocator = std.heap.page_allocator;
 
@@ -803,7 +838,7 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) !void {
 
     var processed_blocks: usize = 0;
     for (blocks, 0..) |*block, i| {
-        if (i % shard_count != shard_index) continue;
+        if (i % partition_count != partition_index) continue;
         if (containsEffectfulCall(block.source)) {
             continue;
         }
@@ -878,44 +913,9 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) !void {
     try testing.expect(processed_blocks > 0);
 }
 
-test "Builtin.roc doc code blocks shard 00" {
-    try testBuiltinDocBlocks(0, 10);
-}
-
-test "Builtin.roc doc code blocks shard 01" {
-    try testBuiltinDocBlocks(1, 10);
-}
-
-test "Builtin.roc doc code blocks shard 02" {
-    try testBuiltinDocBlocks(2, 10);
-}
-
-test "Builtin.roc doc code blocks shard 03" {
-    try testBuiltinDocBlocks(3, 10);
-}
-
-test "Builtin.roc doc code blocks shard 04" {
-    try testBuiltinDocBlocks(4, 10);
-}
-
-test "Builtin.roc doc code blocks shard 05" {
-    try testBuiltinDocBlocks(5, 10);
-}
-
-test "Builtin.roc doc code blocks shard 06" {
-    try testBuiltinDocBlocks(6, 10);
-}
-
-test "Builtin.roc doc code blocks shard 07" {
-    try testBuiltinDocBlocks(7, 10);
-}
-
-test "Builtin.roc doc code blocks shard 08" {
-    try testBuiltinDocBlocks(8, 10);
-}
-
-test "Builtin.roc doc code blocks shard 09" {
-    try testBuiltinDocBlocks(9, 10);
+test "Builtin.roc doc code blocks" {
+    const run = try docBlockRunFromEnv(testing.allocator);
+    try testBuiltinDocBlocks(run.index, run.count);
 }
 
 /// Used by `runInChild EINTR regression` to mark that the test's signal

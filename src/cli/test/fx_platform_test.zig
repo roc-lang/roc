@@ -336,12 +336,47 @@ fn runIoSpecTestWithEnv(
     };
 }
 
+const IoSpecPartition = struct {
+    index: usize,
+    count: usize,
+};
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+
+    return environ.getAlloc(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => null,
+        else => err,
+    };
+}
+
+fn ioSpecPartitionFromEnv(allocator: std.mem.Allocator) !IoSpecPartition {
+    const index_text = try getEnvVarOwned(allocator, "ROC_FX_IO_SPEC_PARTITION_INDEX") orelse
+        return .{ .index = 0, .count = 1 };
+    defer allocator.free(index_text);
+
+    const count_text = try getEnvVarOwned(allocator, "ROC_FX_IO_SPEC_PARTITION_COUNT") orelse
+        return error.InvalidIoSpecPartition;
+    defer allocator.free(count_text);
+
+    const index = try std.fmt.parseUnsigned(usize, index_text, 10);
+    const count = try std.fmt.parseUnsigned(usize, count_text, 10);
+    if (count == 0 or index >= count) return error.InvalidIoSpecPartition;
+
+    return .{ .index = index, .count = count };
+}
+
 fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     if (!fx_test_options.include_io_spec_tests) return error.SkipZigTest;
-    std.debug.assert(fx_test_options.io_spec_shard_count > 0);
-    std.debug.assert(fx_test_options.io_spec_shard_index < fx_test_options.io_spec_shard_count);
 
     const allocator = testing.allocator;
+    const partition = try ioSpecPartitionFromEnv(allocator);
+
     var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
     defer env_map.deinit();
 
@@ -349,7 +384,7 @@ fn runIoSpecTests(comptime opt_flag: []const u8) !void {
     var failed: usize = 0;
 
     for (fx_test_specs.io_spec_tests, 0..) |spec, spec_i| {
-        if (spec_i % fx_test_options.io_spec_shard_count != fx_test_options.io_spec_shard_index) continue;
+        if (spec_i % partition.count != partition.index) continue;
         if (spec.skip) continue;
         if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
 

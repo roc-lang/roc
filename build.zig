@@ -113,6 +113,7 @@ const TestsSummaryStep = struct {
     has_filters: bool,
     test_filters: []const []const u8,
     forced_passes: u64,
+    load_balance_pass_subtractions: u64,
     run_prerequisite: ?*Step,
     serialize_runs: bool,
     last_run: ?*Step,
@@ -133,6 +134,7 @@ const TestsSummaryStep = struct {
             .has_filters = test_filters.len > 0,
             .test_filters = test_filters,
             .forced_passes = @intCast(forced_passes),
+            .load_balance_pass_subtractions = 0,
             .run_prerequisite = null,
             .serialize_runs = false,
             .last_run = null,
@@ -146,6 +148,10 @@ const TestsSummaryStep = struct {
 
     fn setRunSerialization(self: *TestsSummaryStep) void {
         self.serialize_runs = true;
+    }
+
+    fn subtractLoadBalancedPasses(self: *TestsSummaryStep, pass_count: usize) void {
+        self.load_balance_pass_subtractions += @intCast(pass_count);
     }
 
     fn addRun(self: *TestsSummaryStep, run_step: *Step) void {
@@ -194,6 +200,10 @@ const TestsSummaryStep = struct {
         }
 
         var effective_passed = passed;
+        if (self.load_balance_pass_subtractions != 0) {
+            const subtract = @min(effective_passed, self.load_balance_pass_subtractions);
+            effective_passed -= subtract;
+        }
         if (self.has_filters and self.forced_passes != 0) {
             const subtract = @min(effective_passed, self.forced_passes);
             effective_passed -= subtract;
@@ -254,6 +264,98 @@ fn createNoopStep(b: *std.Build, name: []const u8) *Step {
         }.make,
     });
     return step;
+}
+
+fn defaultTestPartitionCount() usize {
+    return std.Thread.getCpuCount() catch 1;
+}
+
+fn rocTestRunner(b: *std.Build) Step.Compile.TestRunner {
+    return .{
+        .path = b.path("test/zig_test_runner.zig"),
+        .mode = .server,
+    };
+}
+
+const AutoTestRunOptions = struct {
+    test_step: *Step.Compile,
+    parent_step: ?*Step = null,
+    tests_summary: ?*TestsSummaryStep = null,
+    run_args: []const []const u8 = &.{},
+    partition_count: usize,
+    use_runner_partitions: bool = true,
+    label: ?[]const u8 = null,
+};
+
+const FocusedAndSummaryRuns = struct {
+    focused: []const *Step.Run,
+    summary: []const *Step.Run,
+};
+
+fn addAutoTestRuns(b: *std.Build, options: AutoTestRunOptions) []const *Step.Run {
+    if (options.partition_count == 0) {
+        std.log.err("-Dtest-partitions must be greater than 0", .{});
+        std.process.exit(1);
+    }
+
+    const runs = b.allocator.alloc(*Step.Run, options.partition_count) catch
+        @panic("OOM while creating automatic test runs");
+    const label = options.label orelse options.test_step.name;
+
+    for (runs, 0..) |*slot, partition_i| {
+        const run = b.addRunArtifact(options.test_step);
+        run.step.name = if (options.partition_count == 1)
+            b.fmt("run {s} tests", .{label})
+        else
+            b.fmt("run {s} tests ({d}/{d})", .{ label, partition_i + 1, options.partition_count });
+
+        if (options.use_runner_partitions and options.partition_count != 1) {
+            run.addArg(b.fmt("--roc-test-partition-index={d}", .{partition_i}));
+            run.addArg(b.fmt("--roc-test-partition-count={d}", .{options.partition_count}));
+        }
+        if (options.run_args.len != 0) {
+            run.addArgs(options.run_args);
+        }
+
+        if (options.parent_step) |parent_step| {
+            parent_step.dependOn(&run.step);
+        }
+        if (options.tests_summary) |tests_summary| {
+            tests_summary.addRun(&run.step);
+        }
+
+        slot.* = run;
+    }
+
+    return runs;
+}
+
+fn addFocusedAndSummaryTestRuns(b: *std.Build, options: AutoTestRunOptions) FocusedAndSummaryRuns {
+    if (options.parent_step == null or options.tests_summary == null) {
+        @panic("addFocusedAndSummaryTestRuns requires both parent_step and tests_summary");
+    }
+
+    var focused_options = options;
+    focused_options.tests_summary = null;
+
+    var summary_options = options;
+    summary_options.parent_step = null;
+    const base_label = options.label orelse options.test_step.name;
+    summary_options.label = b.fmt("{s} summary", .{base_label});
+
+    return .{
+        .focused = addAutoTestRuns(b, focused_options),
+        .summary = addAutoTestRuns(b, summary_options),
+    };
+}
+
+fn multipliedPartitionCount(base_count: usize, multiplier: usize) usize {
+    return std.math.mul(usize, base_count, multiplier) catch @panic("test partition count overflow");
+}
+
+fn loadBalancedPartitionCount(base_count: usize, multiplier: usize, test_filters: []const []const u8) usize {
+    if (test_filters.len != 0) return base_count;
+    return multipliedPartitionCount(base_count, multiplier);
 }
 
 /// Build step that checks for forbidden patterns in the type checker code.
@@ -2245,6 +2347,14 @@ pub fn build(b: *std.Build) void {
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
     const test_filters = parsed_args.test_filters;
+    const test_partition_count = b.option(usize, "test-partitions", "Number of automatic Zig test run partitions") orelse defaultTestPartitionCount();
+    if (test_partition_count == 0) {
+        std.log.err("-Dtest-partitions must be greater than 0", .{});
+        std.process.exit(1);
+    }
+    const balanced_test_partition_count = loadBalancedPartitionCount(test_partition_count, 2, test_filters);
+    const expensive_test_partition_count = loadBalancedPartitionCount(test_partition_count, 4, test_filters);
+    const test_runner = rocTestRunner(b);
 
     // llvm configuration
     // By default, use our bundled LLVM from roc-bootstrap. Users can opt-in to system LLVM
@@ -2525,9 +2635,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(test_runner_exe);
 
-    // Store glue test step references so we can add glue host dependency later.
+    // Store glue test step reference so we can add the generated glue host
+    // dependency after target-specific host selection is known.
     var run_glue_test_step: ?*std.Build.Step = null;
-    var run_glue_test_cli_step: ?*std.Build.Step = null;
 
     // CLI integration tests - parallel test runner replaces 5 sequential
     // test_runner invocations with a single fork-based parallel runner.
@@ -2584,12 +2694,20 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = test_runner,
         });
 
-        const run_roc_subcommands_test = b.addRunArtifact(roc_subcommands_test);
-        run_roc_subcommands_test.step.dependOn(&install.step);
-        run_roc_subcommands_test.step.dependOn(build_test_hosts_step);
-        test_subcommands_step.dependOn(&run_roc_subcommands_test.step);
+        const roc_subcommands_runs = addAutoTestRuns(b, .{
+            .test_step = roc_subcommands_test,
+            .parent_step = test_subcommands_step,
+            .run_args = run_args,
+            .partition_count = expensive_test_partition_count,
+            .label = "roc subcommands",
+        });
+        for (roc_subcommands_runs) |run| {
+            run.step.dependOn(&install.step);
+            run.step.dependOn(build_test_hosts_step);
+        }
 
         // test-echo: echo platform (headerless app) tests
         const echo_tests = b.addTest(.{
@@ -2602,15 +2720,22 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = test_runner,
         });
-
-        const run_echo_tests = b.addRunArtifact(echo_tests);
-        run_echo_tests.step.dependOn(&install.step);
-        run_echo_tests.step.dependOn(build_test_hosts_step);
 
         // Print "All N tests passed" via the same summary step the rest of the suite uses.
         const echo_tests_summary = TestsSummaryStep.create(b, test_filters, 0);
-        echo_tests_summary.addRun(&run_echo_tests.step);
+        const echo_runs = addAutoTestRuns(b, .{
+            .test_step = echo_tests,
+            .tests_summary = echo_tests_summary,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = "echo",
+        });
+        for (echo_runs) |run| {
+            run.step.dependOn(&install.step);
+            run.step.dependOn(build_test_hosts_step);
+        }
         test_echo_step.dependOn(&echo_tests_summary.step);
 
         // test-glue: glue command integration tests
@@ -2624,52 +2749,29 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = test_runner,
         });
 
-        const run_glue_test = b.addRunArtifact(glue_test);
-        run_glue_test.step.dependOn(&install.step);
-        run_glue_test_step = &run_glue_test.step;
-        test_glue_step.dependOn(&run_glue_test.step);
-
-        // test-cli: umbrella depending on all four. On Windows, use separate
-        // aggregate run steps so focused steps like `test-echo` stay focused,
-        // while the umbrella avoids Zig 0.16 test-runner IPC timeouts caused
-        // by starting the heavy platform runner and Zig test binaries together.
-        if (builtin.os.tag == .windows) {
-            const run_parallel_cli_for_cli = b.addRunArtifact(parallel_cli_runner_exe);
-            run_parallel_cli_for_cli.addArg("zig-out/bin/roc");
-            for (test_filters) |f| {
-                run_parallel_cli_for_cli.addArg("--filter");
-                run_parallel_cli_for_cli.addArg(f);
-            }
-            if (run_args.len != 0) {
-                run_parallel_cli_for_cli.addArgs(run_args);
-            }
-            run_parallel_cli_for_cli.step.dependOn(&install.step);
-            run_parallel_cli_for_cli.step.dependOn(build_test_hosts_step);
-
-            const run_roc_subcommands_test_for_cli = b.addRunArtifact(roc_subcommands_test);
-            run_roc_subcommands_test_for_cli.step.dependOn(&install.step);
-            run_roc_subcommands_test_for_cli.step.dependOn(build_test_hosts_step);
-            run_roc_subcommands_test_for_cli.step.dependOn(&run_parallel_cli_for_cli.step);
-
-            const run_echo_tests_for_cli = b.addRunArtifact(echo_tests);
-            run_echo_tests_for_cli.step.dependOn(&install.step);
-            run_echo_tests_for_cli.step.dependOn(build_test_hosts_step);
-            run_echo_tests_for_cli.step.dependOn(&run_roc_subcommands_test_for_cli.step);
-
-            const run_glue_test_for_cli = b.addRunArtifact(glue_test);
-            run_glue_test_for_cli.step.dependOn(&install.step);
-            run_glue_test_for_cli.step.dependOn(&run_echo_tests_for_cli.step);
-            run_glue_test_cli_step = &run_glue_test_for_cli.step;
-
-            test_cli_step.dependOn(&run_glue_test_for_cli.step);
-        } else {
-            test_cli_step.dependOn(test_platforms_step);
-            test_cli_step.dependOn(test_subcommands_step);
-            test_cli_step.dependOn(test_echo_step);
-            test_cli_step.dependOn(test_glue_step);
+        const glue_test_runtime_step = createNoopStep(b, "glue-test-runtime-host");
+        const glue_runs = addAutoTestRuns(b, .{
+            .test_step = glue_test,
+            .parent_step = test_glue_step,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = "glue",
+        });
+        for (glue_runs) |run| {
+            run.step.dependOn(&install.step);
+            run.step.dependOn(glue_test_runtime_step);
         }
+        run_glue_test_step = glue_test_runtime_step;
+
+        // test-cli: umbrella depending on all focused sub-steps. The build
+        // runner schedules these independent steps in parallel.
+        test_cli_step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(test_subcommands_step);
+        test_cli_step.dependOn(test_echo_step);
+        test_cli_step.dependOn(test_glue_step);
 
         // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
         // stays out of test-cli because these tests document currently failing
@@ -3215,7 +3317,7 @@ pub fn build(b: *std.Build) void {
     const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);
 
     // Create and add module tests
-    const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
+    const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters, test_runner);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     const eval_tests_complete = createNoopStep(b, "eval-tests-complete");
     eval_tests_complete.dependOn(eval_test_step);
@@ -3300,43 +3402,28 @@ pub fn build(b: *std.Build) void {
             );
         }
 
-        if (run_args.len != 0) {
-            module_test.run_step.addArgs(run_args);
-        }
-        if (std.mem.eql(u8, module_test.test_step.name, "base")) {
-            module_test.run_step.step.dependOn(&install_stack_overflow_test_helper.step);
-            module_test.run_step.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
-        }
-
         // Create individual test step for this module
         const test_exe_name = module_test.test_step.name;
         const step_name = b.fmt("test-{s}", .{test_exe_name});
         const individual_test_step = b.step(step_name, b.fmt("Run {s} tests only", .{test_exe_name}));
 
-        if (std.mem.eql(u8, module_test.test_step.name, "lsp") and test_filters.len == 0) {
-            addLspShardRuns(
-                b,
-                individual_test_step,
-                tests_summary,
-                target,
-                optimize,
-                roc_modules,
-                compiled_builtins_module,
-                write_compiled_builtins,
-                run_args,
-            );
-        } else {
-            // Create run step that accepts command line args (including --test-filter)
-            const individual_run = b.addRunArtifact(module_test.test_step);
-            if (run_args.len != 0) {
-                individual_run.addArgs(run_args);
+        const module_runs = addFocusedAndSummaryTestRuns(b, .{
+            .test_step = module_test.test_step,
+            .parent_step = individual_test_step,
+            .tests_summary = tests_summary,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = test_exe_name,
+        });
+        if (std.mem.eql(u8, module_test.test_step.name, "base")) {
+            for (module_runs.focused) |run| {
+                run.step.dependOn(&install_stack_overflow_test_helper.step);
+                run.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
             }
-            if (std.mem.eql(u8, module_test.test_step.name, "base")) {
-                individual_run.step.dependOn(&install_stack_overflow_test_helper.step);
-                individual_run.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
+            for (module_runs.summary) |run| {
+                run.step.dependOn(&install_stack_overflow_test_helper.step);
+                run.setEnvironmentVariable("ROC_STACK_OVERFLOW_TEST_HELPER", stack_overflow_test_helper_path);
             }
-            individual_test_step.dependOn(&individual_run.step);
-            tests_summary.addRun(&module_test.run_step.step);
         }
 
         b.default_step.dependOn(&module_test.test_step.step);
@@ -3354,6 +3441,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = test_runner,
         });
         roc_modules.addAll(snapshot_test);
         snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -3377,15 +3465,19 @@ pub fn build(b: *std.Build) void {
 
         add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
 
-        const run_snapshot_test = b.addRunArtifact(snapshot_test);
+        const snapshot_runs = addAutoTestRuns(b, .{
+            .test_step = snapshot_test,
+            .tests_summary = tests_summary,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = "snapshot",
+        });
         if (snapshot_exe_install) |install| {
-            run_snapshot_test.step.dependOn(&install.step);
-            run_snapshot_test.setEnvironmentVariable("ROC_SNAPSHOT_CHILD_EXE", b.getInstallPath(.bin, snapshot_exe.out_filename));
+            for (snapshot_runs) |run| {
+                run.step.dependOn(&install.step);
+                run.setEnvironmentVariable("ROC_SNAPSHOT_CHILD_EXE", b.getInstallPath(.bin, snapshot_exe.out_filename));
+            }
         }
-        if (run_args.len != 0) {
-            run_snapshot_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_snapshot_test.step);
     }
 
     // Add Builtin.roc doc code-block tests. Verifies every ```roc block in
@@ -3414,62 +3506,81 @@ pub fn build(b: *std.Build) void {
                 compiled_builtins_module,
                 write_compiled_builtins,
                 flag_enable_tracy,
+                test_runner,
             );
-            const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
-            if (run_args.len != 0) {
-                run_builtin_doc_test.addArgs(run_args);
-            }
-            const run_builtin_doc_test_for_summary = b.addRunArtifact(builtin_doc_test);
-            if (run_args.len != 0) {
-                run_builtin_doc_test_for_summary.addArgs(run_args);
-            }
-            builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
-            tests_summary.addRun(&run_builtin_doc_test_for_summary.step);
+            _ = addFocusedAndSummaryTestRuns(b, .{
+                .test_step = builtin_doc_test,
+                .parent_step = builtin_doc_test_step,
+                .tests_summary = tests_summary,
+                .run_args = run_args,
+                .partition_count = balanced_test_partition_count,
+                .label = "builtin doc",
+            });
         } else {
-            const builtin_doc_filters = [_][]const u8{
-                "Builtin.roc doc code blocks shard 00",
-                "Builtin.roc doc code blocks shard 01",
-                "Builtin.roc doc code blocks shard 02",
-                "Builtin.roc doc code blocks shard 03",
-                "Builtin.roc doc code blocks shard 04",
-                "Builtin.roc doc code blocks shard 05",
-                "Builtin.roc doc code blocks shard 06",
-                "Builtin.roc doc code blocks shard 07",
-                "Builtin.roc doc code blocks shard 08",
-                "Builtin.roc doc code blocks shard 09",
-                "runInChild retries waitpid on EINTR",
-            };
-            for (builtin_doc_filters, 0..) |filter, filter_i| {
-                const builtin_doc_test = try addBuiltinDocTest(
-                    b,
-                    b.fmt("builtin_doc_test_{d}", .{filter_i}),
-                    &.{filter},
-                    target,
-                    optimize,
-                    use_system_llvm,
-                    user_llvm_path,
-                    roc_modules,
-                    llvm_codegen_module,
-                    llvm_embedded_module,
-                    zstd,
-                    compiled_builtins_module,
-                    write_compiled_builtins,
-                    flag_enable_tracy,
-                );
-                const run_builtin_doc_test = b.addRunArtifact(builtin_doc_test);
-                run_builtin_doc_test.step.name = b.fmt("run builtin doc tests ({d})", .{filter_i});
+            const builtin_doc_blocks_test = try addBuiltinDocTest(
+                b,
+                "builtin_doc_blocks_test",
+                &.{"Builtin.roc doc code blocks"},
+                target,
+                optimize,
+                use_system_llvm,
+                user_llvm_path,
+                roc_modules,
+                llvm_codegen_module,
+                llvm_embedded_module,
+                zstd,
+                compiled_builtins_module,
+                write_compiled_builtins,
+                flag_enable_tracy,
+                test_runner,
+            );
+            for (0..expensive_test_partition_count) |run_i| {
+                const run = b.addRunArtifact(builtin_doc_blocks_test);
+                run.step.name = b.fmt("run builtin doc block tests ({d}/{d})", .{ run_i + 1, expensive_test_partition_count });
+                run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_INDEX", b.fmt("{d}", .{run_i}));
+                run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_COUNT", b.fmt("{d}", .{expensive_test_partition_count}));
                 if (run_args.len != 0) {
-                    run_builtin_doc_test.addArgs(run_args);
+                    run.addArgs(run_args);
                 }
-                builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
-
-                const run_builtin_doc_test_for_summary = b.addRunArtifact(builtin_doc_test);
-                run_builtin_doc_test_for_summary.step.name = b.fmt("run builtin doc tests for summary ({d})", .{filter_i});
-                if (run_args.len != 0) {
-                    run_builtin_doc_test_for_summary.addArgs(run_args);
-                }
-                tests_summary.addRun(&run_builtin_doc_test_for_summary.step);
+                builtin_doc_test_step.dependOn(&run.step);
             }
+            for (0..expensive_test_partition_count) |run_i| {
+                const run = b.addRunArtifact(builtin_doc_blocks_test);
+                run.step.name = b.fmt("run builtin doc block summary tests ({d}/{d})", .{ run_i + 1, expensive_test_partition_count });
+                run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_INDEX", b.fmt("{d}", .{run_i}));
+                run.setEnvironmentVariable("ROC_DOC_BLOCK_RUN_COUNT", b.fmt("{d}", .{expensive_test_partition_count}));
+                if (run_args.len != 0) {
+                    run.addArgs(run_args);
+                }
+                tests_summary.addRun(&run.step);
+            }
+            tests_summary.subtractLoadBalancedPasses(expensive_test_partition_count - test_partition_count);
+
+            const builtin_doc_harness_test = try addBuiltinDocTest(
+                b,
+                "builtin_doc_harness_test",
+                &.{"runInChild retries waitpid on EINTR"},
+                target,
+                optimize,
+                use_system_llvm,
+                user_llvm_path,
+                roc_modules,
+                llvm_codegen_module,
+                llvm_embedded_module,
+                zstd,
+                compiled_builtins_module,
+                write_compiled_builtins,
+                flag_enable_tracy,
+                test_runner,
+            );
+            _ = addFocusedAndSummaryTestRuns(b, .{
+                .test_step = builtin_doc_harness_test,
+                .parent_step = builtin_doc_test_step,
+                .tests_summary = tests_summary,
+                .run_args = run_args,
+                .partition_count = 1,
+                .label = "builtin doc harness",
+            });
         }
     }
 
@@ -3485,6 +3596,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = test_runner,
         });
         roc_modules.addAll(cli_test);
         cli_test.root_module.linkLibrary(zstd.artifact("zstd"));
@@ -3508,259 +3620,46 @@ pub fn build(b: *std.Build) void {
         cli_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cli_test.step.dependOn(&write_compiled_builtins.step);
 
-        const run_cli_test = b.addRunArtifact(cli_test);
-        if (run_args.len != 0) {
-            run_cli_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_cli_test.step);
+        _ = addAutoTestRuns(b, .{
+            .test_step = cli_test,
+            .tests_summary = tests_summary,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = "cli",
+        });
     }
 
-    // REPL tests are intentionally separate from cli_test. A single Zig test
-    // binary runs its tests serially, and the REPL tests repeatedly initialize
-    // checked builtin state under the debug allocator. Sharding these runs keeps
-    // leak detection intact while letting the build scheduler use more cores.
+    // REPL tests are intentionally separate from cli_test. They repeatedly
+    // initialize checked builtin state under the debug allocator, so the
+    // automatic test runner exposes them as independent build runs.
     const enable_repl_tests = b.option(bool, "repl-tests", "Enable REPL session tests") orelse enable_cli_tests;
     if (enable_repl_tests) {
         const repl_test_step = b.step("test-repl", "Run REPL session tests");
-        if (test_filters.len != 0) {
-            const repl_test = try addReplSessionTest(
-                b,
-                "repl_test",
-                test_filters,
-                target,
-                optimize,
-                use_system_llvm,
-                user_llvm_path,
-                roc_modules,
-                llvm_codegen_module,
-                llvm_embedded_module,
-                zstd,
-                compiled_builtins_module,
-                write_compiled_builtins,
-                flag_enable_tracy,
-            );
-            const run_repl_test = b.addRunArtifact(repl_test);
-            if (run_args.len != 0) {
-                run_repl_test.addArgs(run_args);
-            }
-            const run_repl_test_for_summary = b.addRunArtifact(repl_test);
-            if (run_args.len != 0) {
-                run_repl_test_for_summary.addArgs(run_args);
-            }
-            repl_test_step.dependOn(&run_repl_test.step);
-            tests_summary.addRun(&run_repl_test_for_summary.step);
-        } else {
-            const ReplShard = struct {
-                name: []const u8,
-                filters: []const []const u8,
-            };
-            const repl_shards = [_]ReplShard{
-                .{
-                    .name = "session-basics",
-                    .filters = &.{
-                        "Repl - initialization",
-                        "Repl - special",
-                        "Repl - simple",
-                        "Repl - string",
-                        "Repl - I8.mod_by",
-                        "Repl - lambda",
-                    },
-                },
-                .{
-                    .name = "bool",
-                    .filters = &.{
-                        "Repl - Bool",
-                        "Repl - !Bool",
-                    },
-                },
-                .{
-                    .name = "str-to-utf8-bytes",
-                    .filters = &.{
-                        "Repl - Str.to_utf8 bytes",
-                    },
-                },
-                .{
-                    .name = "str-to-utf8-lengths",
-                    .filters = &.{
-                        "Repl - Str.to_utf8 lengths",
-                    },
-                },
-                .{
-                    .name = "str-to-utf8-empty",
-                    .filters = &.{
-                        "Repl - Str.to_utf8 empty",
-                    },
-                },
-                .{
-                    .name = "str-from-utf8",
-                    .filters = &.{
-                        "Repl - Str.from_utf8_lossy",
-                        "Repl - Str.from_utf8 ",
-                    },
-                },
-                .{
-                    .name = "parse-result-format",
-                    .filters = &.{
-                        "Repl - U8.from_str",
-                        "Repl - F32.from_str",
-                        "issue 9364",
-                    },
-                },
-                .{
-                    .name = "list-literals",
-                    .filters = &.{
-                        "Repl - list literals",
-                    },
-                },
-                .{
-                    .name = "list-ops-concat",
-                    .filters = &.{
-                        "Repl - list operations concat",
-                    },
-                },
-                .{
-                    .name = "list-ops-contains",
-                    .filters = &.{
-                        "Repl - list operations contains",
-                    },
-                },
-                .{
-                    .name = "list-ops-filters",
-                    .filters = &.{
-                        "Repl - list operations filters",
-                    },
-                },
-                .{
-                    .name = "list-ops-fold-rev",
-                    .filters = &.{
-                        "Repl - list operations fold_rev",
-                    },
-                },
-                .{
-                    .name = "list-more",
-                    .filters = &.{
-                        "Repl - List.",
-                        "Repl - range_to",
-                    },
-                },
-                .{
-                    .name = "list-sort-lengths",
-                    .filters = &.{
-                        "Repl - list_sort_with lengths",
-                    },
-                },
-                .{
-                    .name = "list-sort-edge",
-                    .filters = &.{
-                        "Repl - list_sort_with empty",
-                        "Repl - list_sort_with single",
-                    },
-                },
-                .{
-                    .name = "list-fold-concat",
-                    .filters = &.{
-                        "Repl - list fold with concat",
-                    },
-                },
-                .{
-                    .name = "state-assignments",
-                    .filters = &.{
-                        "Repl - silent",
-                        "Repl - variable",
-                    },
-                },
-                .{
-                    .name = "state-polymorphic",
-                    .filters = &.{
-                        "Repl - issue",
-                        "Repl - polymorphic",
-                        "Repl - 4-arg",
-                    },
-                },
-                .{
-                    .name = "for-loop-list",
-                    .filters = &.{
-                        "Repl - for loop over list",
-                    },
-                },
-                .{
-                    .name = "for-loop-snapshot-empty",
-                    .filters = &.{
-                        "Repl - for loop snapshots empty",
-                    },
-                },
-                .{
-                    .name = "for-loop-snapshot-conditional",
-                    .filters = &.{
-                        "Repl - for loop snapshots conditional",
-                    },
-                },
-                .{
-                    .name = "for-loop-snapshot-count",
-                    .filters = &.{
-                        "Repl - for loop snapshots string count",
-                    },
-                },
-                .{
-                    .name = "for-loop-snapshot-sum",
-                    .filters = &.{
-                        "Repl - for loop snapshots sum",
-                    },
-                },
-                .{
-                    .name = "for-loop-snapshot-nested",
-                    .filters = &.{
-                        "Repl - for loop snapshots nested",
-                    },
-                },
-                .{
-                    .name = "source-management",
-                    .filters = &.{
-                        "Repl - build full source",
-                        "Repl - definition replacement",
-                        "Repl - paste",
-                    },
-                },
-                .{
-                    .name = "split-input",
-                    .filters = &.{
-                        "splitInputIntoStatements",
-                    },
-                },
-            };
-
-            for (repl_shards) |shard| {
-                const repl_shard_test = try addReplSessionTest(
-                    b,
-                    b.fmt("repl_test_{s}", .{shard.name}),
-                    shard.filters,
-                    target,
-                    optimize,
-                    use_system_llvm,
-                    user_llvm_path,
-                    roc_modules,
-                    llvm_codegen_module,
-                    llvm_embedded_module,
-                    zstd,
-                    compiled_builtins_module,
-                    write_compiled_builtins,
-                    flag_enable_tracy,
-                );
-                const run_repl_shard = b.addRunArtifact(repl_shard_test);
-                run_repl_shard.step.name = b.fmt("run repl tests ({s})", .{shard.name});
-                if (run_args.len != 0) {
-                    run_repl_shard.addArgs(run_args);
-                }
-                repl_test_step.dependOn(&run_repl_shard.step);
-
-                const run_repl_shard_for_summary = b.addRunArtifact(repl_shard_test);
-                run_repl_shard_for_summary.step.name = b.fmt("run repl tests for summary ({s})", .{shard.name});
-                if (run_args.len != 0) {
-                    run_repl_shard_for_summary.addArgs(run_args);
-                }
-                tests_summary.addRun(&run_repl_shard_for_summary.step);
-            }
-        }
+        const repl_test = try addReplSessionTest(
+            b,
+            "repl_test",
+            test_filters,
+            target,
+            optimize,
+            use_system_llvm,
+            user_llvm_path,
+            roc_modules,
+            llvm_codegen_module,
+            llvm_embedded_module,
+            zstd,
+            compiled_builtins_module,
+            write_compiled_builtins,
+            flag_enable_tracy,
+            test_runner,
+        );
+        _ = addFocusedAndSummaryTestRuns(b, .{
+            .test_step = repl_test,
+            .parent_step = repl_test_step,
+            .tests_summary = tests_summary,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = "repl",
+        });
     }
 
     // Add watch tests
@@ -3775,6 +3674,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
             }),
             .filters = test_filters,
+            .test_runner = test_runner,
         });
         roc_modules.addAll(watch_test);
         add_tracy(b, roc_modules.build_options, watch_test, target, false, flag_enable_tracy);
@@ -3787,11 +3687,13 @@ pub fn build(b: *std.Build) void {
             watch_test.root_module.linkSystemLibrary("kernel32", .{});
         }
 
-        const run_watch_test = b.addRunArtifact(watch_test);
-        if (run_args.len != 0) {
-            run_watch_test.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_watch_test.step);
+        _ = addAutoTestRuns(b, .{
+            .test_step = watch_test,
+            .tests_summary = tests_summary,
+            .run_args = run_args,
+            .partition_count = balanced_test_partition_count,
+            .label = "watch",
+        });
     }
 
     // Add check for forbidden patterns in type checker code
@@ -3872,6 +3774,7 @@ pub fn build(b: *std.Build) void {
                     .target = target,
                     .optimize = .Debug, // Debug required for DWARF debug info
                 }),
+                .test_runner = test_runner,
             });
             roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
@@ -4021,6 +3924,7 @@ pub fn build(b: *std.Build) void {
                     .target = windows_target,
                     .optimize = .Debug,
                 }),
+                .test_runner = test_runner,
             });
             roc_modules.addModuleDependencies(windows_parse_build, .parse);
             // Just compile, don't run - verifies Windows comptime branches
@@ -4167,170 +4071,127 @@ pub fn build(b: *std.Build) void {
                 target,
                 optimize,
                 true,
-                0,
-                1,
+                test_runner,
             );
 
-            const run_fx_platform_test = b.addRunArtifact(fx_platform_test);
-            if (run_args.len != 0) {
-                run_fx_platform_test.addArgs(run_args);
+            const fx_runs = addFocusedAndSummaryTestRuns(b, .{
+                .test_step = fx_platform_test,
+                .parent_step = fx_platform_test_step,
+                .tests_summary = tests_summary,
+                .run_args = run_args,
+                .partition_count = balanced_test_partition_count,
+                .label = "fx platform",
+            });
+            for (fx_runs.focused) |run| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
             }
-            // Ensure host library is copied AND fixed before running the test
-            run_fx_platform_test.step.dependOn(final_fx_host_step);
-            run_fx_platform_test.step.dependOn(final_static_data_platform_step);
-            // Ensure roc binary is built before running the test (tests invoke roc CLI)
-            run_fx_platform_test.step.dependOn(roc_step);
-            fx_platform_test_step.dependOn(&run_fx_platform_test.step);
-            tests_summary.addRun(&run_fx_platform_test.step);
+            for (fx_runs.summary) |run| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
+            }
         } else {
-            const FxShard = struct {
-                name: []const u8,
-                filters: []const []const u8,
-            };
-            const fx_misc_shards = [_]FxShard{
-                .{
-                    .name = "host-static-expect",
-                    .filters = &.{
-                        "all test specs",
-                        "find by path",
-                        "fx platform boxed",
-                        "provided static data",
-                        "fx platform expect",
-                    },
-                },
-                .{
-                    .name = "match-debug-qualifier",
-                    .filters = &.{
-                        "fx platform match",
-                        "fx platform zst",
-                        "fx platform wildcard",
-                        "fx platform nested",
-                        "fx platform dbg",
-                        "fx platform check",
-                        "fx platform checked",
-                        "custom platform",
-                        "fx platform string interpolation",
-                        "fx platform run from different cwd",
-                    },
-                },
-                .{
-                    .name = "memory-strings",
-                    .filters = &.{
-                        "drop_prefix",
-                        "str seamless",
-                        "multiline",
-                        "big string",
-                        "fx platform test_type_mismatch",
-                        "fx platform inspect_wrong_sig",
-                        "fx platform issue8433",
-                    },
-                },
-                .{
-                    .name = "run-allow-methods",
-                    .filters = &.{
-                        "run aborts",
-                        "run with --allow-errors",
-                        "run allows warnings",
-                        "fx platform method",
-                        "fx platform if-expression",
-                        "fx platform var",
-                        "fx platform sublist",
-                        "fx platform repeating",
-                        "fx platform hosted",
-                    },
-                },
-                .{
-                    .name = "runtime-inline-index",
-                    .filters = &.{
-                        "fx platform runtime",
-                        "fx platform inline",
-                        "fx platform index",
-                        "fx platform fold_rev",
-                    },
-                },
-                .{
-                    .name = "large-issues",
-                    .filters = &.{
-                        "external platform",
-                        "fx platform issue8826",
-                        "fx platform issue8943",
-                        "fx platform issue9118",
-                    },
-                },
-            };
-
-            for (fx_misc_shards) |shard| {
-                const fx_platform_misc = addFxPlatformTest(
-                    b,
-                    b.fmt("fx_platform_misc_{s}", .{shard.name}),
-                    shard.filters,
-                    target,
-                    optimize,
-                    false,
-                    0,
-                    1,
-                );
-                const run_fx_platform_misc = b.addRunArtifact(fx_platform_misc);
-                run_fx_platform_misc.step.name = b.fmt("run fx platform tests ({s})", .{shard.name});
-                if (run_args.len != 0) {
-                    run_fx_platform_misc.addArgs(run_args);
-                }
-                run_fx_platform_misc.step.dependOn(final_fx_host_step);
-                run_fx_platform_misc.step.dependOn(final_static_data_platform_step);
-                run_fx_platform_misc.step.dependOn(roc_step);
-                fx_platform_test_step.dependOn(&run_fx_platform_misc.step);
-                tests_summary.addRun(&run_fx_platform_misc.step);
+            const fx_platform_misc = addFxPlatformTest(
+                b,
+                "fx_platform_misc",
+                test_filters,
+                target,
+                optimize,
+                false,
+                test_runner,
+            );
+            const fx_misc_runs = addFocusedAndSummaryTestRuns(b, .{
+                .test_step = fx_platform_misc,
+                .parent_step = fx_platform_test_step,
+                .tests_summary = tests_summary,
+                .run_args = run_args,
+                .partition_count = balanced_test_partition_count,
+                .label = "fx platform misc",
+            });
+            for (fx_misc_runs.focused) |run| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
+            }
+            for (fx_misc_runs.summary) |run| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
             }
 
-            const fx_io_shard_count = 10;
-            for (0..fx_io_shard_count) |shard_i| {
-                const fx_platform_interpreter = addFxPlatformTest(
-                    b,
-                    b.fmt("fx_platform_io_interpreter_{d}", .{shard_i}),
-                    &.{"fx platform IO spec tests (interpreter)"},
-                    target,
-                    optimize,
-                    true,
-                    shard_i,
-                    fx_io_shard_count,
-                );
-                const run_fx_platform_interpreter = b.addRunArtifact(fx_platform_interpreter);
-                run_fx_platform_interpreter.step.name = b.fmt("run fx platform IO tests interpreter ({d})", .{shard_i});
-                if (run_args.len != 0) {
-                    run_fx_platform_interpreter.addArgs(run_args);
-                }
-                run_fx_platform_interpreter.step.dependOn(final_fx_host_step);
-                run_fx_platform_interpreter.step.dependOn(final_static_data_platform_step);
-                run_fx_platform_interpreter.step.dependOn(roc_step);
-                fx_platform_test_step.dependOn(&run_fx_platform_interpreter.step);
-                tests_summary.addRun(&run_fx_platform_interpreter.step);
+            const fx_io_partition_count = expensive_test_partition_count;
+            const fx_platform_interpreter = addFxPlatformTest(
+                b,
+                "fx_platform_io_interpreter",
+                &.{"fx platform IO spec tests (interpreter)"},
+                target,
+                optimize,
+                true,
+                test_runner,
+            );
+            const fx_interpreter_runs = addFocusedAndSummaryTestRuns(b, .{
+                .test_step = fx_platform_interpreter,
+                .parent_step = fx_platform_test_step,
+                .tests_summary = tests_summary,
+                .run_args = run_args,
+                .partition_count = fx_io_partition_count,
+                .use_runner_partitions = false,
+                .label = "fx platform IO interpreter",
+            });
+            for (fx_interpreter_runs.focused, 0..) |run, partition_i| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_INDEX", b.fmt("{d}", .{partition_i}));
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_COUNT", b.fmt("{d}", .{fx_io_partition_count}));
+            }
+            for (fx_interpreter_runs.summary, 0..) |run, partition_i| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_INDEX", b.fmt("{d}", .{partition_i}));
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_COUNT", b.fmt("{d}", .{fx_io_partition_count}));
+            }
 
-                const fx_platform_dev = addFxPlatformTest(
-                    b,
-                    b.fmt("fx_platform_io_dev_{d}", .{shard_i}),
-                    &.{"fx platform IO spec tests (dev backend)"},
-                    target,
-                    optimize,
-                    true,
-                    shard_i,
-                    fx_io_shard_count,
-                );
-                const run_fx_platform_dev = b.addRunArtifact(fx_platform_dev);
-                run_fx_platform_dev.step.name = b.fmt("run fx platform IO tests dev ({d})", .{shard_i});
-                if (run_args.len != 0) {
-                    run_fx_platform_dev.addArgs(run_args);
-                }
-                run_fx_platform_dev.step.dependOn(final_fx_host_step);
-                run_fx_platform_dev.step.dependOn(final_static_data_platform_step);
-                run_fx_platform_dev.step.dependOn(roc_step);
-                fx_platform_test_step.dependOn(&run_fx_platform_dev.step);
-                tests_summary.addRun(&run_fx_platform_dev.step);
+            const fx_platform_dev = addFxPlatformTest(
+                b,
+                "fx_platform_io_dev",
+                &.{"fx platform IO spec tests (dev backend)"},
+                target,
+                optimize,
+                true,
+                test_runner,
+            );
+            const fx_dev_runs = addFocusedAndSummaryTestRuns(b, .{
+                .test_step = fx_platform_dev,
+                .parent_step = fx_platform_test_step,
+                .tests_summary = tests_summary,
+                .run_args = run_args,
+                .partition_count = fx_io_partition_count,
+                .use_runner_partitions = false,
+                .label = "fx platform IO dev",
+            });
+            for (fx_dev_runs.focused, 0..) |run, partition_i| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_INDEX", b.fmt("{d}", .{partition_i}));
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_COUNT", b.fmt("{d}", .{fx_io_partition_count}));
+            }
+            for (fx_dev_runs.summary, 0..) |run, partition_i| {
+                run.step.dependOn(final_fx_host_step);
+                run.step.dependOn(final_static_data_platform_step);
+                run.step.dependOn(roc_step);
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_INDEX", b.fmt("{d}", .{partition_i}));
+                run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_COUNT", b.fmt("{d}", .{fx_io_partition_count}));
             }
         }
     }
 
     // Build glue platform host at runtime for the native platform.
-    if (run_glue_test_step != null or run_glue_test_cli_step != null) {
+    if (run_glue_test_step != null) {
         if (isNativeishOrMusl(target)) {
             // Determine the appropriate target for the glue platform host library.
             // On Linux, we need to use musl explicitly because the platform's
@@ -4394,9 +4255,6 @@ pub fn build(b: *std.Build) void {
 
                 if (run_glue_test_step) |glue_test_step| {
                     glue_test_step.dependOn(final_step);
-                }
-                if (run_glue_test_cli_step) |glue_test_cli_step| {
-                    glue_test_cli_step.dependOn(final_step);
                 }
             }
         }
@@ -4819,236 +4677,6 @@ fn addLlvmSupportToStep(
     step.root_module.linkLibrary(zstd.artifact("zstd"));
 }
 
-fn addLspShardRuns(
-    b: *std.Build,
-    individual_test_step: *Step,
-    tests_summary: *TestsSummaryStep,
-    target: ResolvedTarget,
-    optimize: OptimizeMode,
-    roc_modules: anytype,
-    compiled_builtins_module: *std.Build.Module,
-    write_compiled_builtins: *Step.WriteFile,
-    run_args: []const []const u8,
-) void {
-    const LspShard = struct {
-        name: []const u8,
-        filters: []const []const u8,
-    };
-    const lsp_shards = [_]LspShard{
-        .{
-            .name = "core",
-            .filters = &.{
-                "lsp tests",
-                "transport ",
-                "JsonId",
-                "InitializeParams",
-                "SemanticTokensParams",
-                "TextDocumentIdentifier",
-                "SemanticTokens serializes",
-                "empty SemanticTokens",
-                "document store",
-                "computeLineStarts",
-                "positionFromOffset",
-                "offsetFromPosition",
-                "tokenTagToSemanticType",
-                "deltaEncode",
-                "extractSemanticTokens",
-                "ScopeMap",
-                "Binding struct",
-                "parse errors are reported",
-                "DependencyGraph",
-                "getStaleModules",
-                "clearRelationships",
-                "hasContentChanged",
-                "hasExportsChanged",
-                "computeContentHash",
-                "clear removes all modules",
-                "getModule returns",
-                "getOrCreateModule",
-                "extractBaseTypeName",
-                "RecordFieldsIterator",
-                "CirVisitor",
-                "regionContainsOffset",
-                "regionSize",
-                "getStatementParts",
-                "extractDocCommentBefore",
-                "isDocCommentLine",
-                "isRegularComment",
-                "isTypeAnnotation",
-                "isBuiltinType",
-                "BUILTIN_TYPES",
-                "stripModulePrefix",
-                "firstSegment",
-                "lastSegment",
-                "detectCompletionContext",
-                "computeOffset",
-            },
-        },
-        .{
-            .name = "server",
-            .filters = &.{
-                "lsp tests",
-                "server handles initialize",
-                "server rejects",
-                "server tracks",
-                "server applies",
-                "server handles burst",
-                "server responds",
-                "server returns",
-            },
-        },
-        .{
-            .name = "syntax-build",
-            .filters = &.{
-                "lsp tests",
-                "syntax checker",
-                "getDocumentSymbols",
-            },
-        },
-        .{
-            .name = "syntax-hover",
-            .filters = &.{
-                "lsp tests",
-                "hover shows",
-                "hover without",
-            },
-        },
-        .{
-            .name = "syntax-completion-records",
-            .filters = &.{
-                "lsp tests",
-                "completion context detects",
-                "getCompletionsAtPosition",
-                "record field completion works",
-                "record field completion in sub module",
-            },
-        },
-        .{
-            .name = "syntax-completion-other",
-            .filters = &.{
-                "lsp tests",
-                "tuple index completion",
-                "record field completion with partial",
-                "static dispatch completion",
-                "completion includes doc comments",
-            },
-        },
-        .{
-            .name = "handler-format-symbols",
-            .filters = &.{
-                "lsp tests",
-                "formatting handler",
-                "document symbol handler",
-            },
-        },
-        .{
-            .name = "handler-ranges",
-            .filters = &.{
-                "lsp tests",
-                "folding range handler",
-                "selection range handler",
-            },
-        },
-        .{
-            .name = "handler-highlights",
-            .filters = &.{
-                "lsp tests",
-                "document highlight handler",
-            },
-        },
-        .{
-            .name = "handler-definition-hover",
-            .filters = &.{
-                "lsp tests",
-                "definition handler",
-                "hover handler",
-                "document symbols works",
-                "multiple goto definition",
-            },
-        },
-        .{
-            .name = "handler-completion-module",
-            .filters = &.{
-                "lsp tests",
-                "completion handler returns module definitions",
-                "completion handler returns module members",
-                "completion handler returns module names",
-            },
-        },
-        .{
-            .name = "handler-completion-types",
-            .filters = &.{
-                "lsp tests",
-                "completion handler returns types",
-                "completion handler returns List",
-            },
-        },
-        .{
-            .name = "handler-completion-locals",
-            .filters = &.{
-                "lsp tests",
-                "completion handler returns local",
-                "completion handler returns lambda",
-                "completion handler returns top-level",
-                "completion handler returns record fields",
-            },
-        },
-    };
-
-    for (lsp_shards) |shard| {
-        const lsp_test = addLspModuleTest(
-            b,
-            b.fmt("lsp_{s}", .{shard.name}),
-            shard.filters,
-            target,
-            optimize,
-            roc_modules,
-            compiled_builtins_module,
-            write_compiled_builtins,
-        );
-
-        const run_lsp_shard = b.addRunArtifact(lsp_test);
-        run_lsp_shard.step.name = b.fmt("run lsp tests ({s})", .{shard.name});
-        if (run_args.len != 0) {
-            run_lsp_shard.addArgs(run_args);
-        }
-        individual_test_step.dependOn(&run_lsp_shard.step);
-
-        const run_lsp_shard_for_summary = b.addRunArtifact(lsp_test);
-        run_lsp_shard_for_summary.step.name = b.fmt("run lsp tests for summary ({s})", .{shard.name});
-        if (run_args.len != 0) {
-            run_lsp_shard_for_summary.addArgs(run_args);
-        }
-        tests_summary.addRun(&run_lsp_shard_for_summary.step);
-    }
-}
-
-fn addLspModuleTest(
-    b: *std.Build,
-    name: []const u8,
-    filters: []const []const u8,
-    target: ResolvedTarget,
-    optimize: OptimizeMode,
-    roc_modules: anytype,
-    compiled_builtins_module: *std.Build.Module,
-    write_compiled_builtins: *Step.WriteFile,
-) *Step.Compile {
-    const lsp_test = b.addTest(.{
-        .name = name,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lsp/mod.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-        .filters = filters,
-    });
-    roc_modules.addModuleDependencies(lsp_test, .lsp);
-    lsp_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-    lsp_test.step.dependOn(&write_compiled_builtins.step);
-    return lsp_test;
-}
-
 fn addFxPlatformTest(
     b: *std.Build,
     name: []const u8,
@@ -5056,8 +4684,7 @@ fn addFxPlatformTest(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     include_io_spec_tests: bool,
-    io_spec_shard_index: usize,
-    io_spec_shard_count: usize,
+    test_runner: Step.Compile.TestRunner,
 ) *Step.Compile {
     const fx_platform_test = b.addTest(.{
         .name = name,
@@ -5069,12 +4696,11 @@ fn addFxPlatformTest(
             .link_libc = true,
         }),
         .filters = filters,
+        .test_runner = test_runner,
     });
 
     const fx_test_options = b.addOptions();
     fx_test_options.addOption(bool, "include_io_spec_tests", include_io_spec_tests);
-    fx_test_options.addOption(usize, "io_spec_shard_index", io_spec_shard_index);
-    fx_test_options.addOption(usize, "io_spec_shard_count", io_spec_shard_count);
     fx_platform_test.root_module.addOptions("fx_test_options", fx_test_options);
 
     return fx_platform_test;
@@ -5095,6 +4721,7 @@ fn addBuiltinDocTest(
     compiled_builtins_module: *std.Build.Module,
     write_compiled_builtins: *Step.WriteFile,
     flag_enable_tracy: ?[]const u8,
+    test_runner: Step.Compile.TestRunner,
 ) !*Step.Compile {
     const builtin_doc_test = b.addTest(.{
         .name = name,
@@ -5105,6 +4732,7 @@ fn addBuiltinDocTest(
             .link_libc = true,
         }),
         .filters = filters,
+        .test_runner = test_runner,
     });
     roc_modules.addAll(builtin_doc_test);
     builtin_doc_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -5144,6 +4772,7 @@ fn addReplSessionTest(
     compiled_builtins_module: *std.Build.Module,
     write_compiled_builtins: *Step.WriteFile,
     flag_enable_tracy: ?[]const u8,
+    test_runner: Step.Compile.TestRunner,
 ) !*Step.Compile {
     const repl_test = b.addTest(.{
         .name = name,
@@ -5154,6 +4783,7 @@ fn addReplSessionTest(
             .link_libc = true,
         }),
         .filters = filters,
+        .test_runner = test_runner,
     });
     repl_test.root_module.addImport("base", roc_modules.base);
     repl_test.root_module.addImport("can", roc_modules.can);
