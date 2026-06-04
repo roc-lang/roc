@@ -271,6 +271,69 @@ test "NodeStore round trip - Statement" {
     }
 }
 
+test "NodeStore round trip - Statement type annotation full-width where index" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
+    defer store.deinit();
+
+    const statements = [_]AST.Statement{
+        .{ .type_anno = .{
+            .name = 1,
+            .anno = @enumFromInt(2),
+            .where = @enumFromInt(0x80000000),
+            .is_var = false,
+            .region = .{ .start = 3, .end = 4 },
+        } },
+        .{ .type_anno = .{
+            .name = 5,
+            .anno = @enumFromInt(6),
+            .where = @enumFromInt(0xffffffff),
+            .is_var = true,
+            .region = .{ .start = 7, .end = 8 },
+        } },
+    };
+
+    for (statements) |statement| {
+        const idx = try store.addStatement(statement);
+        try testing.expectEqualDeep(statement, store.getStatement(idx));
+    }
+}
+
+test "NodeStore round trip - Statement type declaration optional data starts at zero" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
+    defer store.deinit();
+
+    const zero_collection_idx: u32 = 0; // Collection.Idx 0 is a valid value and must round-trip.
+    const statements = [_]AST.Statement{
+        .{ .type_decl = .{
+            .anno = @enumFromInt(1),
+            .header = @enumFromInt(2),
+            .kind = .nominal,
+            .region = .{ .start = 3, .end = 4 },
+            .where = @enumFromInt(zero_collection_idx),
+            .associated = null,
+        } },
+        .{ .type_decl = .{
+            .anno = @enumFromInt(5),
+            .header = @enumFromInt(6),
+            .kind = .nominal,
+            .region = .{ .start = 7, .end = 8 },
+            .where = null,
+            .associated = .{
+                .statements = .{ .span = .{ .start = 9, .len = 10 } },
+                .scope = @enumFromInt(11),
+                .region = .{ .start = 12, .end = 13 },
+            },
+        } },
+    };
+
+    for (statements) |statement| {
+        const idx = try store.addStatement(statement);
+        try testing.expectEqualDeep(statement, store.getStatement(idx));
+    }
+}
+
 test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_PATTERN_NODE_COUNT);
