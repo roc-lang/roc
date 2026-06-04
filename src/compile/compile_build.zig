@@ -96,7 +96,14 @@ const PathUtils = struct {
 
     fn isWithinRoot(candidate: []const u8, roots: []const []const u8) bool {
         for (roots) |root| {
-            if (std.mem.startsWith(u8, candidate, root)) return true;
+            if (!std.mem.startsWith(u8, candidate, root)) continue;
+            // Only match whole path segments so root "/x/app" does not capture
+            // sibling "/x/app-secrets". An exact match counts, as does a match
+            // where the next character (or the root's own trailing char) is a
+            // path separator.
+            if (candidate.len == root.len) return true;
+            if (std.fs.path.isSep(candidate[root.len])) return true;
+            if (root.len > 0 and std.fs.path.isSep(root[root.len - 1])) return true;
         }
         return false;
     }
@@ -426,6 +433,13 @@ pub const BuildEnv = struct {
         self.coordinator = coord;
     }
 
+    /// Register a directory as a workspace root, skipping it if an existing root
+    /// already contains it. Takes ownership of nothing; copies `dir` when stored.
+    fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) !void {
+        if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
+        try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
+    }
+
     /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
     /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
     /// discovered state (e.g., TargetsConfig) and change the target before compilation.
@@ -437,7 +451,7 @@ pub const BuildEnv = struct {
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
         self.discovered_root_dir = root_dir;
 
-        try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
+        try self.addWorkspaceRoot(root_dir);
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
@@ -1089,9 +1103,7 @@ pub const BuildEnv = struct {
                 // can be resolved. This is needed for both URL packages (cached paths) and
                 // relative paths that may point outside the app directory (e.g., ../platform/main.roc)
                 if (std.fs.path.dirname(plat_path)) |plat_dir| {
-                    if (!PathUtils.isWithinRoot(plat_dir, self.workspace_roots.items)) {
-                        try self.workspace_roots.append(try self.gpa.dupe(u8, plat_dir));
-                    }
+                    try self.addWorkspaceRoot(plat_dir);
                 }
 
                 // Packages map
@@ -1112,7 +1124,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
@@ -1120,9 +1132,7 @@ pub const BuildEnv = struct {
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
                         errdefer self.gpa.free(abs_path);
                         if (std.fs.path.dirname(abs_path)) |pkg_dir| {
-                            if (!PathUtils.isWithinRoot(pkg_dir, self.workspace_roots.items)) {
-                                try self.workspace_roots.append(try self.gpa.dupe(u8, pkg_dir));
-                            }
+                            try self.addWorkspaceRoot(pkg_dir);
                         }
                         break :blk abs_path;
                     };
@@ -1154,7 +1164,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
@@ -1195,7 +1205,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {

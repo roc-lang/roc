@@ -1845,6 +1845,26 @@ test "roc check succeeds with unused app package shorthand (issue 9488)" {
     try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
 }
 
+test "roc check resolves and checks a used sibling package shorthand (issue 9488)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/package_shorthand_used_app/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The app imports from a sibling package (declared via a `../` shorthand)
+    // that lives outside the app directory. Registering the package directory
+    // as a workspace root lets the sandbox resolve it, so the package is
+    // genuinely type-checked rather than silently skipped: the planted type
+    // error inside the package must surface, referencing the package file.
+    try testing.expect(result.term == .exited);
+    try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "package_shorthand_used_pkg") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null);
+}
+
 test "roc check does not hang on tag union type alias inside List (issue 9481)" {
     const testing = std.testing;
     const gpa = testing.allocator;
