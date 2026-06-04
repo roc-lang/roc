@@ -23,13 +23,39 @@ preamble: std.ArrayList(u8),
 import_relocations: std.ArrayList(Relocation),
 
 /// A relocation entry recording a call site that needs patching during linking.
-pub const Relocation = struct {
-    /// Relocation kind for this padded LEB operand.
-    type_id: WasmLinking.IndexRelocType = .function_index_leb,
-    /// Byte position of the 5-byte padded LEB128 placeholder, relative to start of `code`.
-    code_pos: u32,
-    /// Index into the module's linking symbol table.
-    symbol_index: SymbolIndex,
+pub const Relocation = union(enum) {
+    index: struct {
+        /// Relocation kind for this padded LEB operand.
+        type_id: WasmLinking.IndexRelocType = .function_index_leb,
+        /// Byte position of the 5-byte padded LEB128 placeholder, relative to start of `code`.
+        code_pos: u32,
+        /// Index into the module's linking symbol table.
+        symbol_index: SymbolIndex,
+    },
+    offset: struct {
+        /// Relocation kind for this padded memory-address operand.
+        type_id: WasmLinking.OffsetRelocType,
+        /// Byte position of the 5-byte padded LEB128 placeholder, relative to start of `code`.
+        code_pos: u32,
+        /// Index into the module's linking symbol table.
+        symbol_index: SymbolIndex,
+        /// Link-time addend applied to the symbol address.
+        addend: i32,
+    },
+
+    fn codePos(self: Relocation) u32 {
+        return switch (self) {
+            .index => |idx| idx.code_pos,
+            .offset => |off| off.code_pos,
+        };
+    }
+
+    fn shiftCodePos(self: *Relocation, amount: u32) void {
+        switch (self.*) {
+            .index => |*idx| idx.code_pos += amount,
+            .offset => |*off| off.code_pos += amount,
+        }
+    }
 };
 
 pub fn init() Self {
@@ -54,11 +80,11 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
 pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex, provisional_func_idx: u32) !void {
     try self.code.append(allocator, WasmModule.Op.call);
     const code_pos: u32 = @intCast(self.code.items.len);
-    try self.import_relocations.append(allocator, .{
+    try self.import_relocations.append(allocator, .{ .index = .{
         .type_id = .function_index_leb,
         .code_pos = code_pos,
         .symbol_index = symbol_idx,
-    });
+    } });
     try WasmModule.appendPaddedU32(allocator, &self.code, provisional_func_idx);
 }
 
@@ -70,11 +96,28 @@ pub fn addIndexRelocation(
     code_pos: u32,
     symbol_idx: SymbolIndex,
 ) !void {
-    try self.import_relocations.append(allocator, .{
+    try self.import_relocations.append(allocator, .{ .index = .{
         .type_id = type_id,
         .code_pos = code_pos,
         .symbol_index = symbol_idx,
-    });
+    } });
+}
+
+/// Record a relocatable padded memory-address operand already emitted into this function.
+pub fn addOffsetRelocation(
+    self: *Self,
+    allocator: Allocator,
+    type_id: WasmLinking.OffsetRelocType,
+    code_pos: u32,
+    symbol_idx: SymbolIndex,
+    addend: i32,
+) !void {
+    try self.import_relocations.append(allocator, .{ .offset = .{
+        .type_id = type_id,
+        .code_pos = code_pos,
+        .symbol_index = symbol_idx,
+        .addend = addend,
+    } });
 }
 
 /// Finalize this function and insert it into the module's code section.
@@ -102,17 +145,29 @@ pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) 
 
     std.sort.heap(Relocation, self.import_relocations.items, {}, struct {
         fn lessThan(_: void, a: Relocation, b: Relocation) bool {
-            return a.code_pos < b.code_pos;
+            return a.codePos() < b.codePos();
         }
     }.lessThan);
 
     // Create relocation entries with absolute offsets.
     for (self.import_relocations.items) |reloc| {
-        try module.reloc_code.entries.append(allocator, .{ .index = .{
-            .type_id = reloc.type_id,
-            .offset = code_start + reloc.code_pos,
-            .symbol_index = reloc.symbol_index.raw(),
-        } });
+        switch (reloc) {
+            .index => |idx| {
+                try module.reloc_code.entries.append(allocator, .{ .index = .{
+                    .type_id = idx.type_id,
+                    .offset = code_start + idx.code_pos,
+                    .symbol_index = idx.symbol_index.raw(),
+                } });
+            },
+            .offset => |off| {
+                try module.reloc_code.entries.append(allocator, .{ .offset = .{
+                    .type_id = off.type_id,
+                    .offset = code_start + off.code_pos,
+                    .symbol_index = off.symbol_index.raw(),
+                    .addend = off.addend,
+                } });
+            },
+        }
     }
 
     return fn_offset;
@@ -128,7 +183,7 @@ pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) !voi
     const prefix_len: u32 = @intCast(prefix.len);
     // Adjust relocation offsets to account for the prefix
     for (self.import_relocations.items) |*reloc| {
-        reloc.code_pos += prefix_len;
+        reloc.shiftCodePos(prefix_len);
     }
     // Grow capacity if needed
     try self.code.ensureTotalCapacity(allocator, self.code.items.len + prefix.len);
@@ -171,8 +226,8 @@ test "CodeBuilder.emitRelocatableCall — records code_pos relative to function 
 
     try testing.expectEqual(@as(usize, 1), cb.import_relocations.items.len);
     // code_pos should be 3: after 2 nops + 1 call opcode byte
-    try testing.expectEqual(@as(u32, 3), cb.import_relocations.items[0].code_pos);
-    try testing.expectEqual(SymbolIndex.fromRaw(42), cb.import_relocations.items[0].symbol_index);
+    try testing.expectEqual(@as(u32, 3), cb.import_relocations.items[0].index.code_pos);
+    try testing.expectEqual(SymbolIndex.fromRaw(42), cb.import_relocations.items[0].index.symbol_index);
 
     // Total code: 2 nops + 1 call opcode + 5 padded bytes = 8
     try testing.expectEqual(@as(usize, 8), cb.code.items.len);
@@ -349,7 +404,7 @@ test "CodeBuilder — clear resets state for next function without leaking reloc
     // Populate with some data
     try cb.code.appendSlice(testing.allocator, &.{ 0x01, 0x02, 0x03 });
     try cb.preamble.appendSlice(testing.allocator, &.{0x00});
-    try cb.import_relocations.append(testing.allocator, .{ .code_pos = 0, .symbol_index = SymbolIndex.fromRaw(5) });
+    try cb.import_relocations.append(testing.allocator, .{ .index = .{ .code_pos = 0, .symbol_index = SymbolIndex.fromRaw(5) } });
 
     cb.clear();
 
@@ -371,7 +426,7 @@ test "CodeBuilder.prependToCode — shifts relocations and inserts prefix" {
     try cb.code.append(testing.allocator, WasmModule.Op.end);
 
     // Before prepend: reloc code_pos = 1 (after call opcode)
-    try testing.expectEqual(@as(u32, 1), cb.import_relocations.items[0].code_pos);
+    try testing.expectEqual(@as(u32, 1), cb.import_relocations.items[0].index.code_pos);
 
     // Prepend a 3-byte prologue
     try cb.prependToCode(testing.allocator, &.{ 0xAA, 0xBB, 0xCC });
@@ -385,5 +440,5 @@ test "CodeBuilder.prependToCode — shifts relocations and inserts prefix" {
     try testing.expectEqual(WasmModule.Op.end, cb.code.items[9]);
 
     // Relocation code_pos should be shifted by 3
-    try testing.expectEqual(@as(u32, 4), cb.import_relocations.items[0].code_pos);
+    try testing.expectEqual(@as(u32, 4), cb.import_relocations.items[0].index.code_pos);
 }

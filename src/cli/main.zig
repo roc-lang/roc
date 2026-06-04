@@ -3307,9 +3307,25 @@ fn rocBuildWasmSurgical(
         var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
         errdefer wasm_module.deinit();
         wasm_module.addMemoryImport();
-        _ = try wasm_module.addTableImportWithSymbol();
+        const table_symbol = try wasm_module.addTableImportWithSymbol();
         const stack_pointer_symbol = try wasm_module.addStackPointerImportWithSymbol();
-        const builtin_symbols = try backend.wasm.BuiltinSignatures.declareUndefinedRelocs(&wasm_module);
+
+        const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
+        if (builtins_bytes.len > 0) {
+            var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
+                std.log.err("Failed to preload wasm builtins: {}", .{err});
+                return err;
+            };
+            defer builtins_module.deinit();
+
+            var merge_result = try wasm_module.mergeModuleForObject(&builtins_module);
+            merge_result.deinit();
+        }
+
+        const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
+            std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
+            return err;
+        };
 
         var codegen = backend.wasm.WasmCodeGen.initWithModule(
             ctx.gpa,
@@ -3320,6 +3336,8 @@ fn rocBuildWasmSurgical(
         defer codegen.deinit();
         codegen.configureBuiltinRelocs(builtin_symbols);
         codegen.configureStackPointerReloc(stack_pointer_symbol);
+        codegen.configureTableReloc(table_symbol);
+        codegen.configureRelocatableObject();
 
         try codegen.registerIndirectCallTypes();
         try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
@@ -3334,6 +3352,10 @@ fn rocBuildWasmSurgical(
         }
 
         try codegen.flushPendingBodies();
+        for (entrypoints) |entry| {
+            _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
+        }
+        try codegen.module.verifyNoLinkObjectContract();
 
         const wasm_bytes = try codegen.module.encodeRelocatable(ctx.gpa);
         defer ctx.gpa.free(wasm_bytes);
