@@ -1176,7 +1176,7 @@ fn processSnapshotContent(
         const import_name = can_ir.getString(str_idx);
 
         // Match the import name to the corresponding loaded builtin module
-        if (std.mem.eql(u8, import_name, "Builtin")) {
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
             if (config.builtin_module) |builtin_env| {
                 try builtin_modules.append(builtin_env);
             }
@@ -4644,7 +4644,7 @@ fn renderSnapshotReplTypeProblems(
     defer imported_envs.deinit();
     for (can_ir.imports.imports.items.items) |str_idx| {
         const import_name = can_ir.getString(str_idx);
-        if (std.mem.eql(u8, import_name, "Builtin")) {
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
             try imported_envs.append(builtin_env);
         }
     }

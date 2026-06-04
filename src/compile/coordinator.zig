@@ -1745,7 +1745,6 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
             platform_declaration_artifact,
@@ -2519,8 +2518,7 @@ pub const Coordinator = struct {
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var imported_source_count: usize = 0;
         for (imported_envs) |imported_env| {
-            if (std.mem.eql(u8, env.module_name, "Builtin") and
-                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
             imported_source_count += 1;
         }
 
@@ -2529,8 +2527,7 @@ pub const Coordinator = struct {
 
         var source_index: usize = 0;
         for (imported_envs) |imported_env| {
-            if (std.mem.eql(u8, env.module_name, "Builtin") and
-                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
             source_modules[source_index] = .{ .precompiled = imported_env };
             source_index += 1;
         }
@@ -3257,7 +3254,7 @@ pub const Coordinator = struct {
             const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
             const import_name = mod.moduleEnv().?.getString(str_idx);
 
-            if (std.mem.eql(u8, import_name, "Builtin")) {
+            if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
                 mod.moduleEnv().?.imports.setResolvedModule(import_idx, 0);
                 continue;
             }
@@ -3308,7 +3305,7 @@ pub const Coordinator = struct {
             const import_name = module_env.getString(str_idx);
             const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
 
-            if (std.mem.eql(u8, import_name, "Builtin")) {
+            if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
                 try imports.append(allocator, .{
                     .module_idx = resolved_module_idx,
                     .key = self.builtin_modules.checked_artifact.key,

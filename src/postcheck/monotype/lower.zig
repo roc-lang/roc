@@ -32,6 +32,7 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program);
     defer builder.deinit();
     try builder.initHostedCatalog();
+    try builder.initMethodLookupIndex();
 
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
@@ -83,6 +84,92 @@ const MethodLookup = struct {
     view: ModuleView,
     target: static_dispatch.MethodTarget,
 };
+
+const MethodDispatch = struct {
+    owner: static_dispatch.MethodOwner,
+    method: names.MethodNameId,
+};
+
+const MethodLookupIndexEntry = struct {
+    dispatch: MethodDispatch,
+    view: ModuleView,
+    target: static_dispatch.MethodTarget,
+
+    fn lessThan(_: void, lhs: MethodLookupIndexEntry, rhs: MethodLookupIndexEntry) bool {
+        return methodDispatchOrder(lhs.dispatch, rhs.dispatch) == .lt;
+    }
+};
+
+fn assertMethodLookupIndexUnique(entries: []const MethodLookupIndexEntry) void {
+    if (entries.len < 2) return;
+    var index: usize = 1;
+    while (index < entries.len) : (index += 1) {
+        if (methodDispatchOrder(entries[index - 1].dispatch, entries[index].dispatch) != .eq) continue;
+        Common.invariant("checked method registries contain duplicate dispatch targets");
+    }
+}
+
+fn methodDispatchOrder(a: MethodDispatch, b: MethodDispatch) std.math.Order {
+    const owner_order = methodOwnerOrder(a.owner, b.owner);
+    if (owner_order != .eq) return owner_order;
+    return orderEnum(names.MethodNameId, a.method, b.method);
+}
+
+fn methodOwnerOrder(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwner) std.math.Order {
+    const a_tag = methodOwnerTagRank(a);
+    const b_tag = methodOwnerTagRank(b);
+    if (a_tag != b_tag) return orderU32(a_tag, b_tag);
+
+    return switch (a) {
+        .nominal => |a_nominal| switch (b) {
+            .nominal => |b_nominal| blk: {
+                const module_order = orderEnum(names.ModuleNameId, a_nominal.module_name, b_nominal.module_name);
+                if (module_order != .eq) break :blk module_order;
+                const type_order = orderEnum(names.TypeNameId, a_nominal.type_name, b_nominal.type_name);
+                if (type_order != .eq) break :blk type_order;
+                break :blk orderOptionalU32(a_nominal.source_decl, b_nominal.source_decl);
+            },
+            else => unreachable,
+        },
+        .source_decl => |a_decl| switch (b) {
+            .source_decl => |b_decl| blk: {
+                const module_order = orderEnum(names.ModuleNameId, a_decl.module_name, b_decl.module_name);
+                if (module_order != .eq) break :blk module_order;
+                break :blk orderU32(a_decl.statement, b_decl.statement);
+            },
+            else => unreachable,
+        },
+        .builtin => |a_builtin| switch (b) {
+            .builtin => |b_builtin| orderEnum(static_dispatch.BuiltinOwner, a_builtin, b_builtin),
+            else => unreachable,
+        },
+    };
+}
+
+fn methodOwnerTagRank(owner: static_dispatch.MethodOwner) u32 {
+    return switch (owner) {
+        .nominal => 0,
+        .source_decl => 1,
+        .builtin => 2,
+    };
+}
+
+fn orderOptionalU32(a: ?u32, b: ?u32) std.math.Order {
+    if (a) |a_value| {
+        return if (b) |b_value| orderU32(a_value, b_value) else .gt;
+    }
+    return if (b == null) .eq else .lt;
+}
+
+fn orderEnum(comptime T: type, a: T, b: T) std.math.Order {
+    return orderU32(@intFromEnum(a), @intFromEnum(b));
+}
+
+fn orderU32(a: u32, b: u32) std.math.Order {
+    if (a < b) return .lt;
+    if (a > b) return .gt;
+    return .eq;
+}
 
 const FunctionShape = struct {
     args: Type.Span,
@@ -206,6 +293,7 @@ const Builder = struct {
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
+    method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
 
@@ -225,6 +313,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
         self.inspect_defs.deinit();
         self.const_expr_cache.deinit();
@@ -266,6 +355,39 @@ const Builder = struct {
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
+    fn initMethodLookupIndex(self: *Builder) Allocator.Error!void {
+        var entries = std.ArrayList(MethodLookupIndexEntry).empty;
+        errdefer entries.deinit(self.allocator);
+
+        try self.appendMethodLookupIndexFromView(&entries, moduleView(self.root_view));
+        for (self.modules.imports, 0..) |imported, index| {
+            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            try self.appendMethodLookupIndexFromView(&entries, moduleView(imported));
+        }
+        for (self.modules.root.relation_modules, 0..) |relation, index| {
+            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            try self.appendMethodLookupIndexFromView(&entries, moduleView(relation));
+        }
+
+        std.mem.sort(MethodLookupIndexEntry, entries.items, {}, MethodLookupIndexEntry.lessThan);
+        assertMethodLookupIndexUnique(entries.items);
+
+        self.method_lookup_index = try entries.toOwnedSlice(self.allocator);
+    }
+
+    fn appendMethodLookupIndexFromView(self: *Builder, entries: *std.ArrayList(MethodLookupIndexEntry), view: ModuleView) Allocator.Error!void {
+        for (view.method_registry.entries) |entry| {
+            try entries.append(self.allocator, .{
+                .dispatch = .{
+                    .owner = try self.methodOwnerInProgramNames(view, entry.key.owner),
+                    .method = try self.methodName(view, entry.key.method),
+                },
+                .view = view,
+                .target = entry.target,
+            });
+        }
+    }
+
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
         for (view.hosted_procs.procs) |proc| {
             try entries.append(self.allocator, .{
@@ -296,6 +418,25 @@ const Builder = struct {
 
     fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
         return self.program.names.internTypeName(view.names.typeNameText(id));
+    }
+
+    fn methodName(self: *Builder, view: ModuleView, id: names.MethodNameId) Allocator.Error!names.MethodNameId {
+        return self.program.names.internMethodName(view.names.methodNameText(id));
+    }
+
+    fn methodOwnerInProgramNames(self: *Builder, view: ModuleView, owner: static_dispatch.MethodOwner) Allocator.Error!static_dispatch.MethodOwner {
+        return switch (owner) {
+            .builtin => |builtin| .{ .builtin = builtin },
+            .source_decl => |decl| .{ .source_decl = .{
+                .module_name = try self.moduleName(view, decl.module_name),
+                .statement = decl.statement,
+            } },
+            .nominal => |nominal| .{ .nominal = .{
+                .module_name = try self.moduleName(view, nominal.module_name),
+                .type_name = try self.typeName(view, nominal.type_name),
+                .source_decl = nominal.source_decl,
+            } },
+        };
     }
 
     fn recordFieldName(self: *Builder, view: ModuleView, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
@@ -1176,17 +1317,26 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) ?MethodLookup {
-        var found: ?MethodLookup = null;
-        self.lookupMethodTargetInView(moduleView(self.root_view), owner, method_name, &found);
-        for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
-            self.lookupMethodTargetInView(moduleView(imported), owner, method_name, &found);
+        const method = self.program.names.lookupMethodName(method_name) orelse return null;
+        return self.lookupMethodTargetInIndex(.{ .owner = owner, .method = method });
+    }
+
+    fn lookupMethodTargetInIndex(
+        self: *Builder,
+        dispatch: MethodDispatch,
+    ) ?MethodLookup {
+        var low: usize = 0;
+        var high: usize = self.method_lookup_index.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const entry = self.method_lookup_index[mid];
+            switch (methodDispatchOrder(entry.dispatch, dispatch)) {
+                .eq => return .{ .view = entry.view, .target = entry.target },
+                .lt => low = mid + 1,
+                .gt => high = mid,
+            }
         }
-        for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
-            self.lookupMethodTargetInView(moduleView(relation), owner, method_name, &found);
-        }
-        return found;
+        return null;
     }
 
     fn importModuleAlreadyScanned(self: *Builder, module_id: checked.ModuleId, import_index: usize) bool {
@@ -1206,42 +1356,6 @@ const Builder = struct {
             if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return true;
         }
         return false;
-    }
-
-    fn lookupMethodTargetInView(
-        self: *Builder,
-        view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_name: []const u8,
-        found: *?MethodLookup,
-    ) void {
-        const view_owner = self.methodOwnerForView(owner, view) orelse return;
-        const view_method = view.names.lookupMethodName(method_name) orelse return;
-        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return;
-        if (found.* != null) Common.invariant("checked method registries contain duplicate dispatch targets");
-        found.* = .{ .view = view, .target = target };
-    }
-
-    fn methodOwnerForView(self: *Builder, owner: static_dispatch.MethodOwner, view: ModuleView) ?static_dispatch.MethodOwner {
-        return switch (owner) {
-            .builtin => |builtin| .{ .builtin = builtin },
-            .source_decl => |decl| blk: {
-                const module_name = view.names.lookupModuleName(self.program.names.moduleNameText(decl.module_name)) orelse return null;
-                break :blk .{ .source_decl = .{
-                    .module_name = module_name,
-                    .statement = decl.statement,
-                } };
-            },
-            .nominal => |nominal| blk: {
-                const module_name = view.names.lookupModuleName(self.program.names.moduleNameText(nominal.module_name)) orelse return null;
-                const type_name = view.names.lookupTypeName(self.program.names.typeNameText(nominal.type_name)) orelse return null;
-                break :blk .{ .nominal = .{
-                    .module_name = module_name,
-                    .type_name = type_name,
-                    .source_decl = nominal.source_decl,
-                } };
-            },
-        };
     }
 
     fn fnDefForProcedureUse(self: *Builder, source_ty_view: ModuleView, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
@@ -2605,7 +2719,8 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (tags) |tag| {
-            try self.constrainTypeSpanToMono(tag.args, self.monoTagArgs(mono_ty, tag.name), conflict_message);
+            const mono_args = self.monoTagArgs(mono_ty, tag.name);
+            try self.constrainTypeSpanToMono(tag.args, mono_args, conflict_message);
         }
     }
 
@@ -3550,7 +3665,16 @@ const BodyContext = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!void {
-        const source = self.nominalInstantiationSource(nominal.representation) orelse return;
+        if (nominal.args.len != mono_args.len) {
+            Common.invariant("checked nominal type argument arity differed from monotype named argument arity");
+        }
+        try self.constrainTypeSpanToMono(
+            nominal.args,
+            mono_args,
+            "checked nominal type argument conflicted with an existing Monotype constraint",
+        );
+
+        const source = self.nominalInstantiationSource(nominal) orelse return;
         if (source.declaration.formal_args.len != mono_args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
@@ -3566,17 +3690,18 @@ const BodyContext = struct {
 
     fn nominalInstantiationSource(
         self: *BodyContext,
-        representation: anytype,
+        nominal: checked.CheckedNominalType,
     ) ?NominalInstantiationSource {
-        return switch (representation) {
+        return switch (nominal.representation) {
             .local_declaration => |id| .{
                 .view = self.view,
                 .declaration = self.view.types.nominalDeclarationById(id),
             },
-            .imported_declaration,
-            .builtin,
             .local_box_payload_capability,
+            .imported_declaration,
             .imported_box_payload_capability,
+            => null,
+            .builtin,
             .opaque_without_backing,
             => null,
         };

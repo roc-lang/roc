@@ -272,20 +272,12 @@ fn localProcedureTargetForMethodBinding(
 
     if (!localProcedureExpr(module, decl.expr)) return null;
 
+    const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
     const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic(
                 "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
                 .{@intFromEnum(decl.pattern)},
-            );
-        }
-        unreachable;
-    };
-    const expr = checked_bodies.exprIdForSource(decl.expr) orelse {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
-                "checked static dispatch registry invariant violated: local method expression {d} has no checked expression id",
-                .{@intFromEnum(decl.expr)},
             );
         }
         unreachable;
@@ -532,7 +524,7 @@ pub const StaticDispatchPlanTable = struct {
         var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
         errdefer iterator_for_by_node.deinit(allocator);
 
-        var constraint_index = try StaticDispatchConstraintIndex.fromStore(allocator, module.typeStoreConst());
+        var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, checked_bodies);
         defer constraint_index.deinit(allocator);
 
         var node_idx: u32 = 0;
@@ -547,7 +539,7 @@ pub const StaticDispatchPlanTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const checked_expr = checkedExprIdForSource(checked_bodies, expr_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             const expr = module.expr(expr_idx);
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
@@ -609,7 +601,7 @@ pub const StaticDispatchPlanTable = struct {
         for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const checked_expr = checkedExprIdForSource(checked_bodies, expr_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
                 .num_from_numeral,
                 .typed_num_from_numeral,
@@ -662,6 +654,14 @@ pub const StaticDispatchPlanTable = struct {
             const for_node_idx: CIR.Node.Idx = @enumFromInt(for_plan.node_idx);
             const pattern_idx: CIR.Pattern.Idx = @enumFromInt(for_plan.pattern_idx);
             const iterable_idx: CIR.Expr.Idx = @enumFromInt(for_plan.iterable_idx);
+
+            if (checked_bodies.exprIdForSource(iterable_idx) == null) continue;
+            const for_has_checked_node = switch (module.nodeTag(for_node_idx)) {
+                .expr_for => checked_bodies.exprIdForSource(@enumFromInt(for_plan.node_idx)) != null,
+                .statement_for => checked_bodies.statementIdForSource(@enumFromInt(for_plan.node_idx)) != null,
+                else => false,
+            };
+            if (!for_has_checked_node) continue;
 
             const iterable_expr = checkedExprIdForSource(checked_bodies, iterable_idx);
             const item_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.patternType(pattern_idx));
@@ -761,16 +761,54 @@ const StaticDispatchConstraintIndex = struct {
     constraints: []const types.StaticDispatchConstraint = &.{},
     by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .{},
 
-    fn fromStore(allocator: Allocator, store: *const types.Store) Allocator.Error!StaticDispatchConstraintIndex {
+    fn fromModule(allocator: Allocator, module: TypedCIR.Module, checked_bodies: anytype) Allocator.Error!StaticDispatchConstraintIndex {
+        const store = module.typeStoreConst();
+        var live_fn_vars: std.AutoHashMapUnmanaged(Var, void) = .{};
+        defer live_fn_vars.deinit(allocator);
+
+        var node_idx: u32 = 0;
+        while (node_idx < module.nodeCount()) : (node_idx += 1) {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+            const constraint_fn_var: ?Var = switch (module.nodeTag(@enumFromInt(node_idx))) {
+                .expr_dispatch_call => module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var,
+                .expr_type_dispatch_call => module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var,
+                .expr_method_eq => module.expr(expr_idx).data.e_method_eq.constraint_fn_var,
+                else => null,
+            };
+            if (constraint_fn_var) |fn_var| {
+                if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
+                try live_fn_vars.put(allocator, fn_var, {});
+            }
+        }
+
         var index = StaticDispatchConstraintIndex{
             .constraints = store.static_dispatch_constraints.items.items,
         };
         errdefer index.deinit(allocator);
 
-        try index.by_fn_var.ensureTotalCapacity(allocator, @intCast(index.constraints.len));
+        try index.by_fn_var.ensureTotalCapacity(allocator, @intCast(live_fn_vars.count()));
         for (index.constraints, 0..) |constraint, i| {
+            if (!live_fn_vars.contains(constraint.fn_var)) continue;
             const entry = try index.by_fn_var.getOrPut(allocator, constraint.fn_var);
             if (entry.found_existing) {
+                const existing = index.constraints[entry.value_ptr.*];
+                if (staticDispatchConstraintsEquivalent(existing, constraint)) continue;
+                if (@import("builtin").mode == .Debug) {
+                    std.debug.panic(
+                        "checked static dispatch constraint invariant violated: duplicate fn_var {d}; existing idx={d} name={s} origin={s} negated={} new idx={d} name={s} origin={s} negated={}",
+                        .{
+                            @intFromEnum(constraint.fn_var),
+                            entry.value_ptr.*,
+                            module.identStoreConst().getText(existing.fn_name),
+                            @tagName(existing.origin),
+                            existing.binop_negated,
+                            i,
+                            module.identStoreConst().getText(constraint.fn_name),
+                            @tagName(constraint.origin),
+                            constraint.binop_negated,
+                        },
+                    );
+                }
                 continue;
             }
             entry.value_ptr.* = @intCast(i);
@@ -789,6 +827,14 @@ const StaticDispatchConstraintIndex = struct {
         self.* = .{};
     }
 };
+
+fn staticDispatchConstraintsEquivalent(a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
+    return a.fn_name == b.fn_name and
+        a.fn_var == b.fn_var and
+        a.origin == b.origin and
+        a.binop_negated == b.binop_negated and
+        std.meta.eql(a.num_literal, b.num_literal);
+}
 
 fn staticDispatchResultModeForCheckedValueCall(
     allocator: Allocator,

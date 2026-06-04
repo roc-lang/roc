@@ -686,6 +686,12 @@ pub fn fromF64(f: f64) ?RocDec {
 
 /// Represents an import statement in a module
 pub const Import = struct {
+    pub const compiler_builtin_import_name = "\x00compiler.Builtin";
+
+    pub fn isCompilerBuiltinImportName(module_name: []const u8) bool {
+        return std.mem.eql(u8, module_name, compiler_builtin_import_name);
+    }
+
     pub const Idx = enum(u32) {
         first = 0,
         _,
@@ -887,7 +893,12 @@ pub const Import = struct {
             var name_to_idx = std.StringHashMap(u32).init(env.gpa);
             defer name_to_idx.deinit();
             name_to_idx.ensureTotalCapacity(@intCast(available_modules.len)) catch return;
+            var compiler_builtin_module_idx: ?u32 = null;
             for (available_modules, 0..) |module_env, module_idx| {
+                if (module_env.module_role == .builtin and compiler_builtin_module_idx == null) {
+                    compiler_builtin_module_idx = @intCast(module_idx);
+                    continue;
+                }
                 const gop = name_to_idx.getOrPutAssumeCapacity(module_env.module_name);
                 if (!gop.found_existing) gop.value_ptr.* = @intCast(module_idx);
             }
@@ -898,6 +909,13 @@ pub const Import = struct {
                 if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
+
+                if (Import.isCompilerBuiltinImportName(import_name)) {
+                    if (compiler_builtin_module_idx) |module_idx| {
+                        self.setResolvedModule(import_idx, module_idx);
+                    }
+                    continue;
+                }
 
                 if (name_to_idx.get(import_name)) |module_idx| {
                     self.setResolvedModule(import_idx, module_idx);

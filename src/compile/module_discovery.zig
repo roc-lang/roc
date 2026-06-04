@@ -13,7 +13,7 @@ const AST = parse.AST;
 /// Returns module names that:
 /// 1. Have no qualifier (not like "pf.Stdout")
 /// 2. Are uppercase identifiers (module names start with uppercase)
-/// 3. Are not "Builtin" (always available)
+/// 3. Are not compiler-owned package-header Builtin auto-imports
 ///
 /// In addition to explicit `import` statements, the upper-cased entries in a
 /// `package [Mod1, Mod2, ...] {}` header are treated as auto-imports.
@@ -38,12 +38,12 @@ pub fn extractImportsFromDeclIndex(
 
     // Modules listed in a `package [...]` header are auto-imported.
     for (parse_ast.decl_index.package_header_modules.items) |package_module| {
-        try appendModuleName(gpa, &result, parse_ast.env.getIdent(package_module.module_name));
+        try appendModuleName(gpa, &result, parse_ast.env.getIdent(package_module.module_name), false);
     }
 
     for (parse_ast.decl_index.imports.items) |import| {
         if (import.qualifier != null) continue;
-        try appendModuleName(gpa, &result, stripLeadingDot(parse_ast.env.getIdent(import.module_name)));
+        try appendModuleName(gpa, &result, stripLeadingDot(parse_ast.env.getIdent(import.module_name)), true);
     }
 
     return result.toOwnedSlice(gpa);
@@ -53,9 +53,9 @@ fn appendModuleName(
     gpa: Allocator,
     result: *std.ArrayList([]const u8),
     module_name: []const u8,
+    allow_builtin_source_import: bool,
 ) !void {
-    // Skip "Builtin" - always available
-    if (std.mem.eql(u8, module_name, "Builtin")) return;
+    if (!allow_builtin_source_import and std.mem.eql(u8, module_name, "Builtin")) return;
 
     // Check if it looks like a module name (starts with uppercase)
     if (module_name.len == 0) return;
@@ -118,6 +118,7 @@ test "module discovery consumes parser import inventory" {
         \\package [Auto, Builtin] {}
         \\import Foo
         \\import Foo
+        \\import Builtin
         \\import pf.Stdout
         \\import lower
         \\
@@ -133,9 +134,10 @@ test "module discovery consumes parser import inventory" {
         for (local_imports) |item| gpa.free(item);
         gpa.free(local_imports);
     }
-    try std.testing.expectEqual(@as(usize, 2), local_imports.len);
+    try std.testing.expectEqual(@as(usize, 3), local_imports.len);
     try std.testing.expectEqualStrings("Auto", local_imports[0]);
     try std.testing.expectEqualStrings("Foo", local_imports[1]);
+    try std.testing.expectEqualStrings("Builtin", local_imports[2]);
 
     const qualified_imports = try extractQualifiedImportsFromDeclIndex(ast, gpa);
     defer {

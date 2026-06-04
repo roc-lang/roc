@@ -176,12 +176,17 @@ pub const Store = struct {
         return self.slots.backing.len();
     }
 
-    /// Return true when checking left any type descriptor in the explicit error
-    /// state. Post-check artifacts are only valid for modules whose checked type
-    /// store contains no error descriptors.
+    /// Return true when checking left any live type variable in the explicit
+    /// error state. Descriptors not referenced by a current slot are rollback
+    /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.descs.backing.field(.content)) |content| {
-            if (content == .err) return true;
+        for (self.slots.backing.items.items) |slot| {
+            switch (slot) {
+                .root => |desc_idx| {
+                    if (self.descs.get(desc_idx).content == .err) return true;
+                },
+                .redirect => {},
+            }
         }
         return false;
     }

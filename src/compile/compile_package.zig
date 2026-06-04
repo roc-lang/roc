@@ -1243,8 +1243,7 @@ pub const PackageEnv = struct {
         for (env.imports.imports.items.items[0..import_count]) |str_idx| {
             const mod_name = env.getString(str_idx);
 
-            // Skip "Builtin" - it's handled via the precompiled module in module_envs_map
-            if (std.mem.eql(u8, mod_name, "Builtin")) {
+            if (can.CIR.Import.isCompilerBuiltinImportName(mod_name)) {
                 continue;
             }
 
@@ -1518,8 +1517,7 @@ pub const PackageEnv = struct {
         }
 
         for (sibling_imports) |sibling_name| {
-            // Skip Builtin and self
-            if (std.mem.eql(u8, sibling_name, "Builtin")) continue;
+            // Skip self
             if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
 
             const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
@@ -1701,7 +1699,6 @@ pub const PackageEnv = struct {
         if (moduleHasArtifactBlockingCanonicalizeDiagnostics(env) or
             try moduleHasDuplicateTopLevelValueDefs(check_alloc, env) or
             checkerHasArtifactBlockingProblems(&checker) or
-            env.types.containsErrContent() or
             !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
         {
             return .{
@@ -1764,8 +1761,7 @@ pub const PackageEnv = struct {
     ) !CheckedArtifact.CheckedModuleArtifact {
         var imported_source_count: usize = 0;
         for (imported_envs) |imported_env| {
-            if (std.mem.eql(u8, env.module_name, "Builtin") and
-                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
             imported_source_count += 1;
         }
 
@@ -1773,8 +1769,7 @@ pub const PackageEnv = struct {
         defer gpa.free(source_modules);
         var source_index: usize = 0;
         for (imported_envs) |imported_env| {
-            if (std.mem.eql(u8, env.module_name, "Builtin") and
-                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
             source_modules[source_index] = .{ .precompiled = @constCast(imported_env) };
             source_index += 1;
         }
@@ -1826,8 +1821,7 @@ pub const PackageEnv = struct {
             const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
             const import_name = env.getString(str_idx);
 
-            // Skip Builtin - already added above
-            if (std.mem.eql(u8, import_name, "Builtin")) {
+            if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
                 env.imports.setResolvedModule(import_idx, 0);
                 continue;
             }

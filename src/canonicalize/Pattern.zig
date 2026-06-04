@@ -366,7 +366,7 @@ pub const Pattern = union(enum) {
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
-                if (std.mem.eql(u8, module_name, "Builtin")) {
+                if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("builtin");
                     const field_attrs = tree.beginNode();

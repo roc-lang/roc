@@ -1658,6 +1658,19 @@ pub const CheckedTypeStoreView = struct {
         return null;
     }
 
+    pub fn nominalDeclarationBySource(
+        self: CheckedTypeStoreView,
+        module_name: canonical.ModuleNameId,
+        type_name: canonical.TypeNameId,
+        source_decl: ?u32,
+    ) ?CheckedNominalDeclaration {
+        return self.nominalDeclaration(.{
+            .module_name = module_name,
+            .type_name = type_name,
+            .source_decl = source_decl,
+        });
+    }
+
     pub fn nominalDeclarationById(
         self: CheckedTypeStoreView,
         id: CheckedNominalDeclarationId,
@@ -1923,6 +1936,7 @@ pub const CheckedTypeStore = struct {
         names: *canonical.CanonicalNameStore,
         imports: []const PublishImportArtifact,
         available: []const ImportedModuleView,
+        source_nodes: *const CheckedSourceNodes,
     ) Allocator.Error!CheckedTypePublication {
         const import_views = CheckedImportViews{
             .direct = imports,
@@ -1944,7 +1958,7 @@ pub const CheckedTypeStore = struct {
         errdefer nominal_declarations.deinit(allocator);
         var active = std.AutoHashMap(Var, CheckedTypeId).init(allocator);
         defer active.deinit();
-        var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module);
+        var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
@@ -1953,7 +1967,7 @@ pub const CheckedTypeStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag)) {
+            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.exprType(expr_idx));
                 switch (module.expr(expr_idx).data) {
@@ -1962,7 +1976,7 @@ pub const CheckedTypeStore = struct {
                     },
                     else => {},
                 }
-            } else if (isPatternNodeTag(tag)) {
+            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
                 _ = try appendCheckedTypeRoot(
                     allocator,
@@ -1974,27 +1988,30 @@ pub const CheckedTypeStore = struct {
                     &active,
                     pattern_source_var,
                 );
-            } else if (isStatementNodeTag(tag)) {
-                const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
-                switch (module.getStatement(statement_idx)) {
-                    .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
-                    .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
-                        allocator,
-                        module,
-                        names,
-                        import_views,
-                        &nominal_declarations,
-                        &roots,
-                        &payloads,
-                        &active,
-                        &local_type_declarations,
-                        statement_idx,
-                        nominal.header,
-                        nominal.anno,
-                        nominal.is_opaque,
-                    ),
-                    else => {},
-                }
+            }
+        }
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            if (!source_nodes.hasStatement(statement_idx)) continue;
+            switch (module.getStatement(statement_idx)) {
+                .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
+                .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
+                    allocator,
+                    module,
+                    names,
+                    import_views,
+                    &nominal_declarations,
+                    &roots,
+                    &payloads,
+                    &active,
+                    &local_type_declarations,
+                    statement_idx,
+                    nominal.header,
+                    nominal.anno,
+                    nominal.is_opaque,
+                ),
+                else => {},
             }
         }
 
@@ -2018,9 +2035,9 @@ pub const CheckedTypeStore = struct {
             }
         }
 
-        try appendStaticDispatchTypeRoots(allocator, module, names, import_views, &roots, &payloads, &active);
+        try appendStaticDispatchTypeRoots(allocator, module, names, import_views, source_nodes, &roots, &payloads, &active);
 
-        for (module.allDefs()) |def_idx| {
+        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.defType(def_idx));
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
@@ -2623,16 +2640,17 @@ const LocalTypeDeclarationIndex = struct {
 
     finalized_by_relative_name: std.AutoHashMap(Ident.Idx, FinalizedRelativeName),
 
-    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalTypeDeclarationIndex {
+    fn init(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        source_nodes: *const CheckedSourceNodes,
+    ) Allocator.Error!LocalTypeDeclarationIndex {
         var finalized_by_relative_name = std.AutoHashMap(Ident.Idx, FinalizedRelativeName).init(allocator);
         errdefer finalized_by_relative_name.deinit();
 
-        var node_idx: u32 = 0;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const node: CIR.Node.Idx = @enumFromInt(node_idx);
-            if (!isStatementNodeTag(module.nodeTag(node))) continue;
-
-            const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            if (!source_nodes.hasStatement(statement_idx)) continue;
             const statement = module.getStatement(statement_idx);
             const header_idx, const anno_idx = switch (statement) {
                 .s_alias_decl => |alias| .{ alias.header, alias.anno },
@@ -3461,6 +3479,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         const slot: u32 = @intCast(self.identity_variables.count());
         try self.identity_variables.put(root, slot);
         self.writeTag(tag);
+        self.writeU32(@intFromEnum(root));
         self.writeU32(slot);
         self.writeBool(name != null);
         if (name) |text| self.writeBytes(text);
@@ -3868,6 +3887,7 @@ fn appendStaticDispatchTypeRoots(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
+    source_nodes: *const CheckedSourceNodes,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3883,7 +3903,9 @@ fn appendStaticDispatchTypeRoots(
             else => continue,
         }
 
-        const expr = module.expr(@enumFromInt(node_idx));
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+        if (!source_nodes.hasExpr(expr_idx)) continue;
+        const expr = module.expr(expr_idx);
         switch (expr.data) {
             .e_dispatch_call => |dispatch_call| {
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(dispatch_call.receiver));
@@ -3903,11 +3925,13 @@ fn appendStaticDispatchTypeRoots(
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
+        if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.iter_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.next_fn_var));
     }
 
     for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
+        if (!source_nodes.hasExpr(@enumFromInt(plan.node_idx))) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
     }
@@ -4623,11 +4647,8 @@ fn localNominalDeclarationIdForStatement(
     statement_idx: CIR.Statement.Idx,
 ) CheckedNominalDeclarationId {
     var next_id: u32 = 0;
-    var node_idx: u32 = 0;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        const node: CIR.Node.Idx = @enumFromInt(node_idx);
-        if (!isStatementNodeTag(module.nodeTag(node))) continue;
-        const candidate: CIR.Statement.Idx = @enumFromInt(node_idx);
+    const module_env = module.moduleEnvConst();
+    for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
         const nominal = switch (module.getStatement(candidate)) {
             .s_nominal_decl => |nominal| nominal,
             else => continue,
@@ -5127,6 +5148,370 @@ fn checkedSourceNodeIdFromLen(len: usize) Allocator.Error!u32 {
     return @intCast(len);
 }
 
+const CheckedSourceNodeRef = union(enum) {
+    expr: CIR.Expr.Idx,
+    pattern: CIR.Pattern.Idx,
+    statement: CIR.Statement.Idx,
+};
+
+const CheckedSourceNodes = struct {
+    allocator: Allocator = undefined,
+    exprs: []bool = &.{},
+    patterns: []bool = &.{},
+    statements: []bool = &.{},
+
+    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceNodes {
+        const node_count = module.nodeCount();
+        const exprs = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(exprs);
+        const patterns = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(patterns);
+        const statements = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(statements);
+        @memset(exprs, false);
+        @memset(patterns, false);
+        @memset(statements, false);
+
+        var self = CheckedSourceNodes{
+            .allocator = allocator,
+            .exprs = exprs,
+            .patterns = patterns,
+            .statements = statements,
+        };
+
+        var work = std.ArrayList(CheckedSourceNodeRef).empty;
+        defer work.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+            const def = module.def(def_idx);
+            try self.markPattern(def.pattern.idx, &work);
+            try self.markExpr(def.expr.idx, &work);
+        }
+
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            try self.markStatement(statement_idx, &work);
+        }
+
+        var next: usize = 0;
+        while (next < work.items.len) : (next += 1) {
+            switch (work.items[next]) {
+                .expr => |expr_idx| try self.markExprChildren(module, expr_idx, &work),
+                .pattern => |pattern_idx| try self.markPatternChildren(module, pattern_idx, &work),
+                .statement => |statement_idx| try self.markStatementChildren(module, statement_idx, &work),
+            }
+        }
+
+        return self;
+    }
+
+    fn hasExpr(self: *const CheckedSourceNodes, expr_idx: CIR.Expr.Idx) bool {
+        const raw = @intFromEnum(expr_idx);
+        return raw < self.exprs.len and self.exprs[raw];
+    }
+
+    fn hasPattern(self: *const CheckedSourceNodes, pattern_idx: CIR.Pattern.Idx) bool {
+        const raw = @intFromEnum(pattern_idx);
+        return raw < self.patterns.len and self.patterns[raw];
+    }
+
+    fn hasStatement(self: *const CheckedSourceNodes, statement_idx: CIR.Statement.Idx) bool {
+        const raw = @intFromEnum(statement_idx);
+        return raw < self.statements.len and self.statements[raw];
+    }
+
+    fn hasRawLoop(self: *const CheckedSourceNodes, raw_node: u32) bool {
+        const raw: usize = raw_node;
+        return raw < self.exprs.len and (self.exprs[raw] or self.statements[raw]);
+    }
+
+    fn markExpr(
+        self: *CheckedSourceNodes,
+        expr_idx: CIR.Expr.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(expr_idx);
+        if (raw >= self.exprs.len) checkedArtifactInvariant("checked source expression {d} is out of range", .{raw});
+        if (self.exprs[raw]) return;
+        self.exprs[raw] = true;
+        try work.append(self.allocator, .{ .expr = expr_idx });
+    }
+
+    fn markPattern(
+        self: *CheckedSourceNodes,
+        pattern_idx: CIR.Pattern.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(pattern_idx);
+        if (raw >= self.patterns.len) checkedArtifactInvariant("checked source pattern {d} is out of range", .{raw});
+        if (self.patterns[raw]) return;
+        self.patterns[raw] = true;
+        try work.append(self.allocator, .{ .pattern = pattern_idx });
+    }
+
+    fn markStatement(
+        self: *CheckedSourceNodes,
+        statement_idx: CIR.Statement.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(statement_idx);
+        if (raw >= self.statements.len) checkedArtifactInvariant("checked source statement {d} is out of range", .{raw});
+        if (self.statements[raw]) return;
+        self.statements[raw] = true;
+        try work.append(self.allocator, .{ .statement = statement_idx });
+    }
+
+    fn markExprChildren(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        expr_idx: CIR.Expr.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        switch (module.expr(expr_idx).data) {
+            .e_str => |str| try self.markExprSpan(module, str.span, work),
+            .e_list => |list| try self.markExprSpan(module, list.elems, work),
+            .e_tuple => |tuple| try self.markExprSpan(module, tuple.elems, work),
+            .e_match => |match| {
+                try self.markExpr(match.cond, work);
+                for (module.matchBranchSlice(match.branches)) |branch_idx| {
+                    const branch = module.getMatchBranch(branch_idx);
+                    for (module.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                        try self.markPattern(module.getMatchBranchPattern(branch_pattern_idx).pattern, work);
+                    }
+                    if (branch.guard) |guard| try self.markExpr(guard, work);
+                    try self.markExpr(branch.value, work);
+                }
+            },
+            .e_if => |if_| {
+                for (module.sliceIfBranches(if_.branches)) |branch_idx| {
+                    const branch = module.getIfBranch(branch_idx);
+                    try self.markExpr(branch.cond, work);
+                    try self.markExpr(branch.body, work);
+                }
+                try self.markExpr(if_.final_else, work);
+            },
+            .e_call => |call| {
+                try self.markExpr(call.func, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_record => |record| {
+                for (module.sliceRecordFields(record.fields)) |field_idx| {
+                    try self.markExpr(module.getRecordField(field_idx).value, work);
+                }
+                if (record.ext) |ext| try self.markExpr(ext, work);
+            },
+            .e_block => |block| {
+                try self.markStatementSpan(module, block.stmts, work);
+                try self.markExpr(block.final_expr, work);
+            },
+            .e_tag => |tag| try self.markExprSpan(module, tag.args, work),
+            .e_nominal => |nominal| try self.markExpr(nominal.backing_expr, work),
+            .e_nominal_external => |nominal| try self.markExpr(nominal.backing_expr, work),
+            .e_closure => |closure| {
+                try self.markExpr(closure.lambda_idx, work);
+                for (module.moduleEnvConst().store.sliceCaptures(closure.captures)) |capture_idx| {
+                    const capture = module.moduleEnvConst().store.getCapture(capture_idx);
+                    try self.markPattern(capture.pattern_idx, work);
+                }
+            },
+            .e_lambda => |lambda| {
+                try self.markPatternSpan(module, lambda.args, work);
+                try self.markExpr(lambda.body, work);
+            },
+            .e_binop => |binop| {
+                try self.markExpr(binop.lhs, work);
+                try self.markExpr(binop.rhs, work);
+            },
+            .e_unary_minus => |unary| try self.markExpr(unary.expr, work),
+            .e_unary_not => |unary| try self.markExpr(unary.expr, work),
+            .e_field_access => |field| try self.markExpr(field.receiver, work),
+            .e_method_call => |call| {
+                try self.markExpr(call.receiver, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_dispatch_call => |call| {
+                try self.markExpr(call.receiver, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_structural_eq => |eq| {
+                try self.markExpr(eq.lhs, work);
+                try self.markExpr(eq.rhs, work);
+            },
+            .e_method_eq => |eq| {
+                try self.markExpr(eq.lhs, work);
+                try self.markExpr(eq.rhs, work);
+            },
+            .e_type_method_call => |call| {
+                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_type_dispatch_call => |call| {
+                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_tuple_access => |access| try self.markExpr(access.tuple, work),
+            .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .e_expect => |expect| try self.markExpr(expect.body, work),
+            .e_return => |ret| {
+                try self.markExpr(ret.expr, work);
+                try self.markExpr(ret.lambda, work);
+            },
+            .e_for => |for_| {
+                try self.markPattern(for_.patt, work);
+                try self.markExpr(for_.expr, work);
+                try self.markExpr(for_.body, work);
+            },
+            .e_hosted_lambda => |hosted| try self.markPatternSpan(module, hosted.args, work),
+            .e_run_low_level => |run| try self.markExprSpan(module, run.args, work),
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            => {},
+        }
+    }
+
+    fn markPatternChildren(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        pattern_idx: CIR.Pattern.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        switch (module.pattern(pattern_idx).data) {
+            .as => |as| try self.markPattern(as.pattern, work),
+            .applied_tag => |tag| try self.markPatternSpan(module, tag.args, work),
+            .nominal => |nominal| try self.markPattern(nominal.backing_pattern, work),
+            .nominal_external => |nominal| try self.markPattern(nominal.backing_pattern, work),
+            .record_destructure => |record| {
+                for (module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    try self.markPattern(module.getRecordDestruct(destruct_idx).kind.toPatternIdx(), work);
+                }
+            },
+            .list => |list| {
+                try self.markPatternSpan(module, list.patterns, work);
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern| try self.markPattern(rest_pattern, work);
+                }
+            },
+            .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, work),
+            .assign,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn markStatementChildren(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        statement_idx: CIR.Statement.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        switch (module.getStatement(statement_idx)) {
+            .s_decl => |decl| {
+                try self.markPattern(decl.pattern, work);
+                try self.markExpr(decl.expr, work);
+            },
+            .s_var => |var_| {
+                try self.markPattern(var_.pattern_idx, work);
+                try self.markExpr(var_.expr, work);
+            },
+            .s_reassign => |reassign| {
+                try self.markPattern(reassign.pattern_idx, work);
+                try self.markExpr(reassign.expr, work);
+            },
+            .s_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .s_expr => |expr| try self.markExpr(expr.expr, work),
+            .s_expect => |expect| try self.markExpr(expect.body, work),
+            .s_for => |for_| {
+                try self.markPattern(for_.patt, work);
+                try self.markExpr(for_.expr, work);
+                try self.markExpr(for_.body, work);
+            },
+            .s_while => |while_| {
+                try self.markExpr(while_.cond, work);
+                try self.markExpr(while_.body, work);
+            },
+            .s_return => |ret| {
+                try self.markExpr(ret.expr, work);
+                try self.markExpr(ret.lambda, work);
+            },
+            .s_crash,
+            .s_break,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
+
+    fn markExprSpan(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        span: CIR.Expr.Span,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        for (module.sliceExpr(span)) |expr_idx| {
+            try self.markExpr(expr_idx, work);
+        }
+    }
+
+    fn markPatternSpan(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        span: CIR.Pattern.Span,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        for (module.slicePatterns(span)) |pattern_idx| {
+            try self.markPattern(pattern_idx, work);
+        }
+    }
+
+    fn markStatementSpan(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        span: CIR.Statement.Span,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        for (module.sliceStatements(span)) |statement_idx| {
+            try self.markStatement(statement_idx, work);
+        }
+    }
+
+    fn deinit(self: *CheckedSourceNodes, allocator: Allocator) void {
+        allocator.free(self.statements);
+        allocator.free(self.patterns);
+        allocator.free(self.exprs);
+        self.* = .{};
+    }
+};
+
 /// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
     bodies: []CheckedBody = &.{},
@@ -5145,6 +5530,7 @@ pub const CheckedBodyStore = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
+        source_nodes: *const CheckedSourceNodes,
     ) Allocator.Error!CheckedBodyStore {
         var exprs = std.ArrayList(CheckedExpr).empty;
         errdefer exprs.deinit(allocator);
@@ -5172,7 +5558,7 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag)) {
+            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                     if (builtin.mode == .Debug) {
@@ -5188,7 +5574,7 @@ pub const CheckedBodyStore = struct {
                     .data = .pending,
                 });
                 try source_node_map.putExpr(node_idx, id);
-            } else if (isPatternNodeTag(tag)) {
+            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
                     if (builtin.mode == .Debug) {
@@ -5204,7 +5590,7 @@ pub const CheckedBodyStore = struct {
                     .data = .pending,
                 });
                 try source_node_map.putPattern(node_idx, id);
-            } else if (isStatementNodeTag(tag)) {
+            } else if (isStatementNodeTag(tag) and source_nodes.hasStatement(@enumFromInt(node_idx))) {
                 const id: CheckedStatementId = @enumFromInt(try checkedSourceNodeIdFromLen(statements.items.len));
                 try statements.append(allocator, .{
                     .id = id,
@@ -5242,13 +5628,13 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag)) {
+            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
                 exprs.items[@intFromEnum(id)].data = try copier.copyExprData(@enumFromInt(node_idx));
-            } else if (isPatternNodeTag(tag)) {
+            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@intFromEnum(id)].data = try copier.copyPatternData(@enumFromInt(node_idx));
-            } else if (isStatementNodeTag(tag)) {
+            } else if (isStatementNodeTag(tag) and source_nodes.hasStatement(@enumFromInt(node_idx))) {
                 const id = source_node_map.statementAtRawNode(node_idx) orelse unreachable;
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
@@ -5340,6 +5726,10 @@ pub const CheckedBodyStore = struct {
 
     pub fn patternIdForSource(self: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) ?CheckedPatternId {
         return self.source_node_map.pattern(pattern);
+    }
+
+    pub fn statementIdForSource(self: *const CheckedBodyStore, statement: CIR.Statement.Idx) ?CheckedStatementId {
+        return self.source_node_map.statement(statement);
     }
 
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
@@ -7597,15 +7987,7 @@ pub const ResolvedValueRefTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: resolved value ref expression {d} has no checked expression id",
-                        .{@intFromEnum(expr_idx)},
-                    );
-                }
-                unreachable;
-            };
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -8040,7 +8422,8 @@ const TopLevelDefPatternIndex = struct {
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!TopLevelDefPatternIndex {
         const by_pattern = try allocator.alloc(?CIR.Def.Idx, module.nodeCount());
         @memset(by_pattern, null);
-        for (module.allDefs()) |def_idx| {
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             by_pattern[@intFromEnum(module.def(def_idx).pattern.idx)] = def_idx;
         }
         return .{ .by_pattern = by_pattern };
@@ -8105,6 +8488,7 @@ const LocalPatternRoleIndex = struct {
             switch (module.nodeTag(node)) {
                 .statement_decl => {
                     const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
                     const decl = switch (module.getStatement(statement)) {
                         .s_decl => |decl| decl,
                         else => unreachable,
@@ -8118,6 +8502,7 @@ const LocalPatternRoleIndex = struct {
                 },
                 .statement_var => {
                     const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
                     const var_ = switch (module.getStatement(statement)) {
                         .s_var => |var_| var_,
                         else => unreachable,
@@ -8125,6 +8510,8 @@ const LocalPatternRoleIndex = struct {
                     putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
                 },
                 .expr_lambda => {
+                    const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
                     const expr = module.expr(@enumFromInt(node_idx));
                     const lambda = switch (expr.data) {
                         .e_lambda => |lambda| lambda,
@@ -16713,7 +17100,10 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifactRef(artifact_key);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts);
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts, &source_nodes);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     try applyPlatformForClauseSubstitutions(
@@ -16726,7 +17116,7 @@ pub fn publishFromTypedModule(
     );
     const checked_types = &checked_type_publication.store;
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication);
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
     errdefer checked_bodies.deinit(allocator);
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
@@ -17085,7 +17475,9 @@ fn expectProvidedExportKind(
         .{},
         &.{},
     );
-    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, &.{}, &.{});
+    var builtin_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
+    defer builtin_source_nodes.deinit(allocator);
+    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, &.{}, &.{}, &builtin_source_nodes);
     defer builtin_checked_type_publication.deinit(allocator);
     const empty_checked_bodies = CheckedBodyStore{};
     const empty_checked_const_bodies = CheckedConstBodyTable{};
@@ -17168,11 +17560,14 @@ fn expectProvidedExportKind(
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     defer platform_required_declarations.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &builtin_imports, &.{});
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &builtin_imports, &.{}, &source_nodes);
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication);
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
     defer checked_bodies.deinit(allocator);
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);

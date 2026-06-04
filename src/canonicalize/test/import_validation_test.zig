@@ -289,7 +289,7 @@ test "import interner - Import.Idx functionality" {
     var found_set = false;
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, module_name, "Builtin")) continue;
+        if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 
         explicit_import_count += 1;
         if (std.mem.eql(u8, module_name, "List")) {
@@ -343,7 +343,7 @@ test "import interner - many imports keep stable module identity keys" {
     var explicit_import_count: usize = 0;
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, module_name, "Builtin")) continue;
+        if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 
         explicit_import_count += 1;
         try testing.expect(std.mem.startsWith(u8, module_name, "T"));
@@ -395,7 +395,7 @@ test "import interner - comprehensive usage example" {
     var found_result = false;
     for (result.parse_env.imports.imports.items.items) |import_string_idx| {
         const module_name = result.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, module_name, "Builtin")) continue;
+        if (CIR.Import.isCompilerBuiltinImportName(module_name)) continue;
 
         explicit_import_count += 1;
         if (std.mem.eql(u8, module_name, "List")) {
