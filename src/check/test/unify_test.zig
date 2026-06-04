@@ -82,7 +82,7 @@ const TestEnv = struct {
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .gpa = self.module_env.gpa,
+            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .qualified_module_ident = self.module_env.qualified_module_ident,
             .types = &self.module_env.types,
@@ -98,7 +98,7 @@ const TestEnv = struct {
     /// Helper to call the write-no-report unify variant from TestEnv.
     fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .gpa = self.module_env.gpa,
+            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .qualified_module_ident = self.module_env.qualified_module_ident,
             .types = &self.module_env.types,
