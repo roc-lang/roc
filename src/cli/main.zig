@@ -3135,6 +3135,62 @@ const PlatformLinkInputs = struct {
     platform_files_post: []const []const u8,
 };
 
+fn defaultBuildOutputExtension(link_type: roc_target.LinkType, target_os: std.Target.Os.Tag) []const u8 {
+    return switch (link_type) {
+        .exe => switch (target_os) {
+            .windows => ".exe",
+            .freestanding => ".wasm",
+            else => "",
+        },
+        .static_lib => switch (target_os) {
+            .windows => ".lib",
+            .freestanding => ".wasm",
+            else => ".a",
+        },
+        .shared_lib => switch (target_os) {
+            .windows => ".dll",
+            .macos => ".dylib",
+            else => ".so",
+        },
+    };
+}
+
+fn selectDefaultLlvmBuildTarget(
+    targets_config: roc_target.TargetsConfig,
+    native_target: RocTarget,
+) ?roc_target.TargetsConfig.CompatibleTarget {
+    const link_types = [_]roc_target.LinkType{ .exe, .static_lib, .shared_lib };
+
+    for (link_types) |link_type| {
+        for (targets_config.getSupportedTargets(link_type)) |spec| {
+            if (spec.target == native_target or spec.target == .wasm32) {
+                return .{ .target = spec.target, .link_type = link_type };
+            }
+        }
+    }
+
+    return null;
+}
+
+test "wasm static library builds use wasm output extension" {
+    try std.testing.expectEqualStrings(".wasm", defaultBuildOutputExtension(.static_lib, .freestanding));
+}
+
+test "LLVM default build target accepts wasm static library targets" {
+    const config = roc_target.TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{},
+        .static_lib = &.{
+            .{ .target = .wasm32, .items = &.{ .{ .file_path = "host.wasm" }, .app } },
+        },
+        .shared_lib = &.{},
+    };
+
+    const selected = selectDefaultLlvmBuildTarget(config, RocTarget.detectNative()) orelse return error.NoDefaultTarget;
+    try std.testing.expectEqual(RocTarget.wasm32, selected.target);
+    try std.testing.expectEqual(roc_target.LinkType.static_lib, selected.link_type);
+}
+
 fn collectPlatformLinkInputs(
     ctx: *CliCtx,
     platform_dir: []const u8,
@@ -3811,21 +3867,14 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedTarget;
     } else blk: {
-        if (targets_config.supportsTarget(native_target, .exe)) {
-            break :blk .{ native_target, roc_target.LinkType.exe };
-        }
-        if (targets_config.supportsTarget(native_target, .static_lib)) {
-            break :blk .{ native_target, roc_target.LinkType.static_lib };
-        }
-        if (targets_config.supportsTarget(native_target, .shared_lib)) {
-            break :blk .{ native_target, roc_target.LinkType.shared_lib };
-        }
-
-        try ctx.io.stderr().print(
-            "Error: roc build --opt={s} requires --target=wasm32 or a platform target for the detected native host ({s}).\n",
-            .{ @tagName(args.opt), @tagName(native_target) },
-        );
-        return error.UnsupportedTarget;
+        const compatible = selectDefaultLlvmBuildTarget(targets_config, native_target) orelse {
+            try ctx.io.stderr().print(
+                "Error: roc build --opt={s} requires --target=wasm32 or a platform target for the detected native host ({s}).\n",
+                .{ @tagName(args.opt), @tagName(native_target) },
+            );
+            return error.UnsupportedTarget;
+        };
+        break :blk .{ compatible.target, compatible.link_type };
     };
 
     if (target != .wasm32 and target != native_target) {
@@ -3880,22 +3929,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const final_output_path = if (args.output != null)
         output_path
     else blk: {
-        const ext = switch (link_type) {
-            .exe => switch (target_os) {
-                .windows => ".exe",
-                .freestanding => ".wasm",
-                else => "",
-            },
-            .static_lib => switch (target_os) {
-                .windows => ".lib",
-                else => ".a",
-            },
-            .shared_lib => switch (target_os) {
-                .windows => ".dll",
-                .macos => ".dylib",
-                else => ".so",
-            },
-        };
+        const ext = defaultBuildOutputExtension(link_type, target_os);
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 
@@ -4221,22 +4255,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const final_output_path = if (args.output != null)
         output_path
     else blk: {
-        const ext = switch (link_type) {
-            .exe => switch (target_os) {
-                .windows => ".exe",
-                .freestanding => ".wasm",
-                else => "",
-            },
-            .static_lib => switch (target_os) {
-                .windows => ".lib",
-                else => ".a",
-            },
-            .shared_lib => switch (target_os) {
-                .windows => ".dll",
-                .macos => ".dylib",
-                else => ".so",
-            },
-        };
+        const ext = defaultBuildOutputExtension(link_type, target_os);
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 
@@ -4580,22 +4599,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const final_output_path = if (args.output != null)
         output_path
     else blk: {
-        const ext = switch (link_type) {
-            .exe => switch (target_os) {
-                .windows => ".exe",
-                .freestanding => ".wasm",
-                else => "",
-            },
-            .static_lib => switch (target_os) {
-                .windows => ".lib",
-                else => ".a",
-            },
-            .shared_lib => switch (target_os) {
-                .windows => ".dll",
-                .macos => ".dylib",
-                else => ".so",
-            },
-        };
+        const ext = defaultBuildOutputExtension(link_type, target_os);
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 

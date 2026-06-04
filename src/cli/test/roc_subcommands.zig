@@ -1731,6 +1731,39 @@ test "roc build --opt=size uses wasm32 static_lib link spec" {
     try testing.expect(stat.size > 0);
 }
 
+test "roc build defaults to wasm32 static_lib target when no native target exists" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", gpa);
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "default_static_lib_app.wasm" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(gpa, &.{ "build", output_arg }, "test/wasm/static_lib_app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    if (result.term != .exited or result.term.exited != 0) {
+        std.debug.print("stdout: {s}\nstderr: {s}\n", .{ result.stdout, result.stderr });
+    }
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stdout, "checked-artifact LLVM backend") != null);
+
+    const stat = tmp_dir.dir.statFile(std.testing.io, "default_static_lib_app.wasm", .{}) catch |err| {
+        std.debug.print("Failed to stat wasm output: {}\nstdout: {s}\nstderr: {s}\n", .{ err, result.stdout, result.stderr });
+        return err;
+    };
+    try testing.expect(stat.size > 0);
+}
+
 test "roc build returns exit code 2 for warnings (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
