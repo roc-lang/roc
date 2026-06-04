@@ -183,66 +183,6 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     return .ok;
 }
 
-// --- transitional shims (removed in a later commit) -----------------------
-// Old 12-arg signatures preserved so existing `Check.zig` raw callers keep
-// compiling until they migrate to `unify(&env, ...)`.
-
-pub fn unifyInContext(
-    gpa: Allocator,
-    ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    type_writer: *types_mod.TypeWriter,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-    context: Context,
-) std.mem.Allocator.Error!Result {
-    const env = Env{
-        .gpa = gpa,
-        .ident_store = ident_store,
-        .qualified_module_ident = qualified_module_ident,
-        .types = types,
-        .problems = problems,
-        .snapshots = snapshots,
-        .type_writer = type_writer,
-        .unify_scratch = unify_scratch,
-        .occurs_scratch = occurs_scratch,
-    };
-    return unify(&env, a, b, .{ .context = context });
-}
-
-pub fn unifyWriteNoReport(
-    gpa: Allocator,
-    ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    type_writer: *types_mod.TypeWriter,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-    context: Context,
-) std.mem.Allocator.Error!Result {
-    const env = Env{
-        .gpa = gpa,
-        .ident_store = ident_store,
-        .qualified_module_ident = qualified_module_ident,
-        .types = types,
-        .problems = problems,
-        .snapshots = snapshots,
-        .type_writer = type_writer,
-        .unify_scratch = unify_scratch,
-        .occurs_scratch = occurs_scratch,
-    };
-    return unify(&env, a, b, .{ .context = context, .on_mismatch = .write_no_report });
-}
-
 /// A temporary unification context used to unify two type variables within a `Store`.
 ///
 /// `Unifier` is created per unification call and:

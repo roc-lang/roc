@@ -97,20 +97,18 @@ const TestEnv = struct {
 
     /// Helper to call the write-no-report unify variant from TestEnv.
     fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
-        return try unify_mod.unifyWriteNoReport(
-            self.module_env.gpa,
-            self.module_env.getIdentStoreConst(),
-            self.module_env.qualified_module_ident,
-            &self.module_env.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.scratch,
-            &self.occurs_scratch,
-            a,
-            b,
-            problem_mod.Context.none,
-        );
+        const env = unify_mod.Env{
+            .gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .qualified_module_ident = self.module_env.qualified_module_ident,
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, .{ .on_mismatch = .write_no_report });
     }
 
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
