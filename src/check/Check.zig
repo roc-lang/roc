@@ -642,70 +642,30 @@ const Env = struct {
 
 // unify //
 
-/// Unify two types where `a` is the expected type and `b` is the actual type
-fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return self.unifyInContext(a, b, env, .none);
-}
-
-/// Unify two types where `a` is the expected type and `b` is the actual type
-/// Accepts a full unifier config for fine-grained control
-fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyInContextWith(a, b, env, ctx, .poison_to_err);
-}
-
-/// Thin wrapper for `write_no_report` unification: merges on success, records
-/// and poisons nothing on mismatch. The branch-vs-expected caller
-/// (`checkBranchBodyAgainstExpected`) owns the diagnostic and rollback, and
-/// carries the load-bearing operand-order rationale.
-fn unifyWriteNoReportInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyInContextWith(a, b, env, ctx, .write_no_report);
-}
-
-fn unifyInContextWith(
-    self: *Self,
-    a: Var,
-    b: Var,
-    env: *Env,
-    ctx: problem.Context,
-    mismatch_behavior: unifier.MismatchBehavior,
-) std.mem.Allocator.Error!unifier.Result {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Unify
-    const result = switch (mismatch_behavior) {
-        .poison_to_err => try unifier.unifyInContext(
-            self.cir.gpa,
-            self.cir.getIdentStoreConst(),
-            self.cir.qualified_module_ident,
-            self.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.unify_scratch,
-            &self.occurs_scratch,
-            a,
-            b,
-            ctx,
-        ),
-        .write_no_report => try unifier.unifyWriteNoReport(
-            self.cir.gpa,
-            self.cir.getIdentStoreConst(),
-            self.cir.qualified_module_ident,
-            self.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.unify_scratch,
-            &self.occurs_scratch,
-            a,
-            b,
-            ctx,
-        ),
+/// Build the borrowed dependency bundle the unifier needs. Cheap (9 pointers);
+/// constructed per call and inlined.
+fn unifyEnv(self: *Self) unifier.Env {
+    return .{
+        .gpa = self.cir.gpa,
+        .ident_store = self.cir.getIdentStoreConst(),
+        .qualified_module_ident = self.cir.qualified_module_ident,
+        .types = self.types,
+        .problems = &self.problems,
+        .snapshots = &self.snapshots,
+        .type_writer = &self.type_writer,
+        .unify_scratch = &self.unify_scratch,
+        .occurs_scratch = &self.occurs_scratch,
     };
+}
+
+/// The single core: run unification, then assign ranks/regions to fresh vars,
+/// copy out deferred constraints, and assert array sync.
+fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const unify_env = self.unifyEnv();
+    const result = try unifier.unify(&unify_env, a, b, opts);
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -738,6 +698,22 @@ fn unifyInContextWith(
     self.debugAssertArraysInSync();
 
     return result;
+}
+
+/// Unify two types where `a` is the expected type and `b` is the actual type.
+fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, .{});
+}
+
+/// Unify two types with a context for error reporting.
+fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, .{ .context = ctx });
+}
+
+/// `write_no_report` unification: merges on success, records and poisons
+/// nothing on mismatch. The caller owns the diagnostic and rollback.
+fn unifyWriteNoReport(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, .{ .context = ctx, .on_mismatch = .write_no_report });
 }
 
 /// Check if a variable contains an infinite type after solving a definition.
@@ -10697,7 +10673,7 @@ fn checkBranchBodyAgainstExpected(
 
     // Commit: fold the body into the accumulator for real (propagates
     // regions/rank into env). Both probes passed, so this cannot mismatch.
-    _ = try self.unifyWriteNoReportInContext(body_var, acc, env, ctx);
+    _ = try self.unifyWriteNoReport(body_var, acc, env, ctx);
 }
 
 fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
