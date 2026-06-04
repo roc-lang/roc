@@ -4845,7 +4845,10 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.Io.Dir.cwd().readFileAlloc(
+    // Resolve against the build root rather than cwd so the hash works both for
+    // standalone builds and when roc is consumed as a dependency (cwd is then the
+    // consumer's directory, not roc's).
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.graph.io,
         "src/build/roc/Builtin.roc",
         b.allocator,
