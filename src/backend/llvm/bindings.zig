@@ -211,6 +211,7 @@ pub const CodeGenOptLevel = enum(c_int) {
     Aggressive,
 };
 
+/// IR optimization level for LLVM passes before code generation.
 pub const IrOptimizationLevel = enum(c_int) {
     Oz = 0,
     O3 = 1,

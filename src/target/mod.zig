@@ -222,6 +222,12 @@ pub const RocTarget = enum {
         };
     }
 
+    /// Check if this target has the same OS and CPU architecture as the current host.
+    pub fn matchesHostOsAndArch(self: RocTarget) bool {
+        return self.toOsTag() == builtin.target.os.tag and
+            self.toCpuArch() == builtin.target.cpu.arch;
+    }
+
     /// Check if this target can be built on the current host.
     /// wasm32 is always compatible because wasm code generation is host-independent.
     /// Native targets are compatible if both OS and architecture match the host.
@@ -230,8 +236,7 @@ pub const RocTarget = enum {
         if (self == .wasm32) return true;
 
         // Otherwise, check if both OS and architecture match
-        return self.toOsTag() == builtin.target.os.tag and
-            self.toCpuArch() == builtin.target.cpu.arch;
+        return self.matchesHostOsAndArch();
     }
 
     /// Check if this target produces a process executable that can run on this host.
@@ -240,8 +245,7 @@ pub const RocTarget = enum {
     pub fn isExecutableOnHost(self: RocTarget) bool {
         if (self == .wasm32) return false;
 
-        return self.toOsTag() == builtin.target.os.tag and
-            self.toCpuArch() == builtin.target.cpu.arch;
+        return self.matchesHostOsAndArch();
     }
 
     /// Get the dynamic linker path for this target
@@ -278,3 +282,18 @@ pub const RocTarget = enum {
         };
     }
 };
+
+test "native target matches host OS and architecture" {
+    try std.testing.expect(RocTarget.detectNative().matchesHostOsAndArch());
+}
+
+test "wasm32 is not host executable" {
+    try std.testing.expect(!RocTarget.wasm32.isExecutableOnHost());
+}
+
+test "wasm32 host matching is distinct from build compatibility" {
+    if (RocTarget.detectNative() != .wasm32) {
+        try std.testing.expect(!RocTarget.wasm32.matchesHostOsAndArch());
+    }
+    try std.testing.expect(RocTarget.wasm32.isCompatibleWithHost());
+}

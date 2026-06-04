@@ -66,6 +66,7 @@ const ansi_term = @import("ansi_term.zig");
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
+const target_selection = @import("target_selection.zig");
 pub const targets_validator = @import("targets_validator.zig");
 const platform_validation = @import("platform_validation.zig");
 const cli_context = @import("CliCtx.zig");
@@ -83,6 +84,7 @@ comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
         std.testing.refAllDecls(targets_validator);
+        std.testing.refAllDecls(target_selection);
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
@@ -1097,49 +1099,8 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
                 return error.UnsupportedTarget;
             }
 
-            // Select target: if --target is provided, use that; otherwise try native then the next supported linker path.
-            if (args.target) |target_str| {
-                // User explicitly specified a target
-                const parsed_target = RocTarget.fromString(target_str) orelse {
-                    const result = platform_validation.targets_validator.ValidationResult{
-                        .invalid_target = .{ .target_str = target_str },
-                    };
-                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.InvalidTarget;
-                };
-
-                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
-                    if (!parsed_target.isExecutableOnHost()) {
-                        return rejectRunTargetNotExecutable(ctx, parsed_target);
-                    }
-                    link_spec = spec;
-                } else {
-                    const result = platform_validation.createUnsupportedTargetResult(
-                        platform_source,
-                        parsed_target,
-                        .exe,
-                        validation.config,
-                    );
-                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.UnsupportedTarget;
-                }
-            } else {
-                // No --target provided: use the first exe target that can run on this host.
-                if (validation.config.getDefaultHostExecutableTarget(.exe)) |compatible_target| {
-                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
-                } else {
-                    // No compatible exe target found
-                    const native_target = RocTarget.detectNative();
-                    const result = platform_validation.createUnsupportedTargetResult(
-                        platform_source,
-                        native_target,
-                        .exe,
-                        validation.config,
-                    );
-                    renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                    return error.UnsupportedTarget;
-                }
-            }
+            const selected = try selectRunPlatformTarget(ctx, validation.config, platform_source, args.target);
+            link_spec = selected.link_spec;
         } else |err| {
             switch (err) {
                 error.MissingTargetsSection => {
@@ -3135,60 +3096,101 @@ const PlatformLinkInputs = struct {
     platform_files_post: []const []const u8,
 };
 
-fn defaultBuildOutputExtension(link_type: roc_target.LinkType, target_os: std.Target.Os.Tag) []const u8 {
-    return switch (link_type) {
-        .exe => switch (target_os) {
-            .windows => ".exe",
-            .freestanding => ".wasm",
-            else => "",
-        },
-        .static_lib => switch (target_os) {
-            .windows => ".lib",
-            .freestanding => ".wasm",
-            else => ".a",
-        },
-        .shared_lib => switch (target_os) {
-            .windows => ".dll",
-            .macos => ".dylib",
-            else => ".so",
-        },
-    };
-}
-
-fn selectDefaultLlvmBuildTarget(
+fn selectBuildPlatformTarget(
+    ctx: *CliCtx,
     targets_config: roc_target.TargetsConfig,
-    native_target: RocTarget,
-) ?roc_target.TargetsConfig.CompatibleTarget {
-    const link_types = [_]roc_target.LinkType{ .exe, .static_lib, .shared_lib };
-
-    for (link_types) |link_type| {
-        for (targets_config.getSupportedTargets(link_type)) |spec| {
-            if (spec.target == native_target or spec.target == .wasm32) {
-                return .{ .target = spec.target, .link_type = link_type };
-            }
-        }
-    }
-
-    return null;
-}
-
-test "wasm static library builds use wasm output extension" {
-    try std.testing.expectEqualStrings(".wasm", defaultBuildOutputExtension(.static_lib, .freestanding));
-}
-
-test "LLVM default build target accepts wasm static library targets" {
-    const config = roc_target.TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{},
-        .static_lib = &.{
-            .{ .target = .wasm32, .items = &.{ .{ .file_path = "host.wasm" }, .app } },
+    platform_source: ?[]const u8,
+    target_arg: ?[]const u8,
+) !target_selection.SelectedTarget {
+    return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
+        .selected => |selected| selected,
+        .invalid_target => |target_str| {
+            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
+            return error.InvalidTarget;
         },
-        .shared_lib = &.{},
+        .unsupported_target => |target| {
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source orelse "<unknown>",
+                target,
+                .exe,
+                targets_config,
+            );
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            return error.UnsupportedTarget;
+        },
+        .no_default => {
+            const native_target = RocTarget.detectNative();
+            try ctx.io.stderr().print(
+                "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
+                .{@tagName(native_target)},
+            );
+            return error.UnsupportedTarget;
+        },
+        .not_runnable_on_host => unreachable,
     };
+}
 
-    const selected = selectDefaultLlvmBuildTarget(config, RocTarget.detectNative()) orelse return error.NoDefaultTarget;
-    try std.testing.expectEqual(RocTarget.wasm32, selected.target);
-    try std.testing.expectEqual(roc_target.LinkType.static_lib, selected.link_type);
+fn selectRunPlatformTarget(
+    ctx: *CliCtx,
+    targets_config: roc_target.TargetsConfig,
+    platform_source: ?[]const u8,
+    target_arg: ?[]const u8,
+) !target_selection.SelectedTarget {
+    return switch (target_selection.selectRunTarget(targets_config, target_arg)) {
+        .selected => |selected| selected,
+        .invalid_target => |target_str| {
+            const result = platform_validation.targets_validator.ValidationResult{
+                .invalid_target = .{ .target_str = target_str },
+            };
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            return error.InvalidTarget;
+        },
+        .unsupported_target => |target| {
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source orelse "<unknown>",
+                target,
+                .exe,
+                targets_config,
+            );
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            return error.UnsupportedTarget;
+        },
+        .no_default => {
+            const native_target = RocTarget.detectNative();
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source orelse "<unknown>",
+                native_target,
+                .exe,
+                targets_config,
+            );
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            return error.UnsupportedTarget;
+        },
+        .not_runnable_on_host => |target| {
+            try rejectRunTargetNotExecutable(ctx, target);
+            unreachable;
+        },
+    };
+}
+
+fn rejectRequiredExecutableOutput(ctx: *CliCtx, link_type: roc_target.LinkType) !void {
+    const stderr = ctx.io.stderr();
+    switch (link_type) {
+        .static_lib => {
+            try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
+            try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
+            try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
+            try stderr.print("the library artifact.\n", .{});
+        },
+        .shared_lib => {
+            try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
+            try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
+            try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
+            try stderr.print("the library artifact.\n", .{});
+        },
+        .exe => unreachable,
+    }
+    return error.UnsupportedTarget;
 }
 
 fn collectPlatformLinkInputs(
@@ -3841,41 +3843,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
+    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const target = selected.target;
+    const link_type = selected.link_type;
     const native_target = RocTarget.detectNative();
-    const target: RocTarget, const link_type: roc_target.LinkType = if (args.target) |target_str| blk: {
-        const parsed_target = RocTarget.fromString(target_str) orelse {
-            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
-            return error.InvalidTarget;
-        };
-
-        if (targets_config.supportsTarget(parsed_target, .exe)) {
-            break :blk .{ parsed_target, .exe };
-        }
-        if (targets_config.supportsTarget(parsed_target, .static_lib)) {
-            break :blk .{ parsed_target, .static_lib };
-        }
-        if (targets_config.supportsTarget(parsed_target, .shared_lib)) {
-            break :blk .{ parsed_target, .shared_lib };
-        }
-
-        const result = platform_validation.createUnsupportedTargetResult(
-            platform_source orelse "<unknown>",
-            parsed_target,
-            .exe,
-            targets_config,
-        );
-        renderValidationError(ctx.gpa, result, ctx.io.stderr());
-        return error.UnsupportedTarget;
-    } else blk: {
-        const compatible = selectDefaultLlvmBuildTarget(targets_config, native_target) orelse {
-            try ctx.io.stderr().print(
-                "Error: roc build --opt={s} requires --target=wasm32 or a platform target for the detected native host ({s}).\n",
-                .{ @tagName(args.opt), @tagName(native_target) },
-            );
-            return error.UnsupportedTarget;
-        };
-        break :blk .{ compatible.target, compatible.link_type };
-    };
 
     if (target != .wasm32 and target != native_target) {
         try ctx.io.stderr().print(
@@ -3907,29 +3878,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        const stderr = ctx.io.stderr();
-        switch (link_type) {
-            .static_lib => {
-                try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
-                try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
-                try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
-                try stderr.print("the library artifact.\n", .{});
-            },
-            .shared_lib => {
-                try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
-                try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
-                try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
-                try stderr.print("the library artifact.\n", .{});
-            },
-            .exe => unreachable,
-        }
-        return error.UnsupportedTarget;
+        return rejectRequiredExecutableOutput(ctx, link_type);
     }
 
     const final_output_path = if (args.output != null)
         output_path
     else blk: {
-        const ext = defaultBuildOutputExtension(link_type, target_os);
+        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 
@@ -4118,8 +4073,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 }
 
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
-    const target_mod = @import("target.zig");
-
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
@@ -4173,60 +4126,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
-        const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
-            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
-            return error.InvalidTarget;
-        };
-
-        if (targets_config.supportsTarget(parsed_target, .exe)) {
-            break :blk .{ parsed_target, .exe };
-        }
-        if (targets_config.supportsTarget(parsed_target, .static_lib)) {
-            break :blk .{ parsed_target, .static_lib };
-        }
-        if (targets_config.supportsTarget(parsed_target, .shared_lib)) {
-            break :blk .{ parsed_target, .shared_lib };
-        }
-
-        const result = platform_validation.createUnsupportedTargetResult(
-            platform_source orelse "<unknown>",
-            parsed_target,
-            .exe,
-            targets_config,
-        );
-        renderValidationError(ctx.gpa, result, ctx.io.stderr());
-        return error.UnsupportedTarget;
-    } else blk: {
-        const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            renderProblem(ctx.gpa, ctx.io.stderr(), .{
-                .platform_validation_failed = .{
-                    .message = "No compatible target found. The platform does not support any target compatible with this system.",
-                },
-            });
-            return error.UnsupportedTarget;
-        };
-        break :blk .{ compatible.target, compatible.link_type };
-    };
+    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const target = selected.target;
+    const link_type = selected.link_type;
 
     if (args.require_executable_output and link_type != .exe) {
-        const stderr = ctx.io.stderr();
-        switch (link_type) {
-            .static_lib => {
-                try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
-                try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
-                try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
-                try stderr.print("the library artifact.\n", .{});
-            },
-            .shared_lib => {
-                try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
-                try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
-                try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
-                try stderr.print("the library artifact.\n", .{});
-            },
-            .exe => unreachable,
-        }
-        return error.UnsupportedTarget;
+        return rejectRequiredExecutableOutput(ctx, link_type);
     }
 
     const target_arch = target.toCpuArch();
@@ -4255,7 +4160,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const final_output_path = if (args.output != null)
         output_path
     else blk: {
-        const ext = defaultBuildOutputExtension(link_type, target_os);
+        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 
@@ -4474,8 +4379,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 /// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
 fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
-    const target_mod = @import("target.zig");
-
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
@@ -4529,41 +4432,9 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const target: target_mod.RocTarget, const link_type: target_mod.LinkType = if (args.target) |target_str| blk: {
-        const parsed_target = target_mod.RocTarget.fromString(target_str) orelse {
-            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
-            return error.InvalidTarget;
-        };
-
-        if (targets_config.supportsTarget(parsed_target, .exe)) {
-            break :blk .{ parsed_target, .exe };
-        }
-        if (targets_config.supportsTarget(parsed_target, .static_lib)) {
-            break :blk .{ parsed_target, .static_lib };
-        }
-        if (targets_config.supportsTarget(parsed_target, .shared_lib)) {
-            break :blk .{ parsed_target, .shared_lib };
-        }
-
-        const result = platform_validation.createUnsupportedTargetResult(
-            platform_source orelse "<unknown>",
-            parsed_target,
-            .exe,
-            targets_config,
-        );
-        renderValidationError(ctx.gpa, result, ctx.io.stderr());
-        return error.UnsupportedTarget;
-    } else blk: {
-        const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            renderProblem(ctx.gpa, ctx.io.stderr(), .{
-                .platform_validation_failed = .{
-                    .message = "No compatible target found. The platform does not support any target compatible with this system.",
-                },
-            });
-            return error.UnsupportedTarget;
-        };
-        break :blk .{ compatible.target, compatible.link_type };
-    };
+    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const target = selected.target;
+    const link_type = selected.link_type;
 
     const native_target = RocTarget.detectNative();
     if (target != native_target) {
@@ -4575,23 +4446,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        const stderr = ctx.io.stderr();
-        switch (link_type) {
-            .static_lib => {
-                try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
-                try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
-                try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
-                try stderr.print("the library artifact.\n", .{});
-            },
-            .shared_lib => {
-                try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
-                try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
-                try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
-                try stderr.print("the library artifact.\n", .{});
-            },
-            .exe => unreachable,
-        }
-        return error.UnsupportedTarget;
+        return rejectRequiredExecutableOutput(ctx, link_type);
     }
 
     const target_arch = target.toCpuArch();
@@ -4599,7 +4454,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     const final_output_path = if (args.output != null)
         output_path
     else blk: {
-        const ext = defaultBuildOutputExtension(link_type, target_os);
+        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
         break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
     };
 

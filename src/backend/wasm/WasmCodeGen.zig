@@ -516,11 +516,6 @@ fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
 }
 
-fn emitI64Const(self: *Self, value: i64) Allocator.Error!void {
-    self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI64(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
-}
-
 fn loadRocListFields(self: *Self, list_ptr: u32) Allocator.Error!RocListFields {
     const fields = RocListFields{
         .bytes = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
