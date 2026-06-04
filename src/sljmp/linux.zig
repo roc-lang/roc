@@ -9,12 +9,15 @@ const Impl = switch (builtin.cpu.arch) {
     else => @compileError("Unsupported Linux architecture for setjmp/longjmp"),
 };
 
+/// Architecture-specific buffer that stores the machine state for setjmp/longjmp.
 pub const JmpBuf = Impl.JmpBuf;
 
+/// Saves the current execution context in `env` and returns 0 on the initial call.
 pub inline fn setjmp(env: *JmpBuf) c_int {
     return Impl.setjmp(env);
 }
 
+/// Restores `env` and resumes as if `setjmp` returned `val`, or 1 when `val` is 0.
 pub inline fn longjmp(env: *JmpBuf, val: c_int) noreturn {
     Impl.longjmp(env, val);
 }

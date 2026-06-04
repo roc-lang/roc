@@ -103,7 +103,9 @@ test "Monotype lookup lowering uses explicit resolved use types" {
     const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
 
-    try expectContains(lower_call, "const fn_ty = try self.lowerExprType(call.func);");
+    try expectContains(lower_call, "const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {");
+    try expectContains(lower_call, "break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);");
+    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
     try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved)");

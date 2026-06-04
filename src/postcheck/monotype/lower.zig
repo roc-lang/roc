@@ -2102,6 +2102,11 @@ const BodyContext = struct {
         },
     };
 
+    const CurrentLocal = struct {
+        binder: checked.PatternBinderId,
+        local: Ast.LocalId,
+    };
+
     fn init(
         allocator: Allocator,
         builder: *Builder,
@@ -4227,7 +4232,14 @@ const BodyContext = struct {
             };
         }
 
-        const fn_ty = try self.lowerExprType(call.func);
+        const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            defer call_ctx.deinit();
+            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+            call_ctx.current_fn_key = self.current_fn_key;
+
+            break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
+        };
         const fn_data = self.builder.functionShape(fn_ty, "checked call function type was not a function");
         return .{
             .ret_ty = fn_data.ret,
@@ -4236,6 +4248,31 @@ const BodyContext = struct {
                 .args = try self.lowerExprSpanAtTypes(call.args, self.builder.program.types.span(fn_data.args)),
             } },
         };
+    }
+
+    fn indirectCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_func)];
+        return switch (expr.data) {
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            => self.localCalleeMonoType(checked_func),
+            .field_access => try self.lowerExprType(checked_func),
+            else => null,
+        };
+    }
+
+    fn localCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) ?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_func)];
+        const maybe_ref = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved,
+            .lookup_external => |resolved| resolved,
+            .lookup_required => |resolved| resolved,
+            else => return null,
+        };
+        const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
+        const local_id = self.currentLocalForResolvedValue(ref_id) orelse return null;
+        return self.builder.program.locals.items[@intFromEnum(local_id)].ty;
     }
 
     fn directCallInstantiationSourceFnType(
@@ -5179,12 +5216,26 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         if (call.direct_target == null) {
-            if (expected_ret_ty) |ret_ty| {
+            if (try self.indirectCalleeMonoType(call.func)) |fn_ty| {
+                const ret_ty = self.functionReturnType(fn_ty);
+                if (expected_ret_ty) |expected| {
+                    if (!self.sameType(expected, ret_ty)) {
+                        Common.invariant("checked indirect call result type differed from its expected Monotype type");
+                    }
+                    try self.constrainTypeToMono(checked_ret_ty, expected, "checked indirect call result type conflicted with an existing Monotype constraint");
+                    return expected;
+                }
                 try self.constrainTypeToMono(checked_ret_ty, ret_ty, "checked indirect call result type conflicted with an existing Monotype constraint");
                 return ret_ty;
             }
-            if (!try self.checkedTypeCanLower(checked_ret_ty)) return null;
-            return try self.lowerType(checked_ret_ty);
+
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            defer call_ctx.deinit();
+            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+            call_ctx.current_fn_key = self.current_fn_key;
+
+            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
+            return call_ctx.functionReturnType(mono_fn_ty);
         }
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
@@ -5294,7 +5345,7 @@ const BodyContext = struct {
         return fn_template;
     }
 
-    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?Ast.LocalId {
+    fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?CurrentLocal {
         const raw = @intFromEnum(ref_id);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked lookup resolved value id was outside resolved value table");
@@ -5305,10 +5356,17 @@ const BodyContext = struct {
             .local_value,
             .local_mutable_version,
             .pattern_binder,
-            => |local| self.binders.get(local.binder) orelse
-                Common.invariant("local lookup referenced an unbound pattern binder"),
+            => |local| .{
+                .binder = local.binder,
+                .local = self.binders.get(local.binder) orelse
+                    Common.invariant("local lookup referenced an unbound pattern binder"),
+            },
             else => null,
         };
+    }
+
+    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?Ast.LocalId {
+        return if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| binding.local else null;
     }
 
     fn lowerLookupExprAtType(
@@ -5319,12 +5377,14 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
-        if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+        if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
+            const local_id = binding.local;
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), ty, "checked local binder type conflicted with its expected Monotype use type");
+            try self.constrainTypeToMono(checked_ty, ty, "checked local lookup type conflicted with its expected Monotype use type");
             if (!self.sameType(ty, local_ty)) {
                 Common.invariant("checked local lookup type differed from its expected Monotype use type");
             }
-            try self.constrainTypeToMono(checked_ty, local_ty, "checked local lookup type conflicted with its current Monotype binding");
             return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .local = local_id } });
         }
 
@@ -5856,9 +5916,16 @@ const BodyContext = struct {
     fn lambdaFunctionType(self: *BodyContext, lambda: anytype) Allocator.Error!Type.TypeId {
         const args = try self.allocator.alloc(Type.TypeId, lambda.args.len);
         defer self.allocator.free(args);
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+
         for (lambda.args, 0..) |pattern_id, i| {
             args[i] = try self.lowerType(self.view.bodies.patterns[@intFromEnum(pattern_id)].ty);
+            try self.savePatternBinders(pattern_id, &saved);
+            try self.preRegisterPatternBinders(pattern_id, args[i]);
         }
+        defer self.restoreBinders(saved.items);
+
         return try self.builder.program.types.add(.{ .func = .{
             .args = try self.builder.program.types.addSpan(args),
             .ret = try self.lowerExprType(lambda.body),
@@ -7394,8 +7461,8 @@ const BodyContext = struct {
     }
 
     fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprData {
-        const scrutinee = try self.lowerExpr(match.cond);
-        const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
+        const scrutinee_ty = try self.matchScrutineeType(match);
+        const scrutinee = try self.lowerExprAtType(match.cond, scrutinee_ty);
         const branches = try self.allocator.alloc(Ast.Branch, branchCount(match.branches));
         defer self.allocator.free(branches);
         var index: usize = 0;
@@ -7424,6 +7491,10 @@ const BodyContext = struct {
             .scrutinee = scrutinee,
             .branches = try self.builder.program.addBranchSpan(branches),
         } };
+    }
+
+    fn matchScrutineeType(self: *BodyContext, match: anytype) Allocator.Error!Type.TypeId {
+        return try self.lowerExprType(match.cond);
     }
 
     fn saveMatchPatternBinders(
