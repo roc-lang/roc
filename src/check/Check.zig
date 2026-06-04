@@ -1463,7 +1463,12 @@ fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: us
                 quotient_len += 1;
             }
         }
-        try digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder)));
+        // Free the freshly-allocated quotient if recording the digit fails,
+        // since it has not yet been adopted into current_buf.
+        digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder))) catch |err| {
+            allocator.free(quotient);
+            return err;
+        };
         allocator.free(current_buf);
         current_buf = quotient;
         current_len = quotient_len;
@@ -1875,9 +1880,17 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 /// (local/nested lambdas included). A static-dispatch receiver that resolves into
 /// this set can be pinned by a caller at some level, so it is not ambiguous.
 fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    // Shared across all defs in this one-shot, end-of-check pass (not per
+    // expression), so it bounds memory by the largest type spine walked rather
+    // than growing as more of the program is checked. Guards the function-ret /
+    // alias spine in collectArgPositionVars against unbounded recursion; arg
+    // structure is already deduped via `pinnable` inside collectReachableVars.
+    var spine_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer spine_visited.deinit();
+
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable);
+        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable, &spine_visited);
     }
 
     var raw_node_idx: u32 = 0;
@@ -2168,10 +2181,21 @@ fn reportAmbiguousStaticDispatch(
 /// tuples, tag payloads, nested function args AND rets). Return positions of the
 /// outer function are NOT collected (a return-only var is not parameter-pinnable),
 /// but once inside an argument every nested position counts.
-fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectArgPositionVars(
+    self: *Self,
+    var_: Var,
+    out: *std.AutoHashMap(Var, void),
+    spine_visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
+    // Guard the function-ret / alias spine against cycles. Cyclic spines are
+    // currently pre-broken (infinite types are poisoned to .err before this
+    // pass, recursive aliases are rejected during generation), but the guard
+    // keeps this robust if that ever changes.
+    if (spine_visited.contains(resolved.var_)) return;
+    try spine_visited.put(resolved.var_, {});
     switch (resolved.desc.content) {
-        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out),
+        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out, spine_visited),
         .structure => |flat| switch (flat) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 for (self.types.sliceVars(func.args)) |arg| {
@@ -2179,7 +2203,7 @@ fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, voi
                 }
                 // Recurse into the return type: a curried function returns more
                 // functions whose own arguments are still parameter-pinnable.
-                try self.collectArgPositionVars(func.ret, out);
+                try self.collectArgPositionVars(func.ret, out, spine_visited);
             },
             else => {},
         },
@@ -2772,6 +2796,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
+
+    // Check the result expression itself, matching checkExprRepl: its type may
+    // have incompatible constraints (e.g. !3) or be infinite/anonymously
+    // recursive, neither of which is covered by the per-def checks above.
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
+    try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
@@ -3646,6 +3677,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 }
             }.less);
 
+            // Materialize the tags into the types store before processing the
+            // ext. `tags_slice` points into the scratch_tags buffer, and
+            // generating the ext recurses and may append to scratch_tags,
+            // reallocating that buffer and dangling the slice. Copying into a
+            // stable range here mirrors the record case below.
+            const tags_range = try self.types.appendTags(tags_slice);
+
             // Process the ext if it exists. Absence means it's a closed union
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
@@ -3657,7 +3695,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             };
 
             // Set the anno's type
-            try self.unifyWith(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), env);
+            try self.unifyWith(
+                anno_var,
+                .{ .structure = types_mod.FlatType{ .tag_union = .{
+                    .tags = tags_range,
+                    .ext = ext_var,
+                } } },
+                env,
+            );
         },
         .tag => {
             // Tags should only exist as direct children of tag_unions in type annotations.
@@ -5135,11 +5180,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .tuple = .{ .elems = elem_vars },
                         } }, env, expr_region);
 
+                        // A non-tuple structure can never satisfy a tuple access,
+                        // so this unify reports the mismatch. Poison the result to
+                        // `.err` (like the out-of-bounds branch above) rather than
+                        // leaving it a fresh flex var, so conflicting downstream
+                        // uses of the result don't produce cascading errors.
                         _ = try self.unify(tuple_var, expected_tuple_var, env);
-
-                        // The result type is the element at the index
-                        const result_var = self.types.sliceVars(elem_vars)[tuple_access.elem_index];
-                        _ = try self.unify(expr_var, result_var, env);
+                        try self.unifyWith(expr_var, .err, env);
                     },
                 },
                 .flex => {
@@ -7151,8 +7198,9 @@ fn checkMatchExpr(
     const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
     const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
-    // Skip pattern checking if we already know the condition isn't a Try type
-    // This prevents confusing cascading errors about pattern incompatibility
+    // Check each of the first branch's patterns and unify it with the
+    // condition type. (A failed unify poisons cond_var to .err, so subsequent
+    // pattern unifications short-circuit rather than cascading.)
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
@@ -7448,7 +7496,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     // This function attaches the dispatch fn to the not_arg
     try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
-    // Redirect the result to the boolean type
+    // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
     return does_fx;
@@ -7477,7 +7525,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     // This function attaches the dispatch fn to the not_arg
     try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
-    // Redirect the result to the boolean type
+    // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
     return does_fx;
@@ -7574,7 +7622,6 @@ fn checkBinopExpr(
                     .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
                     .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
                     .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
-                    .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
                     else => unreachable,
                 };
 
@@ -8554,7 +8601,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
             const fn_content = self.types.resolveVar(c.fn_var).desc.content;
             const func = fn_content.unwrapFunc() orelse continue;
             var found_peer = false;
-            for (self.types.sliceVars(func.args)) |arg| {
+            // Use iterVars, not sliceVars: unify below appends fresh vars and
+            // can reallocate the backing array, which would dangle a slice.
+            var peer_args = self.types.iterVars(func.args);
+            while (peer_args.next()) |arg| {
                 const resolved_arg = self.types.resolveVar(arg);
                 if (resolved_arg.var_ == resolved.var_) continue; // skip self
                 if (resolved_arg.desc.content.unwrapNominalType() == null) continue;
@@ -8577,7 +8627,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
             if (resolved_ret.desc.content.unwrapNominalType() == null) continue;
             _ = try self.unify(resolved.var_, resolved_ret.var_, env);
 
-            for (self.types.sliceVars(func.args)) |arg| {
+            // Use iterVars, not sliceVars: each unify can reallocate the
+            // backing array, so a held slice would dangle on the next iteration.
+            var ret_args = self.types.iterVars(func.args);
+            while (ret_args.next()) |arg| {
                 const resolved_arg = self.types.resolveVar(arg);
                 if (resolved_arg.var_ == resolved.var_) continue;
                 _ = try self.unify(resolved_ret.var_, resolved_arg.var_, env);
@@ -8673,6 +8726,13 @@ fn builtinNumericCandidateSatisfiesStaticDispatchConstraints(
     return true;
 }
 
+/// PRECONDITION: the caller MUST have an active type-store snapshot in scope.
+/// This speculatively mutates the real stores (copyVar/instantiateVar append
+/// vars and regions, probeUnifyWithoutRecordingProblems unifies) and does NOT
+/// roll them back itself — it relies on the caller's snapshot rollback. The only
+/// caller, builtinNumericCandidateSatisfiesStaticDispatchConstraints, wraps its
+/// loop in such a snapshot. A new caller without one would leak speculative vars
+/// into the live store and corrupt subsequent solving.
 fn staticDispatchConstraintAcceptsCandidate(
     self: *Self,
     constraint: StaticDispatchConstraint,
@@ -8962,9 +9022,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const rigid = dispatcher_content.rigid;
                 const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
 
-                // Get the deferred constraints to validate against
-                const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-
                 // Build a map of constraints the rigid has
                 self.ident_to_var_map.clearRetainingCapacity();
                 try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
@@ -8972,8 +9029,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
                 }
 
-                // Iterate over the constraints
-                for (deferred_constraints) |constraint| {
+                // Iterate over the deferred constraints to validate against.
+                // iterRange re-fetches each item through the SafeList, so it stays valid
+                // even if the unify below appends and reallocates the backing array.
+                var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+                while (constraints_iter.next()) |constraint| {
                     if (constraint.origin == .from_numeral) {
                         if (self.builtinNumKindFromTypeName(rigid.name)) |num_kind| {
                             if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) {
@@ -9436,8 +9496,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
             {
                 // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
                 // only if all their components also support is_eq
-                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-                for (constraints) |constraint| {
+                // iterRange re-fetches each item through the SafeList, so it stays valid even if
+                // satisfyImplicitEqualityConstraint appends and reallocates the backing array.
+                var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+                while (constraints_iter.next()) |constraint| {
                     // Check if this is a call to is_eq (anonymous types have implicit structural equality)
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
@@ -9611,60 +9673,83 @@ fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
 }
 
 fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
-    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true);
+    self.var_set.clearRetainingCapacity();
+    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set) catch false;
 }
 
-fn varContainsUnboxedFunctionInHostedSignatureInternal(self: *Self, var_: Var, allow_top_fn: bool) bool {
+fn varContainsUnboxedFunctionInHostedSignatureInternal(
+    self: *Self,
+    var_: Var,
+    allow_top_fn: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    // Cycle guard: recursive nominal/structural types would otherwise recurse
+    // forever through their backing vars. A var already on the stack
+    // contributes no new unboxed function we haven't already considered.
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
     return switch (resolved.desc.content) {
         .structure => |s| switch (s) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 if (!allow_top_fn) break :blk true;
                 const args = self.types.sliceVars(func.args);
                 for (args) |arg_var| {
-                    if (self.varContainsUnboxedFunctionInternal(arg_var, false)) break :blk true;
+                    if (try self.varContainsUnboxedFunctionInternal(arg_var, false, visited)) break :blk true;
                 }
-                if (self.varContainsUnboxedFunctionInternal(func.ret, false)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(func.ret, false, visited)) break :blk true;
                 break :blk false;
             },
-            else => self.flatTypeContainsUnboxedFunction(s, false),
+            else => try self.flatTypeContainsUnboxedFunction(s, false, visited),
         },
-        .alias => |alias| self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn),
+        .alias => |alias| try self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn, visited),
         .flex, .rigid, .err => false,
     };
 }
 
-fn varContainsUnboxedFunctionInternal(self: *Self, var_: Var, boxed_allowed: bool) bool {
+fn varContainsUnboxedFunctionInternal(
+    self: *Self,
+    var_: Var,
+    boxed_allowed: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
     return switch (resolved.desc.content) {
-        .structure => |s| self.flatTypeContainsUnboxedFunction(s, boxed_allowed),
-        .alias => |alias| self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed),
+        .structure => |s| try self.flatTypeContainsUnboxedFunction(s, boxed_allowed, visited),
+        .alias => |alias| try self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed, visited),
         .flex, .rigid, .err => false,
     };
 }
 
-fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, boxed_allowed: bool) bool {
+fn flatTypeContainsUnboxedFunction(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    boxed_allowed: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         .fn_pure, .fn_effectful, .fn_unbound => !boxed_allowed,
         .empty_record, .empty_tag_union => false,
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
         .tuple => |tuple| blk: {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem_var| {
-                if (self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
@@ -9673,7 +9758,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
             for (tags_slice.items(.args)) |tag_args| {
                 const args = self.types.sliceVars(tag_args);
                 for (args) |arg_var| {
-                    if (self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed)) break :blk true;
+                    if (try self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed, visited)) break :blk true;
                 }
             }
             break :blk false;
@@ -9681,7 +9766,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
         .nominal_type => |nominal| blk: {
             if (self.nominalIsBoxType(nominal)) break :blk false;
             const backing_var = self.types.getNominalBackingVar(nominal);
-            break :blk self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed);
+            break :blk try self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed, visited);
         },
     };
 }
@@ -9744,7 +9829,11 @@ fn validateUnsignedFromNumeralLiteral(
     num_literal: types_mod.NumeralInfo,
 ) ?BuiltinFromNumeralLiteralProblem {
     if (num_literal.is_fractional) return .fractional_integer;
-    if (num_literal.is_negative) return .negative_unsigned;
+    // `is_negative` is a syntactic flag (a leading `-`); guard on the actual
+    // magnitude so `-0` (a valid unsigned value) is not rejected. Real
+    // negatives have a nonzero magnitude, and a large negative whose i128
+    // representation overflowed is still nonzero, so this stays correct.
+    if (num_literal.is_negative and num_literal.toI128() != 0) return .negative_unsigned;
 
     const value = if (num_literal.is_u128) blk: {
         break :blk num_literal.toU128();
@@ -9916,8 +10005,12 @@ fn satisfyImplicitEqualityConstraint(
         );
     }
 
-    _ = try self.unify(dispatcher_var, args[0], env);
-    _ = try self.unify(dispatcher_var, args[1], env);
+    // Read both arg vars before unifying: the first unify can append fresh
+    // vars and reallocate the backing array, dangling the `args` slice.
+    const arg0 = args[0];
+    const arg1 = args[1];
+    _ = try self.unify(dispatcher_var, arg0, env);
+    _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
 }
@@ -10019,8 +10112,11 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
 /// Check if a branch body type is compatible with the expected return type.
-/// This performs a non-destructive unification probe using a type-store snapshot.
-/// Must be called BEFORE pairwise unification poisons branch vars.
+/// This unifies against a type-store snapshot that is rolled back afterward, so
+/// it leaves the type store unchanged. It is NOT fully side-effect-free,
+/// however: a mismatch is recorded as a diagnostic in the real problem store
+/// (see the note at the unify call below). Must be called BEFORE pairwise
+/// unification poisons branch vars.
 fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
     const body = self.types.resolveVar(body_var);
     const expected = self.types.resolveVar(expected_var);
@@ -10043,6 +10139,15 @@ fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: 
         store_snapshot.deinit(self.cir.gpa);
     }
 
+    // NOTE: this passes the real `self.problems`/`self.snapshots` stores, not
+    // throwaway ones, so a mismatch here is RECORDED as a diagnostic and is NOT
+    // rolled back by the defer above (which only rolls back the type store).
+    // This is intentional and load-bearing: callers respond to a `false` return
+    // by marking the branch erroneous WITHOUT emitting their own diagnostic, so
+    // for some branch mismatches (e.g. a match branch whose body conflicts with
+    // a rigid annotated return type) the problem recorded here is the only
+    // diagnostic the user ever sees. Do not switch this to a throwaway problem
+    // store without making the callers emit the diagnostic themselves.
     const probe_result = unifier.unifyInContext(
         self.cir.gpa,
         self.cir.getIdentStoreConst(),
