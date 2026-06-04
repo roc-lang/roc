@@ -299,7 +299,7 @@ is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
 		(p-assign (ident "is_red"))
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 406)
+				(e-call (constraint-fn-var 410)
 					(e-lookup-local
 						(p-assign (ident "pick")))
 					(e-num (value "0"))))
@@ -311,7 +311,7 @@ is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
 		(p-assign (ident "not_red"))
 		(e-structural-eq (negated "true")
 			(lhs
-				(e-call (constraint-fn-var 524)
+				(e-call (constraint-fn-var 528)
 					(e-lookup-local
 						(p-assign (ident "pick")))
 					(e-num (value "0"))))
@@ -385,7 +385,7 @@ is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
 		(p-assign (ident "is_match"))
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 1223)
+				(e-call (constraint-fn-var 1232)
 					(e-lookup-local
 						(p-assign (ident "from_flags")))
 					(e-num (value "1"))))

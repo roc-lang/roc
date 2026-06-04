@@ -653,24 +653,59 @@ fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier
 /// Unify two types where `a` is the expected type and `b` is the actual type
 /// Accepts a full unifier config for fine-grained control
 fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyInContextWith(a, b, env, ctx, .poison_to_err);
+}
+
+/// Thin wrapper for `write_no_report` unification: merges on success, records
+/// and poisons nothing on mismatch. The branch-vs-expected caller
+/// (`checkBranchBodyAgainstExpected`) owns the diagnostic and rollback, and
+/// carries the load-bearing operand-order rationale.
+fn unifyWriteNoReportInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyInContextWith(a, b, env, ctx, .write_no_report);
+}
+
+fn unifyInContextWith(
+    self: *Self,
+    a: Var,
+    b: Var,
+    env: *Env,
+    ctx: problem.Context,
+    mismatch_behavior: unifier.MismatchBehavior,
+) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Unify
-    const result = try unifier.unifyInContext(
-        self.cir.gpa,
-        self.cir.getIdentStoreConst(),
-        self.cir.qualified_module_ident,
-        self.types,
-        &self.problems,
-        &self.snapshots,
-        &self.type_writer,
-        &self.unify_scratch,
-        &self.occurs_scratch,
-        a,
-        b,
-        ctx,
-    );
+    const result = switch (mismatch_behavior) {
+        .poison_to_err => try unifier.unifyInContext(
+            self.cir.gpa,
+            self.cir.getIdentStoreConst(),
+            self.cir.qualified_module_ident,
+            self.types,
+            &self.problems,
+            &self.snapshots,
+            &self.type_writer,
+            &self.unify_scratch,
+            &self.occurs_scratch,
+            a,
+            b,
+            ctx,
+        ),
+        .write_no_report => try unifier.unifyWriteNoReport(
+            self.cir.gpa,
+            self.cir.getIdentStoreConst(),
+            self.cir.qualified_module_ident,
+            self.types,
+            &self.problems,
+            &self.snapshots,
+            &self.type_writer,
+            &self.unify_scratch,
+            &self.occurs_scratch,
+            a,
+            b,
+            ctx,
+        ),
+    };
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -7474,6 +7509,11 @@ fn checkIfElseExpr(
     defer trace.end();
     const expected_branch_ret = expected.branch_result;
 
+    // Fresh accumulator for the meet of all compatible branch bodies. Branches
+    // fold into this instead of into the shared `expected_ret`, which is unified
+    // with the whole expr (and hence the accumulator) exactly once, at the end.
+    const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
+
     const branches = self.cir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
@@ -7493,7 +7533,6 @@ fn checkIfElseExpr(
     does_fx = try self.checkExpr(first_branch.body, env, expected.forBranchBody()) or does_fx;
 
     if (expected_branch_ret) |expected_ret| {
-        const first_body_var = ModuleEnv.varFrom(first_branch.body);
         const branch_ctx = problem.Context{ .if_branch = .{
             .branch_index = 0,
             .num_branches = @intCast(branches.len + 1),
@@ -7501,12 +7540,7 @@ fn checkIfElseExpr(
             .parent_if_expr = if_expr_idx,
             .last_if_branch = first_branch_idx,
         } };
-        if (!self.isCompatibleWithExpected(first_body_var, expected_ret, branch_ctx)) {
-            try self.markErroneousBranchWithExpected(first_branch.body, expected_ret, env);
-            try self.unifyWith(first_body_var, .err, env);
-        } else {
-            _ = try self.unifyInContext(first_body_var, expected_ret, env, branch_ctx);
-        }
+        try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, branch_acc.?, branch_ctx, env);
     }
 
     // The 1st branch's body is the type all other branches must match (when no expected type)
@@ -7530,7 +7564,6 @@ fn checkIfElseExpr(
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
-            const this_body_var = ModuleEnv.varFrom(branch.body);
             const branch_ctx = problem.Context{ .if_branch = .{
                 .branch_index = @intCast(cur_index),
                 .num_branches = num_branches,
@@ -7538,12 +7571,7 @@ fn checkIfElseExpr(
                 .parent_if_expr = if_expr_idx,
                 .last_if_branch = last_if_branch,
             } };
-            if (!self.isCompatibleWithExpected(this_body_var, expected_ret, branch_ctx)) {
-                try self.markErroneousBranchWithExpected(branch.body, expected_ret, env);
-                try self.unifyWith(this_body_var, .err, env);
-            } else {
-                _ = try self.unifyInContext(this_body_var, expected_ret, env, branch_ctx);
-            }
+            try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, branch_acc.?, branch_ctx, env);
         } else {
             const body_var: Var = ModuleEnv.varFrom(branch.body);
             const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
@@ -7582,7 +7610,6 @@ fn checkIfElseExpr(
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
-        const final_else_body_var = ModuleEnv.varFrom(if_.final_else);
         const branch_ctx = problem.Context{ .if_branch = .{
             .branch_index = num_branches - 1,
             .num_branches = num_branches,
@@ -7590,13 +7617,15 @@ fn checkIfElseExpr(
             .parent_if_expr = if_expr_idx,
             .last_if_branch = last_if_branch,
         } };
-        if (!self.isCompatibleWithExpected(final_else_body_var, expected_ret, branch_ctx)) {
-            try self.markErroneousBranchWithExpected(if_.final_else, expected_ret, env);
-            try self.unifyWith(final_else_body_var, .err, env);
-        } else {
-            _ = try self.unifyInContext(final_else_body_var, expected_ret, env, branch_ctx);
-        }
+        try self.checkBranchBodyAgainstExpected(if_.final_else, expected_ret, branch_acc.?, branch_ctx, env);
         const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
+        // Tie the whole expr to the accumulated branch meet, then to the shared
+        // expected return type. This is the ONLY place `expected_ret` is merged
+        // for the if-expr, and it runs in the load-bearing `(expr, expected)`
+        // operand order so `expected_ret` survives as the union-find root (see
+        // `store.union_`): flipping it ties recursive type parameters off to
+        // duplicate rigids of the same name, which then fail to unify.
+        _ = try self.unify(if_expr_var, branch_acc.?, env);
         _ = try self.unify(if_expr_var, expected_ret, env);
     } else {
         const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
@@ -7631,6 +7660,11 @@ fn checkMatchExpr(
 
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     const expected_branch_ret = expected.branch_result;
+
+    // Fresh accumulator for the meet of all compatible branch bodies. Branches
+    // fold into this instead of into the shared `expected_ret`, which is unified
+    // with the whole expr (and hence the accumulator) exactly once, at the end.
+    const branch_acc: ?Var = if (expected_branch_ret != null) try self.fresh(env, expr_region) else null;
 
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond, env, Expected.none());
@@ -7709,18 +7743,12 @@ fn checkMatchExpr(
 
     // Check first branch body against expected return type
     if (expected_branch_ret) |expected_ret| {
-        const first_body_var = ModuleEnv.varFrom(first_branch.value);
         const branch_ctx = problem.Context{ .match_branch = .{
             .branch_index = 0,
             .num_branches = @intCast(match.branches.span.len),
             .match_expr = expr_idx,
         } };
-        if (!self.isCompatibleWithExpected(first_body_var, expected_ret, branch_ctx)) {
-            try self.markErroneousBranchWithExpected(first_branch.value, expected_ret, env);
-            try self.unifyWith(first_body_var, .err, env);
-        } else {
-            _ = try self.unifyInContext(first_body_var, expected_ret, env, branch_ctx);
-        }
+        try self.checkBranchBodyAgainstExpected(first_branch.value, expected_ret, branch_acc.?, branch_ctx, env);
     }
 
     const val_var = ModuleEnv.varFrom(first_branch.value);
@@ -7767,18 +7795,12 @@ fn checkMatchExpr(
         // Pairwise unification poisons ALL connected vars via union-find on failure,
         // making it impossible to distinguish correct from incorrect branches afterward.
         if (expected_branch_ret) |expected_ret| {
-            const body_var = ModuleEnv.varFrom(branch.value);
             const branch_ctx = problem.Context{ .match_branch = .{
                 .branch_index = @intCast(branch_cur_index),
                 .num_branches = @intCast(match.branches.span.len),
                 .match_expr = expr_idx,
             } };
-            if (!self.isCompatibleWithExpected(body_var, expected_ret, branch_ctx)) {
-                try self.markErroneousBranchWithExpected(branch.value, expected_ret, env);
-                try self.unifyWith(body_var, .err, env);
-            } else {
-                _ = try self.unifyInContext(body_var, expected_ret, env, branch_ctx);
-            }
+            try self.checkBranchBodyAgainstExpected(branch.value, expected_ret, branch_acc.?, branch_ctx, env);
         } else {
             const branch_result = try self.unifyInContext(val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
                 .branch_index = @intCast(branch_cur_index),
@@ -7823,6 +7845,13 @@ fn checkMatchExpr(
 
     // Unify the root expr with the match value
     if (expected_branch_ret) |expected_ret| {
+        // Tie the whole expr to the accumulated branch meet, then to the shared
+        // expected return type. This is the ONLY place `expected_ret` is merged
+        // for the match expr, and it runs in the load-bearing `(expr, expected)`
+        // operand order so `expected_ret` survives as the union-find root (see
+        // `store.union_`): flipping it ties recursive type parameters off to
+        // duplicate rigids of the same name, which then fail to unify.
+        _ = try self.unify(ModuleEnv.varFrom(expr_idx), branch_acc.?, env);
         _ = try self.unify(ModuleEnv.varFrom(expr_idx), expected_ret, env);
     } else {
         _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
@@ -8937,9 +8966,11 @@ fn checkNominalTypeUsage(
                 _ = try self.unify(target_var, nominal_var, env);
                 return .ok;
             },
-            .problem => {
+            .problem, .mismatch => {
                 // Unification failed - the constructor is incompatible with the nominal type
                 // Context is already set by unifyInContext
+                // (`.mismatch` is unreachable here — this call uses the poison_to_err
+                // wrapper, which only returns `.ok`/`.problem` — grouped for exhaustiveness.)
                 // Mark the entire expression as having a type error
                 try self.unifyWith(target_var, .err, env);
                 return .err;
@@ -10541,64 +10572,132 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
     }
 }
 
-/// Check if a type variable contains any error types anywhere in its structure.
-/// This is used to determine if an expression's type contains errors, in which case
-/// we should use the annotation type for the pattern instead of the expression type.
-/// This handles cases like `Error -> Error` where the root is a function but the
-/// argument/return types are errors.
-/// Check if a branch body type is compatible with the expected return type.
-/// This unifies against a type-store snapshot that is rolled back afterward, so
-/// it leaves the type store unchanged. It is NOT fully side-effect-free,
-/// however: a mismatch is recorded as a diagnostic in the real problem store
-/// (see the note at the unify call below). Must be called BEFORE pairwise
-/// unification poisons branch vars.
-fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
-    const body = self.types.resolveVar(body_var);
-    const expected = self.types.resolveVar(expected_var);
+/// Record a branch-body-vs-expected `type_mismatch` with roles fixed by the
+/// caller: the branch body is the "actual", the shared return is the "expected".
+/// This is what makes the rendered message + region correct regardless of the
+/// merge operand order used to commit the types.
+fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: problem.Context) std.mem.Allocator.Error!void {
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_ret);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, body_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected_ret,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = body_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = ctx,
+    } });
+}
 
-    // Same resolved var (unified) → compatible
-    if (body.var_ == expected.var_) return true;
-
-    // If either is .err, assume compatible (don't add additional errors)
-    if (body.desc.content == .err or expected.desc.content == .err) return true;
-
-    const from_numeral_count = self.types.from_numeral_flex_count;
-    const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
-    var store_snapshot = self.types.snapshot() catch return true;
+/// Probe whether `body_var` can unify with `target`, recording and committing
+/// nothing. Snapshots the type store, runs the non-recording raw-unifier probe
+/// (`probeUnifyWithoutRecordingProblems`, which touches only the type store — no
+/// problem store, no `self.regions`, no `env`), then ALWAYS rolls the type store
+/// back and restores every counter the probe can move (`from_numeral`; `regions`
+/// and `instantiation_dispatchers` as defensive no-ops matching the sibling
+/// probe sites). On OOM, reports compatible rather than failing solving. Nothing
+/// in the live solver state is disturbed.
+fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Allocator.Error!bool {
+    const saved_from_numeral = self.types.from_numeral_flex_count;
+    const saved_regions_len = self.regions.items.items.len;
+    const saved_dispatchers_len = self.instantiation_dispatchers.items.len;
+    var snap = self.types.snapshot() catch return true;
     defer {
-        self.types.rollbackTo(&store_snapshot);
-        self.types.from_numeral_flex_count = from_numeral_count;
-        // Drop any per-instantiation dispatchers recorded during this speculative
-        // probe; their fresh receiver vars are rolled back with the type store.
-        self.instantiation_dispatchers.shrinkRetainingCapacity(instantiation_dispatchers_len);
-        store_snapshot.deinit(self.cir.gpa);
+        self.types.rollbackTo(&snap);
+        self.types.from_numeral_flex_count = saved_from_numeral;
+        self.regions.items.shrinkRetainingCapacity(saved_regions_len);
+        self.instantiation_dispatchers.shrinkRetainingCapacity(saved_dispatchers_len);
+        snap.deinit(self.gpa);
+    }
+    return try self.probeUnifyWithoutRecordingProblems(body_var, target);
+}
+
+/// Record a branch-vs-`mismatch_against` diagnostic (actual = branch body,
+/// region on it) and locally poison the branch so it does not cascade.
+/// `mismatch_against` is rendered as "the previous branch(es) result" — either
+/// the annotated return type or the branch accumulator, whichever the body
+/// failed against. `expected_ret` is always used to mark the erroneous branch.
+fn reportBranchMismatchAndPoison(
+    self: *Self,
+    body_expr_idx: CIR.Expr.Idx,
+    body_var: Var,
+    mismatch_against: Var,
+    expected_ret: Var,
+    ctx: problem.Context,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    try self.recordBranchTypeMismatch(body_var, mismatch_against, ctx);
+    try self.markErroneousBranchWithExpected(body_expr_idx, expected_ret, env);
+    try self.unifyWith(body_var, .err, env);
+}
+
+/// Check one if/match branch body against the shared expected return type, and
+/// fold a compatible body into the per-expression accumulator `acc`.
+///
+/// `acc` is a fresh var owned by the enclosing `checkIfElseExpr` /
+/// `checkMatchExpr`; it accumulates the meet of every compatible branch body and
+/// is unified with the shared `expected_ret` exactly once, at the end of the
+/// expression. Branches therefore never merge into `expected_ret` directly: the
+/// shared annotated return var is no longer the per-branch union-find hub, so
+/// the "which operand survives" question (see `store.union_`) can no longer
+/// affect branch checking, and one earlier branch can no longer refine the
+/// annotation seen by a later branch.
+///
+/// Branch bodies are checked with two isolated probes (see
+/// `probeBranchCompatible`), committing only once both pass so a failed fold can
+/// never corrupt `acc`:
+///   1. Against the pristine `expected_ret`: catches a body that does not match
+///      the annotated return type. Reported against `expected_ret`.
+///   2. Against `acc`: catches a body that matches the annotation yet diverges
+///      from an earlier sibling already folded in. This is only observable when
+///      the annotation is LOOSER than the accumulated branches — e.g. an
+///      inferred `_` return, where probe (1) passes for every branch but the
+///      branches still disagree. Reported against `acc`. Without this probe such
+///      a mismatch would be silently dropped by the `write_no_report` fold,
+///      inferring an unsound type.
+///
+/// On success the body is folded into `acc` for real via the wrapper (so
+/// regions/rank propagate into the live `env`); `expected_ret` stays untouched.
+/// We do NOT keep a probe's merge as the commit: the probe runs through the raw
+/// unifier (no region/rank/constraint propagation) precisely so its rollback is
+/// complete, so the real merge is redone through the wrapper once compatible.
+fn checkBranchBodyAgainstExpected(
+    self: *Self,
+    body_expr_idx: CIR.Expr.Idx,
+    expected_ret: Var,
+    acc: Var,
+    ctx: problem.Context,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const body_var = ModuleEnv.varFrom(body_expr_idx);
+
+    // Cheap guards: already-unified or already-erroneous pairs need no work.
+    // If body already resolves to expected, it is correctly constrained and we
+    // must NOT fold it into `acc` — that would run `unify(expected_ret, acc)` and
+    // redirect the shared expected var into the accumulator (the very mutation
+    // this accumulator design exists to avoid).
+    const rb = self.types.resolveVar(body_var);
+    const re = self.types.resolveVar(expected_ret);
+    if (rb.var_ == re.var_) return;
+    if (rb.desc.content == .err or re.desc.content == .err) return;
+
+    // Probe (1): does the body match the annotated return type?
+    if (!try self.probeBranchCompatible(body_var, expected_ret)) {
+        try self.reportBranchMismatchAndPoison(body_expr_idx, body_var, expected_ret, expected_ret, ctx, env);
+        return;
     }
 
-    // NOTE: this passes the real `self.problems`/`self.snapshots` stores, not
-    // throwaway ones, so a mismatch here is RECORDED as a diagnostic and is NOT
-    // rolled back by the defer above (which only rolls back the type store).
-    // This is intentional and load-bearing: callers respond to a `false` return
-    // by marking the branch erroneous WITHOUT emitting their own diagnostic, so
-    // for some branch mismatches (e.g. a match branch whose body conflicts with
-    // a rigid annotated return type) the problem recorded here is the only
-    // diagnostic the user ever sees. Do not switch this to a throwaway problem
-    // store without making the callers emit the diagnostic themselves.
-    const probe_result = unifier.unifyInContext(
-        self.cir.gpa,
-        self.cir.getIdentStoreConst(),
-        self.cir.qualified_module_ident,
-        self.types,
-        &self.problems,
-        &self.snapshots,
-        &self.type_writer,
-        &self.unify_scratch,
-        &self.occurs_scratch,
-        expected_var,
-        body_var,
-        ctx,
-    ) catch return true;
+    // Probe (2): does the body match the earlier branches accumulated in `acc`?
+    // (Distinct from (1) only when the annotation is looser than `acc`.)
+    if (!try self.probeBranchCompatible(body_var, acc)) {
+        try self.reportBranchMismatchAndPoison(body_expr_idx, body_var, acc, expected_ret, ctx, env);
+        return;
+    }
 
-    return probe_result.isOk();
+    // Commit: fold the body into the accumulator for real (propagates
+    // regions/rank into env). Both probes passed, so this cannot mismatch.
+    _ = try self.unifyWriteNoReportInContext(body_var, acc, env, ctx);
 }
 
 fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
@@ -10614,6 +10713,11 @@ fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected
     try self.types.dangerousSetVarRedirect(expr_var, redirected_ret);
 }
 
+/// Check if a type variable contains any error types anywhere in its structure.
+/// This is used to determine if an expression's type contains errors, in which case
+/// we should use the annotation type for the pattern instead of the expression type.
+/// This handles cases like `Error -> Error` where the root is a function but the
+/// argument/return types are errors.
 fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
     const resolved = self.types.resolveVar(var_);
 

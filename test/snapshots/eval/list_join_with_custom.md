@@ -435,7 +435,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 433)
+		(e-call (constraint-fn-var 434)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local
@@ -446,7 +446,7 @@ expect output == "div | span | p"
 			(ty-lookup (name "Html") (local))))
 	(d-let
 		(p-assign (ident "output"))
-		(e-dispatch-call (method "to_str") (constraint-fn-var 441)
+		(e-dispatch-call (method "to_str") (constraint-fn-var 442)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "result"))))
