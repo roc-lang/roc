@@ -904,6 +904,23 @@ test "roc run test/str/app_static_24_byte_string.roc does not panic" {
 
 // roc build tests
 
+test "roc build defaults to LLVM speed object build" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "build", "--no-link", "--no-cache" }, "test/str/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    if (!(result.term == .exited and result.term.exited == 0)) {
+        std.debug.print("roc build failed\nstdout: {s}\nstderr: {s}\n", .{ result.stdout, result.stderr });
+    }
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stdout, "Object file generated:") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "roc_app_llvm_") != null);
+    try testing.expect(std.mem.find(u8, result.stdout, "_speed.o") != null);
+}
+
 test "roc build --opt=size and --opt=speed generate LLVM object files" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -1129,7 +1146,7 @@ test "roc build fails with invalid target error" {
     try testing.expect(has_error);
 }
 
-test "roc build glibc target gives helpful error on non-Linux" {
+test "roc build --opt=dev glibc target gives helpful error on non-Linux" {
     const testing = std.testing;
     const builtin = @import("builtin");
     const gpa = testing.allocator;
@@ -1139,7 +1156,7 @@ test "roc build glibc target gives helpful error on non-Linux" {
         return; // Skip on Linux where glibc cross-compilation is supported
     }
 
-    const result = try util.runRoc(gpa, &.{ "build", "--target=x64glibc" }, "test/int/app.roc");
+    const result = try util.runRoc(gpa, &.{ "build", "--opt=dev", "--target=x64glibc" }, "test/int/app.roc");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 

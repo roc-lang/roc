@@ -3522,8 +3522,9 @@ fn compileLlvmAppObject(
     defer bitcode.deinit();
 
     const target_name = @tagName(target);
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}.bc", .{target_name});
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}.o", .{target_name});
+    const opt_name = @tagName(args.opt);
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}.bc", .{ target_name, opt_name });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}.o", .{ target_name, opt_name });
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
     const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
 
@@ -3639,7 +3640,8 @@ fn rocBuildWasmLlvm(
         const wasm_bytes = try wasm_module.encodeRelocatable(ctx.gpa);
         defer ctx.gpa.free(wasm_bytes);
 
-        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, "roc_app_llvm_wasm32.o" });
+        const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(args.opt)});
+        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
             std.log.err("Failed to write wasm object output: {}", .{err});
             return error.WasmOutputWriteFailed;

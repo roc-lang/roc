@@ -99,8 +99,10 @@ pub const CompileOptions = struct {
     /// Whether to place each function in its own section.
     /// Set to false for JIT mode (single .text section is simpler).
     function_sections: bool = true,
-    /// Optimization level for code generation.
-    opt_level: bindings.CodeGenOptLevel = .Default,
+    /// Optimization level for LLVM IR and target-machine code generation.
+    optimization: bindings.IrOptimizationLevel = .O3,
+    /// Whether to include debug information in the generated object.
+    debug: bool = false,
     /// Relocation model to use when emitting the object file.
     reloc_mode: bindings.RelocMode = .Default,
     /// Whether to use the module's native target triple instead of LLVM's default.
@@ -180,7 +182,7 @@ fn emitMergedBitcodeToObjectFile(
         triple,
         cpu,
         "", // No specific features
-        options.opt_level, // optimization level
+        options.optimization.toCodeGenOptLevel(),
         options.reloc_mode,
         .Default, // code model
         options.function_sections, // function_sections
@@ -254,8 +256,8 @@ fn emitMergedBitcodeToObjectFile(
     };
 
     const emit_options = bindings.TargetMachine.EmitOptions{
-        .is_debug = options.opt_level == .None,
-        .is_small = false,
+        .is_debug = options.debug,
+        .ir_opt_level = options.optimization,
         .time_report_out = null,
         .tsan = false,
         .sancov = false,

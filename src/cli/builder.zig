@@ -23,16 +23,20 @@ fn stderrWriter() *std.Io.Writer {
 
 /// Optimization levels for compilation
 pub const OptimizationLevel = enum {
-    none, // --opt none (no optimizations)
     size, // --opt size (optimize for binary size)
     speed, // --opt speed (aggressive performance optimizations)
 
-    /// Convert to LLVM optimization level
-    fn toLLVMLevel(self: OptimizationLevel) c_int {
+    fn toLLVMCodeGenLevel(self: OptimizationLevel) c_int {
         return switch (self) {
-            .none => LLVMCodeGenLevelNone,
-            .size => LLVMCodeGenLevelLess,
+            .size => LLVMCodeGenLevelDefault,
             .speed => LLVMCodeGenLevelAggressive,
+        };
+    }
+
+    fn toLLVMIRLevel(self: OptimizationLevel) ZigLLVMIROptimizationLevel {
+        return switch (self) {
+            .size => .oz,
+            .speed => .o3,
         };
     }
 };
@@ -98,9 +102,14 @@ const ZigLLVMThinOrFullLTOPhase = enum(c_int) {
     ZigLLVMThinOrFullLTOPhase_FullPostLink,
 };
 
+const ZigLLVMIROptimizationLevel = enum(c_int) {
+    oz = 0,
+    o3 = 1,
+};
+
 const ZigLLVMEmitOptions = extern struct {
     is_debug: bool,
-    is_small: bool,
+    ir_opt_level: ZigLLVMIROptimizationLevel,
     time_report_out: ?*?[*:0]u8,
     tsan: bool,
     sancov: bool,
@@ -115,8 +124,7 @@ const ZigLLVMEmitOptions = extern struct {
 };
 
 // LLVM Code Generation Optimization Levels
-const LLVMCodeGenLevelNone: c_int = 0;
-const LLVMCodeGenLevelLess: c_int = 1;
+const LLVMCodeGenLevelDefault: c_int = 2;
 const LLVMCodeGenLevelAggressive: c_int = 3;
 
 // LLVM Relocation Models
@@ -256,7 +264,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         target_triple_z.ptr,
         cpu_z.ptr,
         features_z.ptr,
-        config.optimization.toLLVMLevel(),
+        config.optimization.toLLVMCodeGenLevel(),
         LLVMRelocDefault,
         LLVMCodeModelDefault,
         false, // function_sections
@@ -286,7 +294,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     const emit_options = ZigLLVMEmitOptions{
         // Auto-enable debug when roc is built in debug mode, OR when explicitly requested via --debug
         .is_debug = (builtin.mode == .Debug) or config.debug,
-        .is_small = config.optimization == .size,
+        .ir_opt_level = config.optimization.toLLVMIRLevel(),
         .time_report_out = null,
         .tsan = false,
         .sancov = false,
@@ -315,6 +323,13 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     std.log.debug("Successfully compiled bitcode to object file: {s}", .{config.output_path});
     return true;
+}
+
+test "LLVM optimization option mapping" {
+    try std.testing.expectEqual(LLVMCodeGenLevelDefault, OptimizationLevel.size.toLLVMCodeGenLevel());
+    try std.testing.expectEqual(LLVMCodeGenLevelAggressive, OptimizationLevel.speed.toLLVMCodeGenLevel());
+    try std.testing.expectEqual(ZigLLVMIROptimizationLevel.oz, OptimizationLevel.size.toLLVMIRLevel());
+    try std.testing.expectEqual(ZigLLVMIROptimizationLevel.o3, OptimizationLevel.speed.toLLVMIRLevel());
 }
 
 /// Check if LLVM is available
