@@ -162,6 +162,9 @@ pub const BuildEnv = struct {
     /// declarations that are not part of a valid executable program.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
+    /// Compiler role to assign to the root module of this build.
+    root_module_role: ModuleEnv.ModuleRole = .user,
+
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
 
@@ -367,6 +370,10 @@ pub const BuildEnv = struct {
         self.post_check_publication_mode = mode;
     }
 
+    pub fn setRootModuleRole(self: *BuildEnv, role: ModuleEnv.ModuleRole) void {
+        self.root_module_role = role;
+    }
+
     /// Build an app file specifically (validates it's an app)
     pub fn buildApp(self: *BuildEnv, app_file: []const u8) !void {
         // Build and let the main function handle everything
@@ -547,6 +554,7 @@ pub const BuildEnv = struct {
         const coord_pkg = coord.getPackage(pkg_name).?;
         const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
+        coord_pkg.modules.items[root_id].module_role = self.root_module_role;
         coord_pkg.modules.items[root_id].depth = 0;
         coord_pkg.root_module_id = root_id;
         coord_pkg.remaining_modules += 1;

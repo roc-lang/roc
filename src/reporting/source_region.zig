@@ -82,22 +82,22 @@ test "calculateLineNumberWidth" {
 }
 
 test "formatLineNumber" {
-    var buffer: [100]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buffer);
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
     // Test width 1
-    try formatLineNumber(&writer, 5, 1);
-    try testing.expectEqualStrings("5", writer.buffered());
+    try formatLineNumber(&writer.writer, 5, 1);
+    try testing.expectEqualStrings("5", writer.written());
 
     // Test width 3
-    writer.end = 0;
-    try formatLineNumber(&writer, 5, 3);
-    try testing.expectEqualStrings("  5", writer.buffered());
+    writer.clearRetainingCapacity();
+    try formatLineNumber(&writer.writer, 5, 3);
+    try testing.expectEqualStrings("  5", writer.written());
 
     // Test width 4 with large number
-    writer.end = 0;
-    try formatLineNumber(&writer, 1234, 4);
-    try testing.expectEqualStrings("1234", writer.buffered());
+    writer.clearRetainingCapacity();
+    try formatLineNumber(&writer.writer, 1234, 4);
+    try testing.expectEqualStrings("1234", writer.written());
 }
 
 test "calculateUnderlineLength" {
@@ -115,15 +115,15 @@ test "calculateUnderlineLength" {
 }
 
 test "printSpaces" {
-    var buffer: [100]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buffer);
+    var writer = std.Io.Writer.Allocating.init(testing.allocator);
+    defer writer.deinit();
 
-    try printSpaces(&writer, 0);
-    try testing.expectEqualStrings("", writer.buffered());
+    try printSpaces(&writer.writer, 0);
+    try testing.expectEqualStrings("", writer.written());
 
-    writer.end = 0;
-    try printSpaces(&writer, 5);
-    try testing.expectEqualStrings("     ", writer.buffered());
+    writer.clearRetainingCapacity();
+    try printSpaces(&writer.writer, 5);
+    try testing.expectEqualStrings("     ", writer.written());
 }
 
 test "integration - format source region" {

@@ -1417,9 +1417,20 @@ fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
         module_env.imports.clearResolvedModules();
         for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
             const import_name = module_env.getString(str_idx);
+            const import_idx: CIR.Import.Idx = @enumFromInt(i);
+            if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
+                for (module_envs, 0..) |candidate_env, module_idx| {
+                    if (candidate_env.module_role == .builtin) {
+                        module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
+                        break;
+                    }
+                }
+                continue;
+            }
             for (module_envs, 0..) |candidate_env, module_idx| {
+                if (candidate_env.module_role == .builtin) continue;
                 if (base.Ident.textEql(candidate_env.module_name, import_name)) {
-                    module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                    module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
                     break;
                 }
             }
@@ -1431,9 +1442,20 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     module_env.imports.clearResolvedModules();
     for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
         const import_name = module_env.getString(str_idx);
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
+            for (imported_envs, 0..) |candidate_env, module_idx| {
+                if (candidate_env.module_role == .builtin) {
+                    module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
+                    break;
+                }
+            }
+            continue;
+        }
         for (imported_envs, 0..) |candidate_env, module_idx| {
+            if (candidate_env.module_role == .builtin) continue;
             if (base.Ident.textEql(candidate_env.module_name, import_name)) {
-                module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
                 break;
             }
         }

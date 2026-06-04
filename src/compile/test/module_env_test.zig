@@ -104,11 +104,12 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 numeric method identifiers: abs, abs_diff
     // Plus 1 inspect method identifier: to_inspect
     // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+    // Plus 2 fully qualified builtin type names: Builtin.List, Builtin.Box
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
     // Count reflects the merged builtin set after the zig-16 / origin/main merge
-    // (grew from 85 to 90 builtin identifiers).
-    try testing.expectEqual(@as(u32, 90), original.common.idents.interner.entry_count);
+    // (grew from 85 to 92 builtin identifiers).
+    try testing.expectEqual(@as(u32, 92), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -117,9 +118,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 81 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
+    // Should have same identifiers as original: hello, world, TestModule + 16 well-known identifiers + 21 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 90), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 92), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -160,229 +161,52 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), env.imports.imports.len());
 }
 
-// test "ModuleEnv with types CompactWriter roundtrip" {
-//     const testing = std.testing;
-//     const gpa = testing.allocator;
+test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
+    const gpa = std.testing.allocator;
+    const source = "module []\n";
 
-//     var common_env = try base.CommonEnv.init(gpa, "");
-//     // Module env takes ownership of Common env -- no need to deinit here
+    var original = try ModuleEnv.init(gpa, source);
+    defer original.deinit();
 
-//     // Create ModuleEnv with some types
-//     var original = try ModuleEnv.init(gpa, &common_env);
-//     defer original.deinit();
+    try original.initCIRFields("Test");
+    try original.common.calcLineStarts(gpa);
 
-//     // Initialize CIR fields
-//     try original.initCIRFields("test.Types");
+    const get_ident = try original.insertIdent(Ident.for_text("get"));
+    const set_ident = try original.insertIdent(Ident.for_text("set"));
+    const get_qualified = try original.insertIdent(Ident.for_text("Local.get"));
+    const set_qualified = try original.insertIdent(Ident.for_text("Local.set"));
+    const owner_stmt: CIR.Statement.Idx = @enumFromInt(1);
 
-//     // Add some type variables
-//     const var1 = try original.types.freshFromContent(.err);
-//     const var2 = try original.types.freshFromContent(.{ .flex_var = null });
+    try original.registerMethodIdentForOwner(owner_stmt, set_ident, set_qualified);
+    try original.registerMethodDefForOwner(owner_stmt, set_ident, .{
+        .type_node_idx = @enumFromInt(2),
+        .def_idx = @enumFromInt(2),
+    });
+    try original.registerMethodIdentForOwner(owner_stmt, get_ident, get_qualified);
+    try original.registerMethodDefForOwner(owner_stmt, get_ident, .{
+        .type_node_idx = @enumFromInt(1),
+        .def_idx = @enumFromInt(1),
+    });
+    original.finalizeMethodTables();
 
-//     _ = var1;
-//     _ = var2;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
 
-//     // Create arena allocator for serialization
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_alloc = arena.allocator();
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_alloc);
 
-//     // Create a temp file
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
+    const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+    try serialized.serialize(&original, arena_alloc, &writer);
 
-//     const file = try tmp_dir.dir.createFile("test_types_module_env.dat", .{ .read = true });
-//     defer file.close();
+    try std.testing.expect(serialized.method_idents.sorted);
+    try std.testing.expect(serialized.method_idents.deduplicated);
+    try std.testing.expectEqual(@as(u64, 2), serialized.method_idents.entries_len);
 
-//     // Serialize
-//     var writer = CompactWriter.init();
-//     defer writer.deinit(arena_alloc);
-
-//     // First, allocate and serialize the CommonEnv separately using the working pattern
-//     const common_serialized = try writer.appendAlloc(arena_alloc, base.CommonEnv.Serialized);
-//     try common_serialized.serialize(original.common, arena_alloc, &writer);
-
-//     // Now serialize the ModuleEnv, but we'll need to handle the common field specially
-//     const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
-//     try serialized.serialize(&original, arena_alloc, &writer);
-
-//     // Update the ModuleEnv.Serialized to point to our separately serialized CommonEnv
-//     serialized.common = common_serialized.*;
-
-//     // Write to file
-//     try writer.writeGather(file);
-
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
-//     defer gpa.free(buffer);
-
-//     _ = try file.read(buffer);
-
-//     // The CommonEnv.Serialized is at the beginning of the buffer
-//     const common_serialized_ptr = @as(*base.CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-//     const deserialized_common = common_serialized_ptr.deserialize(@intFromPtr(buffer.ptr), "");
-
-//     // The ModuleEnv.Serialized follows after the CommonEnv.Serialized
-//     const module_env_offset = @sizeOf(base.CommonEnv.Serialized);
-//     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + module_env_offset)));
-
-//     // Now manually construct the ModuleEnv using the deserialized CommonEnv
-//     const deserialized = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
-//     deserialized.* = ModuleEnv{
-//         .gpa = gpa,
-//         .common = deserialized_common,
-//         .types = deserialized_ptr.types.deserialize(@intFromPtr(buffer.ptr)).*,
-//         .all_defs = deserialized_ptr.all_defs,
-//         .all_statements = deserialized_ptr.all_statements,
-//         .external_decls = deserialized_ptr.external_decls.deserialize(@intFromPtr(buffer.ptr)).*,
-//         .imports = (try deserialized_ptr.imports.deserialize(@intFromPtr(buffer.ptr), gpa)).*,
-//         .module_name = "test.Types",
-//         .diagnostics = deserialized_ptr.diagnostics,
-//         .store = deserialized_ptr.store.deserialize(@intFromPtr(buffer.ptr), gpa).*,
-//     };
-
-//     // Verify module name
-//     try testing.expectEqualStrings("test.Types", deserialized.module_name);
-
-//     // Debug: Check the length of types before and after serialization
-//     std.debug.print("\nOriginal types.len(): {}\n", .{original.types.len()});
-//     std.debug.print("Types serialized field - slots.len(): {}\n", .{deserialized_ptr.types.slots.len});
-//     std.debug.print("Types serialized field - descs.len(): {}\n", .{deserialized_ptr.types.descs.len});
-//     std.debug.print("Deserialized types.len(): {}\n", .{deserialized.types.len()});
-
-//     // Can't verify types directly as the internal structure is complex
-//     // but we can at least verify the module env is intact
-//     try testing.expect(deserialized.types.len() >= 2);
-// }
-
-// test "ModuleEnv empty CompactWriter roundtrip" {
-//     const testing = std.testing;
-//     const gpa = testing.allocator;
-
-//     var common_env = try base.CommonEnv.init(gpa, "");
-//     // Module env takes ownership of Common env -- no need to deinit here
-
-//     // Create empty ModuleEnv
-//     var original = try ModuleEnv.init(gpa, &common_env);
-//     defer original.deinit();
-
-//     // Don't initialize CIR fields to keep it truly empty
-
-//     // Create arena allocator for serialization
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_alloc = arena.allocator();
-
-//     // Create a temp file
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
-
-//     const file = try tmp_dir.dir.createFile("test_empty_module_env.dat", .{ .read = true });
-//     defer file.close();
-
-//     // Serialize
-//     var writer = CompactWriter.init();
-//     defer writer.deinit(arena_alloc);
-
-//     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
-//     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
-//     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-//     const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
-//     try serialized_ptr.serialize(&original, arena_alloc, &writer);
-
-//     // Write to file
-//     try writer.writeGather(file);
-
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
-//     defer gpa.free(buffer);
-
-//     _ = try file.read(buffer);
-
-//     // Find the ModuleEnv at the tracked offset
-//     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-//     const deserialized = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, "", "test.Empty");
-
-//     // Verify module name
-//     try testing.expectEqualStrings("test.Empty", deserialized.module_name);
-
-//     // Verify the deserialized ModuleEnv has the expected state
-//     // Note: Even an "empty" ModuleEnv may have some initialized state
-//     try testing.expect(deserialized.idents.interner.bytes.len() >= 0);
-//     try testing.expect(deserialized.strings.buffer.len() >= 0);
-// }
-
-// test "ModuleEnv with source code CompactWriter roundtrip" {
-//     const testing = std.testing;
-//     const gpa = testing.allocator;
-
-//     const source =
-//         \\app [main] {
-//         \\    main = \{} ->
-//         \\        "Hello, World!"
-//         \\}
-//     ;
-
-//     var common_env = try base.CommonEnv.init(gpa, source);
-//     // Module env takes ownership of Common env -- no need to deinit here
-
-//     // Calculate line starts
-//     try common_env.calcLineStarts(gpa);
-
-//     // Create ModuleEnv with source
-//     var original = try ModuleEnv.init(gpa, &common_env);
-//     defer original.deinit();
-
-//     // Initialize CIR fields
-//     try original.initCIRFields("test.Hello");
-
-//     // Create arena allocator for serialization
-//     var arena = std.heap.ArenaAllocator.init(gpa);
-//     defer arena.deinit();
-//     const arena_alloc = arena.allocator();
-
-//     // Create a temp file
-//     var tmp_dir = testing.tmpDir(.{});
-//     defer tmp_dir.cleanup();
-
-//     const file = try tmp_dir.dir.createFile("test_source_module_env.dat", .{ .read = true });
-//     defer file.close();
-
-//     // Serialize
-//     var writer = CompactWriter.init();
-//     defer writer.deinit(arena_alloc);
-
-//     // Allocate space for ModuleEnv (not Serialized) since deserialize requires enough space
-//     const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
-//     const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
-//     const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
-//     try serialized_ptr.serialize(&original, arena_alloc, &writer);
-
-//     // Write to file
-//     try writer.writeGather(file);
-
-//     // Read back
-//     try file.seekTo(0);
-//     const file_size = try file.getEndPos();
-//     const buffer = try gpa.alignedAlloc(u8, @alignOf(ModuleEnv), @intCast(file_size));
-//     defer gpa.free(buffer);
-
-//     _ = try file.read(buffer);
-
-//     // Find the ModuleEnv at the tracked offset
-//     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr + env_start_offset));
-//     const deserialized = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, source, "test.Hello");
-
-//     // Verify source and module name
-//     try testing.expectEqualStrings(source, deserialized.source);
-//     try testing.expectEqualStrings("test.Hello", deserialized.module_name);
-
-//     // Verify line starts were preserved
-//     try testing.expectEqual(original.line_starts.items.items.len, deserialized.line_starts.items.items.len);
-// }
+    try std.testing.expect(serialized.method_defs.sorted);
+    try std.testing.expect(serialized.method_defs.deduplicated);
+    try std.testing.expectEqual(@as(u64, 2), serialized.method_defs.entries_len);
+}
 
 test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     const gpa = std.testing.allocator;

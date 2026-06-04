@@ -39,6 +39,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
+        .lsp => &.{"lsp tests"},
         else => &.{},
     };
 }

@@ -92,6 +92,12 @@ pub const ModuleKind = union(enum) {
     };
 };
 
+/// Module role known before header canonicalization.
+pub const ModuleRole = enum(u8) {
+    user,
+    builtin,
+};
+
 /// Well-known identifiers that are interned once and reused throughout compilation.
 /// These are needed for type checking, operator desugaring, and layout generation.
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
@@ -145,6 +151,8 @@ pub const CommonIdents = extern struct {
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
+    builtin_list: Ident.Idx,
+    builtin_box: Ident.Idx,
     builtin_str_inspect: Ident.Idx,
     u8_type: Ident.Idx,
     i8_type: Ident.Idx,
@@ -245,6 +253,8 @@ pub const CommonIdents = extern struct {
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
+            .builtin_list = try common.insertIdent(gpa, Ident.for_text("Builtin.List")),
+            .builtin_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box")),
             .builtin_str_inspect = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.inspect")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
@@ -346,6 +356,8 @@ pub const CommonIdents = extern struct {
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
+            .builtin_list = common.findIdent("Builtin.List") orelse unreachable,
+            .builtin_box = common.findIdent("Builtin.Box") orelse unreachable,
             .builtin_str_inspect = common.findIdent("Builtin.Str.inspect") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
@@ -400,18 +412,53 @@ pub const CommonIdents = extern struct {
     }
 };
 
-/// Key for method identifier lookup: (type_ident, method_ident) pair.
-pub const MethodKey = packed struct(u64) {
-    type_ident: Ident.Idx,
-    method_ident: Ident.Idx,
+/// Key for method lookup: (owner type declaration, method_ident) pair.
+pub const MethodKey = extern struct {
+    owner: CIR.Statement.Idx,
+    method_ident_bits: u32,
+
+    pub fn init(owner: CIR.Statement.Idx, method_ident: Ident.Idx) MethodKey {
+        return .{
+            .owner = owner,
+            .method_ident_bits = @bitCast(method_ident),
+        };
+    }
+
+    pub fn methodIdent(self: MethodKey) Ident.Idx {
+        return @bitCast(self.method_ident_bits);
+    }
+
+    pub fn order(a: MethodKey, b: MethodKey) std.math.Order {
+        const a_owner = @intFromEnum(a.owner);
+        const b_owner = @intFromEnum(b.owner);
+        if (a_owner != b_owner) {
+            return if (a_owner < b_owner) .lt else .gt;
+        }
+
+        const a_method = a.method_ident_bits;
+        const b_method = b.method_ident_bits;
+        if (a_method == b_method) return .eq;
+        return if (a_method < b_method) .lt else .gt;
+    }
 };
 
-/// Mapping from (type_ident, method_ident) pairs to their qualified method ident.
-/// This enables O(log n) index-based method lookup instead of O(n) string comparison.
-/// The value is the qualified method ident (e.g., "Bool.is_eq" for type "Bool" and method "is_eq").
+/// Mapping from (owner declaration, method_ident) pairs to their qualified
+/// method ident.
 ///
 /// This is populated during canonicalization when methods are defined in associated blocks.
 pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
+/// Type/checking and implementation metadata for a method.
+pub const MethodBinding = extern struct {
+    /// Node whose type variable contains the checked method type.
+    type_node_idx: Node.Idx,
+    /// Def that owns the method implementation identity.
+    def_idx: CIR.Def.Idx,
+};
+
+/// Mapping from (owner declaration, method_ident) pairs to the method binding.
+/// This keeps method implementation lookup explicit without requiring local
+/// associated methods to be published through the module exposure table.
+pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
 /// Checked dispatch metadata for one source `for` loop.
 ///
@@ -517,6 +564,8 @@ types: TypeStore,
 
 /// The kind of module (type_module, app, etc.) - set during canonicalization
 module_kind: ModuleKind,
+/// The compiler role of this module, known before header canonicalization.
+module_role: ModuleRole,
 /// All the definitions in the module (populated by canonicalization)
 all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
@@ -524,6 +573,10 @@ all_defs: CIR.Def.Span,
 global_value_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
+/// All canonical type-declaration statements in the module.
+type_decls: CIR.Statement.Span,
+/// Type declarations prepared by forward references before their source declaration.
+forward_type_decls: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
 /// Required type signatures for platform modules (from `requires { main! : () => {} }`)
@@ -571,10 +624,11 @@ idents: CommonIdents,
 /// Example: "MyModule.Foo" -> "F" if user has `import MyModule exposing [Foo as F]`
 import_mapping: types_mod.import_mapping.ImportMapping,
 
-/// Mapping from (type_ident, method_ident) pairs to qualified method idents.
-/// Enables O(1) index-based method lookup during type checking and evaluation.
+/// Mapping from (owner declaration, method_ident) pairs to qualified method idents.
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
+/// Mapping from (owner declaration, method_ident) pairs to defining def indices.
+method_defs: MethodDefs,
 
 /// Dispatch plans attached by checking to source `for` loop nodes.
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
@@ -643,6 +697,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.method_idents.relocate(offset);
+    self.method_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
@@ -656,9 +711,12 @@ pub fn relocate(self: *Self, offset: isize) void {
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
+    self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
+    self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
+    self.forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
@@ -692,9 +750,12 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .common = common,
         .types = try TypeStore.initFromSourceLen(gpa, source_len),
         .module_kind = .module, // Placeholder - set to actual kind during header canonicalization
+        .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
+        .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
+        .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
@@ -711,6 +772,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .method_defs = MethodDefs.init(),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
@@ -730,6 +792,7 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
+    self.method_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
@@ -793,6 +856,20 @@ pub fn pushDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Err
 pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
     comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
     const diag_idx = try self.addDiagnostic(reason);
+    const region = getDiagnosticRegion(reason);
+    const malformed_idx = try self.addMalformed(diag_idx, region);
+    return castIdx(Node.Idx, RetIdx, malformed_idx);
+}
+
+/// Like `pushMalformed`, but does NOT register `reason` in the reported
+/// diagnostics list. The malformed node still references the diagnostic (for
+/// runtime crash text), but the diagnostic that is actually reported for this
+/// site is pushed separately and later — used when forward-reference vs
+/// mutual-recursion classification of a local definition is deferred to the end
+/// of the enclosing block.
+pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
+    comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
+    const diag_idx = try self.store.addDiagnosticUnregistered(reason);
     const region = getDiagnosticRegion(reason);
     const malformed_idx = try self.addMalformed(diag_idx, region);
     return castIdx(Node.Idx, RetIdx, malformed_idx);
@@ -975,6 +1052,62 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .local_reference_before_definition => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "USED BEFORE DEFINITION", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The name ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is used before it is defined.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Local definitions are evaluated in order: a definition can refer to itself or to definitions written before it, but not to definitions written later in the same block. Move ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" above this use, or move both to the top level.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .mutually_recursive_local_definitions => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident1_name = self.getIdent(data.ident1);
+            const ident2_name = self.getIdent(data.ident2);
+
+            var report = Report.init(allocator, "MUTUALLY RECURSIVE LOCAL DEFINITIONS", .runtime_error);
+            const owned_ident1 = try report.addOwnedString(ident1_name);
+            const owned_ident2 = try report.addOwnedString(ident2_name);
+            try report.document.addReflowingText("The local definitions ");
+            try report.document.addUnqualifiedSymbol(owned_ident1);
+            try report.document.addReflowingText(" and ");
+            try report.document.addUnqualifiedSymbol(owned_ident2);
+            try report.document.addReflowingText(" are mutually recursive, which isn't supported for local definitions.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .erroneous_value_use => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
@@ -1079,18 +1212,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            const MAX_IDENT_FIXED_BUFFER = 100;
-            if (owned_ident.len > MAX_IDENT_FIXED_BUFFER - 1) {
-                try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore to suppress this warning.");
-            } else {
-                // format the identifier with an underscore
-                try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
-                var buf: [MAX_IDENT_FIXED_BUFFER]u8 = undefined;
-                const owned_ident_with_underscore = try std.fmt.bufPrint(&buf, "_{s}", .{owned_ident});
-
-                try report.document.addUnqualifiedSymbol(owned_ident_with_underscore);
-                try report.document.addReflowingText(" to suppress this warning.");
-            }
+            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+            const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
+            defer allocator.free(ident_with_underscore);
+            try report.document.addUnqualifiedSymbol(ident_with_underscore);
+            try report.document.addReflowingText(" to suppress this warning.");
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("The unused variable is declared here:");
@@ -1203,6 +1329,84 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
 
             // Show where the redeclaration is
+            try report.document.addReflowingText("The redeclaration is here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                redeclared_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("But ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_alias_redeclared => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+
+            var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("The type alias ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is being redeclared.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("The redeclaration is here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                redeclared_region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("But ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                original_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .nominal_type_redeclared => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+
+            var report = Report.init(allocator, "NOMINAL TYPE REDECLARED", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            try report.document.addReflowingText("The nominal type ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" is being redeclared.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
             try report.document.addReflowingText("The redeclaration is here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -2756,9 +2960,12 @@ pub const Serialized = extern struct {
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
     module_kind: ModuleKind.Serialized,
+    module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
+    type_decls: CIR.Statement.Span,
+    forward_type_decls: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
@@ -2776,6 +2983,7 @@ pub const Serialized = extern struct {
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
+    method_defs: MethodDefs.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
@@ -2797,9 +3005,12 @@ pub const Serialized = extern struct {
 
         // Copy simple values directly
         self.module_kind = ModuleKind.Serialized.encode(env.module_kind);
+        self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
         self.all_statements = env.all_statements;
+        self.type_decls = env.type_decls;
+        self.forward_type_decls = env.forward_type_decls;
         self.exports = env.exports;
         self.builtin_statements = env.builtin_statements;
 
@@ -2826,8 +3037,14 @@ pub const Serialized = extern struct {
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
-        // Serialize method_idents map
+        if (builtin.mode == .Debug) {
+            std.debug.assert(env.method_idents.sorted);
+            std.debug.assert(env.method_idents.deduplicated);
+            std.debug.assert(env.method_defs.sorted);
+            std.debug.assert(env.method_defs.deduplicated);
+        }
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
+        try self.method_defs.serialize(&env.method_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
@@ -2857,9 +3074,12 @@ pub const Serialized = extern struct {
             .common = self.common.deserializeInto(base_addr, source),
             .types = self.types.deserializeInto(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
@@ -2876,6 +3096,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
@@ -2907,9 +3128,12 @@ pub const Serialized = extern struct {
             // Use deserializeWithCopy to get mutable type store
             .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
             .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
             .exports = self.exports,
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
@@ -2927,6 +3151,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_defs = self.method_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
@@ -3711,108 +3936,72 @@ pub fn insertQualifiedIdent(
     parent: []const u8,
     child: []const u8,
 ) std.mem.Allocator.Error!Ident.Idx {
-    const total_len = parent.len + 1 + child.len; // parent + '.' + child
-
-    if (total_len <= 256) {
-        // Use stack buffer for small identifiers
-        var buf: [256]u8 = undefined;
-        const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ parent, child }) catch unreachable;
-        return try self.insertIdent(Ident.for_text(qualified));
-    } else {
-        // Use heap allocation for large identifiers
-        const qualified = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ parent, child });
-        defer self.gpa.free(qualified);
-        return try self.insertIdent(Ident.for_text(qualified));
-    }
+    const qualified = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ parent, child });
+    defer self.gpa.free(qualified);
+    return try self.insertIdent(Ident.for_text(qualified));
 }
 
-/// Registers a method identifier mapping for fast index-based lookup.
-/// This should be called during canonicalization when a method is defined in an associated block.
-///
-/// Parameters:
-/// - type_ident: The type's identifier index (e.g., the ident for "Bool")
-/// - method_ident: The method's identifier index (e.g., the ident for "is_eq")
-/// - qualified_ident: The qualified method ident (e.g., "Bool.is_eq")
-pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+/// Registers a method identifier mapping for an explicit owner declaration.
+pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
+    const key = MethodKey.init(owner, method_ident);
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
-/// Looks up a method identifier by type and method ident indices.
-/// This is the fast O(log n) index-based lookup that avoids string comparison.
-///
-/// Parameters:
-/// - type_ident: The type's identifier index (must be in this module's ident store)
-/// - method_ident: The method's identifier index (must be in this module's ident store)
-///
-/// Returns the qualified method's ident index if found, or null if not registered.
-pub fn lookupMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+/// Registers a method definition mapping for an explicit owner declaration.
+pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
+    const key = MethodKey.init(owner, method_ident);
+    try self.method_defs.put(self.gpa, key, binding);
+}
+
+/// Looks up a qualified method ident for an explicit owner declaration.
+pub fn lookupMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const key = MethodKey.init(owner, method_ident);
     return self.method_idents.get(self.gpa, key);
 }
 
-/// Looks up a method identifier by type and method ident indices (const version).
-/// This is the fast O(log n) index-based lookup that avoids string comparison.
-pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
-    // Cast away const for the get operation (it doesn't modify the structure, just ensures sorted)
-    const mutable_self = @constCast(self);
-    return mutable_self.method_idents.get(self.gpa, key);
+/// Looks up a qualified method ident in finalized tables for an explicit owner declaration.
+pub fn lookupMethodIdentForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const key = MethodKey.init(owner, method_ident);
+    return self.method_idents.getFinalized(key);
 }
 
-/// Looks up a method identifier by translating idents from a source environment.
-/// This first finds the corresponding idents in this module, then does index-based lookup.
-///
-/// Parameters:
-/// - source_env: The module environment where type_ident and method_ident are from
-/// - type_ident: The type's identifier index in source_env
-/// - method_ident: The method's identifier index in source_env
-///
-/// Returns the qualified method's ident index if found, or null if the method doesn't exist.
-pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    // First, try to find the type and method idents in our own ident store
-    const type_name = source_env.getIdent(type_ident);
+/// Looks up method type/check metadata in finalized tables for an explicit owner declaration.
+pub fn lookupMethodBindingForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?MethodBinding {
+    const key = MethodKey.init(owner, method_ident);
+    return self.method_defs.getFinalized(key);
+}
+
+/// Finalizes method owner, ident, and definition tables.
+pub fn finalizeMethodTables(self: *Self) void {
+    self.method_idents.ensureSortedUnique();
+    self.method_defs.ensureSortedUnique();
+}
+
+/// Looks up method metadata using a type declaration owner from one environment
+/// and a method ident from the same source environment.
+pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
     const method_name = source_env.getIdent(method_ident);
 
-    // Find corresponding idents in this module
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
+    const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
 
-    return self.lookupMethodIdent(local_type_ident, local_method_ident);
+    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
-/// Const version of lookupMethodIdentFromEnv for use with immutable module environments.
-/// Safe to use on deserialized modules since method_idents is already sorted.
-pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    // First, try to find the type and method idents in our own ident store
-    const type_name = source_env.getIdent(type_ident);
-    const method_name = source_env.getIdent(method_ident);
-
-    // Find corresponding idents in this module
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
-    const local_method_ident = self.common.findIdent(method_name) orelse return null;
-
-    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
-}
-
-/// Looks up a method identifier when the type and method idents come from different source environments.
-/// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
-pub fn lookupMethodIdentFromTwoEnvsConst(
+/// Looks up method metadata using a type declaration owner and a method ident
+/// that come from different source environments.
+pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     self: *const Self,
-    type_source_env: *const Self,
-    type_ident: Ident.Idx,
+    source_decl: ?u32,
     method_source_env: *const Self,
     method_ident: Ident.Idx,
-) ?Ident.Idx {
-    // Get strings from respective source environments
-    const type_name = type_source_env.getIdent(type_ident);
+) ?MethodBinding {
     const method_name = method_source_env.getIdent(method_ident);
 
-    // Find corresponding idents in this module
-    const local_type_ident = self.common.findIdent(type_name) orelse return null;
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
+    const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
 
-    return self.lookupMethodIdentConst(local_type_ident, local_method_ident);
+    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

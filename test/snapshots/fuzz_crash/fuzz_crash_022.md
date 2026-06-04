@@ -254,7 +254,7 @@ ain! = |_| getUser(900)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 96)
+			(e-call (constraint-fn-var 92)
 				(e-lookup-local
 					(p-assign (ident "getUser")))
 				(e-num (value "900")))))

@@ -33,6 +33,12 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
 
+const MethodOwnerLookup = struct {
+    owner: CIR.Statement.Idx,
+    type_ident: base.Ident.Idx,
+    builtin_origin: bool,
+};
+
 /// Flags allowing granular debugging
 pub const DebugFlags = struct {
     build: bool = false,
@@ -729,8 +735,8 @@ pub const SyntaxChecker = struct {
             switch (module_env.store.getExpr(lookup_expr_idx)) {
                 .e_method_call => |method_call| {
                     const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                    if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
-                        if (findMethodQualifiedIdent(module_env, type_ident, method_call.method_name)) |qualified_ident| {
+                    if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                        if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
                             if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
                                 hover_type_var = method_type_var;
                             }
@@ -739,8 +745,8 @@ pub const SyntaxChecker = struct {
                 },
                 .e_dispatch_call => |method_call| {
                     const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                    if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
-                        if (findMethodQualifiedIdent(module_env, type_ident, method_call.method_name)) |qualified_ident| {
+                    if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                        if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
                             if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
                                 hover_type_var = method_type_var;
                             }
@@ -955,16 +961,16 @@ pub const SyntaxChecker = struct {
                 // Method call - resolve receiver type to find the providing module
                 const field_name = module_env.getSource(dot.field_name_region);
                 const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
-                if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
+                if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
                     // Prefer local method docs first (e.g. static-dispatch methods
                     // defined in the current module), then fall back to external
                     // module lookup for builtin/qualified providers.
-                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, field_name)) |local_doc| {
+                    if (findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, field_name)) |local_doc| {
                         return local_doc;
                     }
 
-                    const type_name = module_env.getIdentText(type_ident);
-                    if (findExternalModuleEnv(env, type_name)) |external_env| {
+                    const type_name = module_env.getIdentText(method_owner.type_ident);
+                    if (findExternalModuleEnvForMethodOwner(env, method_owner, type_name)) |external_env| {
                         const qualified_name = std.fmt.allocPrint(
                             self.allocator,
                             "{s}.{s}",
@@ -978,13 +984,13 @@ pub const SyntaxChecker = struct {
             .e_dispatch_call => |method_call| {
                 const method_name = module_env.getIdentText(method_call.method_name);
                 const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                if (resolveTypeIdentForMethodLookup(module_env, receiver_type_var)) |type_ident| {
-                    if (findMethodDocForTypeAndName(self.allocator, module_env, type_ident, method_name)) |local_doc| {
+                if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                    if (findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, method_name)) |local_doc| {
                         return local_doc;
                     }
 
-                    const type_name = module_env.getIdentText(type_ident);
-                    if (findExternalModuleEnv(env, type_name)) |external_env| {
+                    const type_name = module_env.getIdentText(method_owner.type_ident);
+                    if (findExternalModuleEnvForMethodOwner(env, method_owner, type_name)) |external_env| {
                         const qualified_name = std.fmt.allocPrint(
                             self.allocator,
                             "{s}.{s}",
@@ -1000,19 +1006,33 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Resolve a nominal type identifier for method lookup from a receiver type var.
+    /// Resolve a source declaration owner for method lookup from a receiver type var.
     ///
     /// This follows aliases/nominal wrappers so hover can map `value.method()` to
-    /// the `(type_ident, method_ident)` entries in `method_idents`.
-    fn resolveTypeIdentForMethodLookup(module_env: *ModuleEnv, type_var: types.Var) ?base.Ident.Idx {
+    /// the `(owner statement, method_ident)` entries in `method_idents`.
+    fn resolveMethodOwnerForLookup(module_env: *ModuleEnv, type_var: types.Var) ?MethodOwnerLookup {
         const resolved = module_env.types.resolveVar(type_var);
         switch (resolved.desc.content) {
             // Aliases carry a nominal ident that can participate in
             // method_idents lookup.
-            .alias => |alias| return @as(?base.Ident.Idx, alias.ident.ident_idx),
+            .alias => |alias| {
+                const source_decl = alias.source_decl.toOptional() orelse return null;
+                return .{
+                    .owner = @enumFromInt(source_decl),
+                    .type_ident = alias.ident.ident_idx,
+                    .builtin_origin = alias.source_decl.originIsBuiltin(),
+                };
+            },
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .nominal_type => |nominal| return @as(?base.Ident.Idx, nominal.ident.ident_idx),
+                    .nominal_type => |nominal| {
+                        const source_decl = nominal.sourceDeclOptional() orelse return null;
+                        return .{
+                            .owner = @enumFromInt(source_decl),
+                            .type_ident = nominal.ident.ident_idx,
+                            .builtin_origin = nominal.originIsBuiltin(),
+                        };
+                    },
                     else => return null,
                 }
             },
@@ -1022,17 +1042,10 @@ pub const SyntaxChecker = struct {
 
     fn findMethodQualifiedIdent(
         module_env: *ModuleEnv,
-        type_ident: base.Ident.Idx,
+        owner: CIR.Statement.Idx,
         method_ident: base.Ident.Idx,
     ) ?base.Ident.Idx {
-        const entries = module_env.method_idents.entries.items;
-        for (entries) |entry| {
-            if (entry.key.type_ident.eql(type_ident) and entry.key.method_ident.eql(method_ident)) {
-                return entry.value;
-            }
-        }
-
-        return null;
+        return module_env.lookupMethodIdentForOwnerConst(owner, method_ident);
     }
 
     fn findTypeForQualifiedIdent(module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
@@ -1076,23 +1089,39 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Find local method documentation by `(type_ident, method_name)`.
-    fn findMethodDocForTypeAndName(
+    /// Find local method documentation by `(owner statement, method_name)`.
+    fn findMethodDocForOwnerAndName(
         allocator: Allocator,
         module_env: *ModuleEnv,
-        type_ident: base.Ident.Idx,
+        owner: CIR.Statement.Idx,
         method_name: []const u8,
     ) ?[]const u8 {
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
-            if (!entry.key.type_ident.eql(type_ident)) continue;
+            if (entry.key.owner != owner) continue;
 
-            const entry_method_name = module_env.getIdentText(entry.key.method_ident);
+            const entry_method_name = module_env.getIdentText(entry.key.methodIdent());
             if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
 
             return findDocForQualifiedIdent(allocator, module_env, entry.value);
         }
 
+        return null;
+    }
+
+    fn findExternalModuleEnvForMethodOwner(env: *BuildEnv, method_owner: MethodOwnerLookup, module_name: []const u8) ?*ModuleEnv {
+        if (method_owner.builtin_origin) {
+            const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
+                module_name[dot_pos + 1 ..]
+            else
+                module_name;
+            if (completion_builtins.isBuiltinType(base_name)) {
+                return env.builtin_modules.builtin_module.env;
+            }
+        }
+        if (module_lookup.findModuleByName(env, module_name)) |info| {
+            return info.module_env;
+        }
         return null;
     }
 

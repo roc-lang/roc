@@ -1108,7 +1108,16 @@ fn processSnapshotContent(
                 },
                 .statement => {
                     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-                    const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
+                    const ast_stmt_idxs = [_]AST.Statement.Idx{ast_stmt_idx};
+                    const can_stmt_result = try czer.canonicalizeBlockStatement(
+                        czer.parse_ir.store.getStatement(ast_stmt_idx),
+                        &ast_stmt_idxs,
+                        0,
+                        .{
+                            .captures_top = czer.scratch_captures.top(),
+                            .bound_vars_top = czer.scratch_bound_vars.top(),
+                        },
+                    );
                     if (can_stmt_result.canonicalized_stmt) |can_stmt| {
                         // Manually track scratch statements because we aren't using the file entrypoint
                         const scratch_statements_start = can_ir.store.scratch.?.statements.top();
@@ -1167,7 +1176,7 @@ fn processSnapshotContent(
         const import_name = can_ir.getString(str_idx);
 
         // Match the import name to the corresponding loaded builtin module
-        if (std.mem.eql(u8, import_name, "Builtin")) {
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
             if (config.builtin_module) |builtin_env| {
                 try builtin_modules.append(builtin_env);
             }
@@ -4635,7 +4644,7 @@ fn renderSnapshotReplTypeProblems(
     defer imported_envs.deinit();
     for (can_ir.imports.imports.items.items) |str_idx| {
         const import_name = can_ir.getString(str_idx);
-        if (std.mem.eql(u8, import_name, "Builtin")) {
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
             try imported_envs.append(builtin_env);
         }
     }

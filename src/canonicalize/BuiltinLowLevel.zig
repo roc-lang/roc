@@ -13,7 +13,7 @@ const ModuleEnv = @import("ModuleEnv.zig");
 
 /// Returns whether this module is the compiler-owned Builtin module.
 pub fn isBuiltinModule(env: *const ModuleEnv) bool {
-    return env.display_module_name_idx.eql(env.idents.builtin_module);
+    return env.module_role == .builtin;
 }
 
 /// Returns whether an annotation-only Builtin declaration is handled as an intrinsic wrapper.
@@ -66,6 +66,35 @@ fn numericFromStrLowLevel(num_type: []const u8) CIR.Expr.LowLevel {
     unreachable;
 }
 
+const LowLevelMap = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel);
+
+fn scratchFmt(
+    scratch: *std.ArrayList(u8),
+    gpa: std.mem.Allocator,
+    comptime fmt: []const u8,
+    args: anytype,
+) std.mem.Allocator.Error![]const u8 {
+    scratch.clearRetainingCapacity();
+    const len = std.fmt.count(fmt, args);
+    try scratch.resize(gpa, len);
+    _ = std.fmt.bufPrint(scratch.items, fmt, args) catch unreachable;
+    return scratch.items;
+}
+
+fn putLowLevelFmt(
+    low_level_map: *LowLevelMap,
+    env: *ModuleEnv,
+    scratch: *std.ArrayList(u8),
+    comptime fmt: []const u8,
+    args: anytype,
+    op: CIR.Expr.LowLevel,
+) std.mem.Allocator.Error!void {
+    const name = try scratchFmt(scratch, env.gpa, fmt, args);
+    if (env.common.findIdent(name)) |ident| {
+        try low_level_map.put(ident, op);
+    }
+}
+
 /// Replace specific `e_anno_only` builtin declarations with `e_lambda` wrappers
 /// around `e_run_low_level` operations.
 ///
@@ -92,6 +121,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     // Build a hashmap of (qualified name -> low-level operation)
     var low_level_map = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel).init(gpa);
     defer low_level_map.deinit();
+    var name_scratch = std.ArrayList(u8).empty;
+    defer name_scratch.deinit(gpa);
 
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
@@ -216,13 +247,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     // `num_is_eq` already lowers correctly for integers, Dec, and fractional types.
     const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     for (eq_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_eq
-        const is_eq = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_eq", .{num_type});
-        if (env.common.findIdent(is_eq)) |ident| {
-            try low_level_map.put(ident, .num_is_eq);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_eq", .{num_type}, .num_is_eq);
     }
 
     // Numeric to_str operations (all numeric types)
@@ -230,8 +255,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
     // "Builtin.Num.Dec.to_str". But Dec is auto-imported as "Dec", so user code
     // calling Dec.to_str looks up "Builtin.Dec.to_str". We need the canonical name here.
     for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-        const to_str_name = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.to_str", .{num_type});
+        const to_str_name = try scratchFmt(&name_scratch, gpa, "Builtin.Num.{s}.to_str", .{num_type});
         if (env.common.findIdent(to_str_name)) |ident| {
             const low_level_op: CIR.Expr.LowLevel = if (std.mem.eql(u8, num_type, "U8"))
                 .u8_to_str
@@ -267,48 +291,20 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // is_gt
-        const is_gt = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_gt", .{num_type});
-        if (env.common.findIdent(is_gt)) |ident| {
-            try low_level_map.put(ident, .num_is_gt);
-        }
-
-        // is_gte
-        const is_gte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_gte", .{num_type});
-        if (env.common.findIdent(is_gte)) |ident| {
-            try low_level_map.put(ident, .num_is_gte);
-        }
-
-        // is_lt
-        const is_lt = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lt", .{num_type});
-        if (env.common.findIdent(is_lt)) |ident| {
-            try low_level_map.put(ident, .num_is_lt);
-        }
-
-        // is_lte
-        const is_lte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lte", .{num_type});
-        if (env.common.findIdent(is_lte)) |ident| {
-            try low_level_map.put(ident, .num_is_lte);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_gt", .{num_type}, .num_is_gt);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_gte", .{num_type}, .num_is_gte);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_lt", .{num_type}, .num_is_lt);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_lte", .{num_type}, .num_is_lte);
     }
 
     // from_numeral (all numeric types)
     for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        const from_numeral = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_numeral", .{num_type});
-        if (env.common.findIdent(from_numeral)) |ident| {
-            try low_level_map.put(ident, .num_from_numeral);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.from_numeral", .{num_type}, .num_from_numeral);
     }
 
     // from_str (all numeric types)
     for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        const from_str = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_str", .{num_type});
+        const from_str = try scratchFmt(&name_scratch, gpa, "Builtin.Num.{s}.from_str", .{num_type});
         if (env.common.findIdent(from_str)) |ident| {
             try low_level_map.put(ident, numericFromStrLowLevel(num_type));
         }
@@ -340,105 +336,36 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
 
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // plus
-        const plus = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.plus", .{num_type});
-        if (env.common.findIdent(plus)) |ident| {
-            try low_level_map.put(ident, .num_plus);
-        }
-
-        // minus
-        const minus = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.minus", .{num_type});
-        if (env.common.findIdent(minus)) |ident| {
-            try low_level_map.put(ident, .num_minus);
-        }
-
-        // times
-        const times = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.times", .{num_type});
-        if (env.common.findIdent(times)) |ident| {
-            try low_level_map.put(ident, .num_times);
-        }
-
-        // div_by
-        const div_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_by", .{num_type});
-        if (env.common.findIdent(div_by)) |ident| {
-            try low_level_map.put(ident, .num_div_by);
-        }
-
-        // div_trunc_by
-        const div_trunc_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.div_trunc_by", .{num_type});
-        if (env.common.findIdent(div_trunc_by)) |ident| {
-            try low_level_map.put(ident, .num_div_trunc_by);
-        }
-
-        // rem_by
-        const rem_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem_by", .{num_type});
-        if (env.common.findIdent(rem_by)) |ident| {
-            try low_level_map.put(ident, .num_rem_by);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus", .{num_type}, .num_plus);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus", .{num_type}, .num_minus);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times", .{num_type}, .num_times);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.div_by", .{num_type}, .num_div_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.div_trunc_by", .{num_type}, .num_div_trunc_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.rem_by", .{num_type}, .num_rem_by);
     }
 
     // Numeric modulo operation (integer types only)
     const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
     for (integer_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // mod_by
-        const mod_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.mod_by", .{num_type});
-        if (env.common.findIdent(mod_by)) |ident| {
-            try low_level_map.put(ident, .num_mod_by);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.mod_by", .{num_type}, .num_mod_by);
     }
 
     // Numeric negate operation (signed types only)
     for (signed_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // negate
-        const negate = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.negate", .{num_type});
-        if (env.common.findIdent(negate)) |ident| {
-            try low_level_map.put(ident, .num_negate);
-        }
-
-        // abs
-        const abs = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs", .{num_type});
-        if (env.common.findIdent(abs)) |ident| {
-            try low_level_map.put(ident, .num_abs);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.negate", .{num_type}, .num_negate);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.abs", .{num_type}, .num_abs);
     }
 
     // Numeric abs_diff operation (all numeric types)
     for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        const abs_diff = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs_diff", .{num_type});
-        if (env.common.findIdent(abs_diff)) |ident| {
-            try low_level_map.put(ident, .num_abs_diff);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.abs_diff", .{num_type}, .num_abs_diff);
     }
 
     // Bitwise shift operations (integer types only);
     for (integer_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // shift_left_by
-        const shift_left_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_left_by", .{num_type});
-        if (env.common.findIdent(shift_left_by)) |ident| {
-            try low_level_map.put(ident, .num_shift_left_by);
-        }
-
-        // shift_right_by
-        const shift_right_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_by", .{num_type});
-        if (env.common.findIdent(shift_right_by)) |ident| {
-            try low_level_map.put(ident, .num_shift_right_by);
-        }
-
-        // shift_right_zf_by
-        const shift_right_zf_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_zf_by", .{num_type});
-        if (env.common.findIdent(shift_right_zf_by)) |ident| {
-            try low_level_map.put(ident, .num_shift_right_zf_by);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_left_by", .{num_type}, .num_shift_left_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_by", .{num_type}, .num_shift_right_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_zf_by", .{num_type}, .num_shift_right_zf_by);
     }
 
     // Bitwise logical operations (integer types only)
@@ -1274,8 +1201,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
                 const patterns_start = env.store.scratchTop("patterns");
                 var i: u32 = 0;
                 while (i < num_params) : (i += 1) {
-                    var arg_name_buf: [16]u8 = undefined;
-                    const arg_name = try std.fmt.bufPrint(&arg_name_buf, "_arg{d}", .{i});
+                    const arg_name = try scratchFmt(&name_scratch, gpa, "_arg{d}", .{i});
                     const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
                     const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
                     try env.store.scratch.?.patterns.append(arg_pattern_idx);

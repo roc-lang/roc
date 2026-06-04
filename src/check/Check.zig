@@ -51,6 +51,8 @@ cir: *ModuleEnv,
 regions: Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
+/// Module envs whose public APIs are semantically visible through imported checked data.
+owner_modules: []const *const ModuleEnv,
 /// Module envs whose public APIs are semantically visible through direct imports.
 /// These are not lexically importable, and CIR import indexes never refer to
 /// this set. It exists only for owner lookups on copied imported types.
@@ -117,6 +119,29 @@ expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 current_expect_region: ?Region,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
+/// Local block-statement (`s_decl`) function patterns whose body is currently
+/// being type-checked. Used to detect self-recursion (and references to an
+/// enclosing in-flight def) of LOCAL function defs so their recursive references
+/// defer unification (fresh flex + a pending `local_recursive_refs` entry)
+/// instead of lowering the pattern var's rank, which would prevent
+/// generalization of the def's rigid type variables. Analogous to
+/// `top_level_ptrns` but for block-local defs.
+///
+/// Presence == "currently being checked" (defer); absence == normal
+/// lookup/instantiate. A reference can only resolve to the current def or an
+/// enclosing in-flight one: forward references to a *later* sibling, and local
+/// mutual recursion, are rejected during canonicalization (local defs are
+/// sequentially scoped), so this is always a single self/enclosing chain.
+local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
+/// Recursive references recorded while checking a LOCAL block def's body (a
+/// self-reference, or a reference to an enclosing in-flight local def), pending
+/// validation once the def's lambda has generalized. Kept in a dedicated stack
+/// rather than the shared `constraints` list because sequential scoping
+/// guarantees local recursion is a single self/enclosing chain — never a mutual
+/// group — so these need no cycle machinery, no per-use instantiation, and no
+/// entanglement with the other constraint kinds (notably early-return / `?`
+/// constraints, which `processReturnConstraints` compacts mid-body).
+local_recursive_refs: std.ArrayListUnmanaged(LocalRecursiveRef) = .empty,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
@@ -198,6 +223,23 @@ const InstantiationDispatcher = struct {
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
 
+/// A local block-statement (`s_decl`) function def whose body is currently being
+/// checked. Block defs are `s_decl` statements (not `CIR.Def`), so there is no
+/// `Def.Idx` — only the name (for error context) and pattern are tracked.
+const LocalDefProcessed = struct {
+    def_name: ?Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+};
+
+/// A recursive reference made inside a LOCAL block def's body, pending
+/// validation once the def's lambda has generalized. `pat_var` is the def's
+/// (eventually generalized) pattern var; `expr_var` is the reference's flex var.
+const LocalRecursiveRef = struct {
+    pat_var: Var,
+    expr_var: Var,
+    def_name: ?Ident.Idx,
+};
+
 /// A deferred def-level unification (def_var = ptrn_var = expr_var).
 const DeferredDefUnification = struct {
     def_var: Var,
@@ -221,7 +263,19 @@ const ScratchStaticDispatchConstraint = struct {
 /// In most cases, we don't defer constraint checking and unify things
 /// immediately. However, there are some cases where it's necessary.
 const Constraint = union(enum) {
-    eql: struct { expected: Var, actual: Var, ctx: problem.Context },
+    eql: struct {
+        expected: Var,
+        actual: Var,
+        ctx: problem.Context,
+        /// True when this is a `recursive_def` cross-reference to a *different*,
+        /// annotated member of a recursive group (mutual recursion). Such a
+        /// reference is instantiated per use-site at validation time so each
+        /// member keeps its own rigid type parameters; a self-reference (or an
+        /// unannotated target) stays monomorphic. Drives resolution, not the
+        /// error message — kept here rather than in `ctx` (which is purely
+        /// diagnostic) so it doesn't have to ride inside the problem context.
+        is_cross_reference: bool = false,
+    },
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -331,7 +385,7 @@ fn initAssumePrepared(
     regions: *const Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
-    var owner_module_envs = try buildOwnerModuleEnvMap(gpa, imported_modules, owner_modules, builtin_ctx);
+    var owner_module_envs = try buildOwnerModuleEnvMap(gpa, imported_modules, owner_modules);
     errdefer owner_module_envs.deinit();
 
     var import_mapping = try createImportMapping(
@@ -348,6 +402,7 @@ fn initAssumePrepared(
         .types = types,
         .cir = cir,
         .imported_modules = imported_modules,
+        .owner_modules = owner_modules,
         .owner_module_envs = owner_module_envs,
         .auto_imported_types = auto_imported_types,
         .regions = blk: {
@@ -402,19 +457,16 @@ fn buildOwnerModuleEnvMap(
     gpa: std.mem.Allocator,
     imported_modules: []const *const ModuleEnv,
     owner_modules: []const *const ModuleEnv,
-    builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!std.StringHashMap(*const ModuleEnv) {
     var map = std.StringHashMap(*const ModuleEnv).init(gpa);
     errdefer map.deinit();
 
-    if (builtin_ctx.builtin_module) |builtin_env| {
-        try putOwnerModuleEnvNames(&map, builtin_env);
-    }
-
     for (imported_modules) |imported_env| {
+        if (imported_env.module_role == .builtin) continue;
         try putOwnerModuleEnvNames(&map, imported_env);
     }
     for (owner_modules) |owner_env| {
+        if (owner_env.module_role == .builtin) continue;
         try putOwnerModuleEnvNames(&map, owner_env);
     }
 
@@ -477,6 +529,8 @@ pub fn deinit(self: *Self) void {
     self.constraint_expr_by_fn_var.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
+    self.local_processing_ptrns.deinit(self.gpa);
+    self.local_recursive_refs.deinit(self.gpa);
     self.type_writer.deinit();
     self.deferred_def_unifications.deinit(self.gpa);
     self.instantiation_dispatchers.deinit(self.gpa);
@@ -961,17 +1015,164 @@ fn freshStr(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
     return try self.instantiateVar(self.str_var, env, .{ .explicit = new_region });
 }
 
+const BuiltinNominalDecl = union(enum) {
+    list,
+    box,
+    try_type,
+    numeral,
+    num: CIR.NumKind,
+};
+
+fn builtinOriginModule(self: *const Self) Ident.Idx {
+    return if (self.builtin_ctx.builtin_module) |_|
+        self.cir.idents.builtin_module
+    else
+        self.builtin_ctx.module_name;
+}
+
+fn isCheckingBuiltinModuleDirectly(self: *const Self) bool {
+    return self.cir.module_role == .builtin;
+}
+
+fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
+    return switch (num_kind) {
+        .u8 => self.cir.idents.u8_type,
+        .i8 => self.cir.idents.i8_type,
+        .u16 => self.cir.idents.u16_type,
+        .i16 => self.cir.idents.i16_type,
+        .u32 => self.cir.idents.u32_type,
+        .i32 => self.cir.idents.i32_type,
+        .u64 => self.cir.idents.u64_type,
+        .i64 => self.cir.idents.i64_type,
+        .u128 => self.cir.idents.u128_type,
+        .i128 => self.cir.idents.i128_type,
+        .f32 => self.cir.idents.f32_type,
+        .f64 => self.cir.idents.f64_type,
+        .dec => self.cir.idents.dec_type,
+        else => unreachable,
+    };
+}
+
+fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind) CIR.Statement.Idx {
+    return switch (num_kind) {
+        .u8 => indices.u8_type,
+        .i8 => indices.i8_type,
+        .u16 => indices.u16_type,
+        .i16 => indices.i16_type,
+        .u32 => indices.u32_type,
+        .i32 => indices.i32_type,
+        .u64 => indices.u64_type,
+        .i64 => indices.i64_type,
+        .u128 => indices.u128_type,
+        .i128 => indices.i128_type,
+        .f32 => indices.f32_type,
+        .f64 => indices.f64_type,
+        .dec => indices.dec_type,
+        else => unreachable,
+    };
+}
+
+fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
+    return switch (decl) {
+        .list => self.cir.idents.builtin_list,
+        .box => self.cir.idents.builtin_box,
+        .try_type => self.cir.idents.builtin_try,
+        .numeral => self.cir.idents.builtin_numeral,
+        .num => |num_kind| self.builtinNumTypeIdent(num_kind),
+    };
+}
+
+fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
+    return switch (decl) {
+        .list => "List",
+        .box => "Box",
+        .try_type => "Try",
+        .numeral => "Num.Numeral",
+        .num => |num_kind| switch (num_kind) {
+            .u8 => "Num.U8",
+            .i8 => "Num.I8",
+            .u16 => "Num.U16",
+            .i16 => "Num.I16",
+            .u32 => "Num.U32",
+            .i32 => "Num.I32",
+            .u64 => "Num.U64",
+            .i64 => "Num.I64",
+            .u128 => "Num.U128",
+            .i128 => "Num.I128",
+            .f32 => "Num.F32",
+            .f64 => "Num.F64",
+            .dec => "Num.Dec",
+            else => unreachable,
+        },
+    };
+}
+
+const SourceDeclKind = enum {
+    alias,
+    nominal,
+};
+
+fn debugAssertSourceDeclKind(self: *const Self, source_decl: u32, kind: SourceDeclKind) void {
+    debugAssertSourceDeclKindInEnv(self.cir, source_decl, kind);
+}
+
+fn debugAssertSourceDeclKindInEnv(env: *const ModuleEnv, source_decl: u32, kind: SourceDeclKind) void {
+    if (builtin.mode != .Debug) return;
+
+    if (source_decl >= env.store.nodes.len()) {
+        std.debug.panic("type checker invariant violated: source declaration {} is outside node store", .{source_decl});
+    }
+
+    const node = env.store.nodes.get(@enumFromInt(source_decl));
+    const ok = switch (kind) {
+        .alias => node.tag == .statement_alias_decl,
+        .nominal => node.tag == .statement_nominal_decl,
+    };
+    if (!ok) {
+        std.debug.panic("type checker invariant violated: source declaration {} has tag {}, expected {s}", .{
+            source_decl,
+            node.tag,
+            @tagName(kind),
+        });
+    }
+}
+
+fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 {
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
+        const indices = self.builtin_ctx.builtin_indices.?;
+        const stmt_idx = switch (decl) {
+            .list => indices.list_type,
+            .box => indices.box_type,
+            .try_type => indices.try_type,
+            .numeral => indices.numeral_type,
+            .num => |num_kind| builtinNumStmtFromIndices(indices, num_kind),
+        };
+        const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
+        debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
+        return @intFromEnum(stmt_idx);
+    }
+
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+        }
+        unreachable;
+    }
+
+    const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
+        }
+        unreachable;
+    };
+    self.debugAssertSourceDeclKind(@intFromEnum(stmt_idx), .nominal);
+    return @intFromEnum(stmt_idx);
+}
+
 /// Create a nominal List type with the given element type
 fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where List is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     const list_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.list,
@@ -995,12 +1196,14 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
 
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         list_ident,
         backing_var,
         &type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.list),
         false, // List is nominal (not opaque)
+        true,
     );
 }
 
@@ -1066,7 +1269,7 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
         .ext = record_ext,
     } } }, env, Region.zero());
 
-    const u64_var = try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, Region.zero());
+    const u64_var = try self.freshFromContent(try self.mkNumberTypeContent(.u64, env), env, Region.zero());
     const skip_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const skip_record_fields = [_]types_mod.RecordField{
         .{ .name = count_ident, .var_ = u64_var },
@@ -1094,21 +1297,12 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
 /// Create a nominal number type content (e.g., U8, I32, Dec)
 /// Number types are defined in Builtin.roc nested inside Num module: Num.U8 :: [].{...}
 /// They have no type parameters and their backing is the empty tag union []
-fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.Error!Content {
+fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
-    // Use fully-qualified type name "Builtin.Num.U8" etc.
-    const qualified_type_name = try std.fmt.allocPrint(self.gpa, "Builtin.Num.{s}", .{type_name});
-    defer self.gpa.free(qualified_type_name);
-    const type_name_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(qualified_type_name));
     const type_ident = types_mod.TypeIdent{
-        .ident_idx = type_name_ident,
+        .ident_idx = self.builtinNumTypeIdent(num_kind),
     };
 
     // Number types backing is [] (empty tag union with closed extension)
@@ -1124,12 +1318,14 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
     // Number types have no type arguments
     const no_type_args: []const Var = &.{};
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         type_ident,
         backing_var,
         no_type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.{ .num = num_kind }),
         true, // Number types are opaque (defined with ::)
+        true,
     );
 }
 
@@ -1150,33 +1346,109 @@ fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumK
     return null;
 }
 
+fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u32) ?BuiltinNominalDecl {
+    if (source_env.module_role != .builtin) return null;
+    const raw_decl = source_decl orelse return null;
+    if (raw_decl >= source_env.store.nodes.len()) return null;
+
+    const node: CIR.Node.Idx = @enumFromInt(raw_decl);
+    switch (source_env.store.nodes.get(node).tag) {
+        .statement_alias_decl, .statement_nominal_decl => {},
+        else => return null,
+    }
+    const statement_idx: CIR.Statement.Idx = @enumFromInt(raw_decl);
+    const header_idx = switch (source_env.store.getStatement(statement_idx)) {
+        .s_alias_decl => |alias| alias.header,
+        .s_nominal_decl => |nominal| nominal.header,
+        else => return null,
+    };
+    const header = source_env.store.getTypeHeader(header_idx);
+    return builtinNominalDeclForIdentInEnv(source_env, header.name);
+}
+
+fn builtinNominalDeclForIdentInEnv(source_env: *const ModuleEnv, type_ident: Ident.Idx) ?BuiltinNominalDecl {
+    const common = source_env.idents;
+    if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
+    if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
+    if (type_ident.eql(common.@"try") or type_ident.eql(common.builtin_try)) return .try_type;
+    if (type_ident.eql(common.builtin_numeral)) return .numeral;
+    if (type_ident.eql(common.u8) or type_ident.eql(common.u8_type)) return .{ .num = .u8 };
+    if (type_ident.eql(common.i8) or type_ident.eql(common.i8_type)) return .{ .num = .i8 };
+    if (type_ident.eql(common.u16) or type_ident.eql(common.u16_type)) return .{ .num = .u16 };
+    if (type_ident.eql(common.i16) or type_ident.eql(common.i16_type)) return .{ .num = .i16 };
+    if (type_ident.eql(common.u32) or type_ident.eql(common.u32_type)) return .{ .num = .u32 };
+    if (type_ident.eql(common.i32) or type_ident.eql(common.i32_type)) return .{ .num = .i32 };
+    if (type_ident.eql(common.u64) or type_ident.eql(common.u64_type)) return .{ .num = .u64 };
+    if (type_ident.eql(common.i64) or type_ident.eql(common.i64_type)) return .{ .num = .i64 };
+    if (type_ident.eql(common.u128) or type_ident.eql(common.u128_type)) return .{ .num = .u128 };
+    if (type_ident.eql(common.i128) or type_ident.eql(common.i128_type)) return .{ .num = .i128 };
+    if (type_ident.eql(common.f32) or type_ident.eql(common.f32_type)) return .{ .num = .f32 };
+    if (type_ident.eql(common.f64) or type_ident.eql(common.f64_type)) return .{ .num = .f64 };
+    if (type_ident.eql(common.dec) or type_ident.eql(common.dec_type)) return .{ .num = .dec };
+    return null;
+}
+
+fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) ?BuiltinNominalDecl {
+    const raw_decl = source_decl orelse return null;
+
+    if (self.cir.module_role == .builtin) {
+        return builtinNominalDeclForSourceDecl(self.cir, raw_decl);
+    }
+
+    const indices = self.builtin_ctx.builtin_indices orelse return null;
+    if (raw_decl == @intFromEnum(indices.list_type)) return .list;
+    if (raw_decl == @intFromEnum(indices.box_type)) return .box;
+    if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
+    if (raw_decl == @intFromEnum(indices.numeral_type)) return .numeral;
+    if (raw_decl == @intFromEnum(indices.u8_type)) return .{ .num = .u8 };
+    if (raw_decl == @intFromEnum(indices.i8_type)) return .{ .num = .i8 };
+    if (raw_decl == @intFromEnum(indices.u16_type)) return .{ .num = .u16 };
+    if (raw_decl == @intFromEnum(indices.i16_type)) return .{ .num = .i16 };
+    if (raw_decl == @intFromEnum(indices.u32_type)) return .{ .num = .u32 };
+    if (raw_decl == @intFromEnum(indices.i32_type)) return .{ .num = .i32 };
+    if (raw_decl == @intFromEnum(indices.u64_type)) return .{ .num = .u64 };
+    if (raw_decl == @intFromEnum(indices.i64_type)) return .{ .num = .i64 };
+    if (raw_decl == @intFromEnum(indices.u128_type)) return .{ .num = .u128 };
+    if (raw_decl == @intFromEnum(indices.i128_type)) return .{ .num = .i128 };
+    if (raw_decl == @intFromEnum(indices.f32_type)) return .{ .num = .f32 };
+    if (raw_decl == @intFromEnum(indices.f64_type)) return .{ .num = .f64 };
+    if (raw_decl == @intFromEnum(indices.dec_type)) return .{ .num = .dec };
+    return null;
+}
+
+fn builtinNumKindFromBuiltinSourceDecl(self: *const Self, source_decl: ?u32) ?CIR.NumKind {
+    return switch (self.builtinNominalDeclForBuiltinSourceDecl(source_decl) orelse return null) {
+        .num => |num_kind| num_kind,
+        else => null,
+    };
+}
+
 fn mkBuiltinNumberTypeContentFromKind(
     self: *Self,
     num_kind: CIR.NumKind,
     env: *Env,
 ) Allocator.Error!Content {
     return switch (num_kind) {
-        .u8 => try self.mkNumberTypeContent("U8", env),
-        .i8 => try self.mkNumberTypeContent("I8", env),
-        .u16 => try self.mkNumberTypeContent("U16", env),
-        .i16 => try self.mkNumberTypeContent("I16", env),
-        .u32 => try self.mkNumberTypeContent("U32", env),
-        .i32 => try self.mkNumberTypeContent("I32", env),
-        .u64 => try self.mkNumberTypeContent("U64", env),
-        .i64 => try self.mkNumberTypeContent("I64", env),
-        .u128 => try self.mkNumberTypeContent("U128", env),
-        .i128 => try self.mkNumberTypeContent("I128", env),
-        .f32 => try self.mkNumberTypeContent("F32", env),
-        .f64 => try self.mkNumberTypeContent("F64", env),
-        .dec => try self.mkNumberTypeContent("Dec", env),
-        else => unreachable,
+        .num_unbound, .int_unbound => unreachable,
+        else => try self.mkNumberTypeContent(num_kind, env),
     };
 }
 
 fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Statement.Idx {
-    const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.type_decls, type_name)) |stmt_idx| return stmt_idx;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.forward_type_decls, type_name)) |stmt_idx| return stmt_idx;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.all_statements, type_name)) |stmt_idx| return stmt_idx;
+    if (self.findLocalTypeDeclByNameInSpan(self.cir.builtin_statements, type_name)) |stmt_idx| return stmt_idx;
+    return null;
+}
 
-    for (all_stmts) |stmt_idx| {
+fn findLocalTypeDeclByNameInSpan(
+    self: *const Self,
+    span: CIR.Statement.Span,
+    type_name: Ident.Idx,
+) ?CIR.Statement.Idx {
+    const stmts = self.cir.store.sliceStatements(span);
+    for (stmts) |stmt_idx| {
         const stmt = self.cir.store.getStatement(stmt_idx);
         const header_idx = switch (stmt) {
             .s_alias_decl => |alias| alias.header,
@@ -1185,9 +1457,8 @@ fn findLocalTypeDeclByName(self: *const Self, type_name: Ident.Idx) ?CIR.Stateme
         };
 
         const header = self.cir.store.getTypeHeader(header_idx);
-        if (header.name.eql(type_name)) return stmt_idx;
+        if (header.name.eql(type_name) or header.relative_name.eql(type_name)) return stmt_idx;
     }
-
     return null;
 }
 
@@ -1409,7 +1680,12 @@ fn base256DecimalText(allocator: Allocator, bytes_be: []const u8, min_digits: us
                 quotient_len += 1;
             }
         }
-        try digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder)));
+        // Free the freshly-allocated quotient if recording the digit fails,
+        // since it has not yet been adopted into current_buf.
+        digits_rev.append(allocator, '0' + @as(u8, @intCast(remainder))) catch |err| {
+            allocator.free(quotient);
+            return err;
+        };
         allocator.free(current_buf);
         current_buf = quotient;
         current_len = quotient_len;
@@ -1431,13 +1707,6 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Box is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
     const box_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.box,
     };
@@ -1446,12 +1715,14 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const backing_var = elem_var;
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         box_ident,
         backing_var,
         &type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.box),
         false, // Box is nominal (not opaque)
+        true,
     );
 }
 
@@ -1460,11 +1731,6 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
     const try_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_try,
@@ -1483,12 +1749,14 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
 
     const type_args = [_]Var{ ok_var, err_var };
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         try_ident,
         backing_var,
         &type_args,
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.try_type),
         false, // Try is nominal (not opaque)
+        true,
     );
 }
 
@@ -1497,24 +1765,16 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Numeral is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
-    // Use the relative name "Num.Numeral" with origin_module Builtin
-    // Use the pre-interned ident from builtin_module to avoid string comparison
+    // Use the pre-interned builtin ident instead of reconstructing the text.
     const numeral_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_numeral,
     };
 
-    const u8_before = try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, Region.zero());
-    const u8_after = try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, Region.zero());
+    const u8_before = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, Region.zero());
+    const u8_after = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, Region.zero());
     const digits_before = try self.freshFromContent(try self.mkListContent(u8_before, env), env, Region.zero());
     const digits_after = try self.freshFromContent(try self.mkListContent(u8_after, env), env, Region.zero());
-    const digit_count = try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, Region.zero());
+    const digit_count = try self.freshFromContent(try self.mkNumberTypeContent(.u64, env), env, Region.zero());
     const is_negative = try self.freshBool(env, Region.zero());
 
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
@@ -1535,12 +1795,14 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
     const backing_content = try self.types.mkTagUnion(&.{literal_tag}, union_ext);
     const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
 
-    return try self.types.mkNominal(
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
         numeral_ident,
         backing_var,
         &.{}, // No type args
-        origin_module_id,
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinNominal(.numeral),
         false, // Numeral is transparent so custom from_numeral methods can inspect it.
+        true,
     );
 }
 
@@ -1577,6 +1839,20 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
     }
 }
 
+fn unifyWithTargetRank(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
+    const resolved_target = self.types.resolveVar(target_var);
+    if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+        var desc = resolved_target.desc;
+        desc.content = content;
+        try self.types.dangerousSetVarDesc(target_var, desc);
+        return;
+    }
+
+    const target_rank = self.types.resolveVar(target_var).desc.rank;
+    const fresh_var = try self.freshFromContentAtRank(content, env, self.getRegionAt(target_var), target_rank);
+    _ = try self.unify(target_var, fresh_var, env);
+}
+
 /// Give a var, ensure it's not a redirect and set its rank.
 /// If the var is already a redirect, this is a no-op - the root's rank was set when
 /// the redirect was created during unification. This can happen when a variable is
@@ -1604,10 +1880,28 @@ fn copyBuiltinTypes(self: *Self) !void {
 
     if (self.builtin_types_copied) return;
 
-    const bool_stmt_idx = self.builtin_ctx.bool_stmt;
-    const str_stmt_idx = self.builtin_ctx.str_stmt;
+    const checking_builtin_directly = self.isCheckingBuiltinModuleDirectly();
+    const bool_stmt_idx = if (checking_builtin_directly)
+        self.findLocalTypeDeclByName(self.cir.idents.bool_type) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        }
+    else
+        self.builtin_ctx.bool_stmt;
+    const str_stmt_idx = if (checking_builtin_directly)
+        self.findLocalTypeDeclByName(self.cir.idents.builtin_str) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        }
+    else
+        self.builtin_ctx.str_stmt;
 
-    if (self.builtin_ctx.builtin_module) |builtin_env| {
+    if (!checking_builtin_directly and self.builtin_ctx.builtin_module != null) {
+        const builtin_env = self.builtin_ctx.builtin_module.?;
         // Copy Bool type from Builtin module using the direct reference
         const bool_type_var = ModuleEnv.varFrom(bool_stmt_idx);
         self.bool_var = try self.copyVar(bool_type_var, builtin_env, Region.zero());
@@ -1650,9 +1944,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // for all its types. This causes type mismatches when locally-defined types (using
     // "module.Builtin") are unified with types from the pre-compiled module (using "Builtin").
     // Fix: use the unqualified "Builtin" to match the pre-compiled module's convention.
-    if (self.builtin_ctx.builtin_module != null and
-        self.cir.display_module_name_idx.eql(self.cir.idents.builtin_module))
-    {
+    if (self.builtin_ctx.builtin_module != null and self.isCheckingBuiltinModuleDirectly()) {
         self.builtin_ctx.module_name = self.cir.idents.builtin_module;
         // Also update qualified_module_ident so that opaque type checks
         // (canLiftInner) allow pattern matching on types defined in this module.
@@ -1672,14 +1964,34 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
+    // Reserve every canonical type constructor from canonicalization's explicit
+    // type-declaration table before generating type bodies. Transparent nominal
+    // backing types and recursive declarations both rely on these constructor
+    // shells being present before any later checking work consumes them.
+    for (0..self.cir.type_decls.span.len) |stmt_offset| {
+        const stmt_idx = self.cir.store.statementAt(self.cir.type_decls, stmt_offset);
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+
+        switch (stmt) {
+            .s_alias_decl => |alias| {
+                try self.setVarRank(stmt_var, &env);
+                try self.predeclareAliasDecl(stmt_var, alias, &env);
+            },
+            .s_nominal_decl => |nominal| {
+                try self.setVarRank(stmt_var, &env);
+                try self.predeclareNominalDecl(stmt_var, nominal, &env);
+            },
+            else => {},
+        }
+    }
+
     // First pass: generate types for each type declaration
     // Note that any types generated will be generalized
     for (0..self.cir.all_statements.span.len) |stmt_offset| {
         const stmt_idx = self.cir.store.statementAt(self.cir.all_statements, stmt_offset);
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
-
-        try self.setVarRank(stmt_var, &env);
 
         switch (stmt) {
             .s_alias_decl => |alias| {
@@ -1689,9 +2001,11 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
                 try self.generateNominalDecl(stmt_idx, stmt_var, nominal, &env);
             },
             .s_runtime_error => {
+                try self.setVarRank(stmt_var, &env);
                 try self.unifyWith(stmt_var, .err, &env);
             },
             .s_type_anno => |type_anno| {
+                try self.setVarRank(stmt_var, &env);
                 try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
             else => {
@@ -1821,9 +2135,17 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 /// (local/nested lambdas included). A static-dispatch receiver that resolves into
 /// this set can be pinned by a caller at some level, so it is not ambiguous.
 fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+    // Shared across all defs in this one-shot, end-of-check pass (not per
+    // expression), so it bounds memory by the largest type spine walked rather
+    // than growing as more of the program is checked. Guards the function-ret /
+    // alias spine in collectArgPositionVars against unbounded recursion; arg
+    // structure is already deduped via `pinnable` inside collectReachableVars.
+    var spine_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer spine_visited.deinit();
+
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable);
+        try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable, &spine_visited);
     }
 
     var raw_node_idx: u32 = 0;
@@ -2114,10 +2436,21 @@ fn reportAmbiguousStaticDispatch(
 /// tuples, tag payloads, nested function args AND rets). Return positions of the
 /// outer function are NOT collected (a return-only var is not parameter-pinnable),
 /// but once inside an argument every nested position counts.
-fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+fn collectArgPositionVars(
+    self: *Self,
+    var_: Var,
+    out: *std.AutoHashMap(Var, void),
+    spine_visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
+    // Guard the function-ret / alias spine against cycles. Cyclic spines are
+    // currently pre-broken (infinite types are poisoned to .err before this
+    // pass, recursive aliases are rejected during generation), but the guard
+    // keeps this robust if that ever changes.
+    if (spine_visited.contains(resolved.var_)) return;
+    try spine_visited.put(resolved.var_, {});
     switch (resolved.desc.content) {
-        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out),
+        .alias => |alias| try self.collectArgPositionVars(self.types.getAliasBackingVar(alias), out, spine_visited),
         .structure => |flat| switch (flat) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 for (self.types.sliceVars(func.args)) |arg| {
@@ -2125,7 +2458,7 @@ fn collectArgPositionVars(self: *Self, var_: Var, out: *std.AutoHashMap(Var, voi
                 }
                 // Recurse into the return type: a curried function returns more
                 // functions whose own arguments are still parameter-pinnable.
-                try self.collectArgPositionVars(func.ret, out);
+                try self.collectArgPositionVars(func.ret, out, spine_visited);
             },
             else => {},
         },
@@ -2719,6 +3052,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
+    // Check the result expression itself, matching checkExprRepl: its type may
+    // have incompatible constraints (e.g. !3) or be infinite/anonymously
+    // recursive, neither of which is covered by the per-def checks above.
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    try self.checkFlexVarConstraintCompatibility(expr_var, &env, true);
+    try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
+
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
 }
@@ -2858,6 +3198,73 @@ fn generateStmtTypeDeclType(
     }
 }
 
+fn aliasOriginModule(self: *const Self) Ident.Idx {
+    return self.builtin_ctx.module_name;
+}
+
+fn predeclareAliasDecl(
+    self: *Self,
+    decl_var: Var,
+    alias: std.meta.fieldInfo(CIR.Statement, .s_alias_decl).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const header = self.cir.store.getTypeHeader(alias.header);
+    const header_args = self.cir.store.sliceTypeAnnos(header.args);
+    const header_vars = try self.generateHeaderVars(header_args, env);
+    const backing_var: Var = ModuleEnv.varFrom(alias.anno);
+
+    try self.unifyWithTargetRank(
+        decl_var,
+        try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+            .{ .ident_idx = header.relative_name },
+            backing_var,
+            header_vars,
+            self.aliasOriginModule(),
+            @intFromEnum(decl_var),
+            self.cir.module_role == .builtin,
+        ),
+        env,
+    );
+}
+
+fn predeclareNominalDecl(
+    self: *Self,
+    decl_var: Var,
+    nominal: std.meta.fieldInfo(CIR.Statement, .s_nominal_decl).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const header = self.cir.store.getTypeHeader(nominal.header);
+    const header_args = self.cir.store.sliceTypeAnnos(header.args);
+    const header_vars = try self.generateHeaderVars(header_args, env);
+    const backing_var: Var = ModuleEnv.varFrom(nominal.anno);
+
+    try self.unifyWithTargetRank(
+        decl_var,
+        try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+            .{ .ident_idx = header.relative_name },
+            backing_var,
+            header_vars,
+            self.builtin_ctx.module_name,
+            @intFromEnum(decl_var),
+            nominal.is_opaque,
+            self.cir.module_role == .builtin,
+        ),
+        env,
+    );
+}
+
+fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
+    const resolved = self.types.resolveVar(decl_var).desc.content;
+    if (resolved != .alias) return null;
+    return self.types.sliceAliasArgs(resolved.alias);
+}
+
+fn predeclaredNominalArgs(self: *const Self, decl_var: Var) ?[]Var {
+    const resolved = self.types.resolveVar(decl_var).desc.content;
+    if (resolved != .structure or resolved.structure != .nominal_type) return null;
+    return self.types.sliceNominalArgs(resolved.structure.nominal_type);
+}
+
 /// Generate types for an alias type declaration
 fn generateAliasDecl(
     self: *Self,
@@ -2874,7 +3281,22 @@ fn generateAliasDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const header_vars = try self.generateHeaderVars(header_args, env);
+    const predeclared_header_vars = self.predeclaredAliasArgs(decl_var);
+    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    if (predeclared_header_vars == null) {
+        try self.unifyWithTargetRank(
+            decl_var,
+            try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
+                .{ .ident_idx = header.relative_name },
+                ModuleEnv.varFrom(alias.anno),
+                header_vars,
+                self.aliasOriginModule(),
+                @intFromEnum(decl_idx),
+                self.cir.module_role == .builtin,
+            ),
+            env,
+        );
+    }
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     defer self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -2899,27 +3321,9 @@ fn generateAliasDecl(
     } });
 
     if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
-        try self.unifyWith(decl_var, .err, env);
+        try self.unifyWithTargetRank(decl_var, .err, env);
         return;
     }
-
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where List is defined.
-    const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
-        self.cir.idents.builtin_module
-    else
-        self.builtin_ctx.module_name; // We're compiling Builtin module itself
-
-    try self.unifyWith(
-        decl_var,
-        try self.types.mkAlias(
-            .{ .ident_idx = header.relative_name },
-            backing_var,
-            header_vars,
-            origin_module_id,
-        ),
-        env,
-    );
 }
 
 /// Generate types for nominal type declaration
@@ -2938,7 +3342,23 @@ fn generateNominalDecl(
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
 
     // Next, generate the provided arg types and build the map of rigid variables in the header
-    const header_vars = try self.generateHeaderVars(header_args, env);
+    const predeclared_header_vars = self.predeclaredNominalArgs(decl_var);
+    const header_vars = if (predeclared_header_vars) |vars| vars else try self.generateHeaderVars(header_args, env);
+    if (predeclared_header_vars == null) {
+        try self.unifyWithTargetRank(
+            decl_var,
+            try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+                .{ .ident_idx = header.relative_name },
+                ModuleEnv.varFrom(nominal.anno),
+                header_vars,
+                self.builtin_ctx.module_name,
+                @intFromEnum(decl_idx),
+                nominal.is_opaque,
+                self.cir.module_role == .builtin,
+            ),
+            env,
+        );
+    }
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     defer self.type_decl_rigid_vars.clearRetainingCapacity();
@@ -2961,18 +3381,6 @@ fn generateNominalDecl(
         .is_opaque = nominal.is_opaque,
         .num_args = @intCast(header_args.len),
     } });
-
-    try self.unifyWith(
-        decl_var,
-        try self.types.mkNominal(
-            .{ .ident_idx = header.relative_name },
-            backing_var,
-            header_vars,
-            self.builtin_ctx.module_name,
-            nominal.is_opaque,
-        ),
-        env,
-    );
 }
 
 /// Generate types for a standalone type annotation (one without a corresponding definition).
@@ -3263,12 +3671,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     },
                                     .nominal => {
                                         // Nominal types can be recursive
-                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             &.{},
                                             self.builtin_ctx.module_name,
+                                            @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
+                                            self.cir.module_role == .builtin,
                                         ), env);
                                     },
                                 }
@@ -3363,12 +3773,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     },
                                     .nominal => {
                                         // Nominal types can be recursive
-                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                        try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
                                             .{ .ident_idx = this_decl.name },
                                             this_decl.backing_var,
                                             anno_arg_vars,
                                             self.builtin_ctx.module_name,
+                                            @intFromEnum(this_decl.idx),
                                             this_decl.is_opaque,
+                                            self.cir.module_role == .builtin,
                                         ), env);
                                     },
                                 }
@@ -3592,6 +4004,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 }
             }.less);
 
+            // Materialize the tags into the types store before processing the
+            // ext. `tags_slice` points into the scratch_tags buffer, and
+            // generating the ext recurses and may append to scratch_tags,
+            // reallocating that buffer and dangling the slice. Copying into a
+            // stable range here mirrors the record case below.
+            const tags_range = try self.types.appendTags(tags_slice);
+
             // Process the ext if it exists. Absence means it's a closed union
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
@@ -3603,7 +4022,14 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             };
 
             // Set the anno's type
-            try self.unifyWith(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), env);
+            try self.unifyWith(
+                anno_var,
+                .{ .structure = types_mod.FlatType{ .tag_union = .{
+                    .tags = tags_range,
+                    .ext = ext_var,
+                } } },
+                env,
+            );
         },
         .tag => {
             // Tags should only exist as direct children of tag_unions in type annotations.
@@ -3945,19 +4371,19 @@ fn setBuiltinTypeContent(
 
     switch (anno_builtin_type) {
         // Phase 5: Use nominal types from Builtin instead of special .num content
-        .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U8", env), env),
-        .u16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U16", env), env),
-        .u32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U32", env), env),
-        .u64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U64", env), env),
-        .u128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U128", env), env),
-        .i8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I8", env), env),
-        .i16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I16", env), env),
-        .i32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I32", env), env),
-        .i64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I64", env), env),
-        .i128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I128", env), env),
-        .f32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F32", env), env),
-        .f64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F64", env), env),
-        .dec => try self.unifyWith(anno_var, try self.mkNumberTypeContent("Dec", env), env),
+        .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u8, env), env),
+        .u16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u16, env), env),
+        .u32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u32, env), env),
+        .u64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u64, env), env),
+        .u128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.u128, env), env),
+        .i8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i8, env), env),
+        .i16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i16, env), env),
+        .i32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i32, env), env),
+        .i64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i64, env), env),
+        .i128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.i128, env), env),
+        .f32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.f32, env), env),
+        .f64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.f64, env), env),
+        .dec => try self.unifyWith(anno_var, try self.mkNumberTypeContent(.dec, env), env),
         .list => {
             // Then check arity
             if (anno_args.len != 1) {
@@ -4365,33 +4791,33 @@ fn checkPatternHelp(
                     _ = try self.unify(pattern_var, flex_var, env);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
-                .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U8", env), env),
-                .i8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I8", env), env),
-                .u16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U16", env), env),
-                .i16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I16", env), env),
-                .u32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U32", env), env),
-                .i32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I32", env), env),
-                .u64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U64", env), env),
-                .i64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I64", env), env),
-                .u128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("U128", env), env),
-                .i128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("I128", env), env),
-                .f32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F32", env), env),
-                .f64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F64", env), env),
-                .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env),
+                .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u8, env), env),
+                .i8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i8, env), env),
+                .u16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u16, env), env),
+                .i16 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i16, env), env),
+                .u32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u32, env), env),
+                .i32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i32, env), env),
+                .u64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u64, env), env),
+                .i64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i64, env), env),
+                .u128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u128, env), env),
+                .i128 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.i128, env), env),
+                .f32 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f32, env), env),
+                .f64 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f64, env), env),
+                .dec => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec, env), env),
             }
         },
         .frac_f32_literal => {
             // Phase 5: Use nominal F32 type
-            try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F32", env), env);
+            try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f32, env), env);
         },
         .frac_f64_literal => {
             // Phase 5: Use nominal F64 type
-            try self.unifyWith(pattern_var, try self.mkNumberTypeContent("F64", env), env);
+            try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.f64, env), env);
         },
         .dec_literal => |dec| {
             if (dec.has_suffix) {
                 // Explicit suffix like `3.14dec` - use nominal Dec type
-                try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unannotated decimal literal - create flex var with from_numeral constraint
                 const num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4408,7 +4834,7 @@ fn checkPatternHelp(
         .small_dec_literal => |dec| {
             if (dec.has_suffix) {
                 // Explicit suffix - use nominal Dec type
-                try self.unifyWith(pattern_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unannotated decimal literal - create flex var with from_numeral constraint
                 const scaled_value = dec.value.toRocDec().num;
@@ -4728,7 +5154,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_bytes_literal => {
             // Create List(U8) type
-            const u8_content = try self.mkNumberTypeContent("U8", env);
+            const u8_content = try self.mkNumberTypeContent(.u8, env);
             const u8_var = try self.freshFromContent(u8_content, env, expr_region);
             const list_content = try self.mkListContent(u8_var, env);
             try self.unifyWith(expr_var, list_content, env);
@@ -4792,19 +5218,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
                     _ = try self.unify(expr_var, flex_var, env);
                 },
-                .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U8", env), env),
-                .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I8", env), env),
-                .u16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U16", env), env),
-                .i16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I16", env), env),
-                .u32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U32", env), env),
-                .i32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I32", env), env),
-                .u64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U64", env), env),
-                .i64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I64", env), env),
-                .u128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("U128", env), env),
-                .i128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("I128", env), env),
-                .f32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env),
-                .f64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env),
-                .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env),
+                .u8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u8, env), env),
+                .i8 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i8, env), env),
+                .u16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u16, env), env),
+                .i16 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i16, env), env),
+                .u32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u32, env), env),
+                .i32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i32, env), env),
+                .u64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u64, env), env),
+                .i64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i64, env), env),
+                .u128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.u128, env), env),
+                .i128 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.i128, env), env),
+                .f32 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32, env), env),
+                .f64 => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64, env), env),
+                .dec => try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env),
             }
         },
         .e_num_from_numeral => {
@@ -4814,7 +5240,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("F32", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32, env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4833,7 +5259,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("F64", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64, env), env);
             } else {
                 // Unsuffixed fractional literal - create constrained flex var
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4854,7 +5280,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unsuffixed Dec literal - create constrained flex var
                 var num_literal_info = types_mod.NumeralInfo.fromI128(
@@ -4875,7 +5301,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (frac.has_suffix) {
                 const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent("Dec", env), env);
+                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec, env), env);
             } else {
                 // Unsuffixed small Dec literal - create constrained flex var
                 const scaled_value = frac.value.toRocDec().num;
@@ -5081,11 +5507,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .tuple = .{ .elems = elem_vars },
                         } }, env, expr_region);
 
+                        // A non-tuple structure can never satisfy a tuple access,
+                        // so this unify reports the mismatch. Poison the result to
+                        // `.err` (like the out-of-bounds branch above) rather than
+                        // leaving it a fresh flex var, so conflicting downstream
+                        // uses of the result don't produce cascading errors.
                         _ = try self.unify(tuple_var, expected_tuple_var, env);
-
-                        // The result type is the element at the index
-                        const result_var = self.types.sliceVars(elem_vars)[tuple_access.elem_index];
-                        _ = try self.unify(expr_var, result_var, env);
+                        try self.unifyWith(expr_var, .err, env);
                     },
                 },
                 .flex => {
@@ -5291,14 +5719,34 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Cycle detected: store env for merge at cycle root.
                             _ = try self.deferred_cycle_envs.append(self.gpa, sub_env);
 
-                            // Use the def's closure/expr var directly. After
-                            // checkDef, e_closure rank elevation has already run,
-                            // so the closure var is at rank 2 — safe for
-                            // unification without pulling body vars below the
-                            // generalization rank.
                             const def = self.cir.store.getDef(processing_def.def_idx);
                             const def_expr_var = ModuleEnv.varFrom(def.expr);
-                            _ = try self.unify(expr_var, def_expr_var, env);
+                            if (def.annotation != null) {
+                                // Forward reference to an ANNOTATED member of the
+                                // recursive group (mutual recursion). Decouple the
+                                // reference with a flex var and defer a
+                                // cross-reference constraint to the cycle root,
+                                // where the target is generalized and instantiated
+                                // per use-site. Unifying directly with the target's
+                                // (not-yet-generalized) type would force the two
+                                // members' rigid type parameters to coincide,
+                                // producing a spurious `T(k)` != `T(k)`.
+                                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+                                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                                    .expected = def_expr_var,
+                                    .actual = expr_var,
+                                    .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                                    .is_cross_reference = true,
+                                } });
+                            } else {
+                                // Unannotated member: the group is inferred together
+                                // and shares type variables, so link monomorphically.
+                                // After checkDef, e_closure rank elevation has run,
+                                // so the closure var is at rank 2 — safe to unify
+                                // without pulling body vars below the generalization
+                                // rank.
+                                _ = try self.unify(expr_var, def_expr_var, env);
+                            }
 
                             break :blk;
                         } else {
@@ -5322,11 +5770,36 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // Set the expr to be a flex
                         try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
 
+                        // A reference to a *different*, ANNOTATED def in the cycle
+                        // (mutual recursion) is instantiated per use-site at
+                        // validation time, so the members' rigid type parameters
+                        // don't clash. A self-reference, or a reference to an
+                        // unannotated member, stays monomorphic: unannotated
+                        // mutually-recursive functions are inferred as a group and
+                        // must share their (not-yet-generalized) type variables.
+                        const is_cross_reference = (referenced_def.annotation != null) and
+                            if (self.current_processing_def) |current_def|
+                                current_def != processing_def.def_idx
+                            else
+                                false;
+
+                        // For a cross-reference, target the callee's expr var
+                        // rather than its pattern var: at the cycle root the
+                        // root's pattern var is not yet linked to its generalized
+                        // type (that def-level unification happens after the body
+                        // is checked), but every participant's expr var has been
+                        // generalized by then — so instantiation can find it.
+                        const constraint_expected = if (is_cross_reference)
+                            ModuleEnv.varFrom(referenced_def.expr)
+                        else
+                            pat_var;
+
                         // Write down this constraint for later validation
                         _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
-                            .expected = pat_var,
+                            .expected = constraint_expected,
                             .actual = expr_var,
                             .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+                            .is_cross_reference = is_cross_reference,
                         } });
 
                         // Detect mutual recursion through local lookups. If the
@@ -5350,6 +5823,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processed => {},
                 }
+            }
+
+            // Local block-def recursion. If this lookup targets a local `s_decl`
+            // function whose body is currently being checked, it's a recursive
+            // reference (to the def itself, or to an enclosing in-flight def).
+            // Defer unification — fresh flex now + a pending `local_recursive_refs`
+            // entry validated after the def generalizes — so we don't unify with
+            // the not-yet-generalized pattern var, which would lower its rank and
+            // prevent generalization of the def's rigid type parameters.
+            //
+            // A reference to an already-finished sibling local def is NOT in this
+            // map (removed after it generalizes), so it falls through to the tail
+            // below and instantiates normally.
+            if (self.local_processing_ptrns.get(lookup.pattern_idx)) |local_def| {
+                // The pattern is mid-check, so it must not be generalized yet.
+                std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                // Set the expr to be a flex
+                try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                // Record for validation once the def's lambda has generalized.
+                // A dedicated stack, not the shared constraints list (sequential
+                // scoping makes this a single self/enclosing chain — see the
+                // `local_recursive_refs` field doc).
+                try self.local_recursive_refs.append(self.gpa, .{
+                    .pat_var = pat_var,
+                    .expr_var = expr_var,
+                    .def_name = local_def.def_name,
+                });
+
+                break :blk;
             }
 
             // Instantiate if generalized, otherwise just use the pattern var
@@ -6385,13 +6889,17 @@ fn toInspectMethodVarForNominal(
     env: *Env,
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
-    const original_env, const is_this_module = try self.methodOwnerEnv(nominal.origin_module);
-    const method_ident = original_env.lookupMethodIdentFromEnvConst(
+    const original_env, const is_this_module = try self.methodOwnerEnv(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+    );
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
-        nominal.ident.ident_idx,
+        nominal.sourceDeclOptional(),
         self.cir.idents.to_inspect,
     ) orelse return null;
-    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_ident, nominal.ident.ident_idx, env, region);
+    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, nominal.ident.ident_idx, env, region);
 }
 
 fn toInspectMethodVarForAlias(
@@ -6400,55 +6908,203 @@ fn toInspectMethodVarForAlias(
     env: *Env,
     region: Region,
 ) Allocator.Error!?ToInspectMethodVar {
-    const original_env, const is_this_module = try self.methodOwnerEnv(alias.origin_module);
-    const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
-        original_env,
-        alias.ident.ident_idx,
+    const original_env, const is_this_module = try self.methodOwnerEnv(
+        alias.origin_module,
+        alias.source_decl.toOptional(),
+        alias.source_decl.originIsBuiltin(),
+    );
+    const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+        alias.source_decl.toOptional(),
         self.cir,
         self.cir.idents.to_inspect,
     ) orelse return null;
-    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_ident, alias.ident.ident_idx, env, region);
+    return try self.methodVarFromOriginalEnv(original_env, is_this_module, method_binding.type_node_idx, alias.ident.ident_idx, env, region);
 }
 
-fn methodOwnerEnv(self: *Self, origin_module: Ident.Idx) Allocator.Error!struct { *const ModuleEnv, bool } {
-    return self.ownerEnvForOriginModule(origin_module, "to_inspect");
+fn methodOwnerEnv(
+    self: *Self,
+    origin_module: Ident.Idx,
+    source_decl: ?u32,
+    origin_is_builtin: bool,
+) Allocator.Error!struct { *const ModuleEnv, bool } {
+    return self.ownerEnvForOriginModule(origin_module, source_decl, origin_is_builtin, "to_inspect");
 }
 
-fn ownerEnvForOriginModule(self: *Self, origin_module: Ident.Idx, context: []const u8) struct { *const ModuleEnv, bool } {
-    if (origin_module.eql(self.builtin_ctx.module_name)) return .{ self.cir, true };
-    if (origin_module.eql(self.cir.idents.builtin_module)) {
-        return .{ self.builtin_ctx.builtin_module orelse self.cir, self.builtin_ctx.builtin_module == null };
+const OwnerEnvCandidate = struct {
+    env: *const ModuleEnv,
+    is_this_module: bool,
+};
+
+fn ownerEnvForOriginModule(
+    self: *const Self,
+    origin_module: Ident.Idx,
+    source_decl: ?u32,
+    origin_is_builtin: bool,
+    context: []const u8,
+) struct { *const ModuleEnv, bool } {
+    if (origin_is_builtin) {
+        return self.builtinOwnerEnvForSourceDecl(source_decl, context);
     }
-    if (self.owner_module_envs.get(self.cir.getIdent(origin_module))) |owner_env| {
+
+    const origin_text = self.cir.getIdent(origin_module);
+    const owner_source_decl = nonBuiltinOwnerSourceDecl(source_decl, context, origin_text);
+
+    var found: ?OwnerEnvCandidate = null;
+    considerOwnerEnvCandidate(&found, self.cir, true, origin_text, owner_source_decl, context);
+    for (self.imported_modules) |imported_env| {
+        if (imported_env.module_role == .builtin) continue;
+        considerOwnerEnvCandidate(&found, imported_env, false, origin_text, owner_source_decl, context);
+    }
+    for (self.owner_modules) |owner_env| {
+        if (owner_env.module_role == .builtin) continue;
+        considerOwnerEnvCandidate(&found, owner_env, false, origin_text, owner_source_decl, context);
+    }
+
+    if (found) |owner| return .{ owner.env, owner.is_this_module };
+
+    if (self.owner_module_envs.get(origin_text)) |owner_env| {
+        if (!ownerModuleEnvSourceDeclMatches(owner_env, owner_source_decl)) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "type checker invariant violated: {s} owner {s} resolved by name to an environment without source_decl={d}",
+                    .{ context, origin_text, owner_source_decl },
+                );
+            }
+            unreachable;
+        }
         return .{ owner_env, false };
     }
 
     if (builtin.mode == .Debug) {
         std.debug.panic(
-            "type checker invariant violated: unable to find module environment for {s} owner from module {s}",
-            .{ context, self.cir.getIdent(origin_module) },
+            "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
+            .{ context, origin_text, owner_source_decl, origin_is_builtin },
         );
     }
     unreachable;
+}
+
+fn nonBuiltinOwnerSourceDecl(source_decl: ?u32, context: []const u8, origin_text: []const u8) u32 {
+    if (source_decl) |raw_decl| return raw_decl;
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "type checker invariant violated: {s} owner {s} has no source declaration",
+            .{ context, origin_text },
+        );
+    }
+    unreachable;
+}
+
+fn builtinOwnerEnvForSourceDecl(
+    self: *const Self,
+    source_decl: ?u32,
+    context: []const u8,
+) struct { *const ModuleEnv, bool } {
+    if (source_decl == null) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "type checker invariant violated: {s} compiler-builtin owner has no source declaration",
+                .{context},
+            );
+        }
+        unreachable;
+    }
+
+    if (self.maybeBuiltinOwnerEnvForSourceDecl(source_decl.?)) |owner| return .{ owner.env, owner.is_this_module };
+
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "type checker invariant violated: unable to find compiler-builtin module environment for {s} owner",
+            .{context},
+        );
+    }
+    unreachable;
+}
+
+fn maybeBuiltinOwnerEnvForSourceDecl(
+    self: *const Self,
+    source_decl: u32,
+) ?OwnerEnvCandidate {
+    if (self.cir.module_role == .builtin and ownerModuleEnvSourceDeclMatches(self.cir, source_decl)) {
+        return .{ .env = self.cir, .is_this_module = true };
+    }
+
+    if (self.builtin_ctx.builtin_module) |builtin_env| {
+        if (ownerModuleEnvSourceDeclMatches(builtin_env, source_decl)) return .{ .env = builtin_env, .is_this_module = false };
+    }
+
+    for (self.imported_modules) |imported_env| {
+        if (imported_env.module_role != .builtin) continue;
+        if (ownerModuleEnvSourceDeclMatches(imported_env, source_decl)) return .{ .env = imported_env, .is_this_module = false };
+    }
+    for (self.owner_modules) |owner_env| {
+        if (owner_env.module_role != .builtin) continue;
+        if (ownerModuleEnvSourceDeclMatches(owner_env, source_decl)) return .{ .env = owner_env, .is_this_module = false };
+    }
+
+    return null;
+}
+
+fn considerOwnerEnvCandidate(
+    found: *?OwnerEnvCandidate,
+    candidate: *const ModuleEnv,
+    is_this_module: bool,
+    origin_text: []const u8,
+    source_decl: u32,
+    context: []const u8,
+) void {
+    if (!ownerModuleEnvNameMatches(candidate, origin_text)) return;
+    if (!ownerModuleEnvSourceDeclMatches(candidate, source_decl)) return;
+
+    if (found.*) |existing| {
+        if (existing.env == candidate) return;
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "type checker invariant violated: {s} owner {s} resolves to multiple module environments",
+                .{ context, origin_text },
+            );
+        }
+        unreachable;
+    }
+
+    found.* = .{ .env = candidate, .is_this_module = is_this_module };
+}
+
+fn ownerModuleEnvNameMatches(candidate: *const ModuleEnv, origin_text: []const u8) bool {
+    if (!candidate.qualified_module_ident.isNone() and
+        Ident.textEql(candidate.getIdent(candidate.qualified_module_ident), origin_text))
+    {
+        return true;
+    }
+    if (!candidate.display_module_name_idx.isNone() and
+        Ident.textEql(candidate.getIdent(candidate.display_module_name_idx), origin_text))
+    {
+        return true;
+    }
+    return candidate.module_name.len > 0 and Ident.textEql(candidate.module_name, origin_text);
+}
+
+fn ownerModuleEnvSourceDeclMatches(candidate: *const ModuleEnv, source_decl: u32) bool {
+    if (source_decl >= candidate.store.nodes.len()) return false;
+
+    const node: CIR.Node.Idx = @enumFromInt(source_decl);
+    switch (candidate.store.nodes.get(node).tag) {
+        .statement_alias_decl, .statement_nominal_decl => {},
+        else => return false,
+    }
+    return true;
 }
 
 fn methodVarFromOriginalEnv(
     self: *Self,
     original_env: *const ModuleEnv,
     is_this_module: bool,
-    method_ident: Ident.Idx,
+    type_node_idx: anytype,
     dispatcher_name: Ident.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!ToInspectMethodVar {
-    const node_idx = original_env.getExposedNodeIndexById(method_ident) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: to_inspect method ident has no exposed definition", .{});
-        }
-        unreachable;
-    };
-    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
-    const def_var: Var = ModuleEnv.varFrom(def_idx);
+    const def_var: Var = ModuleEnv.varFrom(type_node_idx);
     const method_var = if (is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
@@ -6549,6 +7205,22 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     }
                 };
 
+                // Register function defs as "currently processing" so recursive
+                // references in their own body defer unification (see the local
+                // recursion branch in `e_lookup_local`). Only function defs can
+                // legitimately be self-recursive; value defs (`x = x`) keep their
+                // existing diagnostics. Snapshot the pending-recursive-ref stack
+                // so we only validate the references recorded while checking THIS
+                // def's body.
+                const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
+                const local_recursive_refs_top = self.local_recursive_refs.items.len;
+                if (decl_is_fn) {
+                    try self.local_processing_ptrns.put(self.gpa, decl_stmt.pattern, .{
+                        .def_name = self.getPatternIdent(decl_stmt.pattern),
+                        .pattern_idx = decl_stmt.pattern,
+                    });
+                }
+
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -6556,6 +7228,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
+
+                if (decl_is_fn) {
+                    // The def's lambda has generalized (inside checkExpr) and the
+                    // pattern var now carries the generalized function type, so it
+                    // is safe to validate the recursive references it recorded.
+                    try self.validateLocalRecursiveRefs(env, local_recursive_refs_top);
+                    _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
+                }
             },
             .s_var => |var_stmt| {
                 // Check the pattern
@@ -6994,8 +7674,9 @@ fn checkMatchExpr(
     const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
     const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
-    // Skip pattern checking if we already know the condition isn't a Try type
-    // This prevents confusing cascading errors about pattern incompatibility
+    // Check each of the first branch's patterns and unify it with the
+    // condition type. (A failed unify poisons cond_var to .err, so subsequent
+    // pattern unifications short-circuit rather than cascading.)
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
@@ -7284,7 +7965,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     // This function attaches the dispatch fn to the not_arg
     try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
-    // Redirect the result to the boolean type
+    // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
     return does_fx;
@@ -7313,7 +7994,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
     // This function attaches the dispatch fn to the not_arg
     try self.mkUnaryOp(not_arg_var, not_ret_var, not_method_name, env, expr_region, expr_idx);
 
-    // Redirect the result to the boolean type
+    // The result type is the operand type (the desugaring is `a -> a`).
     _ = try self.unify(expr_var, not_ret_var, env);
 
     return does_fx;
@@ -7410,7 +8091,6 @@ fn checkBinopExpr(
                     .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
                     .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
                     .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
-                    .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
                     else => unreachable,
                 };
 
@@ -7632,12 +8312,7 @@ fn reportMissingNominalMethodForBinop(
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
-    const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, method_name) orelse {
-        try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
-        return true;
-    };
-
-    if (original_env.getExposedNodeIndexById(method_ident) == null) {
+    if (original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), method_name) == null) {
         try self.reportMissingNominalMethodForBinopConstraint(lhs_var, rhs_var, expr_var, method_name, env, region);
         return true;
     }
@@ -7673,7 +8348,12 @@ fn reportMissingNominalMethodForBinopConstraint(
 }
 
 fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const ModuleEnv {
-    const original_env, _ = self.ownerEnvForOriginModule(nominal_type.origin_module, "nominal type");
+    const original_env, _ = self.ownerEnvForOriginModule(
+        nominal_type.origin_module,
+        nominal_type.sourceDeclOptional(),
+        nominal_type.originIsBuiltin(),
+        "nominal type",
+    );
     return original_env;
 }
 
@@ -8390,7 +9070,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
             const fn_content = self.types.resolveVar(c.fn_var).desc.content;
             const func = fn_content.unwrapFunc() orelse continue;
             var found_peer = false;
-            for (self.types.sliceVars(func.args)) |arg| {
+            // Use iterVars, not sliceVars: unify below appends fresh vars and
+            // can reallocate the backing array, which would dangle a slice.
+            var peer_args = self.types.iterVars(func.args);
+            while (peer_args.next()) |arg| {
                 const resolved_arg = self.types.resolveVar(arg);
                 if (resolved_arg.var_ == resolved.var_) continue; // skip self
                 if (resolved_arg.desc.content.unwrapNominalType() == null) continue;
@@ -8413,7 +9096,10 @@ fn resolveNumericLiteralsFromContext(self: *Self, env: *Env) std.mem.Allocator.E
             if (resolved_ret.desc.content.unwrapNominalType() == null) continue;
             _ = try self.unify(resolved.var_, resolved_ret.var_, env);
 
-            for (self.types.sliceVars(func.args)) |arg| {
+            // Use iterVars, not sliceVars: each unify can reallocate the
+            // backing array, so a held slice would dangle on the next iteration.
+            var ret_args = self.types.iterVars(func.args);
+            while (ret_args.next()) |arg| {
                 const resolved_arg = self.types.resolveVar(arg);
                 if (resolved_arg.var_ == resolved.var_) continue;
                 _ = try self.unify(resolved_ret.var_, resolved_arg.var_, env);
@@ -8509,6 +9195,13 @@ fn builtinNumericCandidateSatisfiesStaticDispatchConstraints(
     return true;
 }
 
+/// PRECONDITION: the caller MUST have an active type-store snapshot in scope.
+/// This speculatively mutates the real stores (copyVar/instantiateVar append
+/// vars and regions, probeUnifyWithoutRecordingProblems unifies) and does NOT
+/// roll them back itself — it relies on the caller's snapshot rollback. The only
+/// caller, builtinNumericCandidateSatisfiesStaticDispatchConstraints, wraps its
+/// loop in such a snapshot. A new caller without one would leak speculative vars
+/// into the live store and corrupt subsequent solving.
 fn staticDispatchConstraintAcceptsCandidate(
     self: *Self,
     constraint: StaticDispatchConstraint,
@@ -8517,19 +9210,21 @@ fn staticDispatchConstraintAcceptsCandidate(
 ) Allocator.Error!bool {
     const candidate_resolved = self.types.resolveVar(candidate_var);
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
-    const original_env = self.getNominalOriginEnv(nominal_type);
+    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal_type.origin_module,
+        nominal_type.sourceDeclOptional(),
+        nominal_type.originIsBuiltin(),
+        "static dispatch candidate",
+    );
 
-    const method_ident = original_env.lookupMethodIdentFromEnvConst(
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         self.cir,
-        nominal_type.ident.ident_idx,
+        nominal_type.sourceDeclOptional(),
         constraint.fn_name,
     ) orelse return false;
+    const def_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
 
-    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse return false;
-    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-    const def_var: Var = ModuleEnv.varFrom(def_idx);
-
-    const method_var = if (nominal_type.origin_module.eql(self.builtin_ctx.module_name)) blk: {
+    const method_var = if (is_this_module) blk: {
         if (self.types.resolveVar(def_var).desc.rank == .generalized) {
             break :blk try self.instantiateVar(def_var, env, .use_last_var);
         }
@@ -8542,7 +9237,7 @@ fn staticDispatchConstraintAcceptsCandidate(
     return try self.probeUnifyWithoutRecordingProblems(method_var, constraint.fn_var);
 }
 
-fn listJoinWithListItemsMethodIdent(
+fn listJoinWithListItemsMethodDef(
     self: *Self,
     original_env: *const ModuleEnv,
     is_this_module: bool,
@@ -8550,17 +9245,17 @@ fn listJoinWithListItemsMethodIdent(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-) Allocator.Error!?Ident.Idx {
+) Allocator.Error!?ModuleEnv.MethodBinding {
     if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
     if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
 
-    const list_ident = original_env.idents.list;
     const join_list_with_ident = original_env.idents.join_list_with;
-    const helper_ident = original_env.lookupMethodIdentConst(list_ident, join_list_with_ident) orelse return null;
-
-    const helper_node_idx = original_env.getExposedNodeIndexById(helper_ident) orelse return null;
-    const helper_def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(helper_node_idx)));
-    const helper_def_var: Var = ModuleEnv.varFrom(helper_def_idx);
+    const helper_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+        original_env,
+        nominal_type.sourceDeclOptional(),
+        join_list_with_ident,
+    ) orelse return null;
+    const helper_def_var: Var = ModuleEnv.varFrom(helper_binding.type_node_idx);
 
     const from_numeral_count = self.types.from_numeral_flex_count;
     const regions_len = self.regions.items.items.len;
@@ -8591,7 +9286,7 @@ fn listJoinWithListItemsMethodIdent(
     };
 
     if (!try self.probeUnifyWithoutRecordingProblems(helper_var, constraint.fn_var)) return null;
-    return helper_ident;
+    return helper_binding;
 }
 
 fn probeUnifyWithoutRecordingProblems(
@@ -8707,6 +9402,39 @@ fn processReturnConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
     self.constraints.items.shrinkRetainingCapacity(write_idx);
 }
 
+/// Validate the recursive references recorded while checking a LOCAL block def's
+/// body (those at index >= `from`), now that the def's lambda has generalized
+/// and its pattern var carries the generalized type. Sequential scoping forbids
+/// local mutual recursion, so every such reference is a self/enclosing one and a
+/// plain unification suffices (no per-use instantiation). The validated refs are
+/// then popped.
+fn validateLocalRecursiveRefs(self: *Self, env: *Env, from: usize) std.mem.Allocator.Error!void {
+    // Capture the end up front: validation only unifies, it never records new
+    // local recursive refs, so the range is stable.
+    const end = self.local_recursive_refs.items.len;
+    var i = from;
+    while (i < end) : (i += 1) {
+        const ref = self.local_recursive_refs.items[i];
+        _ = try self.unifyInContext(ref.pat_var, ref.expr_var, env, .{ .recursive_def = .{ .def_name = ref.def_name } });
+    }
+    self.local_recursive_refs.shrinkRetainingCapacity(from);
+}
+
+/// Resolve one `eql` constraint. For a `recursive_def` cross-reference (mutual
+/// recursion) whose target has been generalized, instantiate the target so the
+/// reference gets fresh type parameters — otherwise the two members' rigid type
+/// variables would be forced to unify, producing a spurious `T(k)` != `T(k)`
+/// mismatch. Self-references (and any not-yet-generalized target) keep the
+/// monomorphic direct unification.
+fn resolveEqlConstraint(self: *Self, eql: anytype, env: *Env) std.mem.Allocator.Error!void {
+    if (eql.is_cross_reference and self.types.resolveVar(eql.expected).desc.rank == .generalized) {
+        const instantiated = try self.instantiateVar(eql.expected, env, .use_last_var);
+        _ = try self.unifyInContext(instantiated, eql.actual, env, eql.ctx);
+        return;
+    }
+    _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+}
+
 /// Check any accumulated constraints
 fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -8717,7 +9445,7 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
+                try self.resolveEqlConstraint(eql, env);
             },
         }
     }
@@ -8765,9 +9493,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const rigid = dispatcher_content.rigid;
                 const rigid_constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
 
-                // Get the deferred constraints to validate against
-                const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-
                 // Build a map of constraints the rigid has
                 self.ident_to_var_map.clearRetainingCapacity();
                 try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
@@ -8775,8 +9500,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     self.ident_to_var_map.putAssumeCapacity(rigid_constraint.fn_name, rigid_constraint.fn_var);
                 }
 
-                // Iterate over the constraints
-                for (deferred_constraints) |constraint| {
+                // Iterate over the deferred constraints to validate against.
+                // iterRange re-fetches each item through the SafeList, so it stays valid
+                // even if the unify below appends and reallocates the backing array.
+                var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+                while (constraints_iter.next()) |constraint| {
                     if (constraint.origin == .from_numeral) {
                         if (self.builtinNumKindFromTypeName(rigid.name)) |num_kind| {
                             if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) {
@@ -8833,7 +9561,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 const original_module_ident = nominal_type.origin_module;
 
                 // Check if the nominal type in question is defined in this module
-                const original_env, const is_this_module = self.ownerEnvForOriginModule(original_module_ident, "static dispatch nominal");
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                    original_module_ident,
+                    nominal_type.sourceDeclOptional(),
+                    nominal_type.originIsBuiltin(),
+                    "static dispatch nominal",
+                );
 
                 // Get some data about the nominal type
                 const region = self.getRegionAt(deferred_constraint.var_);
@@ -8861,15 +9594,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         continue;
                     }
-                    const method_ident = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
+                    const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
-                        const exact_method_ident = original_env.lookupMethodIdentFromEnvConst(
+                        const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
-                            nominal_type.ident.ident_idx,
+                            nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
-                        if (exact_method_ident == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
+                        if (exact_method_binding == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -8879,7 +9612,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         }
-                        break :blk exact_method_ident orelse {
+                        break :blk exact_method_binding orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
                                 constraint,
@@ -8889,14 +9622,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         };
-                    } else (try self.listJoinWithListItemsMethodIdent(
+                    } else (try self.listJoinWithListItemsMethodDef(
                         original_env,
                         is_this_module,
                         nominal_type,
                         constraint,
                         env,
                         region,
-                    )) orelse original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
+                    )) orelse original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -8911,21 +9644,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
-                    // Get the def index in the original env
-                    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
-                        // The ident exists but isn't exposed as a def
-                        try self.reportConstraintError(
-                            deferred_constraint.var_,
-                            constraint,
-                            .{ .missing_method = .nominal },
-                            env,
-                            is_numeric_default_pass,
-                        );
-                        continue;
-                    };
-
-                    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-                    const def_var: Var = ModuleEnv.varFrom(def_idx);
+                    const def_idx = method_binding.def_idx;
+                    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = original_env.store.getDef(def_idx);
                     // Track whether we just processed a cycle participant
                     var cycle_method_expr_var: ?Var = null;
@@ -8999,13 +9719,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // fresh flex var instead of def_var to avoid rank lowering.
                         break :blk expr_var_for_method;
                     } else if (is_this_module) blk: {
-                        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
-                            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+                        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+                            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
                         }
-                        break :blk def_var;
+                        break :blk method_type_var;
                     } else blk: {
                         // Copy the method from the other module's type store
-                        const copied_var = try self.copyVar(def_var, original_env, region);
+                        const copied_var = try self.copyVar(method_type_var, original_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
 
@@ -9052,7 +9772,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                 // Get the module ident that this alias type was defined in
                 const original_module_ident = alias.origin_module;
-                const original_env, const is_this_module = self.ownerEnvForOriginModule(original_module_ident, "static dispatch alias");
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                    original_module_ident,
+                    alias.source_decl.toOptional(),
+                    alias.source_decl.originIsBuiltin(),
+                    "static dispatch alias",
+                );
 
                 const region = self.getRegionAt(deferred_constraint.var_);
                 const constraints_range = deferred_constraint.constraints;
@@ -9075,13 +9800,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     }
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                        const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
-                            original_env,
-                            alias.ident.ident_idx,
+                        const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                            alias.source_decl.toOptional(),
                             self.cir,
                             constraint.fn_name,
                         );
-                        if (method_ident == null) {
+                        if (method_binding == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
                             if (self.varSupportsIsEq(backing_var)) {
                                 try self.satisfyImplicitEqualityConstraint(
@@ -9102,9 +9826,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    const method_ident = original_env.lookupMethodIdentFromTwoEnvsConst(
-                        original_env,
-                        alias.ident.ident_idx,
+                    const method_binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                        alias.source_decl.toOptional(),
                         self.cir,
                         constraint.fn_name,
                     ) orelse {
@@ -9117,23 +9840,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
+                    const def_idx = method_binding.def_idx;
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
-                    const node_idx_in_original_env = original_env.getExposedNodeIndexById(method_ident) orelse {
-                        try self.reportConstraintError(
-                            deferred_constraint.var_,
-                            constraint,
-                            .{ .missing_method = .nominal },
-                            env,
-                            is_numeric_default_pass,
-                        );
-                        continue;
-                    };
-
-                    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx_in_original_env)));
-                    const def_var: Var = ModuleEnv.varFrom(def_idx);
+                    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = original_env.store.getDef(def_idx);
                     var cycle_method_expr_var: ?Var = null;
                     if (is_this_module) {
@@ -9190,12 +9902,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
                         break :blk expr_var_for_method;
                     } else if (is_this_module) blk: {
-                        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
-                            break :blk try self.instantiateVar(def_var, env, .use_last_var);
+                        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+                            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
                         }
-                        break :blk def_var;
+                        break :blk method_type_var;
                     } else blk: {
-                        const copied_var = try self.copyVar(def_var, original_env, region);
+                        const copied_var = try self.copyVar(method_type_var, original_env, region);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
 
@@ -9239,8 +9951,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
             {
                 // Anonymous structural types (records, tuples, tag unions) have implicit is_eq
                 // only if all their components also support is_eq
-                const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-                for (constraints) |constraint| {
+                // iterRange re-fetches each item through the SafeList, so it stays valid even if
+                // satisfyImplicitEqualityConstraint appends and reallocates the backing array.
+                var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+                while (constraints_iter.next()) |constraint| {
                     // Check if this is a call to is_eq (anonymous types have implicit structural equality)
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
@@ -9409,65 +10123,91 @@ fn typeSupportsIsEqInternal(
 }
 
 fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
-    return nominal_type.origin_module.eql(self.cir.idents.builtin_module) and
-        nominal_type.ident.ident_idx.eql(self.cir.idents.box);
+    if (!nominal_type.originIsBuiltin()) return false;
+    return switch (self.builtinNominalDeclForBuiltinSourceDecl(nominal_type.sourceDeclOptional()) orelse return false) {
+        .box => true,
+        else => false,
+    };
 }
 
 fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
-    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true);
+    self.var_set.clearRetainingCapacity();
+    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set) catch false;
 }
 
-fn varContainsUnboxedFunctionInHostedSignatureInternal(self: *Self, var_: Var, allow_top_fn: bool) bool {
+fn varContainsUnboxedFunctionInHostedSignatureInternal(
+    self: *Self,
+    var_: Var,
+    allow_top_fn: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    // Cycle guard: recursive nominal/structural types would otherwise recurse
+    // forever through their backing vars. A var already on the stack
+    // contributes no new unboxed function we haven't already considered.
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
     return switch (resolved.desc.content) {
         .structure => |s| switch (s) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
                 if (!allow_top_fn) break :blk true;
                 const args = self.types.sliceVars(func.args);
                 for (args) |arg_var| {
-                    if (self.varContainsUnboxedFunctionInternal(arg_var, false)) break :blk true;
+                    if (try self.varContainsUnboxedFunctionInternal(arg_var, false, visited)) break :blk true;
                 }
-                if (self.varContainsUnboxedFunctionInternal(func.ret, false)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(func.ret, false, visited)) break :blk true;
                 break :blk false;
             },
-            else => self.flatTypeContainsUnboxedFunction(s, false),
+            else => try self.flatTypeContainsUnboxedFunction(s, false, visited),
         },
-        .alias => |alias| self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn),
+        .alias => |alias| try self.varContainsUnboxedFunctionInHostedSignatureInternal(self.types.getAliasBackingVar(alias), allow_top_fn, visited),
         .flex, .rigid, .err => false,
     };
 }
 
-fn varContainsUnboxedFunctionInternal(self: *Self, var_: Var, boxed_allowed: bool) bool {
+fn varContainsUnboxedFunctionInternal(
+    self: *Self,
+    var_: Var,
+    boxed_allowed: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
     return switch (resolved.desc.content) {
-        .structure => |s| self.flatTypeContainsUnboxedFunction(s, boxed_allowed),
-        .alias => |alias| self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed),
+        .structure => |s| try self.flatTypeContainsUnboxedFunction(s, boxed_allowed, visited),
+        .alias => |alias| try self.varContainsUnboxedFunctionInternal(self.types.getAliasBackingVar(alias), boxed_allowed, visited),
         .flex, .rigid, .err => false,
     };
 }
 
-fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, boxed_allowed: bool) bool {
+fn flatTypeContainsUnboxedFunction(
+    self: *Self,
+    flat_type: types_mod.FlatType,
+    boxed_allowed: bool,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         .fn_pure, .fn_effectful, .fn_unbound => !boxed_allowed,
         .empty_record, .empty_tag_union => false,
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.var_)) |field_var| {
-                if (self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(field_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
         .tuple => |tuple| blk: {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem_var| {
-                if (self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed)) break :blk true;
+                if (try self.varContainsUnboxedFunctionInternal(elem_var, boxed_allowed, visited)) break :blk true;
             }
             break :blk false;
         },
@@ -9476,7 +10216,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
             for (tags_slice.items(.args)) |tag_args| {
                 const args = self.types.sliceVars(tag_args);
                 for (args) |arg_var| {
-                    if (self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed)) break :blk true;
+                    if (try self.varContainsUnboxedFunctionInternal(arg_var, boxed_allowed, visited)) break :blk true;
                 }
             }
             break :blk false;
@@ -9484,7 +10224,7 @@ fn flatTypeContainsUnboxedFunction(self: *Self, flat_type: types_mod.FlatType, b
         .nominal_type => |nominal| blk: {
             if (self.nominalIsBoxType(nominal)) break :blk false;
             const backing_var = self.types.getNominalBackingVar(nominal);
-            break :blk self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed);
+            break :blk try self.varContainsUnboxedFunctionInternal(backing_var, boxed_allowed, visited);
         },
     };
 }
@@ -9497,8 +10237,8 @@ fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType)
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
-    if (!nominal_type.origin_module.eql(self.cir.idents.builtin_module)) return null;
-    return self.builtinNumKindFromTypeName(nominal_type.ident.ident_idx);
+    if (!nominal_type.originIsBuiltin()) return null;
+    return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
 }
 
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -9547,7 +10287,11 @@ fn validateUnsignedFromNumeralLiteral(
     num_literal: types_mod.NumeralInfo,
 ) ?BuiltinFromNumeralLiteralProblem {
     if (num_literal.is_fractional) return .fractional_integer;
-    if (num_literal.is_negative) return .negative_unsigned;
+    // `is_negative` is a syntactic flag (a leading `-`); guard on the actual
+    // magnitude so `-0` (a valid unsigned value) is not rejected. Real
+    // negatives have a nonzero magnitude, and a large negative whose i128
+    // representation overflowed is still nonzero, so this stays correct.
+    if (num_literal.is_negative and num_literal.toI128() != 0) return .negative_unsigned;
 
     const value = if (num_literal.is_u128) blk: {
         break :blk num_literal.toU128();
@@ -9651,50 +10395,23 @@ fn validateFromNumeralLiteralForBuiltinNominal(
     env: *Env,
     is_numeric_default_pass: bool,
 ) Allocator.Error!bool {
-    return self.validateFromNumeralLiteralForBuiltinType(
-        dispatcher_var,
-        constraint,
-        nominal_type.origin_module,
-        nominal_type.ident.ident_idx,
-        env,
-        is_numeric_default_pass,
-    );
-}
-
-fn validateFromNumeralLiteralForBuiltinAlias(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    alias: types_mod.Alias,
-    env: *Env,
-    is_numeric_default_pass: bool,
-) Allocator.Error!bool {
-    return self.validateFromNumeralLiteralForBuiltinType(
-        dispatcher_var,
-        constraint,
-        alias.origin_module,
-        alias.ident.ident_idx,
-        env,
-        is_numeric_default_pass,
-    );
-}
-
-fn validateFromNumeralLiteralForBuiltinType(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    origin_module: Ident.Idx,
-    type_ident: Ident.Idx,
-    env: *Env,
-    is_numeric_default_pass: bool,
-) Allocator.Error!bool {
     if (constraint.origin != .from_numeral) return true;
-    if (!origin_module.eql(self.cir.idents.builtin_module)) return true;
-    const num_kind = self.builtinNumKindFromTypeName(type_ident) orelse return true;
+    const num_kind = self.builtinNumKindFromNominalType(nominal_type) orelse return true;
 
     if (skipDefaultedDecIntegerLiteralValidation(is_numeric_default_pass, num_kind, constraint)) return true;
 
     return !try self.reportInvalidBuiltinFromNumeralLiteral(dispatcher_var, constraint, num_kind, env);
+}
+
+fn validateFromNumeralLiteralForBuiltinAlias(
+    _: *Self,
+    _: Var,
+    _: StaticDispatchConstraint,
+    _: types_mod.Alias,
+    _: *Env,
+    _: bool,
+) Allocator.Error!bool {
+    return true;
 }
 
 fn satisfyImplicitEqualityConstraint(
@@ -9719,8 +10436,12 @@ fn satisfyImplicitEqualityConstraint(
         );
     }
 
-    _ = try self.unify(dispatcher_var, args[0], env);
-    _ = try self.unify(dispatcher_var, args[1], env);
+    // Read both arg vars before unifying: the first unify can append fresh
+    // vars and reallocate the backing array, dangling the `args` slice.
+    const arg0 = args[0];
+    const arg1 = args[1];
+    _ = try self.unify(dispatcher_var, arg0, env);
+    _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
 }
@@ -9786,8 +10507,12 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
             if (constraint.origin == .from_numeral) continue;
 
             // Check if Dec has this method
-            const method_ident = builtin_env.lookupMethodIdentFromEnvConst(self.cir, indices.dec_ident, constraint.fn_name);
-            if (method_ident == null) {
+            const method_binding = builtin_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                @intFromEnum(indices.dec_type),
+                self.cir,
+                constraint.fn_name,
+            );
+            if (method_binding == null) {
                 // Dec doesn't have this method - report error
                 try self.reportConstraintError(
                     var_,
@@ -9822,8 +10547,11 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
 /// Check if a branch body type is compatible with the expected return type.
-/// This performs a non-destructive unification probe using a type-store snapshot.
-/// Must be called BEFORE pairwise unification poisons branch vars.
+/// This unifies against a type-store snapshot that is rolled back afterward, so
+/// it leaves the type store unchanged. It is NOT fully side-effect-free,
+/// however: a mismatch is recorded as a diagnostic in the real problem store
+/// (see the note at the unify call below). Must be called BEFORE pairwise
+/// unification poisons branch vars.
 fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: problem.Context) bool {
     const body = self.types.resolveVar(body_var);
     const expected = self.types.resolveVar(expected_var);
@@ -9846,6 +10574,15 @@ fn isCompatibleWithExpected(self: *Self, body_var: Var, expected_var: Var, ctx: 
         store_snapshot.deinit(self.cir.gpa);
     }
 
+    // NOTE: this passes the real `self.problems`/`self.snapshots` stores, not
+    // throwaway ones, so a mismatch here is RECORDED as a diagnostic and is NOT
+    // rolled back by the defer above (which only rolls back the type store).
+    // This is intentional and load-bearing: callers respond to a `false` return
+    // by marking the branch erroneous WITHOUT emitting their own diagnostic, so
+    // for some branch mismatches (e.g. a match branch whose body conflicts with
+    // a rigid annotated return type) the problem recorded here is the only
+    // diagnostic the user ever sees. Do not switch this to a throwaway problem
+    // store without making the callers emit the diagnostic themselves.
     const probe_result = unifier.unifyInContext(
         self.cir.gpa,
         self.cir.getIdentStoreConst(),

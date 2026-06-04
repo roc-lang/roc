@@ -63,6 +63,8 @@ pub const ParseTask = struct {
     module_name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
+    /// Compiler role for this source module
+    module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
     depth: u32,
 };
@@ -393,6 +395,7 @@ test "WorkerTask accessors" {
             .module_name = "Main",
             .path = "/path/to/Main.roc",
             .depth = 0,
+            .module_role = .user,
         },
     };
 

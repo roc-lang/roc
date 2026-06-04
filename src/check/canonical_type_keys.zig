@@ -208,8 +208,7 @@ const Builder = struct {
             },
             .alias => |alias| {
                 self.writeTag("alias");
-                self.writeIdent(alias.ident.ident_idx);
-                self.writeIdent(alias.origin_module);
+                self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
                 try self.writeVar(self.store.getAliasBackingVar(alias));
                 const args = self.store.sliceAliasArgs(alias);
                 self.writeU32(@intCast(args.len));
@@ -233,6 +232,7 @@ const Builder = struct {
         self.writeTag("nominal");
         self.writeIdent(builtinDecTypeIdent(self.idents));
         self.writeIdent(builtinModuleIdent(self.idents));
+        self.writeOptionalU32(null);
         self.writeBool(true);
         self.writeU32(0);
     }
@@ -252,9 +252,8 @@ const Builder = struct {
             },
             .nominal_type => |nominal| {
                 self.writeTag("nominal");
-                self.writeIdent(nominal.ident.ident_idx);
-                self.writeIdent(nominal.origin_module);
-                self.writeBool(nominal.is_opaque);
+                self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
+                self.writeBool(nominal.isOpaque());
                 const args = self.store.sliceNominalArgs(nominal);
                 self.writeU32(@intCast(args.len));
                 for (args) |arg| {
@@ -532,6 +531,21 @@ const Builder = struct {
         }
     }
 
+    fn writeOptionalU32(self: *Builder, maybe_value: ?u32) void {
+        self.writeBool(maybe_value != null);
+        if (maybe_value) |value| {
+            self.writeU32(value);
+        }
+    }
+
+    fn writeNamedSourceIdentity(self: *Builder, origin_module: Ident.Idx, ident: Ident.Idx, source_decl: ?u32) void {
+        self.writeIdent(origin_module);
+        self.writeOptionalU32(source_decl);
+        if (source_decl == null) {
+            self.writeIdent(ident);
+        }
+    }
+
     fn writeIdent(self: *Builder, ident: Ident.Idx) void {
         self.writeBytes(self.idents.getText(ident));
     }
@@ -546,19 +560,17 @@ const Builder = struct {
     }
 
     fn writeBool(self: *Builder, value: bool) void {
-        const byte: [1]u8 = if (value) .{1} else .{0};
-        self.hasher.update(&byte);
+        const byte: u8 = if (value) 1 else 0;
+        self.hasher.update(std.mem.asBytes(&byte));
     }
 
     fn writeU32(self: *Builder, value: u32) void {
-        var bytes: [4]u8 = undefined;
-        bytes = .{
+        self.hasher.update(&.{
             @as(u8, @truncate(value)),
             @as(u8, @truncate(value >> 8)),
             @as(u8, @truncate(value >> 16)),
             @as(u8, @truncate(value >> 24)),
-        };
-        self.hasher.update(&bytes);
+        });
     }
 };
 
@@ -580,19 +592,17 @@ fn writeByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void 
 }
 
 fn writeBoolValue(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
-    const byte: [1]u8 = if (value) .{1} else .{0};
-    hasher.update(&byte);
+    const byte: u8 = if (value) 1 else 0;
+    hasher.update(std.mem.asBytes(&byte));
 }
 
 fn writeU32Value(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var bytes: [4]u8 = undefined;
-    bytes = .{
+    hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
         @as(u8, @truncate(value >> 16)),
         @as(u8, @truncate(value >> 24)),
-    };
-    hasher.update(&bytes);
+    });
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {

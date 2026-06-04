@@ -1245,7 +1245,10 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "120.0" },
     },
     .{
-        .name = "inspect: mutual recursion in local lambdas",
+        // Mutual recursion between local definitions is not supported: local
+        // definitions are sequential (self-reference and backward references
+        // only). This must be reported as an error rather than evaluated.
+        .name = "problem: mutual recursion in local lambdas",
         .source =
         \\{
         \\    is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
@@ -1253,16 +1256,39 @@ const core_tests = [_]TestCase{
         \\    is_even(6.I64)
         \\}
         ,
-        .expected = .{ .inspect_str = "True" },
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "inspect: mutual recursion in untyped closures",
+        .name = "problem: mutual recursion in untyped closures",
         .source =
         \\{
         \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
         \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
         \\    if (is_even(4)) 1 else 0
         \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        // Coverage migrated from the (now-disallowed) local mutual-recursion
+        // cases above: mutual recursion is supported at the top level and must
+        // still evaluate to the same results.
+        .name = "inspect: mutual recursion at top level (typed)",
+        .source_kind = .module,
+        .source =
+        \\is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
+        \\is_odd = |n| if (n == 0.I64) False else is_even(n - 1.I64)
+        \\main = is_even(6.I64)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: mutual recursion at top level (untyped)",
+        .source_kind = .module,
+        .source =
+        \\is_even = |n| if (n == 0) True else is_odd(n - 1)
+        \\is_odd = |n| if (n == 0) False else is_even(n - 1)
+        \\main = if (is_even(4)) 1 else 0
         ,
         .expected = .{ .inspect_str = "1.0" },
     },
@@ -2792,6 +2818,32 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "9" },
     },
+    .{
+        .name = "inspect: recursive custom iterator take_first works in for loop",
+        .source_kind = .module,
+        .source =
+        \\fib_iter : Iter(U64)
+        \\fib_iter = {
+        \\    adv : ((U64, U64) -> Try((U64, Iter(U64)), [NoMore]))
+        \\    adv = |(a, b)| Try.Ok((a, Iter.custom((b, a + b), Unknown, adv)))
+        \\
+        \\    Iter.custom(
+        \\        (0.U64, 1.U64),
+        \\        Unknown,
+        \\        adv,
+        \\    )
+        \\}
+        \\
+        \\main = {
+        \\    var $out = []
+        \\    for f in fib_iter.take_first(5) {
+        \\        $out = $out.append(f)
+        \\    }
+        \\    $out
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -3078,6 +3130,47 @@ const core_tests = [_]TestCase{
         \\main = (read(Crate.Crate(5)), read(Count.Count(8)))
         ,
         .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: same-named block-local attached methods keep distinct nominal owners",
+        .source_kind = .module,
+        .source =
+        \\first = {
+        \\    Local := [First(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.First(n)| n
+        \\    }
+        \\
+        \\    Local.First(5).get()
+        \\}
+        \\
+        \\second = {
+        \\    Local := [Second(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.Second(n)| n + 100
+        \\    }
+        \\
+        \\    Local.Second(8).get()
+        \\}
+        \\
+        \\main = (first, second)
+        ,
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: block-local associated bare forward reference preserves later sibling capture",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    captured = 41.U64
+        \\    Local := [Local].{
+        \\        first = second
+        \\        second = captured
+        \\    }
+        \\    Local.first
+        \\}
+        ,
+        .expected = .{ .inspect_str = "41" },
     },
     .{
         .name = "inspect: explicit where method constraint keeps owner generic",

@@ -184,14 +184,12 @@ fn hashBytes(bytes: []const u8) [32]u8 {
 }
 
 fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-    var bytes: [4]u8 = undefined;
-    bytes = .{
+    hasher.update(&.{
         @as(u8, @truncate(value)),
         @as(u8, @truncate(value >> 8)),
         @as(u8, @truncate(value >> 16)),
         @as(u8, @truncate(value >> 24)),
-    };
-    hasher.update(&bytes);
+    });
 }
 
 fn hashByteSlice(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
@@ -325,8 +323,10 @@ const CheckedImportViews = struct {
 /// This is semantic visibility, not lexical import visibility.
 pub const PublicApiDependencies = struct {
     artifacts: []const CheckedModuleArtifactKey = &.{},
+    type_owner_artifacts: []const CheckedModuleArtifactKey = &.{},
 
     pub fn deinit(self: *PublicApiDependencies, allocator: Allocator) void {
+        allocator.free(self.type_owner_artifacts);
         allocator.free(self.artifacts);
         self.* = .{};
     }
@@ -1527,6 +1527,8 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
 pub const CheckedAliasType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
+    source_decl: ?u32 = null,
+    builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: []const CheckedTypeId = &.{},
 };
@@ -1577,6 +1579,7 @@ pub const CheckedNominalRepresentationRef = union(enum) {
 pub const CheckedNominalType = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleNameId,
+    source_decl: ?u32 = null,
     builtin: ?CheckedBuiltinNominal = null,
     is_opaque: bool,
     backing: CheckedTypeId,
@@ -1653,6 +1656,19 @@ pub const CheckedTypeStoreView = struct {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
+    }
+
+    pub fn nominalDeclarationBySource(
+        self: CheckedTypeStoreView,
+        module_name: canonical.ModuleNameId,
+        type_name: canonical.TypeNameId,
+        source_decl: ?u32,
+    ) ?CheckedNominalDeclaration {
+        return self.nominalDeclaration(.{
+            .module_name = module_name,
+            .type_name = type_name,
+            .source_decl = source_decl,
+        });
     }
 
     pub fn nominalDeclarationById(
@@ -1920,6 +1936,7 @@ pub const CheckedTypeStore = struct {
         names: *canonical.CanonicalNameStore,
         imports: []const PublishImportArtifact,
         available: []const ImportedModuleView,
+        source_nodes: *const CheckedSourceNodes,
     ) Allocator.Error!CheckedTypePublication {
         const import_views = CheckedImportViews{
             .direct = imports,
@@ -1941,7 +1958,7 @@ pub const CheckedTypeStore = struct {
         errdefer nominal_declarations.deinit(allocator);
         var active = std.AutoHashMap(Var, CheckedTypeId).init(allocator);
         defer active.deinit();
-        var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module);
+        var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
@@ -1950,7 +1967,7 @@ pub const CheckedTypeStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag)) {
+            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.exprType(expr_idx));
                 switch (module.expr(expr_idx).data) {
@@ -1959,7 +1976,7 @@ pub const CheckedTypeStore = struct {
                     },
                     else => {},
                 }
-            } else if (isPatternNodeTag(tag)) {
+            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @enumFromInt(node_idx));
                 _ = try appendCheckedTypeRoot(
                     allocator,
@@ -1971,27 +1988,30 @@ pub const CheckedTypeStore = struct {
                     &active,
                     pattern_source_var,
                 );
-            } else if (isStatementNodeTag(tag)) {
-                const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
-                switch (module.getStatement(statement_idx)) {
-                    .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
-                    .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
-                        allocator,
-                        module,
-                        names,
-                        import_views,
-                        &nominal_declarations,
-                        &roots,
-                        &payloads,
-                        &active,
-                        &local_type_declarations,
-                        statement_idx,
-                        nominal.header,
-                        nominal.anno,
-                        nominal.is_opaque,
-                    ),
-                    else => {},
-                }
+            }
+        }
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            if (!source_nodes.hasStatement(statement_idx)) continue;
+            switch (module.getStatement(statement_idx)) {
+                .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, ModuleEnv.varFrom(statement_idx)),
+                .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
+                    allocator,
+                    module,
+                    names,
+                    import_views,
+                    &nominal_declarations,
+                    &roots,
+                    &payloads,
+                    &active,
+                    &local_type_declarations,
+                    statement_idx,
+                    nominal.header,
+                    nominal.anno,
+                    nominal.is_opaque,
+                ),
+                else => {},
             }
         }
 
@@ -2015,9 +2035,9 @@ pub const CheckedTypeStore = struct {
             }
         }
 
-        try appendStaticDispatchTypeRoots(allocator, module, names, import_views, &roots, &payloads, &active);
+        try appendStaticDispatchTypeRoots(allocator, module, names, import_views, source_nodes, &roots, &payloads, &active);
 
-        for (module.allDefs()) |def_idx| {
+        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &roots, &payloads, &active, module.defType(def_idx));
             const scheme_key = try canonical_type_keys.schemeFromVar(
                 allocator,
@@ -2378,6 +2398,8 @@ pub const CheckedTypeStore = struct {
             .alias => |alias| .{ .alias = .{
                 .name = alias.name,
                 .origin_module = alias.origin_module,
+                .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, alias.backing, formals, actuals, active),
                 .args = try self.cloneCheckedTypeIdSliceSubstituting(allocator, names, alias.args, formals, actuals, active),
             } },
@@ -2394,6 +2416,7 @@ pub const CheckedTypeStore = struct {
             .nominal => |nominal| .{ .nominal = .{
                 .name = nominal.name,
                 .origin_module = nominal.origin_module,
+                .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.cloneCheckedTypeRootSubstituting(allocator, names, nominal.backing, formals, actuals, active),
@@ -2610,18 +2633,24 @@ pub const CheckedTypeStore = struct {
 };
 
 const LocalTypeDeclarationIndex = struct {
-    finalized_by_relative_name: std.AutoHashMap(Ident.Idx, CIR.Statement.Idx),
+    const FinalizedRelativeName = union(enum) {
+        unique: CIR.Statement.Idx,
+        ambiguous,
+    };
 
-    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalTypeDeclarationIndex {
-        var finalized_by_relative_name = std.AutoHashMap(Ident.Idx, CIR.Statement.Idx).init(allocator);
+    finalized_by_relative_name: std.AutoHashMap(Ident.Idx, FinalizedRelativeName),
+
+    fn init(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        source_nodes: *const CheckedSourceNodes,
+    ) Allocator.Error!LocalTypeDeclarationIndex {
+        var finalized_by_relative_name = std.AutoHashMap(Ident.Idx, FinalizedRelativeName).init(allocator);
         errdefer finalized_by_relative_name.deinit();
 
-        var node_idx: u32 = 0;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const node: CIR.Node.Idx = @enumFromInt(node_idx);
-            if (!isStatementNodeTag(module.nodeTag(node))) continue;
-
-            const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            if (!source_nodes.hasStatement(statement_idx)) continue;
             const statement = module.getStatement(statement_idx);
             const header_idx, const anno_idx = switch (statement) {
                 .s_alias_decl => |alias| .{ alias.header, alias.anno },
@@ -2631,13 +2660,16 @@ const LocalTypeDeclarationIndex = struct {
             if (anno_idx == .placeholder) continue;
 
             const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
-            if (finalized_by_relative_name.get(header.relative_name)) |existing| {
-                if (existing != statement_idx) {
-                    checkedArtifactInvariant("checked artifact found duplicate finalized type declarations for one relative name", .{});
+            if (finalized_by_relative_name.getPtr(header.relative_name)) |existing| {
+                switch (existing.*) {
+                    .unique => |existing_stmt| if (existing_stmt != statement_idx) {
+                        existing.* = .ambiguous;
+                    },
+                    .ambiguous => {},
                 }
-                continue;
+            } else {
+                try finalized_by_relative_name.put(header.relative_name, .{ .unique = statement_idx });
             }
-            try finalized_by_relative_name.put(header.relative_name, statement_idx);
         }
 
         return .{ .finalized_by_relative_name = finalized_by_relative_name };
@@ -2661,8 +2693,11 @@ const LocalTypeDeclarationIndex = struct {
         if (anno_idx != .placeholder) return statement_idx;
 
         const header = module.moduleEnvConst().store.getTypeHeader(header_idx);
-        return self.finalized_by_relative_name.get(header.relative_name) orelse {
+        return switch (self.finalized_by_relative_name.get(header.relative_name) orelse {
             checkedArtifactInvariant("checked declaration template lookup referenced an unfinalized associated type placeholder", .{});
+        }) {
+            .unique => |finalized| finalized,
+            .ambiguous => checkedArtifactInvariant("checked declaration template lookup referenced an ambiguous associated type placeholder", .{}),
         };
     }
 };
@@ -2761,6 +2796,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     const nominal_payload = CheckedTypePayload{ .nominal = .{
         .name = statement_nominal.name,
         .origin_module = statement_nominal.origin_module,
+        .source_decl = @intFromEnum(statement_idx),
         .builtin = statement_nominal.builtin,
         .is_opaque = statement_nominal.is_opaque,
         .backing = backing,
@@ -3305,6 +3341,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     const nominal_key = canonical.NominalTypeKey{
         .module_name = nominal.origin_module,
         .type_name = nominal.name,
+        .source_decl = nominal.source_decl,
     };
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
@@ -3442,6 +3479,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         const slot: u32 = @intCast(self.identity_variables.count());
         try self.identity_variables.put(root, slot);
         self.writeTag(tag);
+        self.writeU32(@intFromEnum(root));
         self.writeU32(slot);
         self.writeBool(name != null);
         if (name) |text| self.writeBytes(text);
@@ -3456,8 +3494,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             => checkedArtifactInvariant("checked type substitution key reached identity payload without root identity", .{}),
             .alias => |alias| {
                 self.writeTag("alias");
-                self.writeBytes(self.names.typeNameText(alias.name));
-                self.writeBytes(self.names.moduleNameText(alias.origin_module));
+                self.writeNamedSourceIdentity(alias.origin_module, alias.name, alias.source_decl);
                 try self.writeType(alias.backing);
                 self.writeU32(@intCast(alias.args.len));
                 for (alias.args) |arg| try self.writeType(arg);
@@ -3474,8 +3511,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             },
             .nominal => |nominal| {
                 self.writeTag("nominal");
-                self.writeBytes(self.names.typeNameText(nominal.name));
-                self.writeBytes(self.names.moduleNameText(nominal.origin_module));
+                self.writeNamedSourceIdentity(nominal.origin_module, nominal.name, nominal.source_decl);
                 self.writeBool(nominal.is_opaque);
                 self.writeU32(@intCast(nominal.args.len));
                 for (nominal.args) |arg| try self.writeType(arg);
@@ -3819,19 +3855,30 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     }
 
     fn writeBool(self: *SubstitutedCheckedTypeKeyBuilder, value: bool) void {
-        const byte: [1]u8 = if (value) .{1} else .{0};
-        self.hasher.update(&byte);
+        const byte: u8 = if (value) 1 else 0;
+        self.hasher.update(std.mem.asBytes(&byte));
+    }
+
+    fn writeOptionalU32(self: *SubstitutedCheckedTypeKeyBuilder, value: ?u32) void {
+        self.writeBool(value != null);
+        if (value) |v| self.writeU32(v);
+    }
+
+    fn writeNamedSourceIdentity(self: *SubstitutedCheckedTypeKeyBuilder, origin_module: canonical.ModuleNameId, name: canonical.TypeNameId, source_decl: ?u32) void {
+        self.writeBytes(self.names.moduleNameText(origin_module));
+        self.writeOptionalU32(source_decl);
+        if (source_decl == null) {
+            self.writeBytes(self.names.typeNameText(name));
+        }
     }
 
     fn writeU32(self: *SubstitutedCheckedTypeKeyBuilder, value: u32) void {
-        var bytes: [4]u8 = undefined;
-        bytes = .{
+        self.hasher.update(&.{
             @as(u8, @truncate(value)),
             @as(u8, @truncate(value >> 8)),
             @as(u8, @truncate(value >> 16)),
             @as(u8, @truncate(value >> 24)),
-        };
-        self.hasher.update(&bytes);
+        });
     }
 };
 
@@ -3840,6 +3887,7 @@ fn appendStaticDispatchTypeRoots(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
+    source_nodes: *const CheckedSourceNodes,
     roots: *std.ArrayList(CheckedTypeRoot),
     payloads: *std.ArrayList(CheckedTypePayload),
     active: *std.AutoHashMap(Var, CheckedTypeId),
@@ -3855,7 +3903,9 @@ fn appendStaticDispatchTypeRoots(
             else => continue,
         }
 
-        const expr = module.expr(@enumFromInt(node_idx));
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+        if (!source_nodes.hasExpr(expr_idx)) continue;
+        const expr = module.expr(expr_idx);
         switch (expr.data) {
             .e_dispatch_call => |dispatch_call| {
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(dispatch_call.receiver));
@@ -3875,11 +3925,13 @@ fn appendStaticDispatchTypeRoots(
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
+        if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.iter_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.next_fn_var));
     }
 
     for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
+        if (!source_nodes.hasExpr(@enumFromInt(plan.node_idx))) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
     }
@@ -4061,6 +4113,8 @@ fn copyCheckedTypePayload(
         .alias => |alias| .{ .alias = .{
             .name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx),
             .origin_module = try names.internModuleIdent(module.identStoreConst(), alias.origin_module),
+            .source_decl = alias.source_decl.toOptional(),
+            .builtin_origin = alias.source_decl.originIsBuiltin(),
             .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getAliasBackingVar(alias)),
             .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceAliasArgs(alias)),
         } },
@@ -4128,12 +4182,13 @@ fn copyCheckedFlatType(
             .tuple = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceVars(tuple.elems)),
         },
         .nominal_type => |nominal| blk: {
-            const builtin_nominal = categorizeBuiltinNominal(module, nominal);
+            const builtin_nominal = categorizeBuiltinNominal(module, imports, nominal);
             break :blk .{ .nominal = .{
                 .name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx),
                 .origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module),
+                .source_decl = nominal.sourceDeclOptional(),
                 .builtin = builtin_nominal,
-                .is_opaque = nominal.is_opaque,
+                .is_opaque = nominal.isOpaque(),
                 .backing = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().getNominalBackingVar(nominal)),
                 .representation = try checkedNominalRepresentationForSourceNominal(module, names, imports, nominal, builtin_nominal),
                 .args = try copyCheckedTypeRange(allocator, module, names, imports, roots, payloads, active, module.typeStoreConst().sliceNominalArgs(nominal)),
@@ -4270,34 +4325,237 @@ fn copyCheckedStaticDispatchConstraints(
     return out;
 }
 
-fn categorizeBuiltinNominal(module: TypedCIR.Module, nominal: types.NominalType) ?CheckedBuiltinNominal {
-    const common = module.moduleEnvConst().idents;
-    const is_builtin_origin = checkedIdentTextEql(module, nominal.origin_module, common.builtin_module);
-    if (!is_builtin_origin) return null;
+fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews, nominal: types.NominalType) ?CheckedBuiltinNominal {
+    if (!nominal.originIsBuiltin()) return null;
 
-    const ident = nominal.ident.ident_idx;
-    if (checkedIdentTextEql(module, ident, common.bool) or checkedIdentTextEql(module, ident, common.bool_type)) return .bool;
-    if (checkedIdentTextEql(module, ident, common.str) or checkedIdentTextEql(module, ident, common.builtin_str)) return .str;
-    if (checkedIdentTextEql(module, ident, common.u8) or checkedIdentTextEql(module, ident, common.u8_type)) return .u8;
-    if (checkedIdentTextEql(module, ident, common.i8) or checkedIdentTextEql(module, ident, common.i8_type)) return .i8;
-    if (checkedIdentTextEql(module, ident, common.u16) or checkedIdentTextEql(module, ident, common.u16_type)) return .u16;
-    if (checkedIdentTextEql(module, ident, common.i16) or checkedIdentTextEql(module, ident, common.i16_type)) return .i16;
-    if (checkedIdentTextEql(module, ident, common.u32) or checkedIdentTextEql(module, ident, common.u32_type)) return .u32;
-    if (checkedIdentTextEql(module, ident, common.i32) or checkedIdentTextEql(module, ident, common.i32_type)) return .i32;
-    if (checkedIdentTextEql(module, ident, common.u64) or checkedIdentTextEql(module, ident, common.u64_type)) return .u64;
-    if (checkedIdentTextEql(module, ident, common.i64) or checkedIdentTextEql(module, ident, common.i64_type)) return .i64;
-    if (checkedIdentTextEql(module, ident, common.u128) or checkedIdentTextEql(module, ident, common.u128_type)) return .u128;
-    if (checkedIdentTextEql(module, ident, common.i128) or checkedIdentTextEql(module, ident, common.i128_type)) return .i128;
-    if (checkedIdentTextEql(module, ident, common.f32) or checkedIdentTextEql(module, ident, common.f32_type)) return .f32;
-    if (checkedIdentTextEql(module, ident, common.f64) or checkedIdentTextEql(module, ident, common.f64_type)) return .f64;
-    if (checkedIdentTextEql(module, ident, common.dec) or checkedIdentTextEql(module, ident, common.dec_type)) return .dec;
-    if (checkedIdentTextEql(module, ident, common.list)) return .list;
-    if (checkedIdentTextEql(module, ident, common.box)) return .box;
+    const source_decl = nominal.sourceDeclOptional() orelse return null;
+    const origin_text = module.getIdent(nominal.origin_module);
+    const module_env = module.moduleEnvConst();
+
+    if (module_env.module_role == .builtin and moduleEnvNameMatches(module_env, origin_text)) {
+        return checkedBuiltinNominalForSourceDecl(module_env, source_decl);
+    }
+    if (checkedBuiltinNominalForImportedSource(imports.direct, origin_text, source_decl)) |builtin_nominal| return builtin_nominal;
+    if (checkedBuiltinNominalForAvailableSource(imports.available, origin_text, source_decl)) |builtin_nominal| return builtin_nominal;
     return null;
 }
 
-fn checkedIdentTextEql(module: TypedCIR.Module, a: base.Ident.Idx, b: base.Ident.Idx) bool {
-    return a.eql(b) or module.identStoreConst().idxTextEql(a, b);
+fn checkedBuiltinNominalForImportedSource(
+    imports: []const PublishImportArtifact,
+    origin_text: []const u8,
+    source_decl: u32,
+) ?CheckedBuiltinNominal {
+    var found: ?CheckedBuiltinNominal = null;
+    for (imports) |import| {
+        if (checkedBuiltinNominalForView(import.view, origin_text, source_decl)) |builtin_nominal| {
+            if (found) |existing| {
+                if (existing != builtin_nominal) {
+                    checkedArtifactInvariant("checked builtin nominal source resolved to multiple builtin declarations", .{});
+                }
+            } else {
+                found = builtin_nominal;
+            }
+        }
+    }
+    return found;
+}
+
+fn checkedBuiltinNominalForAvailableSource(
+    views: []const ImportedModuleView,
+    origin_text: []const u8,
+    source_decl: u32,
+) ?CheckedBuiltinNominal {
+    var found: ?CheckedBuiltinNominal = null;
+    for (views) |view| {
+        if (checkedBuiltinNominalForView(view, origin_text, source_decl)) |builtin_nominal| {
+            if (found) |existing| {
+                if (existing != builtin_nominal) {
+                    checkedArtifactInvariant("checked builtin nominal source resolved to multiple builtin declarations", .{});
+                }
+            } else {
+                found = builtin_nominal;
+            }
+        }
+    }
+    return found;
+}
+
+fn checkedBuiltinNominalForView(view: ImportedModuleView, origin_text: []const u8, source_decl: u32) ?CheckedBuiltinNominal {
+    if (!importedViewModuleNameMatches(view, origin_text)) return null;
+    if (sourceDeclTypeIdent(view.module_env, source_decl) == null) return null;
+    if (view.module_env.module_role != .builtin) return null;
+    return checkedBuiltinNominalForSourceDecl(view.module_env, source_decl);
+}
+
+fn checkedBuiltinNominalForSourceDecl(module_env: *const ModuleEnv, source_decl: u32) ?CheckedBuiltinNominal {
+    if (module_env.module_role != .builtin) return null;
+    const type_ident = sourceDeclTypeIdent(module_env, source_decl) orelse return null;
+    return checkedBuiltinNominalForIdent(module_env, type_ident);
+}
+
+fn sourceDeclTypeIdent(module_env: *const ModuleEnv, source_decl: u32) ?base.Ident.Idx {
+    if (source_decl >= module_env.store.nodes.len()) return null;
+    const node: CIR.Node.Idx = @enumFromInt(source_decl);
+    switch (module_env.store.nodes.get(node).tag) {
+        .statement_alias_decl, .statement_nominal_decl => {},
+        else => return null,
+    }
+    const statement_idx: CIR.Statement.Idx = @enumFromInt(source_decl);
+    const header_idx = switch (module_env.store.getStatement(statement_idx)) {
+        .s_nominal_decl => |nominal| nominal.header,
+        .s_alias_decl => |alias| alias.header,
+        else => return null,
+    };
+    return module_env.store.getTypeHeader(header_idx).name;
+}
+
+fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident.Idx) ?CheckedBuiltinNominal {
+    const common = module_env.idents;
+    if (ident.eql(common.bool) or ident.eql(common.bool_type)) return .bool;
+    if (ident.eql(common.str) or ident.eql(common.builtin_str)) return .str;
+    if (ident.eql(common.u8) or ident.eql(common.u8_type)) return .u8;
+    if (ident.eql(common.i8) or ident.eql(common.i8_type)) return .i8;
+    if (ident.eql(common.u16) or ident.eql(common.u16_type)) return .u16;
+    if (ident.eql(common.i16) or ident.eql(common.i16_type)) return .i16;
+    if (ident.eql(common.u32) or ident.eql(common.u32_type)) return .u32;
+    if (ident.eql(common.i32) or ident.eql(common.i32_type)) return .i32;
+    if (ident.eql(common.u64) or ident.eql(common.u64_type)) return .u64;
+    if (ident.eql(common.i64) or ident.eql(common.i64_type)) return .i64;
+    if (ident.eql(common.u128) or ident.eql(common.u128_type)) return .u128;
+    if (ident.eql(common.i128) or ident.eql(common.i128_type)) return .i128;
+    if (ident.eql(common.f32) or ident.eql(common.f32_type)) return .f32;
+    if (ident.eql(common.f64) or ident.eql(common.f64_type)) return .f64;
+    if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
+    if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
+    if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
+    return null;
+}
+
+fn testTypeDeclSourceDeclForIdent(module_env: *const ModuleEnv, type_ident: base.Ident.Idx) !u32 {
+    for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        const source_decl = @intFromEnum(statement_idx);
+        const candidate = sourceDeclTypeIdent(module_env, source_decl) orelse continue;
+        if (candidate.eql(type_ident)) return source_decl;
+    }
+    return error.MissingTestTypeDecl;
+}
+
+test "checked artifact builtin nominal categorization requires explicit builtin origin" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", "x = 1");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+
+    const module = modules.module(0);
+    const builtin_env = test_env.builtin_module.env;
+    var builtin_names = canonical.CanonicalNameStore.init(allocator);
+    defer builtin_names.deinit();
+    try internLoweringVisibleNames(builtin_env, &builtin_names);
+
+    const builtin_module_name = try builtin_names.internModuleName(builtin_env.module_name);
+    const builtin_identity = ModuleIdentity{
+        .stable_hash = [_]u8{0} ** 32,
+        .module_idx = 1,
+        .module_name = builtin_module_name,
+        .display_module_name = builtin_module_name,
+        .qualified_module_name = builtin_module_name,
+        .kind = builtin_env.module_kind,
+    };
+
+    const empty_checked_const_bodies = CheckedConstBodyTable{};
+    const empty_checked_procedure_templates = CheckedProcedureTemplateTable{};
+    const empty_compile_time_roots = CompileTimeRootTable{};
+    const empty_entry_wrappers = EntryWrapperTable{};
+    const empty_intrinsic_wrappers = IntrinsicWrapperTable{};
+    const empty_resolved_value_refs = ResolvedValueRefTable{};
+    const empty_nested_proc_sites = NestedProcSiteTable{};
+    const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
+    const empty_hosted_procs = HostedProcTable{};
+    const empty_exported_procedure_templates = ExportedProcedureTemplateTable{};
+    const empty_exported_procedure_bindings = ExportedProcedureBindingTable{};
+    const empty_exported_const_templates = ExportedConstTemplateTable{};
+    const empty_provided_exports = ProvidedExportTable{};
+    const empty_top_level_procedure_bindings = TopLevelProcedureBindingTable{};
+    const empty_platform_required_bindings = PlatformRequiredBindingTable{};
+    const empty_callable_eval_templates = CallableEvalTemplateTable{};
+    const empty_const_templates = ConstTemplateTable{};
+    const empty_method_registry = static_dispatch.MethodRegistry{};
+    const empty_interface_capabilities = ModuleInterfaceCapabilities{};
+    var empty_const_store = ConstStore.init(allocator);
+    defer empty_const_store.deinit();
+
+    const builtin_view = ImportedModuleView{
+        .key = .{},
+        .module_env = builtin_env,
+        .canonical_names = &builtin_names,
+        .module_identity = builtin_identity,
+        .exports = .{},
+        .checked_types = .{},
+        .checked_bodies = .{},
+        .checked_const_bodies = &empty_checked_const_bodies,
+        .checked_procedure_templates = &empty_checked_procedure_templates,
+        .compile_time_roots = &empty_compile_time_roots,
+        .entry_wrappers = &empty_entry_wrappers,
+        .intrinsic_wrappers = &empty_intrinsic_wrappers,
+        .resolved_value_refs = &empty_resolved_value_refs,
+        .nested_proc_sites = &empty_nested_proc_sites,
+        .static_dispatch_plans = &empty_static_dispatch_plans,
+        .hosted_procs = &empty_hosted_procs,
+        .exported_procedure_templates = empty_exported_procedure_templates.view(),
+        .exported_procedure_bindings = empty_exported_procedure_bindings.view(),
+        .exported_const_templates = empty_exported_const_templates.view(),
+        .provided_exports = &empty_provided_exports,
+        .top_level_procedure_bindings = &empty_top_level_procedure_bindings,
+        .platform_required_bindings = &empty_platform_required_bindings,
+        .callable_eval_templates = empty_callable_eval_templates.view(),
+        .const_templates = &empty_const_templates,
+        .method_registry = &empty_method_registry,
+        .interface_capabilities = &empty_interface_capabilities,
+        .const_store = &empty_const_store,
+    };
+    const imports = [_]PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = .{},
+        .view = builtin_view,
+    }};
+
+    const bool_source_decl = try testTypeDeclSourceDeclForIdent(builtin_env, builtin_env.idents.bool_type);
+    const nominal = types.NominalType{
+        .ident = .{ .ident_idx = module.commonIdents().bool_type },
+        .vars = undefined,
+        .origin_module = module.commonIdents().builtin_module,
+        .source = try types.NominalType.Source.initChecked(try types.types.SourceDecl.fromStatementChecked(bool_source_decl), false, false),
+    };
+
+    try testing.expect(categorizeBuiltinNominal(module, .{ .direct = &imports }, nominal) == null);
+}
+
+fn moduleEnvNameMatches(module_env: *const ModuleEnv, origin_text: []const u8) bool {
+    if (module_env.module_role == .builtin and
+        Ident.textEql(module_env.getIdent(module_env.idents.builtin_module), origin_text))
+    {
+        return true;
+    }
+    if (!module_env.qualified_module_ident.isNone() and
+        Ident.textEql(module_env.getIdent(module_env.qualified_module_ident), origin_text))
+    {
+        return true;
+    }
+    if (!module_env.display_module_name_idx.isNone() and
+        Ident.textEql(module_env.getIdent(module_env.display_module_name_idx), origin_text))
+    {
+        return true;
+    }
+    return module_env.module_name.len > 0 and Ident.textEql(module_env.module_name, origin_text);
 }
 
 fn checkedNominalRepresentationForSourceNominal(
@@ -4312,8 +4570,11 @@ fn checkedNominalRepresentationForSourceNominal(
     const origin_module = try names.internModuleIdent(module.identStoreConst(), nominal.origin_module);
     const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
     const current_module = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
+    const source_decl = nominal.sourceDeclOptional();
     if (origin_module == current_module) {
-        return .{ .local_declaration = localNominalDeclarationIdForIdent(module, nominal.ident.ident_idx) };
+        const statement = source_decl orelse
+            checkedArtifactInvariant("checked local nominal representation had no source declaration", .{});
+        return .{ .local_declaration = localNominalDeclarationIdForStatement(module, @enumFromInt(statement)) };
     }
 
     return .{ .imported_declaration = importedNominalDeclarationRefForSourceNominal(
@@ -4321,6 +4582,7 @@ fn checkedNominalRepresentationForSourceNominal(
         imports,
         origin_module,
         type_name,
+        source_decl,
     ) };
 }
 
@@ -4329,15 +4591,22 @@ fn importedNominalDeclarationRefForSourceNominal(
     imports: CheckedImportViews,
     origin_module: canonical.ModuleNameId,
     type_name: canonical.TypeNameId,
+    source_decl: ?u32,
 ) ImportedNominalDeclarationRef {
     const origin_text = names.moduleNameText(origin_module);
     const type_text = names.typeNameText(type_name);
+    const nominal_key = canonical.NominalTypeKey{
+        .module_name = origin_module,
+        .type_name = type_name,
+        .source_decl = source_decl,
+    };
     var found: ?ImportedNominalDeclarationRef = null;
 
     for (imports.direct) |import| {
         if (!importedViewModuleNameMatches(import.view, origin_text)) continue;
         for (import.view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            if (declaration.nominal.source_decl != nominal_key.source_decl) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = import.key,
                 .declaration = declaration.id,
@@ -4355,6 +4624,7 @@ fn importedNominalDeclarationRefForSourceNominal(
         if (!importedViewModuleNameMatches(view, origin_text)) continue;
         for (view.checked_types.nominal_declarations) |declaration| {
             if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            if (declaration.nominal.source_decl != nominal_key.source_decl) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = view.key,
                 .declaration = declaration.id,
@@ -4372,39 +4642,13 @@ fn importedNominalDeclarationRefForSourceNominal(
     return found orelse checkedArtifactInvariant("checked nominal representation referenced a missing imported nominal declaration", .{});
 }
 
-fn localNominalDeclarationIdForIdent(
-    module: TypedCIR.Module,
-    ident: Ident.Idx,
-) CheckedNominalDeclarationId {
-    var next_id: u32 = 0;
-    var node_idx: u32 = 0;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        const node: CIR.Node.Idx = @enumFromInt(node_idx);
-        if (!isStatementNodeTag(module.nodeTag(node))) continue;
-        const statement_idx: CIR.Statement.Idx = @enumFromInt(node_idx);
-        const nominal = switch (module.getStatement(statement_idx)) {
-            .s_nominal_decl => |nominal| nominal,
-            else => continue,
-        };
-        if (nominal.anno == .placeholder) continue;
-        const header = module.moduleEnvConst().store.getTypeHeader(nominal.header);
-        const id: CheckedNominalDeclarationId = @enumFromInt(next_id);
-        next_id += 1;
-        if (header.relative_name.eql(ident) or module.identStoreConst().idxTextEql(header.relative_name, ident)) return id;
-    }
-    checkedArtifactInvariant("checked nominal representation referenced a missing local nominal declaration", .{});
-}
-
 fn localNominalDeclarationIdForStatement(
     module: TypedCIR.Module,
     statement_idx: CIR.Statement.Idx,
 ) CheckedNominalDeclarationId {
     var next_id: u32 = 0;
-    var node_idx: u32 = 0;
-    while (node_idx < module.nodeCount()) : (node_idx += 1) {
-        const node: CIR.Node.Idx = @enumFromInt(node_idx);
-        if (!isStatementNodeTag(module.nodeTag(node))) continue;
-        const candidate: CIR.Statement.Idx = @enumFromInt(node_idx);
+    const module_env = module.moduleEnvConst();
+    for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
         const nominal = switch (module.getStatement(candidate)) {
             .s_nominal_decl => |nominal| nominal,
             else => continue,
@@ -4769,7 +5013,6 @@ pub const CheckedReturnContext = enum {
 pub const CheckedExpr = struct {
     id: CheckedExprId,
     ty: CheckedTypeId,
-    diverges: bool,
     source_region: base.Region,
     data: CheckedExprData,
 };
@@ -4785,7 +5028,6 @@ pub const CheckedPattern = struct {
 /// Public `CheckedStatement` declaration.
 pub const CheckedStatement = struct {
     id: CheckedStatementId,
-    diverges: bool,
     source_region: base.Region,
     data: CheckedStatementData,
 };
@@ -4794,31 +5036,501 @@ pub const CheckedStatement = struct {
 pub const CheckedBodyStoreView = struct {
     bodies: []const CheckedBody = &.{},
     exprs: []const CheckedExpr = &.{},
+    expr_diverges: []const bool = &.{},
     patterns: []const CheckedPattern = &.{},
     statements: []const CheckedStatement = &.{},
+    statement_diverges: []const bool = &.{},
     string_literals: []const []const u8 = &.{},
     pattern_binders: []const CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []const ?PatternBinderId = &.{},
+
+    pub fn exprDiverges(self: CheckedBodyStoreView, expr: CheckedExprId) bool {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.expr_diverges.len) checkedArtifactInvariant("checked body view divergence referenced a missing expression", .{});
+        return self.expr_diverges[raw];
+    }
+
+    pub fn statementDiverges(self: CheckedBodyStoreView, statement: CheckedStatementId) bool {
+        const raw = @intFromEnum(statement);
+        if (raw >= self.statement_diverges.len) checkedArtifactInvariant("checked body view divergence referenced a missing statement", .{});
+        return self.statement_diverges[raw];
+    }
+};
+
+const CheckedSourceNodeKind = enum(u2) {
+    expr,
+    pattern,
+    statement,
+};
+
+const checked_source_node_empty = std.math.maxInt(u32);
+const checked_source_node_id_bits = 30;
+const checked_source_node_id_limit = @as(u32, 1) << checked_source_node_id_bits;
+
+const CheckedSourceNodeMap = struct {
+    entries: []u32 = &.{},
+    discarded: bool = false,
+
+    fn init(allocator: Allocator, node_count: usize) Allocator.Error!CheckedSourceNodeMap {
+        const entries = try allocator.alloc(u32, node_count);
+        @memset(entries, checked_source_node_empty);
+        return .{ .entries = entries, .discarded = false };
+    }
+
+    fn putExpr(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedExprId) Allocator.Error!void {
+        try self.put(node_idx, .expr, @intFromEnum(id));
+    }
+
+    fn putPattern(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedPatternId) Allocator.Error!void {
+        try self.put(node_idx, .pattern, @intFromEnum(id));
+    }
+
+    fn putStatement(self: *CheckedSourceNodeMap, node_idx: u32, id: CheckedStatementId) Allocator.Error!void {
+        try self.put(node_idx, .statement, @intFromEnum(id));
+    }
+
+    fn put(self: *CheckedSourceNodeMap, node_idx: u32, kind: CheckedSourceNodeKind, id_raw: u32) Allocator.Error!void {
+        if (node_idx >= self.entries.len) checkedArtifactInvariant("checked source node map write was out of range", .{});
+        if (id_raw >= checked_source_node_id_limit) return error.OutOfMemory;
+        if (builtin.mode == .Debug and self.entries[node_idx] != checked_source_node_empty) {
+            std.debug.panic("checked artifact invariant violated: checked source node map wrote source node {d} twice", .{node_idx});
+        }
+        self.entries[node_idx] = (@as(u32, @intFromEnum(kind)) << checked_source_node_id_bits) | id_raw;
+    }
+
+    fn expr(self: *const CheckedSourceNodeMap, source_expr: CIR.Expr.Idx) ?CheckedExprId {
+        return if (self.get(@intFromEnum(source_expr), .expr)) |id| @enumFromInt(id) else null;
+    }
+
+    fn pattern(self: *const CheckedSourceNodeMap, source_pattern: CIR.Pattern.Idx) ?CheckedPatternId {
+        return if (self.get(@intFromEnum(source_pattern), .pattern)) |id| @enumFromInt(id) else null;
+    }
+
+    fn statement(self: *const CheckedSourceNodeMap, source_statement: CIR.Statement.Idx) ?CheckedStatementId {
+        return if (self.get(@intFromEnum(source_statement), .statement)) |id| @enumFromInt(id) else null;
+    }
+
+    fn exprAtRawNode(self: *const CheckedSourceNodeMap, raw_node: u32) ?CheckedExprId {
+        return if (self.get(raw_node, .expr)) |id| @enumFromInt(id) else null;
+    }
+
+    fn patternAtRawNode(self: *const CheckedSourceNodeMap, raw_node: u32) ?CheckedPatternId {
+        return if (self.get(raw_node, .pattern)) |id| @enumFromInt(id) else null;
+    }
+
+    fn statementAtRawNode(self: *const CheckedSourceNodeMap, raw_node: u32) ?CheckedStatementId {
+        return if (self.get(raw_node, .statement)) |id| @enumFromInt(id) else null;
+    }
+
+    fn get(self: *const CheckedSourceNodeMap, raw_node: u32, expected: CheckedSourceNodeKind) ?u32 {
+        if (self.discarded) checkedArtifactInvariant("checked source node map was used after publication", .{});
+        if (raw_node >= self.entries.len) return null;
+        const packed_entry = self.entries[raw_node];
+        if (packed_entry == checked_source_node_empty) return null;
+        const kind: CheckedSourceNodeKind = @enumFromInt(packed_entry >> checked_source_node_id_bits);
+        if (kind != expected) return null;
+        return packed_entry & (checked_source_node_id_limit - 1);
+    }
+
+    fn deinit(self: *CheckedSourceNodeMap, allocator: Allocator) void {
+        allocator.free(self.entries);
+        self.* = .{};
+    }
+
+    fn discard(self: *CheckedSourceNodeMap, allocator: Allocator) void {
+        allocator.free(self.entries);
+        self.* = .{ .discarded = true };
+    }
+};
+
+fn checkedSourceNodeIdFromLen(len: usize) Allocator.Error!u32 {
+    if (len >= checked_source_node_id_limit) return error.OutOfMemory;
+    return @intCast(len);
+}
+
+const CheckedSourceNodeRef = union(enum) {
+    expr: CIR.Expr.Idx,
+    pattern: CIR.Pattern.Idx,
+    statement: CIR.Statement.Idx,
+};
+
+const CheckedSourceNodes = struct {
+    allocator: Allocator = undefined,
+    exprs: []bool = &.{},
+    patterns: []bool = &.{},
+    statements: []bool = &.{},
+
+    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceNodes {
+        const node_count = module.nodeCount();
+        const exprs = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(exprs);
+        const patterns = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(patterns);
+        const statements = try allocator.alloc(bool, node_count);
+        errdefer allocator.free(statements);
+        @memset(exprs, false);
+        @memset(patterns, false);
+        @memset(statements, false);
+
+        var self = CheckedSourceNodes{
+            .allocator = allocator,
+            .exprs = exprs,
+            .patterns = patterns,
+            .statements = statements,
+        };
+
+        var work = std.ArrayList(CheckedSourceNodeRef).empty;
+        defer work.deinit(allocator);
+
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+            const def = module.def(def_idx);
+            try self.markPattern(def.pattern.idx, &work);
+            try self.markExpr(def.expr.idx, &work);
+        }
+
+        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+            try self.markStatement(statement_idx, &work);
+        }
+
+        var next: usize = 0;
+        while (next < work.items.len) : (next += 1) {
+            switch (work.items[next]) {
+                .expr => |expr_idx| try self.markExprChildren(module, expr_idx, &work),
+                .pattern => |pattern_idx| try self.markPatternChildren(module, pattern_idx, &work),
+                .statement => |statement_idx| try self.markStatementChildren(module, statement_idx, &work),
+            }
+        }
+
+        return self;
+    }
+
+    fn hasExpr(self: *const CheckedSourceNodes, expr_idx: CIR.Expr.Idx) bool {
+        const raw = @intFromEnum(expr_idx);
+        return raw < self.exprs.len and self.exprs[raw];
+    }
+
+    fn hasPattern(self: *const CheckedSourceNodes, pattern_idx: CIR.Pattern.Idx) bool {
+        const raw = @intFromEnum(pattern_idx);
+        return raw < self.patterns.len and self.patterns[raw];
+    }
+
+    fn hasStatement(self: *const CheckedSourceNodes, statement_idx: CIR.Statement.Idx) bool {
+        const raw = @intFromEnum(statement_idx);
+        return raw < self.statements.len and self.statements[raw];
+    }
+
+    fn hasRawLoop(self: *const CheckedSourceNodes, raw_node: u32) bool {
+        const raw: usize = raw_node;
+        return raw < self.exprs.len and (self.exprs[raw] or self.statements[raw]);
+    }
+
+    fn markExpr(
+        self: *CheckedSourceNodes,
+        expr_idx: CIR.Expr.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(expr_idx);
+        if (raw >= self.exprs.len) checkedArtifactInvariant("checked source expression {d} is out of range", .{raw});
+        if (self.exprs[raw]) return;
+        self.exprs[raw] = true;
+        try work.append(self.allocator, .{ .expr = expr_idx });
+    }
+
+    fn markPattern(
+        self: *CheckedSourceNodes,
+        pattern_idx: CIR.Pattern.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(pattern_idx);
+        if (raw >= self.patterns.len) checkedArtifactInvariant("checked source pattern {d} is out of range", .{raw});
+        if (self.patterns[raw]) return;
+        self.patterns[raw] = true;
+        try work.append(self.allocator, .{ .pattern = pattern_idx });
+    }
+
+    fn markStatement(
+        self: *CheckedSourceNodes,
+        statement_idx: CIR.Statement.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(statement_idx);
+        if (raw >= self.statements.len) checkedArtifactInvariant("checked source statement {d} is out of range", .{raw});
+        if (self.statements[raw]) return;
+        self.statements[raw] = true;
+        try work.append(self.allocator, .{ .statement = statement_idx });
+    }
+
+    fn markExprChildren(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        expr_idx: CIR.Expr.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        switch (module.expr(expr_idx).data) {
+            .e_str => |str| try self.markExprSpan(module, str.span, work),
+            .e_list => |list| try self.markExprSpan(module, list.elems, work),
+            .e_tuple => |tuple| try self.markExprSpan(module, tuple.elems, work),
+            .e_match => |match| {
+                try self.markExpr(match.cond, work);
+                for (module.matchBranchSlice(match.branches)) |branch_idx| {
+                    const branch = module.getMatchBranch(branch_idx);
+                    for (module.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
+                        try self.markPattern(module.getMatchBranchPattern(branch_pattern_idx).pattern, work);
+                    }
+                    if (branch.guard) |guard| try self.markExpr(guard, work);
+                    try self.markExpr(branch.value, work);
+                }
+            },
+            .e_if => |if_| {
+                for (module.sliceIfBranches(if_.branches)) |branch_idx| {
+                    const branch = module.getIfBranch(branch_idx);
+                    try self.markExpr(branch.cond, work);
+                    try self.markExpr(branch.body, work);
+                }
+                try self.markExpr(if_.final_else, work);
+            },
+            .e_call => |call| {
+                try self.markExpr(call.func, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_record => |record| {
+                for (module.sliceRecordFields(record.fields)) |field_idx| {
+                    try self.markExpr(module.getRecordField(field_idx).value, work);
+                }
+                if (record.ext) |ext| try self.markExpr(ext, work);
+            },
+            .e_block => |block| {
+                try self.markStatementSpan(module, block.stmts, work);
+                try self.markExpr(block.final_expr, work);
+            },
+            .e_tag => |tag| try self.markExprSpan(module, tag.args, work),
+            .e_nominal => |nominal| try self.markExpr(nominal.backing_expr, work),
+            .e_nominal_external => |nominal| try self.markExpr(nominal.backing_expr, work),
+            .e_closure => |closure| {
+                try self.markExpr(closure.lambda_idx, work);
+                for (module.moduleEnvConst().store.sliceCaptures(closure.captures)) |capture_idx| {
+                    const capture = module.moduleEnvConst().store.getCapture(capture_idx);
+                    try self.markPattern(capture.pattern_idx, work);
+                }
+            },
+            .e_lambda => |lambda| {
+                try self.markPatternSpan(module, lambda.args, work);
+                try self.markExpr(lambda.body, work);
+            },
+            .e_binop => |binop| {
+                try self.markExpr(binop.lhs, work);
+                try self.markExpr(binop.rhs, work);
+            },
+            .e_unary_minus => |unary| try self.markExpr(unary.expr, work),
+            .e_unary_not => |unary| try self.markExpr(unary.expr, work),
+            .e_field_access => |field| try self.markExpr(field.receiver, work),
+            .e_method_call => |call| {
+                try self.markExpr(call.receiver, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_dispatch_call => |call| {
+                try self.markExpr(call.receiver, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_structural_eq => |eq| {
+                try self.markExpr(eq.lhs, work);
+                try self.markExpr(eq.rhs, work);
+            },
+            .e_method_eq => |eq| {
+                try self.markExpr(eq.lhs, work);
+                try self.markExpr(eq.rhs, work);
+            },
+            .e_type_method_call => |call| {
+                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_type_dispatch_call => |call| {
+                try self.markStatement(call.type_var_alias_stmt, work);
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_tuple_access => |access| try self.markExpr(access.tuple, work),
+            .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .e_expect => |expect| try self.markExpr(expect.body, work),
+            .e_return => |ret| {
+                try self.markExpr(ret.expr, work);
+                try self.markExpr(ret.lambda, work);
+            },
+            .e_for => |for_| {
+                try self.markPattern(for_.patt, work);
+                try self.markExpr(for_.expr, work);
+                try self.markExpr(for_.body, work);
+            },
+            .e_hosted_lambda => |hosted| try self.markPatternSpan(module, hosted.args, work),
+            .e_run_low_level => |run| try self.markExprSpan(module, run.args, work),
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            => {},
+        }
+    }
+
+    fn markPatternChildren(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        pattern_idx: CIR.Pattern.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        switch (module.pattern(pattern_idx).data) {
+            .as => |as| try self.markPattern(as.pattern, work),
+            .applied_tag => |tag| try self.markPatternSpan(module, tag.args, work),
+            .nominal => |nominal| try self.markPattern(nominal.backing_pattern, work),
+            .nominal_external => |nominal| try self.markPattern(nominal.backing_pattern, work),
+            .record_destructure => |record| {
+                for (module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    try self.markPattern(module.getRecordDestruct(destruct_idx).kind.toPatternIdx(), work);
+                }
+            },
+            .list => |list| {
+                try self.markPatternSpan(module, list.patterns, work);
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern| try self.markPattern(rest_pattern, work);
+                }
+            },
+            .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, work),
+            .assign,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn markStatementChildren(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        statement_idx: CIR.Statement.Idx,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        switch (module.getStatement(statement_idx)) {
+            .s_decl => |decl| {
+                try self.markPattern(decl.pattern, work);
+                try self.markExpr(decl.expr, work);
+            },
+            .s_var => |var_| {
+                try self.markPattern(var_.pattern_idx, work);
+                try self.markExpr(var_.expr, work);
+            },
+            .s_reassign => |reassign| {
+                try self.markPattern(reassign.pattern_idx, work);
+                try self.markExpr(reassign.expr, work);
+            },
+            .s_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .s_expr => |expr| try self.markExpr(expr.expr, work),
+            .s_expect => |expect| try self.markExpr(expect.body, work),
+            .s_for => |for_| {
+                try self.markPattern(for_.patt, work);
+                try self.markExpr(for_.expr, work);
+                try self.markExpr(for_.body, work);
+            },
+            .s_while => |while_| {
+                try self.markExpr(while_.cond, work);
+                try self.markExpr(while_.body, work);
+            },
+            .s_return => |ret| {
+                try self.markExpr(ret.expr, work);
+                try self.markExpr(ret.lambda, work);
+            },
+            .s_crash,
+            .s_break,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
+
+    fn markExprSpan(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        span: CIR.Expr.Span,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        for (module.sliceExpr(span)) |expr_idx| {
+            try self.markExpr(expr_idx, work);
+        }
+    }
+
+    fn markPatternSpan(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        span: CIR.Pattern.Span,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        for (module.slicePatterns(span)) |pattern_idx| {
+            try self.markPattern(pattern_idx, work);
+        }
+    }
+
+    fn markStatementSpan(
+        self: *CheckedSourceNodes,
+        module: TypedCIR.Module,
+        span: CIR.Statement.Span,
+        work: *std.ArrayList(CheckedSourceNodeRef),
+    ) Allocator.Error!void {
+        for (module.sliceStatements(span)) |statement_idx| {
+            try self.markStatement(statement_idx, work);
+        }
+    }
+
+    fn deinit(self: *CheckedSourceNodes, allocator: Allocator) void {
+        allocator.free(self.statements);
+        allocator.free(self.patterns);
+        allocator.free(self.exprs);
+        self.* = .{};
+    }
 };
 
 /// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
     bodies: []CheckedBody = &.{},
     exprs: []CheckedExpr = &.{},
+    expr_diverges: []bool = &.{},
     patterns: []CheckedPattern = &.{},
     statements: []CheckedStatement = &.{},
+    statement_diverges: []bool = &.{},
     string_literals: []const []const u8 = &.{},
     pattern_binders: []CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []?PatternBinderId = &.{},
-    expr_by_node: []?CheckedExprId = &.{},
-    pattern_by_node: []?CheckedPatternId = &.{},
-    statement_by_node: []?CheckedStatementId = &.{},
+    source_node_map: CheckedSourceNodeMap = .{},
 
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
+        source_nodes: *const CheckedSourceNodes,
     ) Allocator.Error!CheckedBodyStore {
         var exprs = std.ArrayList(CheckedExpr).empty;
         errdefer exprs.deinit(allocator);
@@ -4836,15 +5548,8 @@ pub const CheckedBodyStore = struct {
         var string_builder = CheckedStringLiteralBuilder.init(allocator, module);
         errdefer string_builder.deinitAll();
         defer string_builder.deinitScratch();
-        const expr_by_node = try allocator.alloc(?CheckedExprId, module.nodeCount());
-        errdefer allocator.free(expr_by_node);
-        const pattern_by_node = try allocator.alloc(?CheckedPatternId, module.nodeCount());
-        errdefer allocator.free(pattern_by_node);
-        const statement_by_node = try allocator.alloc(?CheckedStatementId, module.nodeCount());
-        errdefer allocator.free(statement_by_node);
-        @memset(expr_by_node, null);
-        @memset(pattern_by_node, null);
-        @memset(statement_by_node, null);
+        var source_node_map = try CheckedSourceNodeMap.init(allocator, module.nodeCount());
+        errdefer source_node_map.deinit(allocator);
 
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
@@ -4853,7 +5558,7 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag)) {
+            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
                 const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                     if (builtin.mode == .Debug) {
@@ -4861,16 +5566,15 @@ pub const CheckedBodyStore = struct {
                     }
                     unreachable;
                 };
-                const id: CheckedExprId = @enumFromInt(@as(u32, @intCast(exprs.items.len)));
+                const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(exprs.items.len));
                 try exprs.append(allocator, .{
                     .id = id,
                     .ty = ty,
-                    .diverges = false,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                expr_by_node[node_idx] = id;
-            } else if (isPatternNodeTag(tag)) {
+                try source_node_map.putExpr(node_idx, id);
+            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
                 const pattern_idx: CIR.Pattern.Idx = @enumFromInt(node_idx);
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
                     if (builtin.mode == .Debug) {
@@ -4878,25 +5582,32 @@ pub const CheckedBodyStore = struct {
                     }
                     unreachable;
                 };
-                const id: CheckedPatternId = @enumFromInt(@as(u32, @intCast(patterns.items.len)));
+                const id: CheckedPatternId = @enumFromInt(try checkedSourceNodeIdFromLen(patterns.items.len));
                 try patterns.append(allocator, .{
                     .id = id,
                     .ty = ty,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                pattern_by_node[node_idx] = id;
-            } else if (isStatementNodeTag(tag)) {
-                const id: CheckedStatementId = @enumFromInt(@as(u32, @intCast(statements.items.len)));
+                try source_node_map.putPattern(node_idx, id);
+            } else if (isStatementNodeTag(tag) and source_nodes.hasStatement(@enumFromInt(node_idx))) {
+                const id: CheckedStatementId = @enumFromInt(try checkedSourceNodeIdFromLen(statements.items.len));
                 try statements.append(allocator, .{
                     .id = id,
-                    .diverges = false,
                     .source_region = module.regionAt(node),
                     .data = .pending,
                 });
-                statement_by_node[node_idx] = id;
+                try source_node_map.putStatement(node_idx, id);
             }
         }
+
+        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
+        errdefer allocator.free(expr_diverges);
+        @memset(expr_diverges, false);
+
+        const statement_diverges = try allocator.alloc(bool, statements.items.len);
+        errdefer allocator.free(statement_diverges);
+        @memset(statement_diverges, false);
 
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
@@ -4906,9 +5617,7 @@ pub const CheckedBodyStore = struct {
             .allocator = allocator,
             .module = module,
             .names = names,
-            .expr_by_node = expr_by_node,
-            .pattern_by_node = pattern_by_node,
-            .statement_by_node = statement_by_node,
+            .source_node_map = &source_node_map,
             .string_builder = &string_builder,
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
@@ -4919,31 +5628,61 @@ pub const CheckedBodyStore = struct {
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             const node: CIR.Node.Idx = @enumFromInt(node_idx);
             const tag = module.nodeTag(node);
-            if (isExprNodeTag(tag)) {
-                const id = expr_by_node[node_idx] orelse unreachable;
+            if (isExprNodeTag(tag) and source_nodes.hasExpr(@enumFromInt(node_idx))) {
+                const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
                 exprs.items[@intFromEnum(id)].data = try copier.copyExprData(@enumFromInt(node_idx));
-            } else if (isPatternNodeTag(tag)) {
-                const id = pattern_by_node[node_idx] orelse unreachable;
+            } else if (isPatternNodeTag(tag) and source_nodes.hasPattern(@enumFromInt(node_idx))) {
+                const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
                 patterns.items[@intFromEnum(id)].data = try copier.copyPatternData(@enumFromInt(node_idx));
-            } else if (isStatementNodeTag(tag)) {
-                const id = statement_by_node[node_idx] orelse unreachable;
+            } else if (isStatementNodeTag(tag) and source_nodes.hasStatement(@enumFromInt(node_idx))) {
+                const id = source_node_map.statementAtRawNode(node_idx) orelse unreachable;
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
         }
 
-        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items);
+        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, expr_diverges, statement_diverges);
+
+        const body_slice = try bodies.toOwnedSlice(allocator);
+        errdefer allocator.free(body_slice);
+
+        const expr_slice = try exprs.toOwnedSlice(allocator);
+        errdefer {
+            deinitCheckedExprList(allocator, expr_slice);
+            allocator.free(expr_slice);
+        }
+
+        const pattern_slice = try patterns.toOwnedSlice(allocator);
+        errdefer {
+            deinitCheckedPatternList(allocator, pattern_slice);
+            allocator.free(pattern_slice);
+        }
+
+        const statement_slice = try statements.toOwnedSlice(allocator);
+        errdefer {
+            deinitCheckedStatementList(allocator, statement_slice);
+            allocator.free(statement_slice);
+        }
+
+        const string_literals = try string_builder.toOwnedSlice();
+        errdefer {
+            for (string_literals) |literal| allocator.free(literal);
+            allocator.free(string_literals);
+        }
+
+        const pattern_binder_slice = try pattern_binders.toOwnedSlice(allocator);
+        errdefer allocator.free(pattern_binder_slice);
 
         return .{
-            .bodies = try bodies.toOwnedSlice(allocator),
-            .exprs = try exprs.toOwnedSlice(allocator),
-            .patterns = try patterns.toOwnedSlice(allocator),
-            .statements = try statements.toOwnedSlice(allocator),
-            .string_literals = try string_builder.toOwnedSlice(),
-            .pattern_binders = try pattern_binders.toOwnedSlice(allocator),
+            .bodies = body_slice,
+            .exprs = expr_slice,
+            .expr_diverges = expr_diverges,
+            .patterns = pattern_slice,
+            .statements = statement_slice,
+            .statement_diverges = statement_diverges,
+            .string_literals = string_literals,
+            .pattern_binders = pattern_binder_slice,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
-            .expr_by_node = expr_by_node,
-            .pattern_by_node = pattern_by_node,
-            .statement_by_node = statement_by_node,
+            .source_node_map = source_node_map,
         };
     }
 
@@ -4951,8 +5690,10 @@ pub const CheckedBodyStore = struct {
         return .{
             .bodies = self.bodies,
             .exprs = self.exprs,
+            .expr_diverges = self.expr_diverges,
             .patterns = self.patterns,
             .statements = self.statements,
+            .statement_diverges = self.statement_diverges,
             .string_literals = self.string_literals,
             .pattern_binders = self.pattern_binders,
             .pattern_binder_by_pattern = self.pattern_binder_by_pattern,
@@ -4967,16 +5708,28 @@ pub const CheckedBodyStore = struct {
         return self.exprs[@intFromEnum(id)];
     }
 
+    pub fn exprDiverges(self: *const CheckedBodyStore, id: CheckedExprId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.expr_diverges.len) checkedArtifactInvariant("checked body store divergence referenced a missing expression", .{});
+        return self.expr_diverges[raw];
+    }
+
+    pub fn statementDiverges(self: *const CheckedBodyStore, id: CheckedStatementId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.statement_diverges.len) checkedArtifactInvariant("checked body store divergence referenced a missing statement", .{});
+        return self.statement_diverges[raw];
+    }
+
     pub fn exprIdForSource(self: *const CheckedBodyStore, source_expr: CIR.Expr.Idx) ?CheckedExprId {
-        const raw = @intFromEnum(source_expr);
-        if (raw >= self.expr_by_node.len) return null;
-        return self.expr_by_node[raw];
+        return self.source_node_map.expr(source_expr);
     }
 
     pub fn patternIdForSource(self: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) ?CheckedPatternId {
-        const raw = @intFromEnum(pattern);
-        if (raw >= self.pattern_by_node.len) return null;
-        return self.pattern_by_node[raw];
+        return self.source_node_map.pattern(pattern);
+    }
+
+    pub fn statementIdForSource(self: *const CheckedBodyStore, statement: CIR.Statement.Idx) ?CheckedStatementId {
+        return self.source_node_map.statement(statement);
     }
 
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
@@ -5037,32 +5790,28 @@ pub const CheckedBodyStore = struct {
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
 
-            if (raw_node < self.expr_by_node.len) {
-                if (self.expr_by_node[raw_node]) |checked_expr| {
-                    const data = &self.exprs[@intFromEnum(checked_expr)].data;
-                    switch (data.*) {
-                        .for_ => |*for_| for_.plan = entry.value_ptr.*,
-                        else => checkedArtifactInvariant(
-                            "iterator-for plan {d} points at non-for checked expression {d}",
-                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
-                        ),
-                    }
-                    continue;
+            if (self.source_node_map.exprAtRawNode(raw_node)) |checked_expr| {
+                const data = &self.exprs[@intFromEnum(checked_expr)].data;
+                switch (data.*) {
+                    .for_ => |*for_| for_.plan = entry.value_ptr.*,
+                    else => checkedArtifactInvariant(
+                        "iterator-for plan {d} points at non-for checked expression {d}",
+                        .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                    ),
                 }
+                continue;
             }
 
-            if (raw_node < self.statement_by_node.len) {
-                if (self.statement_by_node[raw_node]) |checked_statement| {
-                    const data = &self.statements[@intFromEnum(checked_statement)].data;
-                    switch (data.*) {
-                        .for_ => |*for_| for_.plan = entry.value_ptr.*,
-                        else => checkedArtifactInvariant(
-                            "iterator-for plan {d} points at non-for checked statement {d}",
-                            .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_statement) },
-                        ),
-                    }
-                    continue;
+            if (self.source_node_map.statementAtRawNode(raw_node)) |checked_statement| {
+                const data = &self.statements[@intFromEnum(checked_statement)].data;
+                switch (data.*) {
+                    .for_ => |*for_| for_.plan = entry.value_ptr.*,
+                    else => checkedArtifactInvariant(
+                        "iterator-for plan {d} points at non-for checked statement {d}",
+                        .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_statement) },
+                    ),
                 }
+                continue;
             }
 
             checkedArtifactInvariant(
@@ -5079,13 +5828,7 @@ pub const CheckedBodyStore = struct {
         var iter = plans.numeral_by_node.iterator();
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
-            if (raw_node >= self.expr_by_node.len) {
-                checkedArtifactInvariant(
-                    "from_numeral plan {d} points at source node {d} outside checked expression table",
-                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
-                );
-            }
-            const checked_expr = self.expr_by_node[raw_node] orelse {
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse {
                 checkedArtifactInvariant(
                     "from_numeral plan {d} points at source node {d} with no checked expression",
                     .{ @intFromEnum(entry.value_ptr.*), raw_node },
@@ -5188,9 +5931,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
-        allocator.free(self.statement_by_node);
-        allocator.free(self.pattern_by_node);
-        allocator.free(self.expr_by_node);
+        self.source_node_map.deinit(allocator);
         allocator.free(self.pattern_binder_by_pattern);
         allocator.free(self.pattern_binders);
         for (self.string_literals) |literal| allocator.free(literal);
@@ -5198,11 +5939,17 @@ pub const CheckedBodyStore = struct {
         deinitCheckedStatementList(allocator, self.statements);
         deinitCheckedPatternList(allocator, self.patterns);
         deinitCheckedExprList(allocator, self.exprs);
+        allocator.free(self.statement_diverges);
+        allocator.free(self.expr_diverges);
         allocator.free(self.statements);
         allocator.free(self.patterns);
         allocator.free(self.exprs);
         allocator.free(self.bodies);
         self.* = .{};
+    }
+
+    pub fn discardSourceNodeMap(self: *CheckedBodyStore, allocator: Allocator) void {
+        self.source_node_map.discard(allocator);
     }
 };
 
@@ -5212,7 +5959,12 @@ fn publishCheckedBodyDivergence(
     allocator: Allocator,
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
 ) Allocator.Error!void {
+    if (expr_diverges.len != exprs.len or statement_diverges.len != statements.len) {
+        checkedArtifactInvariant("checked divergence column length mismatch", .{});
+    }
     const expr_states = try allocator.alloc(DivergenceVisitState, exprs.len);
     defer allocator.free(expr_states);
     const statement_states = try allocator.alloc(DivergenceVisitState, statements.len);
@@ -5222,16 +5974,18 @@ fn publishCheckedBodyDivergence(
     @memset(statement_states, .fresh);
 
     for (exprs) |*expr| {
-        expr.diverges = checkedExprDiverges(exprs, statements, expr.id, expr_states, statement_states);
+        expr_diverges[@intFromEnum(expr.id)] = checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr.id, expr_states, statement_states);
     }
     for (statements) |*statement| {
-        statement.diverges = checkedStatementDiverges(exprs, statements, statement.id, expr_states, statement_states);
+        statement_diverges[@intFromEnum(statement.id)] = checkedStatementDiverges(exprs, statements, expr_diverges, statement_diverges, statement.id, expr_states, statement_states);
     }
 }
 
 fn checkedExprDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     expr_id: CheckedExprId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5239,13 +5993,13 @@ fn checkedExprDiverges(
     const index = @intFromEnum(expr_id);
     if (index >= exprs.len) checkedArtifactInvariant("checked divergence referenced a missing expression", .{});
     switch (expr_states[index]) {
-        .done => return exprs[index].diverges,
+        .done => return expr_diverges[index],
         .active => checkedArtifactInvariant("checked expression divergence contains a cycle", .{}),
         .fresh => {},
     }
     expr_states[index] = .active;
-    const result = checkedExprDataDiverges(exprs, statements, exprs[index].data, expr_states, statement_states);
-    exprs[index].diverges = result;
+    const result = checkedExprDataDiverges(exprs, statements, expr_diverges, statement_diverges, exprs[index].data, expr_states, statement_states);
+    expr_diverges[index] = result;
     expr_states[index] = .done;
     return result;
 }
@@ -5253,6 +6007,8 @@ fn checkedExprDiverges(
 fn checkedStatementDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     statement_id: CheckedStatementId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5260,13 +6016,13 @@ fn checkedStatementDiverges(
     const index = @intFromEnum(statement_id);
     if (index >= statements.len) checkedArtifactInvariant("checked divergence referenced a missing statement", .{});
     switch (statement_states[index]) {
-        .done => return statements[index].diverges,
+        .done => return statement_diverges[index],
         .active => checkedArtifactInvariant("checked statement divergence contains a cycle", .{}),
         .fresh => {},
     }
     statement_states[index] = .active;
-    const result = checkedStatementDataDiverges(exprs, statements, statements[index].data, expr_states, statement_states);
-    statements[index].diverges = result;
+    const result = checkedStatementDataDiverges(exprs, statements, expr_diverges, statement_diverges, statements[index].data, expr_states, statement_states);
+    statement_diverges[index] = result;
     statement_states[index] = .done;
     return result;
 }
@@ -5274,6 +6030,8 @@ fn checkedStatementDiverges(
 fn checkedExprDataDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     data: CheckedExprData,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5282,64 +6040,64 @@ fn checkedExprDataDiverges(
         .crash,
         .return_,
         => true,
-        .str => |items| checkedAnyExprDiverges(exprs, statements, items, expr_states, statement_states),
-        .list => |items| checkedAnyExprDiverges(exprs, statements, items, expr_states, statement_states),
-        .tuple => |items| checkedAnyExprDiverges(exprs, statements, items, expr_states, statement_states),
+        .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
+        .list => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
+        .tuple => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
         .match_ => |match| blk: {
-            if (checkedExprDiverges(exprs, statements, match.cond, expr_states, statement_states)) break :blk true;
+            if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, match.cond, expr_states, statement_states)) break :blk true;
             if (match.branches.len == 0) break :blk false;
             for (match.branches) |branch| {
                 if (branch.guard != null) break :blk false;
-                if (!checkedExprDiverges(exprs, statements, branch.value, expr_states, statement_states)) break :blk false;
+                if (!checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, branch.value, expr_states, statement_states)) break :blk false;
             }
             break :blk true;
         },
         .if_ => |if_| blk: {
-            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, if_.branches[0].cond, expr_states, statement_states)) {
+            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, if_.branches[0].cond, expr_states, statement_states)) {
                 break :blk true;
             }
             for (if_.branches) |branch| {
-                if (!checkedExprDiverges(exprs, statements, branch.body, expr_states, statement_states)) break :blk false;
+                if (!checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, branch.body, expr_states, statement_states)) break :blk false;
             }
-            break :blk checkedExprDiverges(exprs, statements, if_.final_else, expr_states, statement_states);
+            break :blk checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, if_.final_else, expr_states, statement_states);
         },
         .call => |call| blk: {
-            if (checkedExprDiverges(exprs, statements, call.func, expr_states, statement_states)) break :blk true;
-            break :blk checkedAnyExprDiverges(exprs, statements, call.args, expr_states, statement_states);
+            if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, call.func, expr_states, statement_states)) break :blk true;
+            break :blk checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, call.args, expr_states, statement_states);
         },
         .record => |record| blk: {
             if (record.ext) |ext| {
-                if (checkedExprDiverges(exprs, statements, ext, expr_states, statement_states)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, ext, expr_states, statement_states)) break :blk true;
             }
             for (record.fields) |field| {
-                if (checkedExprDiverges(exprs, statements, field.value, expr_states, statement_states)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.value, expr_states, statement_states)) break :blk true;
             }
             break :blk false;
         },
         .block => |block| blk: {
             for (block.statements) |statement| {
-                if (checkedStatementDiverges(exprs, statements, statement, expr_states, statement_states)) break :blk true;
+                if (checkedStatementDiverges(exprs, statements, expr_diverges, statement_diverges, statement, expr_states, statement_states)) break :blk true;
             }
-            break :blk checkedExprDiverges(exprs, statements, block.final_expr, expr_states, statement_states);
+            break :blk checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, block.final_expr, expr_states, statement_states);
         },
-        .tag => |tag| checkedAnyExprDiverges(exprs, statements, tag.args, expr_states, statement_states),
-        .nominal => |nominal| checkedExprDiverges(exprs, statements, nominal.backing_expr, expr_states, statement_states),
+        .tag => |tag| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, tag.args, expr_states, statement_states),
+        .nominal => |nominal| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, nominal.backing_expr, expr_states, statement_states),
         .closure => false,
         .lambda => false,
-        .binop => |binop| checkedExprDiverges(exprs, statements, binop.lhs, expr_states, statement_states) or
-            checkedExprDiverges(exprs, statements, binop.rhs, expr_states, statement_states),
+        .binop => |binop| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, binop.lhs, expr_states, statement_states) or
+            checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, binop.rhs, expr_states, statement_states),
         .unary_minus,
         .unary_not,
         .dbg,
         .expect,
-        => |child| checkedExprDiverges(exprs, statements, child, expr_states, statement_states),
-        .field_access => |field| checkedExprDiverges(exprs, statements, field.receiver, expr_states, statement_states),
-        .structural_eq => |eq| checkedExprDiverges(exprs, statements, eq.lhs, expr_states, statement_states) or
-            checkedExprDiverges(exprs, statements, eq.rhs, expr_states, statement_states),
-        .tuple_access => |access| checkedExprDiverges(exprs, statements, access.tuple, expr_states, statement_states),
-        .for_ => |for_| checkedExprDiverges(exprs, statements, for_.expr, expr_states, statement_states),
+        => |child| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, child, expr_states, statement_states),
+        .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
+        .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
+            checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
+        .tuple_access => |access| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states),
+        .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .hosted_lambda => false,
-        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, run.args, expr_states, statement_states),
+        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, run.args, expr_states, statement_states),
         .pending,
         .num,
         .frac_f32,
@@ -5371,6 +6129,8 @@ fn checkedExprDataDiverges(
 fn checkedStatementDataDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     data: CheckedStatementData,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
@@ -5380,15 +6140,15 @@ fn checkedStatementDataDiverges(
         .break_,
         .return_,
         => true,
-        .decl => |decl| checkedExprDiverges(exprs, statements, decl.expr, expr_states, statement_states),
-        .var_ => |var_| checkedExprDiverges(exprs, statements, var_.expr, expr_states, statement_states),
-        .reassign => |reassign| checkedExprDiverges(exprs, statements, reassign.expr, expr_states, statement_states),
+        .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
+        .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
+        .reassign => |reassign| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states),
         .dbg,
         .expr,
         .expect,
-        => |expr| checkedExprDiverges(exprs, statements, expr, expr_states, statement_states),
-        .for_ => |for_| checkedExprDiverges(exprs, statements, for_.expr, expr_states, statement_states),
-        .while_ => |while_| checkedExprDiverges(exprs, statements, while_.cond, expr_states, statement_states),
+        => |expr| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr, expr_states, statement_states),
+        .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
+        .while_ => |while_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states),
         .pending,
         .import_,
         .alias_decl,
@@ -5403,12 +6163,14 @@ fn checkedStatementDataDiverges(
 fn checkedAnyExprDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
+    expr_diverges: []bool,
+    statement_diverges: []bool,
     items: []const CheckedExprId,
     expr_states: []DivergenceVisitState,
     statement_states: []DivergenceVisitState,
 ) bool {
     for (items) |item| {
-        if (checkedExprDiverges(exprs, statements, item, expr_states, statement_states)) return true;
+        if (checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, item, expr_states, statement_states)) return true;
     }
     return false;
 }
@@ -5609,9 +6371,7 @@ const CheckedBodyPayloadCopier = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    expr_by_node: []const ?CheckedExprId,
-    pattern_by_node: []const ?CheckedPatternId,
-    statement_by_node: []const ?CheckedStatementId,
+    source_node_map: *const CheckedSourceNodeMap,
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
@@ -6359,9 +7119,7 @@ const CheckedBodyPayloadCopier = struct {
 
     fn checkedExpr(self: *const @This(), expr: CIR.Expr.Idx) CheckedExprId {
         const raw = @intFromEnum(expr);
-        if (raw < self.expr_by_node.len) {
-            if (self.expr_by_node[raw]) |id| return id;
-        }
+        if (self.source_node_map.expr(expr)) |id| return id;
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
         }
@@ -6378,9 +7136,7 @@ const CheckedBodyPayloadCopier = struct {
 
     fn checkedPattern(self: *const @This(), pattern: CIR.Pattern.Idx) CheckedPatternId {
         const raw = @intFromEnum(pattern);
-        if (raw < self.pattern_by_node.len) {
-            if (self.pattern_by_node[raw]) |id| return id;
-        }
+        if (self.source_node_map.pattern(pattern)) |id| return id;
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
         }
@@ -6412,9 +7168,7 @@ const CheckedBodyPayloadCopier = struct {
 
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
         const raw = @intFromEnum(statement);
-        if (raw < self.statement_by_node.len) {
-            if (self.statement_by_node[raw]) |id| return id;
-        }
+        if (self.source_node_map.statement(statement)) |id| return id;
         if (builtin.mode == .Debug) {
             std.debug.panic("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
         }
@@ -7233,15 +7987,7 @@ pub const ResolvedValueRefTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: resolved value ref expression {d} has no checked expression id",
-                        .{@intFromEnum(expr_idx)},
-                    );
-                }
-                unreachable;
-            };
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -7676,7 +8422,8 @@ const TopLevelDefPatternIndex = struct {
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!TopLevelDefPatternIndex {
         const by_pattern = try allocator.alloc(?CIR.Def.Idx, module.nodeCount());
         @memset(by_pattern, null);
-        for (module.allDefs()) |def_idx| {
+        const module_env = module.moduleEnvConst();
+        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             by_pattern[@intFromEnum(module.def(def_idx).pattern.idx)] = def_idx;
         }
         return .{ .by_pattern = by_pattern };
@@ -7741,6 +8488,7 @@ const LocalPatternRoleIndex = struct {
             switch (module.nodeTag(node)) {
                 .statement_decl => {
                     const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
                     const decl = switch (module.getStatement(statement)) {
                         .s_decl => |decl| decl,
                         else => unreachable,
@@ -7754,6 +8502,7 @@ const LocalPatternRoleIndex = struct {
                 },
                 .statement_var => {
                     const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
                     const var_ = switch (module.getStatement(statement)) {
                         .s_var => |var_| var_,
                         else => unreachable,
@@ -7761,6 +8510,8 @@ const LocalPatternRoleIndex = struct {
                     putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
                 },
                 .expr_lambda => {
+                    const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
                     const expr = module.expr(@enumFromInt(node_idx));
                     const lambda = switch (expr.data) {
                         .e_lambda => |lambda| lambda,
@@ -8362,7 +9113,7 @@ pub const CheckedProcedureTemplate = struct {
 /// Public `CheckedProcedureTemplateTable` declaration.
 pub const CheckedProcedureTemplateTable = struct {
     templates: []CheckedProcedureTemplate = &.{},
-    by_def: []?canonical.ProcedureTemplateRef = &.{},
+    by_def: []static_dispatch.ProcedureTemplateLookupEntry = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -8376,10 +9127,8 @@ pub const CheckedProcedureTemplateTable = struct {
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
         errdefer templates.deinit(allocator);
-
-        const by_def = try allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
-        errdefer allocator.free(by_def);
-        @memset(by_def, null);
+        var by_def = std.ArrayList(static_dispatch.ProcedureTemplateLookupEntry).empty;
+        errdefer by_def.deinit(allocator);
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
@@ -8405,7 +9154,10 @@ pub const CheckedProcedureTemplateTable = struct {
                 .proc_base = proc_base,
                 .template = template_id,
             };
-            by_def[@intFromEnum(def_idx)] = template_ref;
+            try by_def.append(allocator, .{
+                .def = def_idx,
+                .template = template_ref,
+            });
             const checked_fn_root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("checked artifact invariant violated: checked procedure function root was not published", .{});
@@ -8450,16 +9202,31 @@ pub const CheckedProcedureTemplateTable = struct {
             });
         }
 
+        std.mem.sort(static_dispatch.ProcedureTemplateLookupEntry, by_def.items, {}, static_dispatch.ProcedureTemplateLookupEntry.lessThan);
+        const template_slice = try templates.toOwnedSlice(allocator);
+        errdefer allocator.free(template_slice);
+        const by_def_slice = try by_def.toOwnedSlice(allocator);
         return .{
-            .templates = try templates.toOwnedSlice(allocator),
-            .by_def = by_def,
+            .templates = template_slice,
+            .by_def = by_def_slice,
         };
     }
 
     pub fn lookupByDef(self: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
-        const raw = @intFromEnum(def_idx);
-        if (raw >= self.by_def.len) return null;
-        return self.by_def[raw];
+        var lo: usize = 0;
+        var hi: usize = self.by_def.len;
+        const target = @intFromEnum(def_idx);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_def[mid].def);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_def.len or self.by_def[lo].def != def_idx) return null;
+        return self.by_def[lo].template;
     }
 
     pub fn appendEntryWrappersForRoots(
@@ -10069,6 +10836,7 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         };
         if (expected_nominal.name != actual_nominal.name) return false;
         if (expected_nominal.origin_module != actual_nominal.origin_module) return false;
+        if (expected_nominal.source_decl != actual_nominal.source_decl) return false;
         if (expected_nominal.builtin != actual_nominal.builtin) return false;
         if (expected_nominal.is_opaque != actual_nominal.is_opaque) return false;
         if (expected_nominal.args.len != actual_nominal.args.len) return false;
@@ -10486,6 +11254,8 @@ const PlatformAppRelationTypeResolver = struct {
                 break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .alias = .{
                     .name = alias.name,
                     .origin_module = alias.origin_module,
+                    .source_decl = alias.source_decl,
+                    .builtin_origin = alias.builtin_origin,
                     .backing = backing,
                     .args = args,
                 } });
@@ -10523,6 +11293,7 @@ const PlatformAppRelationTypeResolver = struct {
                 break :blk try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
                     .name = nominal.name,
                     .origin_module = nominal.origin_module,
+                    .source_decl = nominal.source_decl,
                     .builtin = nominal.builtin,
                     .is_opaque = nominal.is_opaque,
                     .backing = backing,
@@ -10549,6 +11320,8 @@ const PlatformAppRelationTypeResolver = struct {
         return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .alias = .{
             .name = platform_alias.name,
             .origin_module = platform_alias.origin_module,
+            .source_decl = platform_alias.source_decl,
+            .builtin_origin = platform_alias.builtin_origin,
             .backing = backing,
             .args = args,
         } });
@@ -10573,6 +11346,7 @@ const PlatformAppRelationTypeResolver = struct {
         };
         if (platform_nominal.name != app_nominal.name or
             platform_nominal.origin_module != app_nominal.origin_module or
+            platform_nominal.source_decl != app_nominal.source_decl or
             platform_nominal.is_opaque != app_nominal.is_opaque or
             platform_nominal.args.len != app_nominal.args.len)
         {
@@ -10584,6 +11358,7 @@ const PlatformAppRelationTypeResolver = struct {
         return try self.store.appendSyntheticPayloadRoot(self.allocator, self.names, .{ .nominal = .{
             .name = platform_nominal.name,
             .origin_module = platform_nominal.origin_module,
+            .source_decl = platform_nominal.source_decl,
             .builtin = platform_nominal.builtin,
             .is_opaque = platform_nominal.is_opaque,
             .backing = backing,
@@ -11357,6 +12132,7 @@ pub const ModuleInterfaceCapabilities = struct {
             const nominal_key = canonical.NominalTypeKey{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
+                .source_decl = nominal.source_decl,
             };
             const seen_key = NominalCapabilitySeenKey{
                 .source_ty = source_key,
@@ -11555,7 +12331,7 @@ fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalType
 }
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
-    return a.module_name == b.module_name and a.type_name == b.type_name;
+    return a.module_name == b.module_name and a.type_name == b.type_name and a.source_decl == b.source_decl;
 }
 
 fn checkedTypeKeyForId(
@@ -11913,11 +12689,20 @@ pub const TopLevelValueEntry = struct {
     value: TopLevelValueKind,
 };
 
+const TopLevelValueByDefEntry = struct {
+    def: CIR.Def.Idx,
+    entry: u32,
+
+    fn lessThan(_: void, lhs: TopLevelValueByDefEntry, rhs: TopLevelValueByDefEntry) bool {
+        return @intFromEnum(lhs.def) < @intFromEnum(rhs.def);
+    }
+};
+
 /// Public `TopLevelValueTable` declaration.
 pub const TopLevelValueTable = struct {
     entries: []TopLevelValueEntry = &.{},
     by_pattern: []?u32 = &.{},
-    by_def: []?u32 = &.{},
+    by_def: []TopLevelValueByDefEntry = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -11939,9 +12724,8 @@ pub const TopLevelValueTable = struct {
         errdefer allocator.free(by_pattern);
         @memset(by_pattern, null);
 
-        const by_def = try allocator.alloc(?u32, module.nodeCount());
-        errdefer allocator.free(by_def);
-        @memset(by_def, null);
+        var by_def = std.ArrayList(TopLevelValueByDefEntry).empty;
+        errdefer by_def.deinit(allocator);
 
         var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
         defer seen_source_names.deinit(allocator);
@@ -12021,13 +12805,20 @@ pub const TopLevelValueTable = struct {
                 .value = value,
             });
             by_pattern[@intFromEnum(checked_pattern)] = entry_idx;
-            by_def[@intFromEnum(def_idx)] = entry_idx;
+            try by_def.append(allocator, .{
+                .def = def_idx,
+                .entry = entry_idx,
+            });
         }
 
+        std.mem.sort(TopLevelValueByDefEntry, by_def.items, {}, TopLevelValueByDefEntry.lessThan);
+        const entry_slice = try entries.toOwnedSlice(allocator);
+        errdefer allocator.free(entry_slice);
+        const by_def_slice = try by_def.toOwnedSlice(allocator);
         return .{
-            .entries = try entries.toOwnedSlice(allocator),
+            .entries = entry_slice,
             .by_pattern = by_pattern,
-            .by_def = by_def,
+            .by_def = by_def_slice,
         };
     }
 
@@ -12039,10 +12830,20 @@ pub const TopLevelValueTable = struct {
     }
 
     pub fn lookupByDef(self: *const TopLevelValueTable, def: CIR.Def.Idx) ?TopLevelValueEntry {
-        const raw = @intFromEnum(def);
-        if (raw >= self.by_def.len) return null;
-        const idx = self.by_def[raw] orelse return null;
-        return self.entries[idx];
+        var lo: usize = 0;
+        var hi: usize = self.by_def.len;
+        const target = @intFromEnum(def);
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const candidate = @intFromEnum(self.by_def[mid].def);
+            if (candidate < target) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo >= self.by_def.len or self.by_def[lo].def != def) return null;
+        return self.entries[self.by_def[lo].entry];
     }
 
     pub fn deinit(self: *TopLevelValueTable, allocator: Allocator) void {
@@ -12323,6 +13124,8 @@ fn appendClosureArtifactKey(
     try keys.append(allocator, key);
 }
 
+const ArtifactKeyAccumulator = UniqueList(CheckedModuleArtifactKey);
+
 fn collectPublicApiDependencies(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -12332,14 +13135,23 @@ fn collectPublicApiDependencies(
     exported_defs: []const CIR.Def.Idx,
     checked_type_publication: *const CheckedTypePublication,
     checked_types: *const CheckedTypeStore,
+    checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+    const_templates: *const ConstTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     exported_procedure_templates: *const ExportedProcedureTemplateTable,
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
 ) Allocator.Error!PublicApiDependencies {
-    var keys = std.ArrayList(CheckedModuleArtifactKey).empty;
-    errdefer keys.deinit(allocator);
+    var keys = ArtifactKeyAccumulator.empty;
+    defer keys.deinit(allocator);
+    var type_owner_keys = ArtifactKeyAccumulator.empty;
+    defer type_owner_keys.deinit(allocator);
 
     var active_types = std.AutoHashMap(CheckedTypeId, void).init(allocator);
     defer active_types.deinit();
@@ -12359,6 +13171,7 @@ fn collectPublicApiDependencies(
             imports,
             available_artifacts,
             &keys,
+            &type_owner_keys,
         );
     }
 
@@ -12374,17 +13187,41 @@ fn collectPublicApiDependencies(
         available_artifacts,
         &active_types,
         &keys,
+        &type_owner_keys,
     );
 
-    try appendExportedClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, exported_procedure_templates.*);
+    var closure_dependencies = PublicApiClosureDependencyCollector.init(
+        allocator,
+        artifact_key,
+        imports,
+        available_artifacts,
+        checked_templates,
+        callable_eval_templates,
+        entry_wrappers,
+        const_templates,
+        resolved_value_refs,
+        top_level_bindings,
+        platform_required_bindings,
+        &keys,
+    );
+    defer closure_dependencies.deinit();
+
+    try closure_dependencies.appendExportedProcedureTemplates(exported_procedure_templates.*);
     for (exported_procedure_bindings.bindings) |binding| {
-        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, binding.template_closure);
+        try closure_dependencies.appendClosure(binding.template_closure);
     }
     for (exported_const_templates.templates) |template| {
-        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, &keys, template.template_closure);
+        try closure_dependencies.appendClosure(template.template_closure);
     }
 
-    return .{ .artifacts = try keys.toOwnedSlice(allocator) };
+    const artifacts = try keys.toOwnedSlice(allocator);
+    errdefer allocator.free(artifacts);
+    const type_owner_artifacts = try type_owner_keys.toOwnedSlice(allocator);
+
+    return .{
+        .artifacts = artifacts,
+        .type_owner_artifacts = type_owner_artifacts,
+    };
 }
 
 fn appendExposedTypeDeclarationPublicApiDependencies(
@@ -12398,7 +13235,8 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     active_types: *std.AutoHashMap(CheckedTypeId, void),
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
     var exposed_iter = module_env.common.exposed_items.iterator();
@@ -12429,6 +13267,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
                     imports,
                     available_artifacts,
                     keys,
+                    type_owner_keys,
                 );
             },
             else => {},
@@ -12446,7 +13285,8 @@ fn appendPublicApiTypeDependencies(
     active: *std.AutoHashMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const index: usize = @intFromEnum(root);
     if (index >= checked_types.payloads.len) {
@@ -12470,6 +13310,7 @@ fn appendPublicApiTypeDependencies(
             imports,
             available_artifacts,
             keys,
+            type_owner_keys,
         ),
         .rigid => |rigid| try appendPublicApiConstraintDependencies(
             allocator,
@@ -12482,6 +13323,7 @@ fn appendPublicApiTypeDependencies(
             imports,
             available_artifacts,
             keys,
+            type_owner_keys,
         ),
         .alias => |alias| {
             try appendPublicApiModuleDependency(
@@ -12493,9 +13335,10 @@ fn appendPublicApiTypeDependencies(
                 imports,
                 available_artifacts,
                 keys,
+                type_owner_keys,
             );
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, alias.backing, active, imports, available_artifacts, keys);
-            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, alias.args, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, alias.backing, active, imports, available_artifacts, keys, type_owner_keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, alias.args, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .nominal => |nominal| {
             try appendPublicApiModuleDependency(
@@ -12507,31 +13350,32 @@ fn appendPublicApiTypeDependencies(
                 imports,
                 available_artifacts,
                 keys,
+                type_owner_keys,
             );
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, nominal.backing, active, imports, available_artifacts, keys);
-            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, nominal.args, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, nominal.backing, active, imports, available_artifacts, keys, type_owner_keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, nominal.args, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .record => |record| {
             for (record.fields) |field| {
-                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys);
+                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys, type_owner_keys);
             }
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, record.ext, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, record.ext, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .record_unbound => |fields| {
             for (fields) |field| {
-                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys);
+                try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, field.ty, active, imports, available_artifacts, keys, type_owner_keys);
             }
         },
-        .tuple => |items| try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, items, active, imports, available_artifacts, keys),
+        .tuple => |items| try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, items, active, imports, available_artifacts, keys, type_owner_keys),
         .function => |function| {
-            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, function.args, active, imports, available_artifacts, keys);
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, function.ret, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, function.args, active, imports, available_artifacts, keys, type_owner_keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, function.ret, active, imports, available_artifacts, keys, type_owner_keys);
         },
         .tag_union => |tag_union| {
             for (tag_union.tags) |tag| {
-                try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, tag.args, active, imports, available_artifacts, keys);
+                try appendPublicApiTypeDependencyRange(allocator, names, module_identity, artifact_key, checked_types, tag.args, active, imports, available_artifacts, keys, type_owner_keys);
             }
-            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, tag_union.ext, active, imports, available_artifacts, keys);
+            try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, tag_union.ext, active, imports, available_artifacts, keys, type_owner_keys);
         },
     }
 }
@@ -12546,10 +13390,11 @@ fn appendPublicApiConstraintDependencies(
     active: *std.AutoHashMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     for (constraints) |constraint| {
-        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, constraint.fn_ty, active, imports, available_artifacts, keys);
+        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, constraint.fn_ty, active, imports, available_artifacts, keys, type_owner_keys);
     }
 }
 
@@ -12563,10 +13408,11 @@ fn appendPublicApiTypeDependencyRange(
     active: *std.AutoHashMap(CheckedTypeId, void),
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     for (roots) |child| {
-        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, child, active, imports, available_artifacts, keys);
+        try appendPublicApiTypeDependencies(allocator, names, module_identity, artifact_key, checked_types, child, active, imports, available_artifacts, keys, type_owner_keys);
     }
 }
 
@@ -12578,16 +13424,18 @@ fn appendPublicApiModuleDependency(
     origin_module: canonical.ModuleNameId,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
+    type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const origin_name = names.moduleNameText(origin_module);
     if (isSelfPublicApiModuleName(names, module_identity, origin_name)) return;
-    if (Ident.textEql(origin_name, "Builtin")) return;
 
     const view = publicApiDependencyViewByModuleName(origin_name, imports, available_artifacts) orelse {
         checkedArtifactInvariant("public API dependency scan could not find checked artifact for module {s}", .{origin_name});
     };
+    if (view.module_env.module_role == .builtin) return;
     try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
+    try appendPublicApiDependencyView(allocator, artifact_key, type_owner_keys, view);
 }
 
 fn isSelfPublicApiModuleName(
@@ -12605,13 +13453,33 @@ fn publicApiDependencyViewByModuleName(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
 ) ?ImportedModuleView {
+    var direct: ?ImportedModuleView = null;
     for (imports) |import_artifact| {
-        if (importedViewModuleNameMatches(import_artifact.view, module_name)) return import_artifact.view;
+        if (importedViewModuleNameMatches(import_artifact.view, module_name)) {
+            direct = publicApiDependencyUniqueView(module_name, direct, import_artifact.view);
+        }
     }
+    if (direct) |view| return view;
+
+    var found: ?ImportedModuleView = null;
     for (available_artifacts) |view| {
-        if (importedViewModuleNameMatches(view, module_name)) return view;
+        if (importedViewModuleNameMatches(view, module_name)) {
+            found = publicApiDependencyUniqueView(module_name, found, view);
+        }
     }
-    return null;
+    return found;
+}
+
+fn publicApiDependencyUniqueView(
+    module_name: []const u8,
+    existing: ?ImportedModuleView,
+    next: ImportedModuleView,
+) ImportedModuleView {
+    const view = existing orelse return next;
+    if (!checkedArtifactKeyEql(view.key, next.key)) {
+        checkedArtifactInvariant("public API dependency scan found multiple checked artifacts for module {s}", .{module_name});
+    }
+    return view;
 }
 
 fn importedViewModuleNameMatches(view: ImportedModuleView, module_name: []const u8) bool {
@@ -12623,49 +13491,307 @@ fn importedViewModuleNameMatches(view: ImportedModuleView, module_name: []const 
 fn appendPublicApiDependencyView(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
+    keys: *ArtifactKeyAccumulator,
     view: ImportedModuleView,
 ) Allocator.Error!void {
     if (checkedArtifactKeyEql(view.key, artifact_key)) return;
-    try appendClosureArtifactKey(allocator, keys, view.key);
-    for (view.public_api_dependencies.artifacts) |dependency| {
-        if (checkedArtifactKeyEql(dependency, artifact_key)) continue;
-        try appendClosureArtifactKey(allocator, keys, dependency);
-    }
+    _ = try keys.append(allocator, view.key);
 }
 
-fn appendExportedClosurePublicApiDependencies(
+fn appendPublicApiClosureDependencyKey(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
-    exported_procedure_templates: ExportedProcedureTemplateTable,
+    keys: *ArtifactKeyAccumulator,
+    key: CheckedModuleArtifactKey,
 ) Allocator.Error!void {
-    for (exported_procedure_templates.templates) |template| {
-        try appendTemplateClosurePublicApiDependencies(allocator, artifact_key, imports, available_artifacts, keys, template.template_closure);
-    }
+    if (checkedArtifactKeyEql(key, artifact_key)) return;
+    if (publicApiDependencyKeyIsKnownBuiltin(key, imports, available_artifacts)) return;
+    _ = try keys.append(allocator, key);
 }
 
-fn appendTemplateClosurePublicApiDependencies(
+fn publicApiDependencyKeyIsKnownBuiltin(
+    key: CheckedModuleArtifactKey,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+) bool {
+    if (publicApiDependencyViewByKey(key, imports, available_artifacts)) |view| {
+        return view.module_env.module_role == .builtin;
+    }
+    return false;
+}
+
+const PublicApiClosureDependencyCollector = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    keys: *std.ArrayList(CheckedModuleArtifactKey),
-    closure: ImportedTemplateClosureView,
-) Allocator.Error!void {
-    var closure_keys = std.ArrayList(CheckedModuleArtifactKey).empty;
-    defer closure_keys.deinit(allocator);
-    try appendImportedTemplateClosureArtifactKeys(allocator, &closure_keys, closure);
-    for (closure_keys.items) |key| {
-        if (checkedArtifactKeyEql(key, artifact_key)) continue;
-        const view = publicApiDependencyViewByKey(key, imports, available_artifacts) orelse {
-            checkedArtifactInvariant("public API closure dependency scan could not find checked artifact for referenced key", .{});
+    checked_templates: *const CheckedProcedureTemplateTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+    const_templates: *const ConstTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_bindings: *const TopLevelProcedureBindingTable,
+    platform_required_bindings: *const PlatformRequiredBindingTable,
+    keys: *ArtifactKeyAccumulator,
+    visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
+    visited_consts: std.AutoHashMap(ConstRef, void),
+    visited_callable_eval_templates: std.AutoHashMap(ArtifactCallableEvalTemplateRef, void),
+
+    fn init(
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        imports: []const PublishImportArtifact,
+        available_artifacts: []const ImportedModuleView,
+        checked_templates: *const CheckedProcedureTemplateTable,
+        callable_eval_templates: *const CallableEvalTemplateTable,
+        entry_wrappers: *const EntryWrapperTable,
+        const_templates: *const ConstTemplateTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
+        top_level_bindings: *const TopLevelProcedureBindingTable,
+        platform_required_bindings: *const PlatformRequiredBindingTable,
+        keys: *ArtifactKeyAccumulator,
+    ) PublicApiClosureDependencyCollector {
+        return .{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .imports = imports,
+            .available_artifacts = available_artifacts,
+            .checked_templates = checked_templates,
+            .callable_eval_templates = callable_eval_templates,
+            .entry_wrappers = entry_wrappers,
+            .const_templates = const_templates,
+            .resolved_value_refs = resolved_value_refs,
+            .top_level_bindings = top_level_bindings,
+            .platform_required_bindings = platform_required_bindings,
+            .keys = keys,
+            .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
+            .visited_consts = std.AutoHashMap(ConstRef, void).init(allocator),
+            .visited_callable_eval_templates = std.AutoHashMap(ArtifactCallableEvalTemplateRef, void).init(allocator),
         };
-        try appendPublicApiDependencyView(allocator, artifact_key, keys, view);
     }
-}
+
+    fn deinit(self: *PublicApiClosureDependencyCollector) void {
+        self.visited_callable_eval_templates.deinit();
+        self.visited_consts.deinit();
+        self.visited_templates.deinit();
+    }
+
+    fn appendExportedProcedureTemplates(
+        self: *PublicApiClosureDependencyCollector,
+        exported_procedure_templates: ExportedProcedureTemplateTable,
+    ) Allocator.Error!void {
+        for (exported_procedure_templates.templates) |template| {
+            try self.appendClosure(template.template_closure);
+        }
+    }
+
+    fn appendClosure(
+        self: *PublicApiClosureDependencyCollector,
+        closure: ImportedTemplateClosureView,
+    ) Allocator.Error!void {
+        for (closure.checked_bodies) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_type_roots) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_type_schemes) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_callable_bodies) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_const_bodies) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.checked_procedure_templates) |value| try self.appendProcedureTemplateRef(value);
+        for (closure.callable_eval_templates) |value| try self.appendCallableEvalTemplateRef(value);
+        for (closure.const_templates) |value| try self.appendConstRef(value);
+        for (closure.nested_proc_sites) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.resolved_value_refs) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.static_dispatch_plans) |value| try self.appendArtifactKey(value.artifact);
+        for (closure.interface_capabilities) |value| try self.appendArtifactKey(value.artifact);
+    }
+
+    fn appendArtifactKey(
+        self: *PublicApiClosureDependencyCollector,
+        key: CheckedModuleArtifactKey,
+    ) Allocator.Error!void {
+        try appendPublicApiClosureDependencyKey(
+            self.allocator,
+            self.artifact_key,
+            self.imports,
+            self.available_artifacts,
+            self.keys,
+            key,
+        );
+    }
+
+    fn appendProcedureTemplateRef(
+        self: *PublicApiClosureDependencyCollector,
+        template_ref: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        const key = checkedArtifactKeyFromArtifactRef(template_ref.artifact);
+        try self.appendArtifactKey(key);
+        if (!checkedArtifactKeyEql(key, self.artifact_key)) return;
+
+        const entry = try self.visited_templates.getOrPut(template_ref);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+
+        const index: usize = @intFromEnum(template_ref.template);
+        if (index >= self.checked_templates.templates.len) {
+            checkedArtifactInvariant("public API closure dependency referenced missing local procedure template", .{});
+        }
+        const template = self.checked_templates.get(template_ref.template);
+        if (template.proc_base != template_ref.proc_base) {
+            checkedArtifactInvariant("public API closure dependency procedure template ref disagreed with template row", .{});
+        }
+        try self.appendResolvedValueRefs(template.resolved_value_refs);
+    }
+
+    fn appendCallableEvalTemplateRef(
+        self: *PublicApiClosureDependencyCollector,
+        template_ref: ArtifactCallableEvalTemplateRef,
+    ) Allocator.Error!void {
+        try self.appendArtifactKey(template_ref.artifact);
+        if (!checkedArtifactKeyEql(template_ref.artifact, self.artifact_key)) return;
+
+        const entry = try self.visited_callable_eval_templates.getOrPut(template_ref);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+
+        const index: usize = @intFromEnum(template_ref.template);
+        if (index >= self.callable_eval_templates.templates.len) {
+            checkedArtifactInvariant("public API closure dependency referenced missing callable-eval template", .{});
+        }
+        const template = self.callable_eval_templates.get(template_ref.template);
+        const wrapper = entryWrapperForRoot(self.entry_wrappers, template.root);
+        try self.appendProcedureTemplateRef(wrapper.template);
+    }
+
+    fn appendConstRef(
+        self: *PublicApiClosureDependencyCollector,
+        const_ref: ConstRef,
+    ) Allocator.Error!void {
+        try self.appendArtifactKey(const_ref.artifact);
+        if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return;
+
+        const entry = try self.visited_consts.getOrPut(const_ref);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+
+        const template = self.const_templates.get(const_ref);
+        switch (template.state) {
+            .eval_template => |eval| {
+                try self.appendResolvedValueRefs(eval.resolved_value_refs);
+                try self.appendProcedureTemplateRef(eval.entry_template);
+            },
+            .stored_const => {},
+            .reserved => checkedArtifactInvariant("public API closure dependency reached unsealed const template", .{}),
+        }
+    }
+
+    fn appendResolvedValueRefs(
+        self: *PublicApiClosureDependencyCollector,
+        table: ResolvedValueRefTableRef,
+    ) Allocator.Error!void {
+        const end = table.start + table.len;
+        if (end > self.resolved_value_refs.template_refs.len) {
+            checkedArtifactInvariant("public API closure resolved-ref span was outside table", .{});
+        }
+        for (self.resolved_value_refs.template_refs[table.start..end]) |ref_id| {
+            const raw = @intFromEnum(ref_id);
+            if (raw >= self.resolved_value_refs.records.len) {
+                checkedArtifactInvariant("public API closure resolved-ref id was outside table", .{});
+            }
+            try self.appendResolvedValueRef(self.resolved_value_refs.records[raw].ref);
+        }
+    }
+
+    fn appendResolvedValueRef(
+        self: *PublicApiClosureDependencyCollector,
+        ref: ResolvedValueRef,
+    ) Allocator.Error!void {
+        switch (ref) {
+            .top_level_const,
+            .imported_const,
+            => |const_use| try self.appendConstRef(const_use.const_ref),
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |procedure| try self.appendProcedureUse(procedure),
+            .platform_required_const => |required| {
+                try self.appendConstRef(required.const_use.const_ref);
+                try self.appendPlatformRequiredBindingClosure(required.binding);
+            },
+            .platform_required_proc => |required| {
+                try self.appendProcedureUse(required.procedure);
+                try self.appendPlatformRequiredBindingClosure(required.binding);
+            },
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .platform_required_declaration,
+            => {},
+        }
+    }
+
+    fn appendProcedureUse(
+        self: *PublicApiClosureDependencyCollector,
+        procedure: ProcedureUseTemplate,
+    ) Allocator.Error!void {
+        switch (procedure.binding) {
+            .top_level => |top_level| try self.appendTopLevelProcedureBinding(top_level),
+            .imported => |imported| try self.appendArtifactKey(imported.artifact),
+            .hosted => |hosted| try self.appendProcedureTemplateRef(hosted.template),
+            .platform_required => |required| try self.appendArtifactKey(required.artifact),
+        }
+    }
+
+    fn appendTopLevelProcedureBinding(
+        self: *PublicApiClosureDependencyCollector,
+        binding_ref: ArtifactTopLevelProcedureBindingRef,
+    ) Allocator.Error!void {
+        try self.appendArtifactKey(binding_ref.artifact);
+        if (!checkedArtifactKeyEql(binding_ref.artifact, self.artifact_key)) return;
+
+        const binding = self.top_level_bindings.get(binding_ref.binding);
+        try self.appendProcedureBindingBody(binding.body);
+    }
+
+    fn appendProcedureBindingBody(
+        self: *PublicApiClosureDependencyCollector,
+        body: ProcedureBindingBody,
+    ) Allocator.Error!void {
+        switch (body) {
+            .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+            .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
+                .artifact = self.artifact_key,
+                .template = template,
+            }),
+        }
+    }
+
+    fn appendCallableProcedureTemplateRef(
+        self: *PublicApiClosureDependencyCollector,
+        template: canonical.CallableProcedureTemplateRef,
+    ) Allocator.Error!void {
+        switch (template) {
+            .checked => |checked| try self.appendProcedureTemplateRef(checked),
+            .synthetic => |synthetic| try self.appendProcedureTemplateRef(synthetic.template),
+            .lifted => checkedArtifactInvariant("public API closure reached lifted procedure template before mono", .{}),
+        }
+    }
+
+    fn appendPlatformRequiredBindingClosure(
+        self: *PublicApiClosureDependencyCollector,
+        binding_id: PlatformRequiredBindingId,
+    ) Allocator.Error!void {
+        const binding = self.platform_required_bindings.lookupByBindingId(@intFromEnum(binding_id)) orelse {
+            checkedArtifactInvariant("public API closure referenced missing platform-required binding", .{});
+        };
+        switch (binding.value_use) {
+            .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
+            .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
+        }
+    }
+};
 
 fn publicApiDependencyViewByKey(
     key: CheckedModuleArtifactKey,
@@ -12828,6 +13954,37 @@ fn buildImportedTemplateClosure(
     };
 }
 
+fn UniqueList(comptime T: type) type {
+    return struct {
+        items: std.ArrayList(T) = .empty,
+        seen: std.AutoHashMapUnmanaged(T, void) = .{},
+
+        const Self = @This();
+        const empty: Self = .{};
+
+        fn append(self: *Self, allocator: Allocator, value: T) Allocator.Error!bool {
+            const entry = try self.seen.getOrPut(allocator, value);
+            if (entry.found_existing) return false;
+
+            entry.value_ptr.* = {};
+            errdefer _ = self.seen.remove(value);
+
+            try self.items.append(allocator, value);
+            return true;
+        }
+
+        fn toOwnedSlice(self: *Self, allocator: Allocator) Allocator.Error![]T {
+            return try self.items.toOwnedSlice(allocator);
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            self.seen.deinit(allocator);
+            self.items.deinit(allocator);
+            self.* = .{};
+        }
+    };
+}
+
 const ImportedTemplateClosureBuilder = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
@@ -12840,19 +13997,19 @@ const ImportedTemplateClosureBuilder = struct {
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
-    checked_bodies: std.ArrayList(ArtifactCheckedBodyRef),
-    checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef),
-    checked_type_schemes: std.ArrayList(ArtifactCheckedTypeSchemeRef),
-    checked_callable_bodies: std.ArrayList(ArtifactCheckedCallableBodyRef),
-    checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef),
-    checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef),
-    callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef),
-    const_templates: std.ArrayList(ConstRef),
-    nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef),
-    resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef),
-    static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef),
-    method_registry_entries: std.ArrayList(MethodRegistryEntryRef),
-    interface_capabilities: std.ArrayList(ArtifactModuleInterfaceCapabilitiesRef),
+    checked_bodies: UniqueList(ArtifactCheckedBodyRef),
+    checked_type_roots: UniqueList(ArtifactCheckedTypeRef),
+    checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef),
+    checked_callable_bodies: UniqueList(ArtifactCheckedCallableBodyRef),
+    checked_const_bodies: UniqueList(ArtifactCheckedConstBodyRef),
+    checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef),
+    callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef),
+    const_templates: UniqueList(ConstRef),
+    nested_proc_sites: UniqueList(ArtifactNestedProcSiteTableRef),
+    resolved_value_refs: UniqueList(ArtifactResolvedValueRefTableRef),
+    static_dispatch_plans: UniqueList(ArtifactStaticDispatchPlanTableRef),
+    method_registry_entries: UniqueList(MethodRegistryEntryRef),
+    interface_capabilities: UniqueList(ArtifactModuleInterfaceCapabilitiesRef),
 
     fn init(
         allocator: Allocator,
@@ -12916,9 +14073,8 @@ const ImportedTemplateClosureBuilder = struct {
         template_ref: canonical.ProcedureTemplateRef,
         template: CheckedProcedureTemplate,
     ) Allocator.Error!void {
-        if (self.containsProcedureTemplate(template_ref)) return;
+        if (!try self.checked_procedure_templates.append(self.allocator, template_ref)) return;
 
-        try self.checked_procedure_templates.append(self.allocator, template_ref);
         switch (template.body) {
             .checked_body => |body| try self.appendCheckedBody(body),
             .intrinsic_wrapper,
@@ -12930,41 +14086,22 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendNestedProcSites(template.nested_proc_sites);
         try self.appendResolvedValueRefs(template.resolved_value_refs);
         try self.appendStaticDispatchPlans(template.static_dispatch_plans);
-        try self.appendProcedureDependencies(template.resolved_value_refs);
-    }
-
-    fn containsProcedureTemplate(
-        self: *const ImportedTemplateClosureBuilder,
-        template_ref: canonical.ProcedureTemplateRef,
-    ) bool {
-        for (self.checked_procedure_templates.items) |existing| {
-            if (canonical.procedureTemplateRefEql(existing, template_ref)) return true;
-        }
-        return false;
+        try self.appendDirectProcedureDependencies(template.resolved_value_refs);
     }
 
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CheckedBodyId) Allocator.Error!void {
         const ref = ArtifactCheckedBodyRef{ .artifact = self.artifact_key, .body = body };
-        for (self.checked_bodies.items) |existing| {
-            if (existing.body == ref.body and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_bodies.append(self.allocator, ref);
+        _ = try self.checked_bodies.append(self.allocator, ref);
     }
 
     fn appendCheckedConstBody(self: *ImportedTemplateClosureBuilder, body: CheckedConstBodyRef) Allocator.Error!void {
         const ref = ArtifactCheckedConstBodyRef{ .artifact = self.artifact_key, .body = body };
-        for (self.checked_const_bodies.items) |existing| {
-            if (existing.body == ref.body and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_const_bodies.append(self.allocator, ref);
+        _ = try self.checked_const_bodies.append(self.allocator, ref);
     }
 
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
         const ref = ArtifactCheckedTypeRef{ .artifact = self.artifact_key, .ty = ty };
-        for (self.checked_type_roots.items) |existing| {
-            if (existing.ty == ref.ty and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_type_roots.append(self.allocator, ref);
+        _ = try self.checked_type_roots.append(self.allocator, ref);
     }
 
     fn appendCheckedTypeScheme(
@@ -12978,10 +14115,7 @@ const ImportedTemplateClosureBuilder = struct {
             unreachable;
         };
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.artifact_key, .scheme = scheme.id };
-        for (self.checked_type_schemes.items) |existing| {
-            if (existing.scheme == ref.scheme and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.checked_type_schemes.append(self.allocator, ref);
+        _ = try self.checked_type_schemes.append(self.allocator, ref);
     }
 
     fn appendNestedProcSites(
@@ -12990,10 +14124,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (table.len == 0) return;
         const ref = ArtifactNestedProcSiteTableRef{ .artifact = self.artifact_key, .table = table };
-        for (self.nested_proc_sites.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.nested_proc_sites.append(self.allocator, ref);
+        _ = try self.nested_proc_sites.append(self.allocator, ref);
     }
 
     fn appendResolvedValueRefs(
@@ -13002,10 +14133,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (table.len == 0) return;
         const ref = ArtifactResolvedValueRefTableRef{ .artifact = self.artifact_key, .table = table };
-        for (self.resolved_value_refs.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.resolved_value_refs.append(self.allocator, ref);
+        _ = try self.resolved_value_refs.append(self.allocator, ref);
     }
 
     fn appendStaticDispatchPlans(
@@ -13014,39 +14142,36 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (table.len == 0) return;
         const ref = ArtifactStaticDispatchPlanTableRef{ .artifact = self.artifact_key, .table = table };
-        for (self.static_dispatch_plans.items) |existing| {
-            if (existing.table.start == table.start and existing.table.len == table.len and std.meta.eql(existing.artifact.bytes, ref.artifact.bytes)) return;
-        }
-        try self.static_dispatch_plans.append(self.allocator, ref);
+        _ = try self.static_dispatch_plans.append(self.allocator, ref);
     }
 
     fn appendInterfaceCapabilities(
         self: *ImportedTemplateClosureBuilder,
         ref: ArtifactModuleInterfaceCapabilitiesRef,
     ) Allocator.Error!void {
-        try appendUniqueValue(ArtifactModuleInterfaceCapabilitiesRef, self.allocator, &self.interface_capabilities, ref);
+        _ = try self.interface_capabilities.append(self.allocator, ref);
     }
 
     fn appendImportedTemplateClosure(
         self: *ImportedTemplateClosureBuilder,
         closure: ImportedTemplateClosureView,
     ) Allocator.Error!void {
-        for (closure.checked_bodies) |value| try appendUniqueValue(ArtifactCheckedBodyRef, self.allocator, &self.checked_bodies, value);
-        for (closure.checked_type_roots) |value| try appendUniqueValue(ArtifactCheckedTypeRef, self.allocator, &self.checked_type_roots, value);
-        for (closure.checked_type_schemes) |value| try appendUniqueValue(ArtifactCheckedTypeSchemeRef, self.allocator, &self.checked_type_schemes, value);
-        for (closure.checked_callable_bodies) |value| try appendUniqueValue(ArtifactCheckedCallableBodyRef, self.allocator, &self.checked_callable_bodies, value);
-        for (closure.checked_const_bodies) |value| try appendUniqueValue(ArtifactCheckedConstBodyRef, self.allocator, &self.checked_const_bodies, value);
-        for (closure.checked_procedure_templates) |value| try appendUniqueValue(ArtifactProcedureTemplateRef, self.allocator, &self.checked_procedure_templates, value);
-        for (closure.callable_eval_templates) |value| try appendUniqueValue(ArtifactCallableEvalTemplateRef, self.allocator, &self.callable_eval_templates, value);
-        for (closure.const_templates) |value| try appendUniqueValue(ConstRef, self.allocator, &self.const_templates, value);
-        for (closure.nested_proc_sites) |value| try appendUniqueValue(ArtifactNestedProcSiteTableRef, self.allocator, &self.nested_proc_sites, value);
-        for (closure.resolved_value_refs) |value| try appendUniqueValue(ArtifactResolvedValueRefTableRef, self.allocator, &self.resolved_value_refs, value);
-        for (closure.static_dispatch_plans) |value| try appendUniqueValue(ArtifactStaticDispatchPlanTableRef, self.allocator, &self.static_dispatch_plans, value);
-        for (closure.method_registry_entries) |value| try appendUniqueValue(MethodRegistryEntryRef, self.allocator, &self.method_registry_entries, value);
-        for (closure.interface_capabilities) |value| try appendUniqueValue(ArtifactModuleInterfaceCapabilitiesRef, self.allocator, &self.interface_capabilities, value);
+        for (closure.checked_bodies) |value| _ = try self.checked_bodies.append(self.allocator, value);
+        for (closure.checked_type_roots) |value| _ = try self.checked_type_roots.append(self.allocator, value);
+        for (closure.checked_type_schemes) |value| _ = try self.checked_type_schemes.append(self.allocator, value);
+        for (closure.checked_callable_bodies) |value| _ = try self.checked_callable_bodies.append(self.allocator, value);
+        for (closure.checked_const_bodies) |value| _ = try self.checked_const_bodies.append(self.allocator, value);
+        for (closure.checked_procedure_templates) |value| _ = try self.checked_procedure_templates.append(self.allocator, value);
+        for (closure.callable_eval_templates) |value| _ = try self.callable_eval_templates.append(self.allocator, value);
+        for (closure.const_templates) |value| _ = try self.const_templates.append(self.allocator, value);
+        for (closure.nested_proc_sites) |value| _ = try self.nested_proc_sites.append(self.allocator, value);
+        for (closure.resolved_value_refs) |value| _ = try self.resolved_value_refs.append(self.allocator, value);
+        for (closure.static_dispatch_plans) |value| _ = try self.static_dispatch_plans.append(self.allocator, value);
+        for (closure.method_registry_entries) |value| _ = try self.method_registry_entries.append(self.allocator, value);
+        for (closure.interface_capabilities) |value| _ = try self.interface_capabilities.append(self.allocator, value);
     }
 
-    fn appendProcedureDependencies(
+    fn appendDirectProcedureDependencies(
         self: *ImportedTemplateClosureBuilder,
         table: ResolvedValueRefTableRef,
     ) Allocator.Error!void {
@@ -13060,11 +14185,10 @@ const ImportedTemplateClosureBuilder = struct {
             if (try self.appendPlatformRequiredRelationClosureForResolvedRef(resolved)) continue;
             if (try self.appendCallableEvalBindingClosureForResolvedRef(resolved)) continue;
             if (self.templateForResolvedValueRef(resolved)) |dependency_ref| {
-                const template = self.checked_templates.get(dependency_ref.template);
-                try self.appendTemplate(dependency_ref, template);
+                _ = try self.checked_procedure_templates.append(self.allocator, dependency_ref);
             }
             if (self.constRefForResolvedValueRef(resolved)) |dependency_ref| {
-                try self.appendConstTemplate(dependency_ref);
+                _ = try self.const_templates.append(self.allocator, dependency_ref);
             }
         }
     }
@@ -13075,8 +14199,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!bool {
         return switch (ref) {
             .imported_const => |const_use| blk: {
-                const template = self.importedConstTemplate(const_use.const_ref);
-                try self.appendImportedTemplateClosure(template.template_closure);
+                _ = try self.const_templates.append(self.allocator, const_use.const_ref);
                 break :blk true;
             },
             .imported_proc => |proc_use| blk: {
@@ -13088,11 +14211,31 @@ const ImportedTemplateClosureBuilder = struct {
                     => checkedArtifactInvariant("imported procedure ref did not carry imported binding", .{}),
                 };
                 const binding = self.importedProcedureBinding(imported);
-                try self.appendImportedTemplateClosure(binding.template_closure);
+                try self.appendImportedProcedureBindingDependency(binding);
                 break :blk true;
             },
             else => false,
         };
+    }
+
+    fn appendImportedProcedureBindingDependency(
+        self: *ImportedTemplateClosureBuilder,
+        binding: ImportedProcedureBindingView,
+    ) Allocator.Error!void {
+        switch (binding.body) {
+            .direct_template => |direct| {
+                const template_ref = checkedTemplateFromCallableTemplateForClosure(direct.template) orelse {
+                    checkedArtifactInvariant("imported procedure binding referenced a post-check template before mono", .{});
+                };
+                _ = try self.checked_procedure_templates.append(self.allocator, template_ref);
+            },
+            .callable_eval_template => |template_id| {
+                _ = try self.callable_eval_templates.append(self.allocator, .{
+                    .artifact = binding.binding.artifact,
+                    .template = template_id,
+                });
+            },
+        }
     }
 
     fn importedProcedureBinding(
@@ -13110,19 +14253,6 @@ const ImportedTemplateClosureBuilder = struct {
             }
         }
         checkedArtifactInvariant("imported procedure dependency had no published imported closure", .{});
-    }
-
-    fn importedConstTemplate(
-        self: *ImportedTemplateClosureBuilder,
-        ref: ConstRef,
-    ) ImportedConstTemplateView {
-        for (self.imports) |import| {
-            if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
-            for (import.view.exported_const_templates.templates) |template| {
-                if (constRefEql(template.const_ref, ref)) return template;
-            }
-        }
-        checkedArtifactInvariant("imported const dependency had no published imported closure", .{});
     }
 
     fn appendPlatformRequiredRelationClosureForResolvedRef(
@@ -13165,10 +14295,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         const_ref: ConstRef,
     ) Allocator.Error!void {
-        for (self.const_templates.items) |existing| {
-            if (constRefEql(existing, const_ref)) return;
-        }
-        try self.const_templates.append(self.allocator, const_ref);
+        if (!try self.const_templates.append(self.allocator, const_ref)) return;
 
         if (!std.meta.eql(const_ref.artifact.bytes, self.artifact_key.bytes)) return;
 
@@ -13188,7 +14315,7 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendNestedProcSites(eval.nested_proc_sites);
                 try self.appendResolvedValueRefs(eval.resolved_value_refs);
                 try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
-                try self.appendProcedureDependencies(eval.resolved_value_refs);
+                try self.appendDirectProcedureDependencies(eval.resolved_value_refs);
                 const entry_template = self.checked_templates.get(eval.entry_template.template);
                 try self.appendTemplate(eval.entry_template, entry_template);
             },
@@ -13254,7 +14381,7 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendCheckedTypeRoot(template.checked_fn_root);
         try self.appendCheckedTypeScheme(template.source_scheme);
         try self.appendTemplate(wrapper.template, entry_template);
-        try appendUniqueValue(ArtifactCallableEvalTemplateRef, self.allocator, &self.callable_eval_templates, .{
+        _ = try self.callable_eval_templates.append(self.allocator, .{
             .artifact = self.artifact_key,
             .template = template_id,
         });
@@ -13347,18 +14474,6 @@ fn buildImportedConstTemplateClosure(
 
 fn freeConstSlice(allocator: Allocator, slice: anytype) void {
     if (slice.len > 0) allocator.free(slice);
-}
-
-fn appendUniqueValue(
-    comptime T: type,
-    allocator: Allocator,
-    list: *std.ArrayList(T),
-    value: T,
-) Allocator.Error!void {
-    for (list.items) |existing| {
-        if (std.meta.eql(existing, value)) return;
-    }
-    try list.append(allocator, value);
 }
 
 pub fn deinitImportedTemplateClosure(
@@ -13603,7 +14718,7 @@ fn buildProcedureBindingClosure(
             try builder.appendCheckedTypeScheme(template.source_scheme);
             try builder.appendTemplate(wrapper.template, entry_template);
 
-            try builder.callable_eval_templates.append(allocator, .{
+            _ = try builder.callable_eval_templates.append(allocator, .{
                 .artifact = artifact_key,
                 .template = template_id,
             });
@@ -14096,6 +15211,8 @@ pub const CheckedModuleArtifact = struct {
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         std.debug.assert(self.checked_types.roots.len == self.checked_types.payloads.len);
+        std.debug.assert(self.checked_bodies.expr_diverges.len == self.checked_bodies.exprs.len);
+        std.debug.assert(self.checked_bodies.statement_diverges.len == self.checked_bodies.statements.len);
         verifyRootRequestSubsets(self.root_requests);
 
         for (self.checked_types.payloads, 0..) |payload, i| {
@@ -14161,6 +15278,8 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
+        std.debug.assert(self.checked_bodies.expr_diverges.len == self.checked_bodies.exprs.len);
+        std.debug.assert(self.checked_bodies.statement_diverges.len == self.checked_bodies.statements.len);
         verifyRootRequestSubsets(self.root_requests);
 
         for (self.root_requests.requests, 0..) |request, i| {
@@ -14869,6 +15988,8 @@ pub const CheckedTypeProjector = struct {
             .alias => |alias| .{ .alias = .{
                 .name = try self.remapViewTypeName(source_names, alias.name),
                 .origin_module = try self.remapViewModuleName(source_names, alias.origin_module),
+                .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, alias.backing, active),
                 .args = try self.projectCheckedTypeViewIds(source, source_names, alias.args, active),
             } },
@@ -14883,6 +16004,7 @@ pub const CheckedTypeProjector = struct {
             .nominal => |nominal| .{ .nominal = .{
                 .name = try self.remapViewTypeName(source_names, nominal.name),
                 .origin_module = try self.remapViewModuleName(source_names, nominal.origin_module),
+                .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.projectCheckedTypeViewRootInner(source, source_names, nominal.backing, active),
@@ -15210,6 +16332,8 @@ pub const CheckedTypeProjector = struct {
         return .{ .alias = .{
             .name = try self.remapTypeName(imported, alias.name),
             .origin_module = try self.remapModuleName(imported, alias.origin_module),
+            .source_decl = alias.source_decl,
+            .builtin_origin = alias.builtin_origin,
             .backing = try self.projectImportedCheckedType(imported, alias.backing),
             .args = args,
         } };
@@ -15225,6 +16349,7 @@ pub const CheckedTypeProjector = struct {
         return .{ .nominal = .{
             .name = try self.remapTypeName(imported, nominal.name),
             .origin_module = try self.remapModuleName(imported, nominal.origin_module),
+            .source_decl = nominal.source_decl,
             .builtin = nominal.builtin,
             .is_opaque = nominal.is_opaque,
             .backing = try self.projectImportedCheckedType(imported, nominal.backing),
@@ -15338,9 +16463,14 @@ pub const CheckedTypeProjector = struct {
     ) Allocator.Error!static_dispatch.MethodOwner {
         return switch (owner) {
             .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .source_decl => |decl| .{ .source_decl = .{
+                .module_name = try self.remapModuleName(imported, decl.module_name),
+                .statement = decl.statement,
+            } },
             .nominal => |nominal| .{ .nominal = .{
                 .module_name = try self.remapModuleName(imported, nominal.module_name),
                 .type_name = try self.remapTypeName(imported, nominal.type_name),
+                .source_decl = nominal.source_decl,
             } },
         };
     }
@@ -15422,6 +16552,8 @@ const CheckedTypeStoreImportProjector = struct {
             .alias => |alias| .{ .alias = .{
                 .name = try self.remapTypeName(alias.name),
                 .origin_module = try self.remapModuleName(alias.origin_module),
+                .source_decl = alias.source_decl,
+                .builtin_origin = alias.builtin_origin,
                 .backing = try self.project(alias.backing),
                 .args = try self.projectIds(alias.args),
             } },
@@ -15436,6 +16568,7 @@ const CheckedTypeStoreImportProjector = struct {
             .nominal => |nominal| .{ .nominal = .{
                 .name = try self.remapTypeName(nominal.name),
                 .origin_module = try self.remapModuleName(nominal.origin_module),
+                .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
                 .backing = try self.project(nominal.backing),
@@ -15568,9 +16701,14 @@ const CheckedTypeStoreImportProjector = struct {
     ) Allocator.Error!static_dispatch.MethodOwner {
         return switch (owner) {
             .builtin => |builtin_owner| .{ .builtin = builtin_owner },
+            .source_decl => |decl| .{ .source_decl = .{
+                .module_name = try self.remapModuleName(decl.module_name),
+                .statement = decl.statement,
+            } },
             .nominal => |nominal| .{ .nominal = .{
                 .module_name = try self.remapModuleName(nominal.module_name),
                 .type_name = try self.remapTypeName(nominal.type_name),
+                .source_decl = nominal.source_decl,
             } },
         };
     }
@@ -15962,7 +17100,10 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifactRef(artifact_key);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts);
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, inputs.imports, inputs.available_artifacts, &source_nodes);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     try applyPlatformForClauseSubstitutions(
@@ -15975,7 +17116,7 @@ pub fn publishFromTypedModule(
     );
     const checked_types = &checked_type_publication.store;
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication);
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
     errdefer checked_bodies.deinit(allocator);
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
@@ -15996,7 +17137,7 @@ pub fn publishFromTypedModule(
     errdefer checked_procedure_templates.deinit(allocator);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication);
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, &canonical_names, &template_lookup, &checked_type_publication, &checked_bodies);
     errdefer method_registry.deinit(allocator);
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, &canonical_names, &checked_type_publication, &checked_bodies);
@@ -16217,6 +17358,13 @@ pub fn publishFromTypedModule(
         exports,
         &checked_type_publication,
         checked_types,
+        &checked_procedure_templates,
+        &callable_eval_templates,
+        &entry_wrappers,
+        &const_templates,
+        &resolved_value_refs,
+        &top_level_procedure_bindings,
+        &platform_required_bindings,
         inputs.imports,
         inputs.available_artifacts,
         &exported_procedure_templates,
@@ -16224,6 +17372,8 @@ pub fn publishFromTypedModule(
         &exported_const_templates,
     );
     errdefer public_api_dependencies.deinit(allocator);
+
+    checked_bodies.discardSourceNodeMap(allocator);
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
@@ -16325,7 +17475,9 @@ fn expectProvidedExportKind(
         .{},
         &.{},
     );
-    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, &.{}, &.{});
+    var builtin_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
+    defer builtin_source_nodes.deinit(allocator);
+    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, &.{}, &.{}, &builtin_source_nodes);
     defer builtin_checked_type_publication.deinit(allocator);
     const empty_checked_bodies = CheckedBodyStore{};
     const empty_checked_const_bodies = CheckedConstBodyTable{};
@@ -16408,11 +17560,14 @@ fn expectProvidedExportKind(
     var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
     defer platform_required_declarations.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &builtin_imports, &.{});
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, &builtin_imports, &.{}, &source_nodes);
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
-    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication);
+    var checked_bodies = try CheckedBodyStore.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
     defer checked_bodies.deinit(allocator);
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);

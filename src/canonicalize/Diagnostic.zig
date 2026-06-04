@@ -52,6 +52,21 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A local (block) definition references a name that is defined LATER in the
+    /// same block. Local definitions are sequential: they may reference
+    /// themselves or earlier definitions, but not later ones.
+    local_reference_before_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    /// Two local (block) definitions are mutually recursive, which is not
+    /// supported for local definitions (only top-level definitions may be
+    /// mutually recursive).
+    mutually_recursive_local_definitions: struct {
+        ident1: Ident.Idx,
+        ident2: Ident.Idx,
+        region: Region,
+    },
     /// This use-site was rewritten to crash because the referenced top-level
     /// non-function value failed type checking earlier in the pipeline.
     erroneous_value_use: struct {
@@ -351,6 +366,8 @@ pub const Diagnostic = union(enum) {
             .ident_not_in_scope => |d| d.region,
             .self_referential_definition => |d| d.region,
             .circular_value_definition => |d| d.region,
+            .local_reference_before_definition => |d| d.region,
+            .mutually_recursive_local_definitions => |d| d.region,
             .erroneous_value_use => |d| d.region,
             .erroneous_value_expr => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
@@ -1338,18 +1355,11 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        const MAX_IDENT_FIXED_BUFFER = 100;
-        if (owned_ident.len > MAX_IDENT_FIXED_BUFFER - 1) {
-            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore to suppress this warning.");
-        } else {
-            // format the identifier with an underscore
-            try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
-            var buf: [MAX_IDENT_FIXED_BUFFER]u8 = undefined;
-            const owned_ident_with_underscore = try std.fmt.bufPrint(&buf, "_{s}", .{owned_ident});
-
-            try report.document.addUnqualifiedSymbol(owned_ident_with_underscore);
-            try report.document.addReflowingText(" to suppress this warning.");
-        }
+        try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
+        const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});
+        defer gpa.free(ident_with_underscore);
+        try report.document.addUnqualifiedSymbol(ident_with_underscore);
+        try report.document.addReflowingText(" to suppress this warning.");
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("The unused variable is declared here:");

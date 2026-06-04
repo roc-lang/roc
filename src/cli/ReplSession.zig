@@ -123,22 +123,27 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
 
 /// Split pasted input into complete REPL statements using the parser as the boundary check.
 pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]const u8 {
+    return splitInputIntoStatementsWithAllocator(self.allocator, input);
+}
+
+/// Split pasted input into complete REPL statements using the parser as the boundary check.
+pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []const u8) ![][]const u8 {
     const trimmed_input = std.mem.trim(u8, input, " \t\r\n");
-    if (trimmed_input.len == 0) return self.allocator.alloc([]const u8, 0);
+    if (trimmed_input.len == 0) return allocator.alloc([]const u8, 0);
     if (isSpecialCommand(trimmed_input)) {
-        const out = try self.allocator.alloc([]const u8, 1);
-        out[0] = try self.allocator.dupe(u8, trimmed_input);
+        const out = try allocator.alloc([]const u8, 1);
+        out[0] = try allocator.dupe(u8, trimmed_input);
         return out;
     }
 
     var result = std.ArrayList([]const u8).empty;
     errdefer {
-        for (result.items) |slice| self.allocator.free(slice);
-        result.deinit(self.allocator);
+        for (result.items) |slice| allocator.free(slice);
+        result.deinit(allocator);
     }
 
     var current = std.ArrayList(u8).empty;
-    defer current.deinit(self.allocator);
+    defer current.deinit(allocator);
 
     var lines = std.mem.splitScalar(u8, input, '\n');
     while (lines.next()) |raw_line| {
@@ -147,14 +152,14 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]cons
             continue;
         }
 
-        if (current.items.len > 0) try current.append(self.allocator, '\n');
-        try current.appendSlice(self.allocator, trimmed_line);
+        if (current.items.len > 0) try current.append(allocator, '\n');
+        try current.appendSlice(allocator, trimmed_line);
 
         const candidate = std.mem.trim(u8, current.items, " \t\r\n");
         if (candidate.len == 0) continue;
-        switch (try self.inputStatus(candidate)) {
+        switch (try inputStatusWithAllocator(allocator, candidate)) {
             .complete => {
-                try result.append(self.allocator, try self.allocator.dupe(u8, candidate));
+                try result.append(allocator, try allocator.dupe(u8, candidate));
                 current.clearRetainingCapacity();
             },
             .incomplete, .invalid => {},
@@ -163,16 +168,21 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]cons
 
     const remaining = std.mem.trim(u8, current.items, " \t\r\n");
     if (remaining.len > 0) {
-        try result.append(self.allocator, try self.allocator.dupe(u8, remaining));
+        try result.append(allocator, try allocator.dupe(u8, remaining));
     }
 
-    return result.toOwnedSlice(self.allocator);
+    return result.toOwnedSlice(allocator);
 }
 
 /// Free slices returned by `splitInputIntoStatements`.
 pub fn freeStatementSlices(self: *ReplSession, slices: []const []const u8) void {
-    for (slices) |slice| self.allocator.free(slice);
-    self.allocator.free(slices);
+    freeStatementSlicesWithAllocator(self.allocator, slices);
+}
+
+/// Free slices returned by `splitInputIntoStatementsWithAllocator`.
+pub fn freeStatementSlicesWithAllocator(allocator: Allocator, slices: []const []const u8) void {
+    for (slices) |slice| allocator.free(slice);
+    allocator.free(slices);
 }
 
 /// Add or replace one stored definition while preserving definition order.
@@ -421,12 +431,17 @@ pub const InputStatus = union(enum) {
 
 /// Parses a line to determine whether it is a complete, incomplete, or invalid REPL input.
 pub fn inputStatus(self: *ReplSession, line: []const u8) !InputStatus {
-    var env = try ModuleEnv.init(self.allocator, line);
+    return inputStatusWithAllocator(self.allocator, line);
+}
+
+/// Parses a line to determine whether it is a complete, incomplete, or invalid REPL input.
+pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) !InputStatus {
+    var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
-    try env.common.calcLineStarts(self.allocator);
+    try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(self.allocator, &env.common) catch |err| switch (err) {
+    const ast = parse.parseStatement(allocator, &env.common) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .invalid,
     };
@@ -875,8 +890,11 @@ test "Repl - lambda renders as <function>" {
     try expectAllNative("|x, y| x + y", "<function>");
 }
 
-test "Repl - Str.to_utf8" {
+test "Repl - Str.to_utf8 bytes" {
     try expectAllNative("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
+}
+
+test "Repl - Str.to_utf8 lengths" {
     try expectAllNative("List.len(Str.to_utf8(\"\"))", "0");
     try expectAllNative("List.len(Str.to_utf8(\"hello\"))", "5");
     try expectAllNative("List.len(Str.to_utf8(\"é\"))", "2");
@@ -884,6 +902,9 @@ test "Repl - Str.to_utf8" {
     try expectAllNative("List.len(Str.to_utf8(\"Hello, World!\"))", "13");
     try expectAllNative("List.len(Str.to_utf8(\"日本語\"))", "9");
     try expectAllNative("List.len(Str.to_utf8(\"a é 🎉\"))", "9");
+}
+
+test "Repl - Str.to_utf8 empty checks" {
     try expectAllNative("List.is_empty(Str.to_utf8(\"\"))", "True");
     try expectAllNative("List.is_empty(Str.to_utf8(\"x\"))", "False");
 }
@@ -935,14 +956,23 @@ test "Repl - list literals" {
     try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
 }
 
-test "Repl - list operations" {
+test "Repl - list operations concat" {
     try expectAllNative("List.len(List.concat([1, 2], [3, 4]))", "4");
     try expectAllNative("List.len(List.concat([], [1, 2, 3]))", "3");
     try expectAllNative("List.len(List.concat([1, 2, 3], []))", "3");
+}
+
+test "Repl - list operations contains" {
     try expectAllNative("List.contains([1, 2, 3, 4, 5], 3)", "True");
+}
+
+test "Repl - list operations filters" {
     try expectAllNative("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
     try expectAllNative("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
     try expectAllNative("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
+}
+
+test "Repl - list operations fold_rev" {
     try expectAllNative("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", "321");
     try expectAllNative("List.fold_rev([1], 0, |x, acc| acc * 10 + x)", "1.0");
     try expectAllNative("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", "321.0");
@@ -962,9 +992,12 @@ test "Repl - range_to" {
     try expectInterpreter("Iter.fold(1.to(3), [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
 }
 
-test "Repl - list_sort_with" {
+test "Repl - list_sort_with lengths" {
     try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", "3");
     try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", "5");
+}
+
+test "Repl - list_sort_with empty" {
     try expectAllNative(
         \\{
         \\    xs : List(I64)
@@ -972,6 +1005,9 @@ test "Repl - list_sort_with" {
         \\    List.len(List.sort_with(xs, |a, b| if a < b LT else if a > b GT else EQ))
         \\}
     , "0");
+}
+
+test "Repl - list_sort_with single" {
     try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))", "1");
 }
 
@@ -1044,7 +1080,7 @@ test "Repl - for loop over list" {
     try expectStateful(.wasm, steps);
 }
 
-test "Repl - for loop snapshots" {
+test "Repl - for loop snapshots empty list" {
     const steps = &[_][2][]const u8{
         .{
             \\unchanged = {
@@ -1057,6 +1093,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `unchanged`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots conditional" {
+    const steps = &[_][2][]const u8{
         .{
             \\result = {
             \\    var all_true_ = Bool.True
@@ -1072,6 +1116,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `result`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots string count" {
+    const steps = &[_][2][]const u8{
         .{
             \\count = {
             \\    var counter_ = 0
@@ -1083,6 +1135,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `count`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots sum" {
+    const steps = &[_][2][]const u8{
         .{
             \\sum = {
             \\    var total_ = 0
@@ -1094,6 +1154,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `sum`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots nested product" {
+    const steps = &[_][2][]const u8{
         .{
             \\product = {
             \\    var result_ = 0
@@ -1166,11 +1234,8 @@ test "Repl - 4-arg lambda call (dev)" {
 }
 
 fn expectSplit(input: []const u8, expected: []const []const u8) !void {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
-    defer repl.deinit();
-
-    const slices = try repl.splitInputIntoStatements(input);
-    defer repl.freeStatementSlices(slices);
+    const slices = try splitInputIntoStatementsWithAllocator(testing.allocator, input);
+    defer freeStatementSlicesWithAllocator(testing.allocator, slices);
 
     try testing.expectEqual(expected.len, slices.len);
     for (expected, slices) |want, got| {
