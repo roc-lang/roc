@@ -46,9 +46,10 @@ fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
 }
 
 fn runGeneratedZigBoxHelperTest(allocator: std.mem.Allocator, tmp_path: []const u8) !void {
+    const generated_abi_path = "roc_platform_abi.zig";
     const test_source =
         \\const std = @import("std");
-        \\const abi = @import("roc_platform_abi.zig");
+    ++ "const abi = @import(\"" ++ generated_abi_path ++ "\");\n" ++
         \\
         \\const Env = struct {
         \\    callback_count: usize = 0,
