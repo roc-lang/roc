@@ -60,7 +60,7 @@ MODULE NOT FOUND - qualified_type_canonicalization.md:14:24:14:28
 MODULE NOT FOUND - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT FOUND - qualified_type_canonicalization.md:18:26:18:35
 MODULE NOT FOUND - qualified_type_canonicalization.md:19:26:19:35
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
+MODULE NOT FOUND - qualified_type_canonicalization.md:22:38:22:44
 DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
 MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:21
 MODULE NOT FOUND - qualified_type_canonicalization.md:30:23:30:27
@@ -70,8 +70,10 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
 MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:26:39:30
 MODULE NOT FOUND - qualified_type_canonicalization.md:39:38:39:44
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:49:39:70
+MODULE NOT FOUND - qualified_type_canonicalization.md:39:64:39:70
+UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:12
 DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
+UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:12
 DOES NOT EXIST - qualified_type_canonicalization.md:43:25:43:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
 # PROBLEMS
@@ -186,15 +188,15 @@ aliasedQualified = ExtMod.DataType.Default
                          ^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `ModuleB.TypeC` is qualified by the module `ModuleA`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:22:23:22:44:**
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:22:38:22:44:**
 ```roc
 multiLevelQualified : ModuleA.ModuleB.TypeC
 ```
-                      ^^^^^^^^^^^^^^^^^^^^^
+                                     ^^^^^^
 
 
 **DOES NOT EXIST**
@@ -296,15 +298,26 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
                                      ^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `ModuleB.TypeC` is qualified by the module `ModuleA`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**qualified_type_canonicalization.md:39:49:39:70:**
+You're attempting to use this type here:
+**qualified_type_canonicalization.md:39:64:39:70:**
 ```roc
 transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
-                                                ^^^^^^^^^^^^^^^^^^^^^
+                                                               ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Try_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:42:9:42:12:**
+```roc
+        Try.Ok(rgb) => TypeC.fromColor(rgb)
+```
+        ^^^
 
 
 **DOES NOT EXIST**
@@ -315,6 +328,17 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
         Try.Ok(rgb) => TypeC.fromColor(rgb)
 ```
                        ^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Try_ is not declared in this scope.
+
+This type is referenced here:
+**qualified_type_canonicalization.md:43:9:43:12:**
+```roc
+        Try.Err(err) => TypeC.default
+```
+        ^^^
 
 
 **DOES NOT EXIST**
@@ -561,32 +585,33 @@ transform = |result|
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "rgb"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))))))))
+		(e-closure
+			(captures
+				(capture (ident "rgb")))
+			(e-lambda
+				(args
+					(p-assign (ident "result")))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error (tag "undeclared_type"))))
+								(value
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "rgb"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-runtime-error (tag "undeclared_type"))))
+								(value
+									(e-runtime-error (tag "qualified_ident_does_not_exist")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

@@ -3132,6 +3132,47 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(5, 108)" },
     },
     .{
+        .name = "inspect: same-named block-local attached methods keep distinct nominal owners",
+        .source_kind = .module,
+        .source =
+        \\first = {
+        \\    Local := [First(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.First(n)| n
+        \\    }
+        \\
+        \\    Local.First(5).get()
+        \\}
+        \\
+        \\second = {
+        \\    Local := [Second(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.Second(n)| n + 100
+        \\    }
+        \\
+        \\    Local.Second(8).get()
+        \\}
+        \\
+        \\main = (first, second)
+        ,
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: block-local associated bare forward reference preserves later sibling capture",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    captured = 41.U64
+        \\    Local := [Local].{
+        \\        first = second
+        \\        second = captured
+        \\    }
+        \\    Local.first
+        \\}
+        ,
+        .expected = .{ .inspect_str = "41" },
+    },
+    .{
         .name = "inspect: explicit where method constraint keeps owner generic",
         .source_kind = .module,
         .source =

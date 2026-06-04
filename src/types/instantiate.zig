@@ -235,7 +235,14 @@ pub const Instantiator = struct {
         const backing_var = self.store.getAliasBackingVar(alias);
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
-        return self.store.mkAlias(alias.ident, fresh_backing_var, fresh_vars.items, alias.origin_module);
+        return self.store.mkAliasWithSourceDeclAndBuiltinOrigin(
+            alias.ident,
+            fresh_backing_var,
+            fresh_vars.items,
+            alias.origin_module,
+            alias.source_decl.toOptional(),
+            alias.source_decl.originIsBuiltin(),
+        );
     }
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
@@ -267,7 +274,15 @@ pub const Instantiator = struct {
             fresh_vars.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
 
-        return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module, nominal.is_opaque)).structure.nominal_type;
+        return (try self.store.mkNominalWithSourceDeclAndBuiltinOrigin(
+            nominal.ident,
+            fresh_backing_var,
+            fresh_vars.items,
+            nominal.origin_module,
+            nominal.sourceDeclOptional(),
+            nominal.isOpaque(),
+            nominal.originIsBuiltin(),
+        )).structure.nominal_type;
     }
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {

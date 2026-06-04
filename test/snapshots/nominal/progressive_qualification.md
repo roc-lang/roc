@@ -700,102 +700,6 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Outer.Inner.value"))))
 	(d-let
-		(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))
-		(e-num (value "100")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Level1.Level2.Level3.accessFromL3"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Level1.Level2.accessFromL2"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Level1.accessFromL1"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.Child1.useParent"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.Child2.c2Val"))
-		(e-num (value "20")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.Child2.useSibling"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.Child2.useParent"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.sharedVal"))
-		(e-num (value "999")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent.sumChildren"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 415)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "progressive_qualification.Parent.Child2.c2Val"))))))
-	(d-let
-		(p-assign (ident "progressive_qualification.TypeA.helper"))
-		(e-num (value "111")))
-	(d-let
-		(p-assign (ident "progressive_qualification.TypeA.useHelper"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.TypeA.helper"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.TypeB.helper"))
-		(e-num (value "222")))
-	(d-let
-		(p-assign (ident "progressive_qualification.TypeB.useHelper"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.TypeB.helper"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent1.Nested.val"))
-		(e-num (value "1")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Parent2.Nested.val"))
-		(e-num (value "2")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))
-		(e-num (value "5")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.Nested.useOuterA"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Container.outerA"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.Nested.useOuterB"))
-		(e-lookup-local
-			(p-assign (ident "progressive_qualification.Container.outerB"))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.Nested.combined"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 629)
-			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 627)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "progressive_qualification.Container.outerA"))))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "progressive_qualification.Container.outerB"))))))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.outerA"))
-		(e-num (value "10")))
-	(d-let
-		(p-assign (ident "progressive_qualification.Container.outerB"))
-		(e-num (value "20")))
-	(d-let
 		(p-assign (ident "fromModule"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Outer.Inner.value"))))
@@ -811,6 +715,21 @@ test6_combined = Container.Nested.combined # 35
 		(p-assign (ident "test1_module"))
 		(e-lookup-local
 			(p-assign (ident "fromModule"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))
+		(e-num (value "100")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Level1.Level2.Level3.accessFromL3"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Level1.Level2.accessFromL2"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Level1.accessFromL1"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Level1.Level2.Level3.deepValue"))))
 	(d-let
 		(p-assign (ident "accessFromModule"))
 		(e-lookup-local
@@ -832,6 +751,36 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "accessFromModule"))))
 	(d-let
+		(p-assign (ident "progressive_qualification.Parent.sharedVal"))
+		(e-num (value "999")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent.Child1.useParent"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent.Child2.c2Val"))
+		(e-num (value "20")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent.Child2.useSibling"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent.Child2.useParent"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Parent.sharedVal"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent.sumChildren"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 394)
+			(receiver
+				(e-lookup-local
+					(p-assign (ident "progressive_qualification.Parent.Child1.c1Val"))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "progressive_qualification.Parent.Child2.c2Val"))))))
+	(d-let
 		(p-assign (ident "test3_c1"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Parent.Child1.useParent"))))
@@ -847,6 +796,20 @@ test6_combined = Container.Nested.combined # 35
 		(p-assign (ident "test3_sum"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Parent.sumChildren"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.TypeA.helper"))
+		(e-num (value "111")))
+	(d-let
+		(p-assign (ident "progressive_qualification.TypeA.useHelper"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.TypeA.helper"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.TypeB.helper"))
+		(e-num (value "222")))
+	(d-let
+		(p-assign (ident "progressive_qualification.TypeB.useHelper"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.TypeB.helper"))))
 	(d-let
 		(p-assign (ident "test4_a"))
 		(e-lookup-local
@@ -864,6 +827,12 @@ test6_combined = Container.Nested.combined # 35
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.TypeB.helper"))))
 	(d-let
+		(p-assign (ident "progressive_qualification.Parent1.Nested.val"))
+		(e-num (value "1")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Parent2.Nested.val"))
+		(e-num (value "2")))
+	(d-let
 		(p-assign (ident "test5_p1"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Parent1.Nested.val"))))
@@ -871,6 +840,37 @@ test6_combined = Container.Nested.combined # 35
 		(p-assign (ident "test5_p2"))
 		(e-lookup-local
 			(p-assign (ident "progressive_qualification.Parent2.Nested.val"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.outerA"))
+		(e-num (value "10")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.outerB"))
+		(e-num (value "20")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))
+		(e-num (value "5")))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.Nested.useOuterA"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Container.outerA"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.Nested.useOuterB"))
+		(e-lookup-local
+			(p-assign (ident "progressive_qualification.Container.outerB"))))
+	(d-let
+		(p-assign (ident "progressive_qualification.Container.Nested.combined"))
+		(e-dispatch-call (method "plus") (constraint-fn-var 608)
+			(receiver
+				(e-dispatch-call (method "plus") (constraint-fn-var 606)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "progressive_qualification.Container.Nested.innerVal"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "progressive_qualification.Container.outerA"))))))
+			(args
+				(e-lookup-local
+					(p-assign (ident "progressive_qualification.Container.outerB"))))))
 	(d-let
 		(p-assign (ident "test6_a"))
 		(e-lookup-local
@@ -888,13 +888,33 @@ test6_combined = Container.Nested.combined # 35
 		(ty-tag-union
 			(ty-tag-name (name "O"))))
 	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Outer.Inner"))
+		(ty-tag-union
+			(ty-tag-name (name "I"))))
+	(s-nominal-decl
 		(ty-header (name "Level1"))
 		(ty-tag-union
 			(ty-tag-name (name "L1"))))
 	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Level1.Level2"))
+		(ty-tag-union
+			(ty-tag-name (name "L2"))))
+	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Level1.Level2.Level3"))
+		(ty-tag-union
+			(ty-tag-name (name "L3"))))
+	(s-nominal-decl
 		(ty-header (name "Parent"))
 		(ty-tag-union
 			(ty-tag-name (name "P"))))
+	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Parent.Child1"))
+		(ty-tag-union
+			(ty-tag-name (name "C1"))))
+	(s-nominal-decl
+		(ty-header (name "progressive_qualification.Parent.Child2"))
+		(ty-tag-union
+			(ty-tag-name (name "C2"))))
 	(s-nominal-decl
 		(ty-header (name "TypeA"))
 		(ty-tag-union
@@ -908,41 +928,21 @@ test6_combined = Container.Nested.combined # 35
 		(ty-tag-union
 			(ty-tag-name (name "P1"))))
 	(s-nominal-decl
-		(ty-header (name "Parent2"))
-		(ty-tag-union
-			(ty-tag-name (name "P2"))))
-	(s-nominal-decl
-		(ty-header (name "Container"))
-		(ty-tag-union
-			(ty-tag-name (name "CONT"))))
-	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Outer.Inner"))
-		(ty-tag-union
-			(ty-tag-name (name "I"))))
-	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Level1.Level2"))
-		(ty-tag-union
-			(ty-tag-name (name "L2"))))
-	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Level1.Level2.Level3"))
-		(ty-tag-union
-			(ty-tag-name (name "L3"))))
-	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Parent.Child1"))
-		(ty-tag-union
-			(ty-tag-name (name "C1"))))
-	(s-nominal-decl
-		(ty-header (name "progressive_qualification.Parent.Child2"))
-		(ty-tag-union
-			(ty-tag-name (name "C2"))))
-	(s-nominal-decl
 		(ty-header (name "progressive_qualification.Parent1.Nested"))
 		(ty-tag-union
 			(ty-tag-name (name "N1"))))
 	(s-nominal-decl
+		(ty-header (name "Parent2"))
+		(ty-tag-union
+			(ty-tag-name (name "P2"))))
+	(s-nominal-decl
 		(ty-header (name "progressive_qualification.Parent2.Nested"))
 		(ty-tag-union
 			(ty-tag-name (name "N2"))))
+	(s-nominal-decl
+		(ty-header (name "Container"))
+		(ty-tag-union
+			(ty-tag-name (name "CONT"))))
 	(s-nominal-decl
 		(ty-header (name "progressive_qualification.Container.Nested"))
 		(ty-tag-union
@@ -1003,34 +1003,34 @@ test6_combined = Container.Nested.combined # 35
 	(type_decls
 		(nominal (type "Outer")
 			(ty-header (name "Outer")))
+		(nominal (type "Outer.Inner")
+			(ty-header (name "progressive_qualification.Outer.Inner")))
 		(nominal (type "Level1")
 			(ty-header (name "Level1")))
+		(nominal (type "Level1.Level2")
+			(ty-header (name "progressive_qualification.Level1.Level2")))
+		(nominal (type "Level1.Level2.Level3")
+			(ty-header (name "progressive_qualification.Level1.Level2.Level3")))
 		(nominal (type "Parent")
 			(ty-header (name "Parent")))
+		(nominal (type "Parent.Child1")
+			(ty-header (name "progressive_qualification.Parent.Child1")))
+		(nominal (type "Parent.Child2")
+			(ty-header (name "progressive_qualification.Parent.Child2")))
 		(nominal (type "TypeA")
 			(ty-header (name "TypeA")))
 		(nominal (type "TypeB")
 			(ty-header (name "TypeB")))
 		(nominal (type "Parent1")
 			(ty-header (name "Parent1")))
-		(nominal (type "Parent2")
-			(ty-header (name "Parent2")))
-		(nominal (type "Container")
-			(ty-header (name "Container")))
-		(nominal (type "Outer.Inner")
-			(ty-header (name "progressive_qualification.Outer.Inner")))
-		(nominal (type "Level1.Level2")
-			(ty-header (name "progressive_qualification.Level1.Level2")))
-		(nominal (type "Level1.Level2.Level3")
-			(ty-header (name "progressive_qualification.Level1.Level2.Level3")))
-		(nominal (type "Parent.Child1")
-			(ty-header (name "progressive_qualification.Parent.Child1")))
-		(nominal (type "Parent.Child2")
-			(ty-header (name "progressive_qualification.Parent.Child2")))
 		(nominal (type "Parent1.Nested")
 			(ty-header (name "progressive_qualification.Parent1.Nested")))
+		(nominal (type "Parent2")
+			(ty-header (name "Parent2")))
 		(nominal (type "Parent2.Nested")
 			(ty-header (name "progressive_qualification.Parent2.Nested")))
+		(nominal (type "Container")
+			(ty-header (name "Container")))
 		(nominal (type "Container.Nested")
 			(ty-header (name "progressive_qualification.Container.Nested"))))
 	(expressions

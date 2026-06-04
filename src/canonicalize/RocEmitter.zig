@@ -30,6 +30,9 @@ module_env: *const ModuleEnv,
 /// The output buffer where Roc code is written
 output: std.ArrayList(u8),
 
+/// Scratch buffer for short-lived formatting.
+scratch: std.ArrayList(u8),
+
 /// Current indentation level
 indent_level: u32,
 
@@ -48,6 +51,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
         .allocator = allocator,
         .module_env = module_env,
         .output = std.ArrayList(u8).empty,
+        .scratch = std.ArrayList(u8).empty,
         .indent_level = 0,
         .names_in_scope = std.StringHashMap(void).init(allocator),
         .capture_renames = std.AutoHashMap(PatternMod.Pattern.Idx, []const u8).init(allocator),
@@ -58,6 +62,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
 /// Free resources used by the emitter
 pub fn deinit(self: *Self) void {
     self.output.deinit(self.allocator);
+    self.scratch.deinit(self.allocator);
     self.names_in_scope.deinit();
     // Free the allocated rename strings
     var iter = self.capture_renames.valueIterator();
@@ -75,6 +80,7 @@ pub fn getOutput(self: *const Self) []const u8 {
 /// Reset the emitter for reuse
 pub fn reset(self: *Self) void {
     self.output.clearRetainingCapacity();
+    self.scratch.clearRetainingCapacity();
     self.indent_level = 0;
     self.names_in_scope.clearRetainingCapacity();
     // Free the allocated rename strings
@@ -220,15 +226,12 @@ fn emitExprValue(self: *Self, expr_idx: Expr.Idx, expr: Expr) EmitError!void {
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                var str_buf: [40]u8 = undefined;
-                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
+                try self.write(try self.formatI128(whole));
             } else {
-                var str_buf: [40]u8 = undefined;
-                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
-                try self.output.appendSlice(self.allocator, ".");
+                try self.write(try self.formatI128(whole));
+                try self.write(".");
                 // Format frac_part with leading zeros (18 digits)
-                var frac_buf: [40]u8 = undefined;
-                const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
+                const frac_str = try self.formatU128(frac_part);
                 // Pad with leading zeros to 18 digits
                 var pad: usize = 18 - frac_str.len;
                 while (pad > 0) : (pad -= 1) {
@@ -752,14 +755,11 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
-                var str_buf: [40]u8 = undefined;
-                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
+                try self.write(try self.formatI128(whole));
             } else {
-                var str_buf: [40]u8 = undefined;
-                try self.output.appendSlice(self.allocator, i128h.i128_to_str(&str_buf, whole).str);
-                try self.output.appendSlice(self.allocator, ".");
-                var frac_buf: [40]u8 = undefined;
-                const frac_str = i128h.u128_to_str(&frac_buf, frac_part).str;
+                try self.write(try self.formatI128(whole));
+                try self.write(".");
+                const frac_str = try self.formatU128(frac_part);
                 var pad: usize = 18 - frac_str.len;
                 while (pad > 0) : (pad -= 1) {
                     try self.output.appendSlice(self.allocator, "0");
@@ -768,14 +768,12 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             }
         },
         .frac_f32_literal => |frac| {
-            var float_buf: [400]u8 = undefined;
-            try self.output.appendSlice(self.allocator, i128h.f32_to_str(&float_buf, frac.value));
-            try self.output.appendSlice(self.allocator, "f32");
+            try self.write(try self.formatF32(frac.value));
+            try self.write("f32");
         },
         .frac_f64_literal => |frac| {
-            var float_buf: [400]u8 = undefined;
-            try self.output.appendSlice(self.allocator, i128h.f64_to_str(&float_buf, frac.value));
-            try self.output.appendSlice(self.allocator, "f64");
+            try self.write(try self.formatF64(frac.value));
+            try self.write("f64");
         },
     }
 }
@@ -808,8 +806,7 @@ fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
 }
 
 fn emitIntValue(self: *Self, value: CIR.IntValue) !void {
-    var buf: [64]u8 = undefined;
-    const str = try value.bufPrint(&buf);
+    const str = try value.bufPrint(try self.scratchBuffer(40));
     try self.write(str);
 }
 
@@ -821,6 +818,31 @@ fn emitIndent(self: *Self) !void {
 
 fn write(self: *Self, str: []const u8) !void {
     try self.output.appendSlice(self.allocator, str);
+}
+
+fn scratchBuffer(self: *Self, len: usize) std.mem.Allocator.Error![]u8 {
+    try self.scratch.resize(self.allocator, len);
+    return self.scratch.items;
+}
+
+fn formatI128(self: *Self, value: i128) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(40);
+    return i128h.i128_to_str(buf, value).str;
+}
+
+fn formatU128(self: *Self, value: u128) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(40);
+    return i128h.u128_to_str(buf, value).str;
+}
+
+fn formatF32(self: *Self, value: f32) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(400);
+    return i128h.f32_to_str(buf, value);
+}
+
+fn formatF64(self: *Self, value: f64) std.mem.Allocator.Error![]const u8 {
+    const buf = try self.scratchBuffer(400);
+    return i128h.f64_to_str(buf, value);
 }
 
 /// Emit a tag name, transforming compiler-generated `#` prefix to `C`.

@@ -77,10 +77,7 @@ pub const Report = struct {
         };
 
         if (line_number) |line_num| {
-            // Manually format line number to avoid buffer corruption
-            var line_num_buf: [32]u8 = undefined;
-            const line_num_str = std.fmt.bufPrint(&line_num_buf, "{d}", .{line_num}) catch unreachable;
-            try self.document.addText(line_num_str);
+            try self.document.addFormattedText("{d}", .{line_num});
             try self.document.addText(" | ");
         } else {
             try self.document.addText("   | ");

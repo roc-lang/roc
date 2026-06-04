@@ -49,12 +49,12 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-num (value "42")))
-	(s-alias-decl
-		(ty-header (name "JsonValue"))
-		(ty-lookup (name "U64") (builtin)))
 	(s-import (module "json.Json")
 		(exposes
-			(exposed (name "JsonValue") (wildcard false)))))
+			(exposed (name "JsonValue") (wildcard false))))
+	(s-alias-decl
+		(ty-header (name "JsonValue"))
+		(ty-lookup (name "U64") (builtin))))
 ~~~
 # TYPES
 ~~~clojure

@@ -3317,13 +3317,19 @@ pub fn formatPattern(
     pattern: Pattern,
 ) error{OutOfMemory}!ByteListRange {
     const start = buf.items.len;
-    // Create an allocating writer backed by the managed list's memory
-    var unmanaged: std.ArrayList(u8) = .{ .items = buf.items, .capacity = buf.capacity };
-    var aw = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
-    formatPatternInto(&aw.writer, ident_store, string_store, pattern) catch return error.OutOfMemory;
-    unmanaged = aw.toArrayList();
-    buf.items = unmanaged.items;
-    buf.capacity = unmanaged.capacity;
+
+    var unmanaged = buf.moveToUnmanaged();
+    errdefer buf.* = unmanaged.toManaged(buf.allocator);
+
+    var writer_alloc = std.Io.Writer.Allocating.fromArrayList(buf.allocator, &unmanaged);
+    var scratch = try ByteList.initCapacity(buf.allocator, 400);
+    defer scratch.deinit();
+
+    formatPatternInto(&writer_alloc.writer, ident_store, string_store, &scratch, pattern) catch return error.OutOfMemory;
+
+    unmanaged = writer_alloc.toArrayList();
+    buf.* = unmanaged.toManaged(buf.allocator);
+
     const end = buf.items.len;
 
     return ByteListRange{
@@ -3337,30 +3343,31 @@ fn formatPatternInto(
     writer: *std.Io.Writer,
     ident_store: *const Ident.Store,
     string_store: *const StringLiteral.Store,
+    scratch: *ByteList,
     pattern: Pattern,
-) std.Io.Writer.Error!void {
+) error{ OutOfMemory, WriteFailed }!void {
     switch (pattern) {
         .anything => try writer.writeAll("_"),
 
         .literal => |lit| switch (lit) {
             .int => |i| {
-                var str_buf: [40]u8 = undefined;
-                try writer.writeAll(i128h.i128_to_str(&str_buf, i).str);
+                try scratch.resize(40);
+                try writer.writeAll(i128h.i128_to_str(scratch.items, i).str);
             },
             .uint => |u| {
-                var str_buf: [40]u8 = undefined;
-                try writer.writeAll(i128h.u128_to_str(&str_buf, u).str);
+                try scratch.resize(40);
+                try writer.writeAll(i128h.u128_to_str(scratch.items, u).str);
             },
             .bit => |b| try writer.writeAll(if (b) "Bool.true" else "Bool.false"),
             .byte => |b| try writer.print("{}", .{b}),
             .float => |f| {
                 const float_val: f64 = @bitCast(f);
-                var float_buf: [400]u8 = undefined;
-                try writer.writeAll(i128h.f64_to_str(&float_buf, float_val));
+                try scratch.resize(400);
+                try writer.writeAll(i128h.f64_to_str(scratch.items, float_val));
             },
             .decimal => |d| {
-                var str_buf: [40]u8 = undefined;
-                try writer.writeAll(i128h.i128_to_str(&str_buf, d).str);
+                try scratch.resize(40);
+                try writer.writeAll(i128h.i128_to_str(scratch.items, d).str);
             },
             .str => |idx| {
                 try writer.writeAll("\"");
@@ -3391,7 +3398,7 @@ fn formatPatternInto(
                     if (c.args.len > 0) {
                         for (c.args) |arg| {
                             try writer.writeAll(" ");
-                            try formatPatternInto(writer, ident_store, string_store, arg);
+                            try formatPatternInto(writer, ident_store, string_store, scratch, arg);
                         }
                     }
                 },
@@ -3406,7 +3413,7 @@ fn formatPatternInto(
                             try writer.writeAll("_");
                         }
                         try writer.writeAll(": ");
-                        try formatPatternInto(writer, ident_store, string_store, arg);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, arg);
                     }
                     try writer.writeAll(" }");
                 },
@@ -3415,7 +3422,7 @@ fn formatPatternInto(
                     try writer.writeAll("(");
                     for (c.args, 0..) |arg, i| {
                         if (i > 0) try writer.writeAll(", ");
-                        try formatPatternInto(writer, ident_store, string_store, arg);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, arg);
                     }
                     try writer.writeAll(")");
                 },
@@ -3423,7 +3430,7 @@ fn formatPatternInto(
                 .guard => {
                     // Unwrap the guard - show the actual pattern (second arg)
                     if (c.args.len >= 2) {
-                        try formatPatternInto(writer, ident_store, string_store, c.args[1]);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, c.args[1]);
                         try writer.writeAll(" (with guard)");
                     }
                 },
@@ -3440,7 +3447,7 @@ fn formatPatternInto(
                     }
                     if (c.args.len > 0) {
                         try writer.writeAll(" ");
-                        try formatPatternInto(writer, ident_store, string_store, c.args[0]);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, c.args[0]);
                     }
                 },
             }
@@ -3452,14 +3459,14 @@ fn formatPatternInto(
                 .exact => {
                     for (l.elements, 0..) |elem, i| {
                         if (i > 0) try writer.writeAll(", ");
-                        try formatPatternInto(writer, ident_store, string_store, elem);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, elem);
                     }
                 },
                 .slice => |s| {
                     // Format as [prefix.., suffix]
                     for (0..s.prefix) |i| {
                         if (i > 0) try writer.writeAll(", ");
-                        try formatPatternInto(writer, ident_store, string_store, l.elements[i]);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, l.elements[i]);
                     }
                     if (s.prefix > 0 and s.suffix > 0) {
                         try writer.writeAll(", .., ");
@@ -3473,7 +3480,7 @@ fn formatPatternInto(
                     const suffix_start = l.elements.len - s.suffix;
                     for (suffix_start..l.elements.len) |i| {
                         if (i > suffix_start) try writer.writeAll(", ");
-                        try formatPatternInto(writer, ident_store, string_store, l.elements[i]);
+                        try formatPatternInto(writer, ident_store, string_store, scratch, l.elements[i]);
                     }
                 },
             }

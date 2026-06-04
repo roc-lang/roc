@@ -12,9 +12,35 @@ match ... {
 }
 ~~~
 # EXPECTED
-NIL
+REDUNDANT PATTERN - record_destructure.md:1:1:5:2
+REDUNDANT PATTERN - record_destructure.md:1:1:5:2
 # PROBLEMS
-NIL
+**REDUNDANT PATTERN**
+The second branch of this `match` is redundant:
+**record_destructure.md:1:1:5:2:**
+```roc
+match ... {
+    { name, age } => "${name} is ${age.to_str()} years old"
+    { name, address: { city } } => "${city} is the city of ${name}"
+    {} => "empty"
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The third branch of this `match` is redundant:
+**record_destructure.md:1:1:5:2:**
+```roc
+match ... {
+    { name, age } => "${name} is ${age.to_str()} years old"
+    { name, address: { city } } => "${city} is the city of ${name}"
+    {} => "empty"
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,
@@ -72,7 +98,7 @@ match ... {
 (e-match
 	(match
 		(cond
-			(e-runtime-error (tag "not_implemented")))
+			(e-not-implemented))
 		(branches
 			(branch
 				(patterns
@@ -91,7 +117,7 @@ match ... {
 						(e-lookup-local
 							(p-assign (ident "name")))
 						(e-literal (string " is "))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 52)
+						(e-dispatch-call (method "to_str") (constraint-fn-var 51)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "age"))))

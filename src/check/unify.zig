@@ -534,9 +534,7 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (a_alias.origin_module.eql(b_alias.origin_module) and
-                    a_alias.ident.ident_idx.eql(b_alias.ident.ident_idx))
-                {
+                if (sameAliasIdentity(a_alias, b_alias)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
                     try self.unifyGuarded(backing_var, b_backing_var);
@@ -1034,9 +1032,7 @@ const Unifier = struct {
             return;
         }
 
-        if (!a_type.origin_module.eql(b_type.origin_module) or
-            !a_type.ident.ident_idx.eql(b_type.ident.ident_idx))
-        {
+        if (!sameNominalIdentity(a_type, b_type)) {
             return error.TypeMismatch;
         }
 
@@ -2780,6 +2776,24 @@ pub const Scratch = struct {
         return try self.gathered_tags.appendSlice(self.gpa, fields);
     }
 };
+
+fn sameAliasIdentity(a: Alias, b: Alias) bool {
+    if (!a.origin_module.eql(b.origin_module)) return false;
+    if (a.source_decl.present or b.source_decl.present) {
+        return a.source_decl.eql(b.source_decl);
+    }
+    return a.ident.ident_idx.eql(b.ident.ident_idx);
+}
+
+fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
+    if (!a.origin_module.eql(b.origin_module)) return false;
+    const a_source_decl = a.sourceDecl();
+    const b_source_decl = b.sourceDecl();
+    if (a_source_decl.present or b_source_decl.present) {
+        return a_source_decl.eql(b_source_decl);
+    }
+    return a.ident.ident_idx.eql(b.ident.ident_idx);
+}
 
 /// In-place merge of two sorted regions of record fields.
 /// Given an array [left_sorted | right_sorted], produces [merged_sorted].

@@ -2,6 +2,8 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
+const base = @import("base");
+const can = @import("can");
 const TestEnv = @import("./TestEnv.zig");
 const canonical = @import("../canonical_names.zig");
 const checked_ids = @import("../checked_ids.zig");
@@ -9,6 +11,8 @@ const static_dispatch = @import("../static_dispatch_registry.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const types = @import("types");
 
+const Ident = base.Ident;
+const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
@@ -17,6 +21,22 @@ const MethodRegistryTestCheckedTypes = struct {
         _: TypedCIR.Module,
         _: types.Var,
     ) ?checked_ids.CheckedTypeId {
+        unreachable;
+    }
+};
+
+const MethodRegistryTestCheckedBodies = struct {
+    pub fn patternBinderForSource(
+        _: *const @This(),
+        _: can.CIR.Pattern.Idx,
+    ) ?checked_ids.PatternBinderId {
+        unreachable;
+    }
+
+    pub fn exprIdForSource(
+        _: *const @This(),
+        _: can.CIR.Expr.Idx,
+    ) ?checked_ids.CheckedExprId {
         unreachable;
     }
 };
@@ -1359,15 +1379,12 @@ test "checked artifact method registry skips nominal associated values" {
     defer modules.deinit();
     const module = modules.module(0);
 
-    const by_def = try testing.allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
-    defer testing.allocator.free(by_def);
-    @memset(by_def, null);
-
     const template_lookup = static_dispatch.ProcedureTemplateLookup{
         .module_idx = module.moduleIndex(),
-        .by_def = by_def,
+        .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
+    const checked_bodies = MethodRegistryTestCheckedBodies{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -1378,10 +1395,41 @@ test "checked artifact method registry skips nominal associated values" {
         &names,
         &template_lookup,
         &checked_types,
+        &checked_bodies,
     );
     defer registry.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 0), registry.entries.len);
+}
+
+test "typed method definition entries expose finalized owner-method keys" {
+    const gpa = testing.allocator;
+
+    var env = try ModuleEnv.init(gpa, "module []\n");
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    try env.common.calcLineStarts(gpa);
+
+    const method_ident = try env.insertIdent(Ident.for_text("get"));
+    const other_method_ident = try env.insertIdent(Ident.for_text("set"));
+    const owner: can.CIR.Statement.Idx = @enumFromInt(1);
+
+    try env.registerMethodDefForOwner(owner, method_ident, .{
+        .type_node_idx = @enumFromInt(1),
+        .def_idx = @enumFromInt(1),
+    });
+    try env.registerMethodDefForOwner(owner, other_method_ident, .{
+        .type_node_idx = @enumFromInt(2),
+        .def_idx = @enumFromInt(2),
+    });
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = &env },
+    };
+    var modules = try TypedCIR.Modules.init(gpa, &source_modules);
+    defer modules.deinit();
+
+    try testing.expectEqual(@as(usize, 2), modules.module(0).methodDefEntries().len);
 }
 
 test "check type - nominal with tag arg" {

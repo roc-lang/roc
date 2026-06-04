@@ -16,6 +16,7 @@ const base = @import("base");
 const reporting = @import("reporting");
 
 const NodeStore = @import("NodeStore.zig");
+pub const DeclIndex = @import("DeclIndex.zig");
 const NumericLiteral = @import("NumericLiteral.zig");
 pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
@@ -35,6 +36,7 @@ gpa: Allocator,
 env: *CommonEnv,
 tokens: TokenizedBuffer,
 store: NodeStore,
+decl_index: DeclIndex,
 root_node_idx: u32 = 0,
 tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayList(AST.Diagnostic),
@@ -131,6 +133,7 @@ pub fn deinit(self: *AST) void {
 
     self.tokens.deinit(gpa);
     self.store.deinit();
+    self.decl_index.deinit();
     self.tokenize_diagnostics.deinit(gpa);
     self.parse_diagnostics.deinit(gpa);
 
@@ -1308,6 +1311,7 @@ pub const Statement = union(enum) {
 pub const Block = struct {
     /// The statements that constitute the block
     statements: Statement.Span,
+    scope: DeclIndex.ScopeIdx,
     region: TokenizedRegion,
 
     /// Push this Block to the SExprTree stack
@@ -1337,6 +1341,7 @@ pub const Block = struct {
 pub const Associated = struct {
     /// The statements in the associated items block
     statements: Statement.Span,
+    scope: DeclIndex.ScopeIdx,
     region: TokenizedRegion,
 };
 
@@ -1708,6 +1713,7 @@ pub const Collection = struct {
 pub const File = struct {
     header: Header.Idx,
     statements: Statement.Span,
+    scope: DeclIndex.ScopeIdx,
     region: TokenizedRegion,
 
     /// Push this File to the SExprTree stack
@@ -1990,9 +1996,7 @@ pub const Header = union(enum) {
                 try tree.pushStaticAtom("default-app");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
-                var buf: [32]u8 = undefined;
-                const idx_str = std.fmt.bufPrint(&buf, "{d}", .{a.main_fn_idx}) catch "(error)";
-                try tree.pushStringPair("main-fn-idx", idx_str);
+                try tree.pushStringPairFmt("main-fn-idx", "{d}", .{a.main_fn_idx});
                 try tree.endNode(begin, attrs);
             },
             .malformed => |a| {

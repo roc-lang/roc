@@ -2207,10 +2207,10 @@ fn getDisplayName(origin_text: []const u8, ident_text: []const u8) []const u8 {
 
 /// Get the module path from the origin text.
 /// The origin_module text is the raw module path from the compiler.
-/// Returns empty string for "Builtin" since it's an implementation detail.
+/// Returns empty string for compiler-owned builtin types since Builtin is an implementation detail.
 fn getModulePath(origin_text: []const u8) []const u8 {
-    if (std.mem.eql(u8, origin_text, "Builtin")) {
-        return ""; // Don't expose "Builtin" module as it's an implementation detail
+    if (std.mem.eql(u8, origin_text, "Builtin") or CIR.Import.isCompilerBuiltinImportName(origin_text)) {
+        return "";
     }
     return origin_text;
 }
