@@ -353,8 +353,8 @@ fn multipliedPartitionCount(base_count: usize, multiplier: usize) usize {
     return std.math.mul(usize, base_count, multiplier) catch @panic("test partition count overflow");
 }
 
-fn loadBalancedPartitionCount(base_count: usize, multiplier: usize, test_filters: []const []const u8) usize {
-    if (test_filters.len != 0) return base_count;
+fn loadBalancedPartitionCount(base_count: usize, multiplier: usize, enabled: bool) usize {
+    if (!enabled) return base_count;
     return multipliedPartitionCount(base_count, multiplier);
 }
 
@@ -2347,13 +2347,15 @@ pub fn build(b: *std.Build) void {
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
     const test_filters = parsed_args.test_filters;
-    const test_partition_count = b.option(usize, "test-partitions", "Number of automatic Zig test run partitions") orelse defaultTestPartitionCount();
+    const requested_test_partition_count = b.option(usize, "test-partitions", "Number of automatic Zig test run partitions");
+    const test_partition_count = requested_test_partition_count orelse if (test_filters.len == 0) defaultTestPartitionCount() else 1;
     if (test_partition_count == 0) {
         std.log.err("-Dtest-partitions must be greater than 0", .{});
         std.process.exit(1);
     }
-    const balanced_test_partition_count = loadBalancedPartitionCount(test_partition_count, 2, test_filters);
-    const expensive_test_partition_count = loadBalancedPartitionCount(test_partition_count, 4, test_filters);
+    const load_balance_test_partitions = requested_test_partition_count == null and test_filters.len == 0;
+    const balanced_test_partition_count = loadBalancedPartitionCount(test_partition_count, 2, load_balance_test_partitions);
+    const expensive_test_partition_count = loadBalancedPartitionCount(test_partition_count, 4, load_balance_test_partitions);
     const test_runner = rocTestRunner(b);
 
     // llvm configuration
@@ -3554,7 +3556,7 @@ pub fn build(b: *std.Build) void {
                 }
                 tests_summary.addRun(&run.step);
             }
-            tests_summary.subtractLoadBalancedPasses(expensive_test_partition_count - test_partition_count);
+            tests_summary.subtractLoadBalancedPasses(expensive_test_partition_count - 1);
 
             const builtin_doc_harness_test = try addBuiltinDocTest(
                 b,
@@ -4154,6 +4156,7 @@ pub fn build(b: *std.Build) void {
                 run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_INDEX", b.fmt("{d}", .{partition_i}));
                 run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_COUNT", b.fmt("{d}", .{fx_io_partition_count}));
             }
+            tests_summary.subtractLoadBalancedPasses(fx_io_partition_count - 1);
 
             const fx_platform_dev = addFxPlatformTest(
                 b,
@@ -4187,6 +4190,7 @@ pub fn build(b: *std.Build) void {
                 run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_INDEX", b.fmt("{d}", .{partition_i}));
                 run.setEnvironmentVariable("ROC_FX_IO_SPEC_PARTITION_COUNT", b.fmt("{d}", .{fx_io_partition_count}));
             }
+            tests_summary.subtractLoadBalancedPasses(fx_io_partition_count - 1);
         }
     }
 

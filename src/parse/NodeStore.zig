@@ -14,9 +14,9 @@ const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 
-/// When storing optional indices/values where 0 is a valid value, we add this offset
-/// to distinguish "value is 0" from "value is null". This is a common pattern when
-/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
+/// Packed optional indices store null as 0 and non-null values as value + 1.
+/// All producers must use the fallible helpers below so maxInt(u32) overflows
+/// become OutOfMemory in every build mode.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
 /// The root node is always stored at index 0 in the node list.
@@ -45,15 +45,46 @@ scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
 numeric_literal_bytes: std.ArrayList(u8),
 
-fn extraDataToken(store: *const NodeStore) std.mem.Allocator.Error!u32 {
+fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
     const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
-    if (start == std.math.maxInt(u32)) return error.OutOfMemory;
-    return start + OPTIONAL_VALUE_OFFSET;
+    if (count != 0) {
+        const last_offset = std.math.cast(u32, count - 1) orelse return error.OutOfMemory;
+        if (start > std.math.maxInt(u32) - last_offset) return error.OutOfMemory;
+    }
+    try store.extra_data.ensureUnusedCapacity(store.gpa, count);
+    return start;
+}
+
+fn reserveExtraDataToken(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
+    const start = try store.reserveExtraDataStart(count);
+    return packNonNullOptionalU32(start);
 }
 
 fn extraDataStart(token: u32) u32 {
     std.debug.assert(token != 0);
-    return token - OPTIONAL_VALUE_OFFSET;
+    return unpackNonNullOptionalU32(token);
+}
+
+fn packNonNullOptionalU32(value: u32) std.mem.Allocator.Error!u32 {
+    if (value == std.math.maxInt(u32)) return error.OutOfMemory;
+    return value + OPTIONAL_VALUE_OFFSET;
+}
+
+fn packOptionalIndex(value: anytype) std.mem.Allocator.Error!u32 {
+    if (value) |idx| {
+        return packNonNullOptionalU32(@intFromEnum(idx));
+    }
+    return 0;
+}
+
+fn unpackNonNullOptionalU32(value: u32) u32 {
+    std.debug.assert(value != 0);
+    return value - OPTIONAL_VALUE_OFFSET;
+}
+
+fn unpackOptionalIndex(comptime Idx: type, value: u32) ?Idx {
+    if (value == 0) return null;
+    return @enumFromInt(unpackNonNullOptionalU32(value));
 }
 
 const TypeDeclExtra = struct {
@@ -389,20 +420,17 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = store.extra_data.items.len;
+            const ed_start = try store.reserveExtraDataStart(6);
             // Store requires_entries span (start and len)
-            try store.extra_data.append(store.gpa, platform.requires_entries.span.start);
-            try store.extra_data.append(store.gpa, platform.requires_entries.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.exposes));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.packages));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.provides));
-            // Store targets as optional (0 = null, val + OPTIONAL_VALUE_OFFSET = val)
-            const targets_val: u32 = if (platform.targets) |t| @intFromEnum(t) + OPTIONAL_VALUE_OFFSET else 0;
-            try store.extra_data.append(store.gpa, targets_val);
-            const ed_len = store.extra_data.items.len - ed_start;
+            store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
+            store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.exposes));
+            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.packages));
+            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.provides));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
 
-            node.data.lhs = @intCast(ed_start);
-            node.data.rhs = @intCast(ed_len);
+            node.data.lhs = ed_start;
+            node.data.rhs = 6;
 
             node.region = platform.region;
         },
@@ -586,23 +614,24 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                 // where_idx is meaningful only when has_where is 1.
                 // has_associated is 0 or 1
                 // associated_data is [statements_start, statements_len, scope_idx, region_start, region_end] if has_associated == 1
-                node.main_token = try store.extraDataToken();
+                const extra_count: usize = if (d.associated != null) 8 else 3;
+                node.main_token = try store.reserveExtraDataToken(extra_count);
 
                 const has_where: u32 = @intFromBool(d.where != null);
                 const where_idx: u32 = if (d.where) |w| @intFromEnum(w) else 0;
-                try store.extra_data.append(store.gpa, has_where);
-                try store.extra_data.append(store.gpa, where_idx);
+                store.extra_data.appendAssumeCapacity(has_where);
+                store.extra_data.appendAssumeCapacity(where_idx);
 
                 // Store associated data if present
                 if (d.associated) |assoc| {
-                    try store.extra_data.append(store.gpa, 1); // has_associated = 1
-                    try store.extra_data.append(store.gpa, assoc.statements.span.start);
-                    try store.extra_data.append(store.gpa, assoc.statements.span.len);
-                    try store.extra_data.append(store.gpa, @intFromEnum(assoc.scope));
-                    try store.extra_data.append(store.gpa, assoc.region.start);
-                    try store.extra_data.append(store.gpa, assoc.region.end);
+                    store.extra_data.appendAssumeCapacity(1); // has_associated = 1
+                    store.extra_data.appendAssumeCapacity(assoc.statements.span.start);
+                    store.extra_data.appendAssumeCapacity(assoc.statements.span.len);
+                    store.extra_data.appendAssumeCapacity(@intFromEnum(assoc.scope));
+                    store.extra_data.appendAssumeCapacity(assoc.region.start);
+                    store.extra_data.appendAssumeCapacity(assoc.region.end);
                 } else {
-                    try store.extra_data.append(store.gpa, 0); // has_associated = 0
+                    store.extra_data.appendAssumeCapacity(0); // has_associated = 0
                 }
             } else {
                 node.main_token = 0;
@@ -614,10 +643,10 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = a.name;
             node.data.rhs = @intFromEnum(a.anno);
             if (a.where != null or a.is_var) {
-                node.main_token = try store.extraDataToken();
-                try store.extra_data.append(store.gpa, @intFromBool(a.where != null));
-                try store.extra_data.append(store.gpa, if (a.where) |w| @intFromEnum(w) else 0);
-                try store.extra_data.append(store.gpa, @intFromBool(a.is_var));
+                node.main_token = try store.reserveExtraDataToken(3);
+                store.extra_data.appendAssumeCapacity(@intFromBool(a.where != null));
+                store.extra_data.appendAssumeCapacity(if (a.where) |w| @intFromEnum(w) else 0);
+                store.extra_data.appendAssumeCapacity(@intFromBool(a.is_var));
             } else {
                 node.main_token = 0;
             }
@@ -1055,7 +1084,7 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
 pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Allocator.Error!AST.MatchBranch.Idx {
     const node = Node{
         .tag = .branch,
-        .main_token = if (branch.guard) |g| @intFromEnum(g) + 1 else 0,
+        .main_token = try packOptionalIndex(branch.guard),
         .data = .{
             .lhs = @intFromEnum(branch.pattern),
             .rhs = @intFromEnum(branch.body),
@@ -1340,9 +1369,8 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             const ed_start = node.data.lhs;
             std.debug.assert(node.data.rhs == 6);
 
-            // Decode optional targets (0 = null, val = val - OPTIONAL_VALUE_OFFSET)
             const targets_val = store.extra_data.items[ed_start + 5];
-            const targets: ?AST.TargetsSection.Idx = if (targets_val == 0) null else @enumFromInt(targets_val - OPTIONAL_VALUE_OFFSET);
+            const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
 
             return .{ .platform = .{
                 .name = node.main_token,
@@ -2066,7 +2094,7 @@ pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.M
         .region = node.region,
         .pattern = @enumFromInt(node.data.lhs),
         .body = @enumFromInt(node.data.rhs),
-        .guard = if (node.main_token == 0) null else @enumFromInt(node.main_token - 1),
+        .guard = unpackOptionalIndex(AST.Expr.Idx, node.main_token),
     };
 }
 
@@ -2708,8 +2736,8 @@ pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem
         .tag = .targets_section,
         .main_token = section.files_path orelse 0,
         .data = .{
-            .lhs = if (section.exe) |e| @intFromEnum(e) + OPTIONAL_VALUE_OFFSET else 0,
-            .rhs = if (section.static_lib) |s| @intFromEnum(s) + OPTIONAL_VALUE_OFFSET else 0,
+            .lhs = try packOptionalIndex(section.exe),
+            .rhs = try packOptionalIndex(section.static_lib),
         },
         .region = section.region,
     };
@@ -2848,8 +2876,8 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     std.debug.assert(node.tag == .targets_section);
 
     const files_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
-    const exe: ?AST.TargetLinkType.Idx = if (node.data.lhs == 0) null else @enumFromInt(node.data.lhs - OPTIONAL_VALUE_OFFSET);
-    const static_lib: ?AST.TargetLinkType.Idx = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs - OPTIONAL_VALUE_OFFSET);
+    const exe = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.lhs);
+    const static_lib = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.rhs);
 
     return .{
         .files_path = files_path,

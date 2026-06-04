@@ -828,6 +828,14 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
 
     try testing.expect(blocks.len > 0);
 
+    var runnable_block_indices = std.ArrayList(usize).empty;
+    defer runnable_block_indices.deinit(allocator);
+    for (blocks, 0..) |*block, i| {
+        if (containsEffectfulCall(block.source)) continue;
+        try runnable_block_indices.append(allocator, i);
+    }
+    try testing.expect(runnable_block_indices.items.len > 0);
+
     var failures = std.ArrayList(Failure).empty;
     defer {
         for (failures.items) |*f| f.deinit(allocator);
@@ -836,13 +844,9 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
 
     var phantom_failures: usize = 0;
 
-    var processed_blocks: usize = 0;
-    for (blocks, 0..) |*block, i| {
-        if (i % partition_count != partition_index) continue;
-        if (containsEffectfulCall(block.source)) {
-            continue;
-        }
-        processed_blocks += 1;
+    for (runnable_block_indices.items, 0..) |block_i, work_i| {
+        if (work_i % partition_count != partition_index) continue;
+        const block = &blocks[block_i];
         const result = try processBlock(allocator, block);
         switch (result) {
             .success => {},
@@ -852,10 +856,10 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
                     .crashed => |sig| try std.fmt.allocPrint(allocator, "in-memory evaluation crashed with signal {d}", .{sig}),
                     else => unreachable,
                 };
-                const repro = reproduceWithBinary(allocator, block, i) catch |err| blk: {
+                const repro = reproduceWithBinary(allocator, block, block_i) catch |err| blk: {
                     std.debug.print(
                         "[builtin-doc-tests] reproduction failed with {s} (block #{d} line {d})\n",
-                        .{ @errorName(err), i, block.start_line },
+                        .{ @errorName(err), block_i, block.start_line },
                     );
                     break :blk true;
                 };
@@ -863,11 +867,11 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
                     phantom_failures += 1;
                     std.debug.print(
                         "[builtin-doc-tests] PHANTOM FAILURE: in-memory check reported a failure for block #{d} (Builtin.roc line {d}) but the roc binary succeeded — investigate!\nMessage was: {s}\n",
-                        .{ i, block.start_line, message },
+                        .{ block_i, block.start_line, message },
                     );
                 }
                 try failures.append(allocator, .{
-                    .block_index = i,
+                    .block_index = block_i,
                     .start_line = block.start_line,
                     .stage = @tagName(block.kind),
                     .message = message,
@@ -884,7 +888,7 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
         };
         std.debug.print(
             "\n[builtin-doc-tests] {d} of {d} doc code blocks failed ({d} crashed):\n",
-            .{ failures.items.len, blocks.len, crashed_count },
+            .{ failures.items.len, runnable_block_indices.items.len, crashed_count },
         );
         for (failures.items) |*f| {
             std.debug.print(
@@ -909,8 +913,6 @@ fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) !void {
         );
         return error.DocBlockFailures;
     }
-
-    try testing.expect(processed_blocks > 0);
 }
 
 test "Builtin.roc doc code blocks" {
