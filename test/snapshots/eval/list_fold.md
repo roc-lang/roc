@@ -143,7 +143,7 @@ expect sumResult == 10
 					(e-block
 						(s-reassign
 							(p-assign (ident "$state"))
-							(e-call (constraint-fn-var 224)
+							(e-call (constraint-fn-var 222)
 								(e-lookup-local
 									(p-assign (ident "step")))
 								(e-lookup-local
@@ -166,7 +166,7 @@ expect sumResult == 10
 				(ty-rigid-var-lookup (ty-rigid-var (name "state"))))))
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call (constraint-fn-var 391)
+		(e-call (constraint-fn-var 389)
 			(e-lookup-local
 				(p-assign (ident "fold")))
 			(e-list
@@ -180,7 +180,7 @@ expect sumResult == 10
 				(args
 					(p-assign (ident "acc"))
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 389)
+				(e-dispatch-call (method "plus") (constraint-fn-var 387)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "acc"))))

@@ -1245,6 +1245,9 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "120.0" },
     },
     .{
+        // Mutual recursion between local definitions is not supported: local
+        // definitions are sequential (self-reference and backward references
+        // only). This must be reported as an error rather than evaluated.
         .name = "problem: mutual recursion in local lambdas",
         .source =
         \\{
@@ -1265,6 +1268,29 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .problem = {} },
+    },
+    .{
+        // Coverage migrated from the (now-disallowed) local mutual-recursion
+        // cases above: mutual recursion is supported at the top level and must
+        // still evaluate to the same results.
+        .name = "inspect: mutual recursion at top level (typed)",
+        .source_kind = .module,
+        .source =
+        \\is_even = |n| if (n == 0.I64) True else is_odd(n - 1.I64)
+        \\is_odd = |n| if (n == 0.I64) False else is_even(n - 1.I64)
+        \\main = is_even(6.I64)
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: mutual recursion at top level (untyped)",
+        .source_kind = .module,
+        .source =
+        \\is_even = |n| if (n == 0) True else is_odd(n - 1)
+        \\is_odd = |n| if (n == 0) False else is_even(n - 1)
+        \\main = if (is_even(4)) 1 else 0
+        ,
+        .expected = .{ .inspect_str = "1.0" },
     },
     .{
         .name = "inspect: triple nested closure factory",

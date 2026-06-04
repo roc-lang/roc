@@ -90,6 +90,30 @@ fn countIdentNotInScopeDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Dia
     return count;
 }
 
+fn countLocalReferenceBeforeDefinitionDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .local_reference_before_definition => |d| {
+                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .mutually_recursive_local_definitions => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
 fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
     var count: usize = 0;
     for (diagnostics) |diagnostic| {
@@ -390,7 +414,7 @@ test "block-local lambda use before declaration does not forward resolve" {
 
     try canonicalizeModuleAndCheck(source, struct {
         fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
-            try testing.expectEqual(@as(usize, 1), countIdentNotInScopeDiagnostics(env, diagnostics, "later"));
+            try testing.expectEqual(@as(usize, 1), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
         }
     }.check);
 }
@@ -407,8 +431,8 @@ test "block-local lambdas cannot be mutually recursive through forward declarati
     ;
 
     try canonicalizeModuleAndCheck(source, struct {
-        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
-            try testing.expectEqual(@as(usize, 1), countIdentNotInScopeDiagnostics(env, diagnostics, "second"));
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
+            try testing.expectEqual(@as(usize, 1), countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics));
         }
     }.check);
 }
@@ -429,6 +453,7 @@ test "block-local lambda declaration does not capture earlier use of same-named 
     try canonicalizeModuleAndCheck(source, struct {
         fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) !void {
             try testing.expectEqual(@as(usize, 0), countIdentNotInScopeDiagnostics(env, diagnostics, "later"));
+            try testing.expectEqual(@as(usize, 0), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
         }
     }.check);
 }

@@ -236,6 +236,13 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// Local function declaration patterns that are visible as direct local
 /// procedures in the current canonicalization context.
 scratch_local_function_patterns: base.Scratch(Pattern.Idx),
+/// Names declared in the current (and enclosing) block bodies, recorded from
+/// parser-owned declaration inventory so a lookup miss can tell "used before
+/// its local definition" apart from a genuinely unknown identifier. Each entry
+/// also carries the forward-reference markers used to classify
+/// use-before-definition vs mutual recursion at block end. Snapshot/rollback
+/// per block.
+scratch_block_local_defs: base.Scratch(BlockLocalDef),
 /// Local type declarations found inside function bodies.
 /// Collected during canonicalization, then added to all_statements at the end.
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
@@ -258,6 +265,17 @@ defining_patterns_start: ?u32 = null,
 /// The main pattern being defined (for simple ident patterns).
 /// Used to detect self-referential definitions like `a = a`.
 defining_pattern: ?Pattern.Idx = null,
+/// The identifier of the block-local definition whose body is currently being
+/// canonicalized, if any. Saved/restored around each local decl body so that
+/// references can be attributed to the def that made them (for sequential
+/// local-let scoping: detecting forward references and mutual recursion).
+current_local_def_ident: ?Ident.Idx = null,
+/// Index into `scratch_block_local_defs` of the def whose body is currently
+/// being canonicalized (paired with `current_local_def_ident`). Lets the
+/// lookup-hit path mark `refs_back` on that entry in O(1) when the def
+/// references its forward-referencer back. null when not in a local def body
+/// or the def has no resolvable name.
+current_local_def_index: ?usize = null,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
@@ -276,6 +294,29 @@ source_dir: ?[]const u8 = null,
 roc_ctx: CoreCtx,
 const Ident = base.Ident;
 const Region = base.Region;
+
+/// A name declared in a block body (for sequential local-let scoping). Recorded
+/// from parser-owned declaration inventory; used to recognize "used before its
+/// local definition".
+const BlockLocalDef = struct {
+    ident: Ident.Idx,
+    region: Region,
+    /// Whether the definition's body is a function (lambda). Only function
+    /// definitions can be "mutually recursive"; a cycle through a non-function
+    /// value is reported as a plain use-before-definition instead.
+    is_fn: bool,
+    /// Set when an earlier sibling references this def before it is defined (a
+    /// forward reference). Holds the use-site region for the diagnostic, which
+    /// is deferred to block end. First writer wins, so repeated forward uses of
+    /// the same name produce a single diagnostic.
+    fwd_ref_region: ?Region = null,
+    /// The sibling that made the first forward reference to this def. Together
+    /// with `refs_back` this identifies a mutual-recursion pair.
+    fwd_ref_from: ?Ident.Idx = null,
+    /// Set while canonicalizing THIS def's body if it references its
+    /// forward-referencer back — completing a 2-cycle (mutual recursion).
+    refs_back: bool = false,
+};
 // ModuleEnv is already imported at the top
 const CalledVia = base.CalledVia;
 
@@ -484,6 +525,7 @@ pub fn deinit(
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
     self.scratch_local_function_patterns.deinit();
+    self.scratch_block_local_defs.deinit();
     self.scratch_local_type_decls.deinit(gpa);
     self.scratch_global_value_defs.deinit(gpa);
 }
@@ -555,6 +597,7 @@ fn initInternal(
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_local_function_patterns = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_block_local_defs = try base.Scratch(BlockLocalDef).init(gpa),
         .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
         .scratch_global_value_defs = try std.ArrayList(CIR.Def.Idx).initCapacity(gpa, 0),
     };
@@ -6625,6 +6668,18 @@ pub fn canonicalizeExpr(
                         // Check if this is a used underscore variable
                         try self.checkUsedUnderscoreVariable(ident, region);
 
+                        // Mutual-recursion detection (sequential local-let scoping):
+                        // if the def whose body we're in was itself forward-referenced
+                        // by an earlier sibling, and it now references that sibling
+                        // back, the two form a 2-cycle. Gated on the current def having
+                        // been forward-referenced, so the common case does no work.
+                        if (self.current_local_def_index) |idx| {
+                            const entry = &self.scratch_block_local_defs.items.items[idx];
+                            if (entry.fwd_ref_from) |fwd_from| {
+                                if (fwd_from.eql(ident)) entry.refs_back = true;
+                            }
+                        }
+
                         // We found the ident in scope, create a lookup to reference the pattern
                         // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
                         const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
@@ -6691,9 +6746,38 @@ pub fn canonicalizeExpr(
                             }
                         }
 
+                        // Sequential local-let scoping: if this name is declared
+                        // later in the current (or an enclosing) block body, it's
+                        // being used before its definition. This takes precedence
+                        // over associated/global forward placeholders below, so
+                        // local block defs are always sequential even inside
+                        // associated method bodies. The diagnostic is deferred to
+                        // block end, where it is classified as a plain
+                        // use-before-definition or as mutual recursion.
+                        if (self.current_local_def_ident) |from_ident| {
+                            if (self.blockLocalDefIndex(ident)) |idx| {
+                                // Record the forward reference on the target's entry
+                                // (first writer wins, so repeated uses of the same
+                                // name yield a single diagnostic). Classified at block
+                                // end as use-before-definition or mutual recursion.
+                                const entry = &self.scratch_block_local_defs.items.items[idx];
+                                if (entry.fwd_ref_region == null) {
+                                    entry.fwd_ref_region = region;
+                                    entry.fwd_ref_from = from_ident;
+                                }
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushRuntimeErrorExpr(Expr.Idx, Diagnostic{ .local_reference_before_definition = .{
+                                        .ident = ident,
+                                        .region = region,
+                                    } }),
+                                    .free_vars = DataSpan.empty(),
+                                };
+                            }
+                        }
+
                         // Before falling back to a forward-reference placeholder,
                         // check whether the name matches a platform `requires`
-                        // clause — that resolves to an `e_lookup_required` and
+                        // clause - that resolves to an `e_lookup_required` and
                         // must take precedence over speculative placeholders.
                         const requires_items = self.env.requires_types.items.items;
                         for (requires_items, 0..) |req, idx| {
@@ -12168,6 +12252,16 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const local_functions_top = self.scratch_local_function_patterns.top();
     defer self.scratch_local_function_patterns.clearFrom(local_functions_top);
 
+    // Sequential local-let scoping bookkeeping. Parser-owned declaration
+    // inventory records this block's declared names without making them
+    // resolvable; a lookup miss can then distinguish "used before its local
+    // definition" from a genuinely unknown identifier. Forward-reference
+    // markers are written onto these same entries while the def bodies are
+    // canonicalized, then classified at block end. The list is
+    // snapshot/rollback per block, which also scopes the markers per block.
+    const block_defs_top = self.scratch_block_local_defs.top();
+    defer self.scratch_block_local_defs.clearFrom(block_defs_top);
+
     const free_vars_top = self.scratch_free_vars.top();
     const block_statement_context = BlockStatementContext{
         .captures_top = captures_top,
@@ -12176,6 +12270,8 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
     // Canonicalize all statements in the block
     const ast_stmt_idxs = self.parse_ir.store.statementSlice(e.statements);
+
+    try self.recordParserBlockLocalDefs(e.scope);
 
     var last_expr: ?CanonicalizedExpr = null;
 
@@ -12286,6 +12382,14 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
         }
     }
 
+    // Sequential local-let scoping: classify the forward references discovered
+    // while canonicalizing this block's definition bodies. A forward reference
+    // that is part of a reference cycle is mutual recursion (unsupported for
+    // local defs); otherwise it is a plain use-before-definition. This is done
+    // at block end because mutual recursion depends on a later sibling's
+    // references, which are only known once the whole block is canonicalized.
+    try self.classifyBlockLocalForwardRefs(block_defs_top);
+
     // Determine the final expression
     const final_expr = if (last_expr) |can_expr| can_expr else blk: {
         // Empty block - create empty record
@@ -12325,6 +12429,79 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     const block_idx = try self.env.addExpr(block_expr, block_region);
 
     return CanonicalizedExpr{ .idx = block_idx, .free_vars = block_free_vars };
+}
+
+fn recordParserBlockLocalDefs(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Allocator.Error!void {
+    const decl_ids = self.parse_ir.decl_index.scopeDecls(scope_idx);
+    for (decl_ids) |decl_idx| {
+        const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(decl_idx)];
+        const is_fn = switch (decl.kind) {
+            .value => decl.value_form == .lambda,
+            .var_decl => false,
+            else => continue,
+        };
+        const ident = decl.name_ident orelse continue;
+        try self.scratch_block_local_defs.append(.{
+            .ident = ident,
+            .region = self.parserDeclRegion(decl),
+            .is_fn = is_fn,
+        });
+    }
+}
+
+/// Classify and report the forward references targeting this block's
+/// definitions (the names from `block_defs_top` onward). A forward-referenced
+/// function definition that references its forward-referencer back is mutual
+/// recursion between local definitions; otherwise it is a plain
+/// use-before-definition. The forward-reference markers live on the per-block
+/// `scratch_block_local_defs` entries (snapshot/rollback per block), so no
+/// separate edge state or cross-block bookkeeping is needed: a cross-block
+/// forward reference (an inner def naming an outer-later def) lands on the outer
+/// entry and is classified as non-mutual when the outer block runs this pass,
+/// since the inner def is not visible to the outer one.
+fn classifyBlockLocalForwardRefs(self: *Self, block_defs_top: u32) std.mem.Allocator.Error!void {
+    const this_defs = self.scratch_block_local_defs.slice(block_defs_top, self.scratch_block_local_defs.top());
+    for (this_defs) |d| {
+        const region = d.fwd_ref_region orelse continue;
+        // Mutual recursion only applies between function definitions; a cycle
+        // through a non-function value is reported as use-before-definition.
+        if (d.is_fn and d.refs_back and blockLocalIsFn(this_defs, d.fwd_ref_from.?)) {
+            try self.env.pushDiagnostic(Diagnostic{ .mutually_recursive_local_definitions = .{
+                .ident1 = d.fwd_ref_from.?,
+                .ident2 = d.ident,
+                .region = region,
+            } });
+        } else {
+            try self.env.pushDiagnostic(Diagnostic{ .local_reference_before_definition = .{
+                .ident = d.ident,
+                .region = region,
+            } });
+        }
+    }
+}
+
+fn blockLocalIsFn(defs: []const BlockLocalDef, target: Ident.Idx) bool {
+    for (defs) |d| {
+        if (d.ident.eql(target)) return d.is_fn;
+    }
+    return false;
+}
+
+/// The index in `scratch_block_local_defs` of the definition named `ident` in
+/// the current or an enclosing block body (recorded from parser-owned
+/// declaration inventory),
+/// or null if there is none. A lookup miss on such a name means it is used
+/// before its (sequential) definition. Scans from the end so a name shadowed
+/// across nested blocks resolves to the nearest (innermost) declaration, since
+/// outer entries are appended before inner ones.
+fn blockLocalDefIndex(self: *const Self, ident: Ident.Idx) ?usize {
+    const defs = self.scratch_block_local_defs.items.items;
+    var i: usize = defs.len;
+    while (i > 0) {
+        i -= 1;
+        if (defs[i].ident.eql(ident)) return i;
+    }
+    return null;
 }
 
 const StatementResult = struct {
@@ -13323,6 +13500,29 @@ pub fn canonicalizeBlockDecl(
         try self.scratch_local_function_patterns.append(pattern_idx);
     }
 
+    // Track which block-local definition's body we're canonicalizing, so that
+    // references it makes can be attributed to it for sequential local-let
+    // scoping (forward-reference / mutual-recursion detection).
+    const saved_current_local_def_ident = self.current_local_def_ident;
+    const saved_current_local_def_index = self.current_local_def_index;
+    const ast_decl_pattern = self.parse_ir.store.getPattern(d.pattern);
+    if (ast_decl_pattern == .ident) {
+        const decl_ident = self.parse_ir.tokens.resolveIdentifier(ast_decl_pattern.ident.ident_tok);
+        self.current_local_def_ident = decl_ident;
+        self.current_local_def_index = if (decl_ident) |di| self.blockLocalDefIndex(di) else null;
+        // If this definition's name was already forward-referenced earlier in
+        // the block (an error we report at block end), mark it used so it does
+        // not also produce a misleading "unused variable" warning.
+        if (self.current_local_def_index) |idx| {
+            if (self.scratch_block_local_defs.items.items[idx].fwd_ref_region != null) {
+                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            }
+        }
+    } else {
+        self.current_local_def_ident = null;
+        self.current_local_def_index = null;
+    }
+
     // Save and set self-reference tracking for issues #8831, #9043:
     // - defining_pattern: the main pattern (handles `a = a`)
     // - defining_patterns_start: node index for new patterns (handles tuple cases)
@@ -13339,6 +13539,8 @@ pub fn canonicalizeBlockDecl(
     // Restore self-reference tracking
     self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
+    self.current_local_def_ident = saved_current_local_def_ident;
+    self.current_local_def_index = saved_current_local_def_index;
 
     const stmt_idx = if (pattern_reused_existing_var)
         try self.env.addStatement(Statement{ .s_reassign = .{
