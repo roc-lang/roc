@@ -10596,13 +10596,12 @@ fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: 
 /// problem store, no `self.regions`, no `env`), then ALWAYS rolls the type store
 /// back and restores every counter the probe can move (`from_numeral`; `regions`
 /// and `instantiation_dispatchers` as defensive no-ops matching the sibling
-/// probe sites). On OOM, reports compatible rather than failing solving. Nothing
-/// in the live solver state is disturbed.
+/// probe sites). Nothing in the live solver state is disturbed.
 fn probeBranchCompatible(self: *Self, body_var: Var, target: Var) std.mem.Allocator.Error!bool {
     const saved_from_numeral = self.types.from_numeral_flex_count;
     const saved_regions_len = self.regions.items.items.len;
     const saved_dispatchers_len = self.instantiation_dispatchers.items.len;
-    var snap = self.types.snapshot() catch return true;
+    var snap = try self.types.snapshot();
     defer {
         self.types.rollbackTo(&snap);
         self.types.from_numeral_flex_count = saved_from_numeral;
