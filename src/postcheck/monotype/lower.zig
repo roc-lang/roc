@@ -1221,12 +1221,6 @@ const Builder = struct {
         };
     }
 
-    fn fnDefForProcedureUse(self: *Builder, source_ty_view: ModuleView, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
-        const source_fn_ty = proc.source_fn_ty_payload orelse
-            Common.invariant("checked procedure use reached Monotype without a requested function type");
-        return try self.fnDefForProcedureUseWithType(source_ty_view, proc, source_fn_ty);
-    }
-
     fn fnDefForProcedureUseWithType(
         self: *Builder,
         source_ty_view: ModuleView,
@@ -4051,6 +4045,9 @@ const BodyContext = struct {
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
+            .lookup_external => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
+            .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(lambda),
             .closure => |closure| try self.closureFunctionType(closure),
             .field_access => |field| try self.fieldAccessMonoType(field.receiver, field.field_name),
@@ -4098,9 +4095,9 @@ const BodyContext = struct {
             .empty_list => .{ .list = .empty() },
             .empty_record => .{ .record = .empty() },
             .str => |segments| try self.lowerStr(segments),
-            .lookup_local => |lookup| return try self.lowerLookupExpr(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| return try self.lowerLookupExpr(expr.ty, resolved),
-            .lookup_required => |resolved| return try self.lowerLookupExpr(expr.ty, resolved),
+            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .list => |items| .{ .list = try self.lowerListExpr(items, ty) },
             .tuple => |items| .{ .tuple = try self.lowerExprSpanAtTypes(items, self.builder.tupleItemTypes(ty)) },
             .record => |record| return try self.lowerRecordExpr(record, ty),
@@ -4230,7 +4227,7 @@ const BodyContext = struct {
             };
         }
 
-        const fn_ty = try self.lowerType(call.source_fn_ty_payload);
+        const fn_ty = try self.lowerExprType(call.func);
         const fn_data = self.builder.functionShape(fn_ty, "checked call function type was not a function");
         return .{
             .ret_ty = fn_data.ret,
@@ -5109,6 +5106,26 @@ const BodyContext = struct {
         return null;
     }
 
+    fn lookupExprMonoType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueId,
+    ) Allocator.Error!Type.TypeId {
+        const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
+        if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            try self.constrainTypeToMono(checked_ty, local_ty, "checked local lookup type conflicted with its current Monotype binding");
+            return local_ty;
+        }
+        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        return switch (record.ref) {
+            .top_level_const => |const_use| try self.constUseMonoType(const_use),
+            .imported_const => |const_use| try self.constUseMonoType(const_use),
+            .platform_required_const => |required| try self.constUseMonoType(required.const_use),
+            else => try self.lowerType(checked_ty),
+        };
+    }
+
     fn lookupArgumentMonoType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -5211,19 +5228,6 @@ const BodyContext = struct {
         };
     }
 
-    fn fnTemplateForLocalProc(
-        self: *BodyContext,
-        local: checked.LocalProcedureBinding,
-        source_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.FnTemplate {
-        return try self.fnTemplateForLocalProcWithMono(
-            local,
-            source_fn_ty,
-            self.view.types.rootKey(source_fn_ty),
-            try self.lowerType(source_fn_ty),
-        );
-    }
-
     fn fnTemplateForLocalProcWithMono(
         self: *BodyContext,
         local: checked.LocalProcedureBinding,
@@ -5244,21 +5248,6 @@ const BodyContext = struct {
         );
         try self.builder.lowerNestedFnFromContext(self, local.expr, fn_template);
         return fn_template;
-    }
-
-    fn fnDefForProcedureUse(self: *BodyContext, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
-        const source_fn_ty = proc.source_fn_ty_payload orelse
-            Common.invariant("checked procedure use reached Monotype without a requested function type");
-        return try self.fnDefForProcedureUseWithType(proc, source_fn_ty);
-    }
-
-    fn fnDefForProcedureUseWithType(
-        self: *BodyContext,
-        proc: checked.ProcedureUseTemplate,
-        source_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.FnTemplate {
-        const mono_fn_ty = try self.lowerType(source_fn_ty);
-        return try self.fnDefForProcedureUseWithMono(proc, source_fn_ty, proc.source_fn_ty_template, mono_fn_ty);
     }
 
     fn fnDefForProcedureUseWithMono(
@@ -5322,32 +5311,48 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerLookupExpr(self: *BodyContext, checked_ty: checked.CheckedTypeId, maybe_ref: ?checked.ResolvedValueId) Allocator.Error!Ast.ExprId {
+    fn lowerLookupExprAtType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
-            const ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
-            try self.constrainTypeToMono(checked_ty, ty, "checked local lookup type conflicted with an existing Monotype constraint");
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            if (!self.sameType(ty, local_ty)) {
+                Common.invariant("checked local lookup type differed from its expected Monotype use type");
+            }
+            try self.constrainTypeToMono(checked_ty, local_ty, "checked local lookup type conflicted with its current Monotype binding");
             return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .local = local_id } });
         }
 
-        const ty = try self.lowerType(checked_ty);
+        switch (record.ref) {
+            .top_level_const => |const_use| return try self.restoreConstUseAtType(const_use, ty),
+            .imported_const => |const_use| return try self.restoreConstUseAtType(const_use, ty),
+            .platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty),
+            else => {},
+        }
+
+        try self.constrainTypeToMono(checked_ty, ty, "checked lookup type conflicted with its expected Monotype use type");
         const data: Ast.ExprData = switch (record.ref) {
             .local_param,
             .local_value,
             .local_mutable_version,
             .pattern_binder,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
-            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProc(local, checked_ty) },
+            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
             => |proc| return try self.lowerProcedureUseValue(proc, ty),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty),
-            .top_level_const => |const_use| return try self.restoreConstUse(const_use),
-            .imported_const => |const_use| return try self.restoreConstUse(const_use),
-            .platform_required_const => |required| return try self.restoreConstUse(required.const_use),
+            .top_level_const,
+            .imported_const,
+            .platform_required_const,
+            => unreachable,
             .platform_required_declaration => Common.invariant("platform required declaration reached Monotype without a binding"),
         };
         return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
@@ -5402,12 +5407,22 @@ const BodyContext = struct {
         };
     }
 
-    fn restoreConstUse(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!Ast.ExprId {
+    fn constUseMonoType(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!Type.TypeId {
         const requested_ty = const_use.requested_source_ty_payload orelse
             Common.invariant("checked const use reached Monotype without a requested checked type");
+        return try self.lowerType(requested_ty);
+    }
+
+    fn restoreConstUseAtType(
+        self: *BodyContext,
+        const_use: checked.ConstUseTemplate,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const requested_ty = const_use.requested_source_ty_payload orelse
+            Common.invariant("checked const use reached Monotype without a requested checked type");
+        try self.constrainTypeToMono(requested_ty, ty, "checked const use requested type conflicted with its Monotype use type");
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const ty = try self.lowerType(requested_ty);
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
@@ -5717,6 +5732,9 @@ const BodyContext = struct {
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .structural_eq => |eq| {
                 try self.constrainKnownType(expr.ty, ty);
                 const lowered = try self.lowerDirectStructuralEqAtType(eq, ty);
@@ -5763,18 +5781,19 @@ const BodyContext = struct {
     }
 
     fn lowerRecordExpr(self: *BodyContext, record: anytype, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const target_fields = switch (self.builder.shapeContent(ty)) {
-            .record => |fields| self.builder.program.types.fieldSpan(fields),
+        const target_field_span = switch (self.builder.shapeContent(ty)) {
+            .record => |fields| fields,
             else => Common.invariant("record expression had a non-record monotype"),
         };
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, target_fields.len);
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, target_field_span.len);
         defer self.allocator.free(lowered);
         const base_record = if (record.ext) |ext| try self.lowerExpr(ext) else null;
         const base_ty = if (base_record) |base_expr| self.builder.program.exprs.items[@intFromEnum(base_expr)].ty else ty;
         const base_local = if (base_record) |_| try self.builder.program.addLocal(self.builder.symbols.fresh(), base_ty) else null;
         const base_expr = if (base_local) |local| try self.builder.localExpr(local, base_ty) else null;
 
-        for (target_fields, 0..) |field, i| {
+        for (0..target_field_span.len) |i| {
+            const field = self.builder.program.types.fieldSpan(target_field_span)[i];
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value|
                 try self.lowerExprAtType(field_value, field.ty)
             else if (base_expr) |base_value|

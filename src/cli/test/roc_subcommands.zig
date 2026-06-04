@@ -954,6 +954,21 @@ test "roc build creates executable from test/int/app.roc (dev)" {
     return error.SkipZigTest;
 }
 
+test "roc build --no-link lowers platform required init consts" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "build", "--no-link", "--no-cache" }, "test/postcheck/platform_required_init/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    if (result.term != .exited or result.term.exited != 0) {
+        std.debug.print("roc build --no-link failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ result.term, result.stdout, result.stderr });
+    }
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stdout, "Object file generated:") != null);
+}
+
 test "roc build executable runs correctly (interpreter)" {
     // Skip on Windows - test/int platform doesn't have Windows host libraries
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
