@@ -56,6 +56,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const coverage_options = @import("coverage_options");
 const eval = @import("eval");
+const base = @import("base");
 
 /// When true (set via `zig build coverage-eval`), the runner:
 /// - Only builds/runs the interpreter backend (dev/wasm are DCE'd)
@@ -328,7 +329,7 @@ const ForkStatsResult = union(enum) {
 
 /// Fork a child process to evaluate a backend, communicating the result via pipe.
 ///
-/// The child calls `eval_fn(page_allocator, lowered_lir_image)`, where
+/// The child calls `eval_fn(base.defaultGpa(), lowered_lir_image)`, where
 /// `lowered_lir_image` is already a zero-copy view over ARC-inserted LIR
 /// allocated in shared memory. Backend children must not inspect CIR, checked
 /// modules, or post-check IRs; they write only the resulting string to the pipe and
@@ -343,7 +344,7 @@ fn forkAndEval(
     inherited_fd_to_close: ?posix.fd_t,
 ) ForkResult {
     if (comptime !has_fork or coverage_mode) {
-        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };
@@ -352,7 +353,7 @@ fn forkAndEval(
     // std.process.getEnvVarOwned was removed in Zig 0.16; use std.c.getenv instead.
     const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
     if (disable_fork) {
-        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };
@@ -581,7 +582,7 @@ fn forkAndEvalWithStats(
     lowered: *const LoweredProgram,
 ) ForkStatsResult {
     if (comptime !has_fork or coverage_mode) {
-        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };
@@ -589,7 +590,7 @@ fn forkAndEvalWithStats(
 
     const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
     if (disable_fork) {
-        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };

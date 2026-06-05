@@ -661,18 +661,13 @@ pub fn main(init: std.process.Init) !void {
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
-        if (builtin.os.tag == .freestanding) break :gpa .{ std.heap.wasm_allocator, false };
-        // With libc linked, use its malloc so the native tooling ecosystem
-        // (ASan, Valgrind, LD_PRELOAD replacements) works; otherwise leak-check
-        // with the debug allocator in safe builds and use smp in fast builds.
-        // -Ddebug-gpa forces the leak checker even when libc is linked.
-        const use_debug_allocator = build_options.debug_gpa or (!builtin.link_libc and switch (builtin.mode) {
-            .Debug, .ReleaseSafe => true,
-            .ReleaseFast, .ReleaseSmall => false,
-        });
+        // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
+        // else uses the fast target allocator — see base.defaultGpa.
+        const use_debug_allocator = builtin.os.tag != .freestanding and
+            (builtin.mode == .Debug or build_options.debug_gpa);
         if (use_debug_allocator) break :gpa .{ debug_allocator.allocator(), true };
-        if (builtin.link_libc) break :gpa .{ std.heap.c_allocator, false };
-        break :gpa .{ std.heap.smp_allocator, false };
+        break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
