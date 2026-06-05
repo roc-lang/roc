@@ -146,13 +146,15 @@ const RetiredCheckedArtifact = struct {
 /// `mmap`/`munmap` serialization on the kernel VM lock that `page_allocator`
 /// incurs (the prior cause of the multi-threaded performance cliff).
 ///
-/// On wasm/freestanding (no threads), `smp_allocator` is unreachable at
-/// runtime but the constant must still compile, so it resolves to
-/// `page_allocator` (which on wasm is backed by `WasmAllocator`).
+/// On wasm/freestanding (no threads), `smp_allocator` is unreachable, so we
+/// resolve explicitly to `std.heap.wasm_allocator` — a real allocator over
+/// linear memory, never the syscall-per-alloc page allocator. A non-wasm
+/// freestanding target would fail to compile here, forcing a deliberate
+/// choice rather than silently degrading to `page_allocator`.
 const thread_safe_allocator: Allocator = if (threads_available)
     std.heap.smp_allocator
 else
-    std.heap.page_allocator;
+    std.heap.wasm_allocator;
 
 const StageTimer = if (threads_available) std.Io.Timestamp else void;
 

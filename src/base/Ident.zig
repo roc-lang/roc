@@ -7,6 +7,11 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+
+const global_gpa: std.mem.Allocator = if (builtin.target.os.tag == .freestanding)
+    std.heap.wasm_allocator
+else
+    std.heap.smp_allocator;
 const collections = @import("collections");
 
 const SmallStringInterner = @import("SmallStringInterner.zig");
@@ -192,13 +197,13 @@ pub const Store = struct {
                 self.debug_id = debug_store_id_counter.fetchAdd(1, .monotonic);
 
                 // Register in the global map with source location info
-                const store_id = std.fmt.allocPrint(std.heap.page_allocator, "{s}:{d}:{d}", .{
+                const store_id = std.fmt.allocPrint(global_gpa, "{s}:{d}:{d}", .{
                     src.file,
                     src.line,
                     src.column,
                 }) catch "unknown";
 
-                debug_store_map.put(std.heap.page_allocator, self.debug_id, .{
+                debug_store_map.put(global_gpa, self.debug_id, .{
                     .store_id = store_id,
                     .known_idxs = .{},
                 }) catch {};
@@ -220,11 +225,11 @@ pub const Store = struct {
             if (debug_store_map.fetchRemove(self.debug_id)) |entry| {
                 // Free the heap-allocated store_id (if it's not the static "unknown" string)
                 if (entry.value.store_id.ptr != @as([*]const u8, "unknown".ptr)) {
-                    std.heap.page_allocator.free(entry.value.store_id);
+                    global_gpa.free(entry.value.store_id);
                 }
                 // Copy the known_idxs to make it mutable for deinit
                 var known_idxs = entry.value.known_idxs;
-                known_idxs.deinit(std.heap.page_allocator);
+                known_idxs.deinit(global_gpa);
             }
         }
     }
@@ -238,7 +243,7 @@ pub const Store = struct {
             const debug_id = self.getOrAssignDebugId(src);
             if (debug_store_map.getPtr(debug_id)) |info| {
                 // We don't fail on OOM in debug tracking - just skip tracking
-                info.known_idxs.put(std.heap.page_allocator, @bitCast(idx), {}) catch {};
+                info.known_idxs.put(global_gpa, @bitCast(idx), {}) catch {};
             }
         }
     }

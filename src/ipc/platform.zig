@@ -229,16 +229,10 @@ pub fn createMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
             var random_buf: [8]u8 = undefined;
             io.random(&random_buf);
             const random_val = std.mem.readInt(u64, &random_buf, .little);
-            const random_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "/roc_shm_{}", .{random_val}, 0) catch {
-                return error.OutOfMemory;
-            };
-            defer std.heap.page_allocator.free(random_name);
-
-            const shm_name = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}", .{random_name}, 0) catch {
-                return error.OutOfMemory;
-            };
-            defer std.heap.page_allocator.free(shm_name);
-            const shm_name_null_terminated = shm_name[0.. :0];
+            // The name is "/roc_shm_" + a u64, so size the buffer to the longest
+            // possible such name (largest u64) plus a NUL — it can never overflow.
+            var shm_name_buf: [std.fmt.count("/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
+            const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{random_val}) catch unreachable;
             const fd = posix.shm_open(
                 shm_name_null_terminated,
                 @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),

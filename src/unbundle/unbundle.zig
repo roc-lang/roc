@@ -282,6 +282,13 @@ const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "LPT8", "LPT9",
 };
 
+/// Length of the longest Windows reserved device name (e.g. "COM1").
+const max_reserved_name_len: usize = blk: {
+    var longest: usize = 0;
+    for (WINDOWS_RESERVED_NAMES) |name| longest = @max(longest, name.len);
+    break :blk longest;
+};
+
 /// Check if a path has security or compatibility issues for unbundling
 pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
     if (path.len == 0) {
@@ -328,30 +335,24 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             };
         }
 
-        // Use stack buffer for small components to avoid allocation
-        var upper_buf: [256]u8 = undefined;
-        const upper_component = if (component.len <= upper_buf.len) blk: {
-            for (component, 0..) |c, i| {
-                upper_buf[i] = std.ascii.toUpper(c);
+        // Only the base name (before the first dot) can be a Windows reserved
+        // name, and those are short, so longer base names can't match.
+        const dot = std.mem.findScalar(u8, component, '.') orelse component.len;
+        const base = component[0..dot];
+        if (base.len <= max_reserved_name_len) {
+            var upper_base_buf: [max_reserved_name_len]u8 = undefined;
+            for (base, 0..) |c, i| {
+                upper_base_buf[i] = std.ascii.toUpper(c);
             }
-            break :blk upper_buf[0..component.len];
-        } else blk: {
-            break :blk std.ascii.allocUpperString(std.heap.page_allocator, component) catch component;
-        };
-        defer if (component.len > upper_buf.len and upper_component.ptr != component.ptr)
-            std.heap.page_allocator.free(upper_component);
+            const upper_base = upper_base_buf[0..base.len];
 
-        const base_name = if (std.mem.findScalar(u8, upper_component, '.')) |dot_pos|
-            upper_component[0..dot_pos]
-        else
-            upper_component;
-
-        for (WINDOWS_RESERVED_NAMES) |reserved| {
-            if (std.mem.eql(u8, base_name, reserved)) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .windows_reserved_name,
-                };
+            for (WINDOWS_RESERVED_NAMES) |reserved| {
+                if (std.mem.eql(u8, upper_base, reserved)) {
+                    return PathValidationError{
+                        .path = path,
+                        .reason = .windows_reserved_name,
+                    };
+                }
             }
         }
 

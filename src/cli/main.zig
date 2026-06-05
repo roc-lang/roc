@@ -1506,7 +1506,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         return error.TypeCheckingFailed;
     }
 
-    const view = try viewLirImageFromHandle(shm_result.handle);
+    const view = try viewLirImageFromHandle(shm_result.handle, ctx.arena);
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
@@ -1931,10 +1931,10 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewLirImageFromHandle(handle: SharedMemoryHandle) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+fn viewLirImageFromHandle(handle: SharedMemoryHandle, arena: std.mem.Allocator) lir.LirImage.ImageError!lir.LirImage.ProgramView {
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.LirImage.viewMappedImage(header, base_ptr, handle.size);
+    return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, arena);
 }
 
 fn argLayoutsForProc(

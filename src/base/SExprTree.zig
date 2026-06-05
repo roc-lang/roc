@@ -73,12 +73,12 @@ const HtmlSExprWriter = struct {
     color_active: bool = false,
     scratch_buffer: std.array_list.Managed(u8),
 
-    pub fn init(writer: *std.Io.Writer) HtmlSExprWriter {
+    pub fn init(writer: *std.Io.Writer, allocator: std.mem.Allocator) HtmlSExprWriter {
         return HtmlSExprWriter{
             .writer = writer,
             .current_color = .default,
             .color_active = false,
-            .scratch_buffer = std.array_list.Managed(u8).init(std.heap.page_allocator),
+            .scratch_buffer = std.array_list.Managed(u8).init(allocator),
         };
     }
 
@@ -437,7 +437,7 @@ pub fn toStringPretty(self: *const SExprTree, writer: anytype, linecol_mode: Lin
 /// Render this SExprTree to HTML with syntax highlighting.
 pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer, linecol_mode: LineColMode) !void {
     if (self.stack.items.len == 0) return;
-    var html_writer = HtmlSExprWriter.init(writer);
+    var html_writer = HtmlSExprWriter.init(writer, self.allocator);
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0, linecol_mode);
     html_writer.deinit() catch {
         return error.ErrFinalizingHTMLWriter;
