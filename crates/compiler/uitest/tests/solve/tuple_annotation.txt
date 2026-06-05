@@ -1,5 +1,0 @@
-interface Test exposes [x] imports []
-
-x : (I64, Str)
-x = (1, "")
-#^{-1} ( I64, Str )*
