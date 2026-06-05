@@ -138,23 +138,11 @@ const RetiredCheckedArtifact = struct {
     }
 };
 
-/// Thread-safe allocator used for worker-thread allocations and shared
-/// coordinator buffers (channels, per-package maps) when running multi-threaded.
-///
-/// On platforms with threads, `std.heap.smp_allocator` is used: it maintains
-/// per-thread freelists backed by a shared global pool, avoiding the per-call
-/// `mmap`/`munmap` serialization on the kernel VM lock that `page_allocator`
-/// incurs (the prior cause of the multi-threaded performance cliff).
-///
-/// On wasm/freestanding (no threads), `smp_allocator` is unreachable, so we
-/// resolve explicitly to `std.heap.wasm_allocator` — a real allocator over
-/// linear memory, never the syscall-per-alloc page allocator. A non-wasm
-/// freestanding target would fail to compile here, forcing a deliberate
-/// choice rather than silently degrading to `page_allocator`.
-const thread_safe_allocator: Allocator = if (threads_available)
-    std.heap.smp_allocator
-else
-    std.heap.wasm_allocator;
+/// Thread-safe allocator for worker-thread allocations and shared coordinator
+/// buffers (channels, per-package maps) in multi-threaded mode. base.defaultGpa
+/// resolves per target to a thread-safe, non-page_allocator choice: libc's
+/// malloc, smp_allocator on musl, or wasm_allocator on freestanding (no threads).
+const thread_safe_allocator: Allocator = base.defaultGpa();
 
 const StageTimer = if (threads_available) std.Io.Timestamp else void;
 
