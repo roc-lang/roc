@@ -289,7 +289,7 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     stderrWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
-        tracy.waitForShutdown(stderr_file_writer.io) catch unreachable;
+        tracy.waitForShutdown(stderr_file_writer.io);
     }
     std.process.exit(1);
 }

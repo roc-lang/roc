@@ -705,14 +705,14 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
-            tracy.waitForShutdown(init.io) catch {};
+            tracy.waitForShutdown(init.io);
         }
         restoreWindowsConsoleCodePage();
         std.process.exit(1);
     };
 
     if (tracy.enable) {
-        try tracy.waitForShutdown(init.io);
+        tracy.waitForShutdown(init.io);
     }
 }
 
