@@ -277,8 +277,6 @@ fn tidyFile(
     file: SourceFile,
     errors: *Errors,
 ) Allocator.Error!void {
-    // Skip legacy crates/ directory entirely - it's scheduled for deletion
-    if (std.mem.startsWith(u8, file.path, "crates/")) return;
 
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
@@ -723,7 +721,6 @@ fn tidyMarkdownTitle(file: SourceFile, errors: *Errors) void {
     // Skip directories with different conventions
     const skip_paths: []const []const u8 = &.{
         "test/snapshots/", // Snapshot files are generated
-        "crates/", // Old Rust crate code
         "design/", // Design docs may have different structure
         "www/", // Website content
     };
