@@ -1801,8 +1801,8 @@ test "check type - tuple access on non-tuple does not cascade" {
 }
 
 test "check type - if else - annotated branch mismatch reports error" {
-    // Exercises the expected-return-type path in checkIfElseExpr (the
-    // isCompatibleWithExpected probe). The else branch (a number) does not
+    // Exercises the expected-return-type path in checkIfElseExpr
+    // (checkBranchBodyAgainstExpected). The else branch (a number) does not
     // match the annotated Str return type, which must be reported.
     const source =
         \\f : Bool -> Str
@@ -1812,13 +1812,12 @@ test "check type - if else - annotated branch mismatch reports error" {
 }
 
 test "check type - match branch conflicting with rigid return type reports error" {
-    // Load-bearing case for isCompatibleWithExpected: the `Ok(_) => ""` branch
-    // body (Str) conflicts with the function's rigid annotated return type `e`.
-    // The caller's incompatible path (markErroneousBranchWithExpected) emits no
-    // diagnostic of its own, so the mismatch recorded by the
-    // isCompatibleWithExpected probe is the ONLY error reported. If that probe
-    // were switched to a throwaway problem store, this error would silently
-    // disappear.
+    // Load-bearing case for checkBranchBodyAgainstExpected: the `Ok(_) => ""`
+    // branch body (Str) conflicts with the function's rigid annotated return
+    // type `e`. The compatibility probe is non-recording; the diagnostic is
+    // emitted by checkBranchBodyAgainstExpected itself (recordBranchTypeMismatch)
+    // on the incompatible path, so the error is reported with the branch body as
+    // the actual type.
     const source =
         \\get_err : [Ok(a), Err(e)] -> e
         \\get_err = |result| match result {

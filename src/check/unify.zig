@@ -90,7 +90,11 @@ pub const Result = union(enum) {
     const Self = @This();
 
     ok,
+    /// A mismatch that WAS recorded as a diagnostic (the poison_to_err path).
     problem: Problem.Idx,
+    /// A mismatch detected under `write_no_report`: nothing recorded, nothing
+    /// poisoned. The caller decides whether/how to report it.
+    mismatch,
 
     pub fn isOk(self: Self) bool {
         return self == .ok;
@@ -99,7 +103,7 @@ pub const Result = union(enum) {
     pub fn isProblem(self: Self) bool {
         switch (self) {
             .ok => return false,
-            .problem => return true,
+            .problem, .mismatch => return true,
         }
     }
 };
@@ -141,6 +145,19 @@ pub fn unify(
     );
 }
 
+/// Controls what a top-level type mismatch does to the two operands.
+pub const MismatchBehavior = enum {
+    /// Merge both operands into a single `.err` type. This is the default: it
+    /// stops the now-erroneous vars from producing cascading downstream errors
+    /// (anything unifies OK against `.err`).
+    poison_to_err,
+    /// Merge on success exactly like a normal unify, but on a top-level mismatch
+    /// record NOTHING and poison NOTHING — return `Result.mismatch`. The caller
+    /// owns the diagnostic (with correct expected/actual roles) and any
+    /// rollback. Used by the branch-vs-expected check.
+    write_no_report,
+};
+
 /// Unify two type variables
 ///
 /// This function
@@ -165,6 +182,72 @@ pub fn unifyInContext(
     b: Var,
     context: Context,
 ) std.mem.Allocator.Error!Result {
+    return unifyWithMismatchBehavior(
+        gpa,
+        ident_store,
+        qualified_module_ident,
+        types,
+        problems,
+        snapshots,
+        type_writer,
+        unify_scratch,
+        occurs_scratch,
+        a,
+        b,
+        context,
+        .poison_to_err,
+    );
+}
+
+/// Like `unifyInContext`, but merges on success and on a mismatch records
+/// nothing and poisons nothing — returns `Result.mismatch`. The caller owns the
+/// diagnostic and any rollback. See `MismatchBehavior.write_no_report`.
+pub fn unifyWriteNoReport(
+    gpa: Allocator,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
+    types: *types_mod.Store,
+    problems: *problem_mod.Store,
+    snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    a: Var,
+    b: Var,
+    context: Context,
+) std.mem.Allocator.Error!Result {
+    return unifyWithMismatchBehavior(
+        gpa,
+        ident_store,
+        qualified_module_ident,
+        types,
+        problems,
+        snapshots,
+        type_writer,
+        unify_scratch,
+        occurs_scratch,
+        a,
+        b,
+        context,
+        .write_no_report,
+    );
+}
+
+fn unifyWithMismatchBehavior(
+    gpa: Allocator,
+    ident_store: *const Ident.Store,
+    qualified_module_ident: Ident.Idx,
+    types: *types_mod.Store,
+    problems: *problem_mod.Store,
+    snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    a: Var,
+    b: Var,
+    context: Context,
+    mismatch_behavior: MismatchBehavior,
+) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -174,32 +257,27 @@ pub fn unifyInContext(
     // Unify
     var unifier = Unifier.init(ident_store, qualified_module_ident, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
-        const problem: Problem = blk: {
-            switch (err) {
-                error.OutOfMemory => {
-                    return error.OutOfMemory;
-                },
-                error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeMismatch => {},
+        }
 
-                    break :blk .{ .type_mismatch = .{
-                        .types = .{
-                            .expected_var = a,
-                            .expected_snapshot = expected_snapshot,
-                            .actual_var = b,
-                            .actual_snapshot = actual_snapshot,
-                        },
-                        .context = context,
-                    } };
-                },
-            }
-        };
-        const problem_idx = try problems.appendProblem(gpa, problem);
-        types.union_(a, b, .{
-            .content = .err,
-            .rank = Rank.generalized,
-        });
+        // write_no_report: no record, no poison — the caller owns it.
+        if (mismatch_behavior == .write_no_report) return Result.mismatch;
+
+        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+        const problem_idx = try problems.appendProblem(gpa, .{ .type_mismatch = .{
+            .types = .{
+                .expected_var = a,
+                .expected_snapshot = expected_snapshot,
+                .actual_var = b,
+                .actual_snapshot = actual_snapshot,
+            },
+            .context = context,
+        } });
+        // Only `poison_to_err` reaches here (`write_no_report` returned above).
+        types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
         return Result{ .problem = problem_idx };
     };
 
