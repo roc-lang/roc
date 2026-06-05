@@ -408,6 +408,7 @@ test "NodeStore round trip - Expressions" {
             .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
             .constraint_fn_var = rand_idx(types.Var),
+            .surface_origin = .{ .binop = .add },
         },
     });
     try expressions.append(gpa, CIR.Expr{

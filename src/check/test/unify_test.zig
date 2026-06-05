@@ -890,6 +890,60 @@ test "unify - two empty nominal types" {
     try std.testing.expectEqual(false, result.isOk());
 }
 
+test "unify - distinct concrete builtin numeric nominals never unify" {
+    // GUARD for `structurallyIncompatiblePair` in src/check/unify.zig (the
+    // pair classifier behind `numeralCandidateStructurallyRefuted` in
+    // src/check/Check.zig): its dispatcher-position refutation (and the
+    // witness-probe assertion in `commitLiteralDefault`) assumes two
+    // CONCRETE builtin numeric nominals with different identities (origin +
+    // source decl) can never unify —
+    // there is no implicit numeric widening/coercion in the unifier. If such
+    // coercion is ever added, this test fails legibly BEFORE the structural
+    // pre-filter starts skipping probes that would now succeed.
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Builtin numeric nominals are opaque, builtin-origin, zero-arg, with an
+    // empty tag union backing and a present source decl (see
+    // `mkNumberTypeContent` in src/check/Check.zig). Mirror that shape for
+    // U8 and I64 with distinct source decls.
+    const origin_module = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("Builtin"),
+    );
+
+    const u8_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const u8_var = try env.module_env.types.freshFromContent(
+        try env.module_env.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+            try env.mkTypeIdent("U8"),
+            u8_backing,
+            &[_]Var{},
+            origin_module,
+            1, // source decl
+            true, // opaque
+            true, // builtin origin
+        ),
+    );
+
+    const i64_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
+    const i64_var = try env.module_env.types.freshFromContent(
+        try env.module_env.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+            try env.mkTypeIdent("I64"),
+            i64_backing,
+            &[_]Var{},
+            origin_module,
+            2, // source decl
+            true, // opaque
+            true, // builtin origin
+        ),
+    );
+
+    // Unify: U8 ~ I64 - must fail (no implicit numeric coercion)
+    const result = try env.unify(u8_var, i64_var);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
 test "unify - empty nominal type with non-empty tag union fails" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
@@ -1871,8 +1925,7 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .from_numeral,
-        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()) } },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1880,7 +1933,6 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
         .name = null,
         .constraints = constraints,
     } });
-    env.module_env.types.from_numeral_flex_count += 1;
 
     const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
     const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
@@ -1889,7 +1941,6 @@ test "unify - from_numeral flex with rigid retains constraints on resolved rigid
     try std.testing.expectEqual(.ok, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
-    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
     try std.testing.expect(resolved.desc.content == .rigid);
     const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
@@ -1907,8 +1958,7 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .from_numeral,
-        .num_literal = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()),
+        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.fromU128(12345, false, base.Region.zero()) } },
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -1918,13 +1968,11 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
         .name = null,
         .constraints = constraints,
     } });
-    env.module_env.types.from_numeral_flex_count += 1;
 
     const result = try env.unify(rigid_var, flex_var);
     try std.testing.expectEqual(.ok, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
-    try std.testing.expectEqual(@as(u32, 0), env.module_env.types.from_numeral_flex_count);
     try std.testing.expect(resolved.desc.content == .rigid);
     const retained_constraints = env.module_env.types.sliceStaticDispatchConstraints(resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(@as(usize, 0), retained_constraints.len);
