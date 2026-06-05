@@ -111,13 +111,13 @@ pub const SyntaxChecker = struct {
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
         if (override_text) |text| {
-            const path = uri_util.uriToPath(self.allocator, uri) catch null;
-            defer if (path) |p| self.allocator.free(p);
+            const path = try uri_util.uriToPath(self.allocator, uri);
+            defer self.allocator.free(path);
 
-            const abs_path: ?[:0]u8 = if (path) |p|
-                std.Io.Dir.cwd().realPathFileAlloc(self.std_io, p, self.allocator) catch null
-            else
-                null;
+            const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
             defer if (abs_path) |a| self.allocator.free(a);
 
             if (abs_path) |ap| {
@@ -144,9 +144,7 @@ pub const SyntaxChecker = struct {
                     });
                 }
 
-                self.dependency_graph.setContentHash(ap, new_hash) catch |err| {
-                    self.logDebug(.build, "Failed to set content hash: {s}", .{@errorName(err)});
-                };
+                try self.dependency_graph.setContentHash(ap, new_hash);
             }
         }
 
@@ -159,7 +157,7 @@ pub const SyntaxChecker = struct {
         const absolute_path = session.absolute_path;
 
         // Update dependency graph from successful build
-        self.updateDependencyGraph(env);
+        try self.updateDependencyGraph(env);
 
         var publish_list: std.ArrayList(Diagnostics.PublishDiagnostics) = .empty;
         errdefer {
@@ -169,7 +167,7 @@ pub const SyntaxChecker = struct {
         if (session.drained_reports) |drained_reports| {
             // if the build succeeded, consider snapshotting the BuildEnv for completions
             if (self.shouldSnapshotBuild(env, session.absolute_path, drained_reports)) {
-                self.storeSnapshotEnv(env_handle, session.absolute_path);
+                try self.storeSnapshotEnv(env_handle, session.absolute_path);
             }
             for (drained_reports) |entry| {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
@@ -289,7 +287,7 @@ pub const SyntaxChecker = struct {
         return true;
     }
 
-    fn storeSnapshotEnv(self: *SyntaxChecker, env_handle: *BuildEnvHandle, absolute_path: []const u8) void {
+    fn storeSnapshotEnv(self: *SyntaxChecker, env_handle: *BuildEnvHandle, absolute_path: []const u8) Allocator.Error!void {
         self.logDebug(.completion, "storeSnapshotEnv: path={s}", .{absolute_path});
         if (self.snapshot_envs.fetchRemove(absolute_path)) |removed| {
             self.logDebug(.completion, "storeSnapshotEnv: replacing existing snapshot", .{});
@@ -297,41 +295,24 @@ pub const SyntaxChecker = struct {
             self.allocator.free(removed.key);
         }
 
-        const owned_path = self.allocator.dupe(u8, absolute_path) catch return;
-        self.snapshot_envs.put(self.allocator, owned_path, env_handle) catch {
-            self.allocator.free(owned_path);
-            return;
-        };
+        const owned_path = try self.allocator.dupe(u8, absolute_path);
+        errdefer self.allocator.free(owned_path);
+        try self.snapshot_envs.put(self.allocator, owned_path, env_handle);
         env_handle.retain(owner_snapshot);
         self.logDebug(.completion, "storeSnapshotEnv: stored snapshot count={d}", .{self.snapshot_envs.count()});
     }
 
     fn clearSnapshots(self: *SyntaxChecker) void {
-        // Collect all handles and keys before clearing the map so we can
-        // release snapshot ownership without mutating the map mid-iteration.
-        var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .empty;
-        defer envs.deinit(self.allocator);
-        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer keys.deinit(self.allocator);
-
+        // Release each snapshot handle and free its key in a single pass.
+        // release() only adjusts a refcount and never mutates snapshot_envs,
+        // so iterating in place is safe.
         var it = self.snapshot_envs.iterator();
         while (it.next()) |entry| {
-            envs.append(self.allocator, entry.value_ptr.*) catch {};
-            keys.append(self.allocator, entry.key_ptr.*) catch {};
+            entry.value_ptr.*.release(owner_snapshot);
+            self.allocator.free(entry.key_ptr.*);
         }
 
-        // Clear the map FIRST so snapshot ownership is only represented by handles.
         self.snapshot_envs.clearRetainingCapacity();
-
-        // Now release all handles (with empty snapshot_envs map)
-        for (envs.items) |handle| {
-            handle.release(owner_snapshot);
-        }
-
-        // Free all keys
-        for (keys.items) |key| {
-            self.allocator.free(key);
-        }
     }
 
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
@@ -451,7 +432,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Update the dependency graph from a successful build.
-    fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) void {
+    fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) Allocator.Error!void {
         self.logDebug(.build, "[DEPS] Updating dependency graph...", .{});
 
         // Clear only relationships, preserving content/exports hashes for incremental detection
@@ -468,20 +449,14 @@ pub const SyntaxChecker = struct {
 
             self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, sched.modules.items.len });
 
-            self.dependency_graph.buildFromPackageEnv(sched) catch |err| {
-                self.logDebug(.build, "[DEPS] Failed to build dependency graph for '{s}': {s}", .{ pkg_name, @errorName(err) });
-                continue;
-            };
+            try self.dependency_graph.buildFromPackageEnv(sched);
 
             // Compute and store exports hash for each module with a valid ModuleEnv
             for (sched.modules.items) |*module_state| {
                 total_modules += 1;
 
                 if (module_state.moduleEnv()) |module_env| {
-                    const new_exports_hash = DependencyGraph.computeExportsHash(self.allocator, module_env) catch |err| {
-                        self.logDebug(.build, "[DEPS] Failed to compute exports hash for {s}: {s}", .{ module_state.path, @errorName(err) });
-                        continue;
-                    };
+                    const new_exports_hash = try DependencyGraph.computeExportsHash(self.allocator, module_env);
 
                     // Check if exports changed (for future smart invalidation)
                     const old_exports_hash = self.dependency_graph.getExportsHash(module_state.path);
@@ -768,7 +743,7 @@ pub const SyntaxChecker = struct {
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
         var documentation = if (lookup_expr_idx_opt) |lookup_expr_idx|
-            self.resolveDocForLookup(env, module_env, lookup_expr_idx)
+            try self.resolveDocForLookup(env, module_env, lookup_expr_idx)
         else
             try self.findDocumentationForRegion(env, module_env, result.region, target_offset);
 
@@ -776,16 +751,16 @@ pub const SyntaxChecker = struct {
         // call sites where direct lookup queries can miss the identifier region.
         // This keeps hover aligned with go-to-definition behavior.
         if (documentation == null) {
-            if (self.findDefinitionAtOffset(module_env, target_offset, uri)) |def_loc| {
+            if (try self.findDefinitionAtOffset(module_env, target_offset, uri)) |def_loc| {
                 if (std.mem.eql(u8, def_loc.uri, uri)) {
                     if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
                         if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
                             hover_type_var = ModuleEnv.varFrom(pattern_idx);
-                            documentation = doc_comments.extractDocCommentBefore(
+                            documentation = try doc_comments.extractDocCommentBefore(
                                 self.allocator,
                                 module_env.common.source,
                                 module_env.store.getPatternRegion(pattern_idx).start.offset,
-                            ) catch null;
+                            );
                         }
                     }
                 }
@@ -809,34 +784,34 @@ pub const SyntaxChecker = struct {
                         hover_type_text_opt = module_env.getSource(anno_region);
                     }
 
-                    const extracted = doc_comments.extractDocForDef(
+                    const extracted = try doc_comments.extractDocForDef(
                         self.allocator,
                         module_env.common.source,
                         &module_env.store,
                         def,
-                    ) catch documentation;
+                    );
                     if (extracted != null) {
                         if (documentation) |doc| self.allocator.free(doc);
                         documentation = extracted;
                     }
                 } else if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |stmt_owner| {
-                    const extracted = doc_comments.extractDocForStatement(
+                    const extracted = try doc_comments.extractDocForStatement(
                         self.allocator,
                         module_env.common.source,
                         &module_env.store,
                         stmt_owner.stmt,
                         stmt_owner.idx,
-                    ) catch documentation;
+                    );
                     if (extracted != null) {
                         if (documentation) |doc| self.allocator.free(doc);
                         documentation = extracted;
                     }
                 } else {
-                    const extracted = doc_comments.extractDocCommentBefore(
+                    const extracted = try doc_comments.extractDocCommentBefore(
                         self.allocator,
                         module_env.common.source,
                         module_env.store.getPatternRegion(def_info.pattern_idx).start.offset,
-                    ) catch documentation;
+                    );
                     if (extracted != null) {
                         if (documentation) |doc| self.allocator.free(doc);
                         documentation = extracted;
@@ -872,7 +847,7 @@ pub const SyntaxChecker = struct {
         // First, check if this is a lookup expression (e.g., a function call)
         // If so, resolve it to the definition and extract docs from there
         if (cir_queries.findLookupAtOffset(module_env, target_offset)) |expr_idx| {
-            if (self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+            if (try self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
         }
 
         // Hover positions can land on delimiters around the symbol (e.g. `(` in
@@ -881,7 +856,7 @@ pub const SyntaxChecker = struct {
         // documentation resolution.
         if (region.start.offset != target_offset) {
             if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |expr_idx| {
-                if (self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+                if (try self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
             }
         }
 
@@ -896,13 +871,13 @@ pub const SyntaxChecker = struct {
             if (cir_queries.regionContainsOffset(pattern_region, region.start.offset) or
                 pattern_region.start.offset == region.start.offset)
             {
-                return doc_comments.extractDocForDef(self.allocator, source, store, def) catch null;
+                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
             }
 
             // Also check if the expression region matches (for hovering over expressions)
             const expr_region = store.getExprRegion(def.expr);
             if (cir_queries.regionContainsOffset(expr_region, region.start.offset)) {
-                return doc_comments.extractDocForDef(self.allocator, source, store, def) catch null;
+                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
             }
         }
 
@@ -913,7 +888,7 @@ pub const SyntaxChecker = struct {
             const stmt_region = store.getStatementRegion(stmt_idx);
 
             if (cir_queries.regionContainsOffset(stmt_region, region.start.offset)) {
-                return doc_comments.extractDocForStatement(self.allocator, source, store, stmt, stmt_idx) catch null;
+                return try doc_comments.extractDocForStatement(self.allocator, source, store, stmt, stmt_idx);
             }
         }
 
@@ -921,7 +896,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve documentation for a lookup expression (local, external, or dot access).
-    fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?[]const u8 {
+    fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
         const expr = store.getExpr(expr_idx);
@@ -930,20 +905,20 @@ pub const SyntaxChecker = struct {
             .e_lookup_local => |lookup| {
                 // Local lookup - resolve to the owning def or statement
                 if (module_lookup.findDefOwningPattern(module_env, lookup.pattern_idx)) |def| {
-                    return doc_comments.extractDocForDef(self.allocator, source, store, def) catch null;
+                    return try doc_comments.extractDocForDef(self.allocator, source, store, def);
                 }
                 if (module_lookup.findStatementOwningPattern(module_env, lookup.pattern_idx)) |result| {
-                    return doc_comments.extractDocForStatement(self.allocator, source, store, result.stmt, result.idx) catch null;
+                    return try doc_comments.extractDocForStatement(self.allocator, source, store, result.stmt, result.idx);
                 }
 
                 // Some local bindings are nested inside expressions (e.g. block
                 // locals) and are not owned by top-level defs/statements. Fall
                 // back to doc extraction directly from the bound pattern region.
-                return doc_comments.extractDocCommentBefore(
+                return try doc_comments.extractDocCommentBefore(
                     self.allocator,
                     source,
                     store.getPatternRegion(lookup.pattern_idx).start.offset,
-                ) catch null;
+                );
             },
             .e_lookup_external => |lookup| {
                 // External lookup - parse "Module.function" and find docs in that module
@@ -953,7 +928,7 @@ pub const SyntaxChecker = struct {
                     const function_name = region_text[dot_pos + 1 ..];
 
                     if (findExternalModuleEnv(env, module_name)) |external_env| {
-                        return findDocInModule(self.allocator, external_env, function_name);
+                        return try findDocInModule(self.allocator, external_env, function_name);
                     }
                 }
             },
@@ -965,19 +940,19 @@ pub const SyntaxChecker = struct {
                     // Prefer local method docs first (e.g. static-dispatch methods
                     // defined in the current module), then fall back to external
                     // module lookup for builtin/qualified providers.
-                    if (findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, field_name)) |local_doc| {
+                    if (try findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, field_name)) |local_doc| {
                         return local_doc;
                     }
 
                     const type_name = module_env.getIdentText(method_owner.type_ident);
                     if (findExternalModuleEnvForMethodOwner(env, method_owner, type_name)) |external_env| {
-                        const qualified_name = std.fmt.allocPrint(
+                        const qualified_name = try std.fmt.allocPrint(
                             self.allocator,
                             "{s}.{s}",
                             .{ type_name, field_name },
-                        ) catch return null;
+                        );
                         defer self.allocator.free(qualified_name);
-                        return findDocInModule(self.allocator, external_env, qualified_name);
+                        return try findDocInModule(self.allocator, external_env, qualified_name);
                     }
                 }
             },
@@ -985,19 +960,19 @@ pub const SyntaxChecker = struct {
                 const method_name = module_env.getIdentText(method_call.method_name);
                 const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
                 if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
-                    if (findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, method_name)) |local_doc| {
+                    if (try findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, method_name)) |local_doc| {
                         return local_doc;
                     }
 
                     const type_name = module_env.getIdentText(method_owner.type_ident);
                     if (findExternalModuleEnvForMethodOwner(env, method_owner, type_name)) |external_env| {
-                        const qualified_name = std.fmt.allocPrint(
+                        const qualified_name = try std.fmt.allocPrint(
                             self.allocator,
                             "{s}.{s}",
                             .{ type_name, method_name },
-                        ) catch return null;
+                        );
                         defer self.allocator.free(qualified_name);
-                        return findDocInModule(self.allocator, external_env, qualified_name);
+                        return try findDocInModule(self.allocator, external_env, qualified_name);
                     }
                 }
             },
@@ -1095,7 +1070,7 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         owner: CIR.Statement.Idx,
         method_name: []const u8,
-    ) ?[]const u8 {
+    ) Allocator.Error!?[]const u8 {
         const entries = module_env.method_idents.entries.items;
         for (entries) |entry| {
             if (entry.key.owner != owner) continue;
@@ -1103,7 +1078,7 @@ pub const SyntaxChecker = struct {
             const entry_method_name = module_env.getIdentText(entry.key.methodIdent());
             if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
 
-            return findDocForQualifiedIdent(allocator, module_env, entry.value);
+            return try findDocForQualifiedIdent(allocator, module_env, entry.value);
         }
 
         return null;
@@ -1146,7 +1121,7 @@ pub const SyntaxChecker = struct {
 
     /// Find documentation for a definition by name in a module.
     /// Uses module_lookup infrastructure for the search, with qualified-name fallback.
-    fn findDocInModule(allocator: Allocator, module_env: *ModuleEnv, name: []const u8) ?[]const u8 {
+    fn findDocInModule(allocator: Allocator, module_env: *ModuleEnv, name: []const u8) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
@@ -1154,24 +1129,24 @@ pub const SyntaxChecker = struct {
         if (module_lookup.findDefinitionByUnqualifiedName(module_env, name)) |def_info| {
             // Try to find the full Def for annotation-aware offset
             if (module_lookup.findDefOwningPattern(module_env, def_info.pattern_idx)) |def| {
-                return doc_comments.extractDocForDef(allocator, source, store, def) catch null;
+                return try doc_comments.extractDocForDef(allocator, source, store, def);
             }
             // Fall back to statement-based extraction
             if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |result| {
-                return doc_comments.extractDocForStatement(allocator, source, store, result.stmt, result.idx) catch null;
+                return try doc_comments.extractDocForStatement(allocator, source, store, result.stmt, result.idx);
             }
             // Last resort: use pattern region directly
-            return doc_comments.extractDocCommentBefore(
+            return try doc_comments.extractDocCommentBefore(
                 allocator,
                 source,
                 store.getPatternRegion(def_info.pattern_idx).start.offset,
-            ) catch null;
+            );
         }
         return null;
     }
 
     /// Find documentation for a specific qualified identifier in a module.
-    fn findDocForQualifiedIdent(allocator: Allocator, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?[]const u8 {
+    fn findDocForQualifiedIdent(allocator: Allocator, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
@@ -1188,7 +1163,7 @@ pub const SyntaxChecker = struct {
             };
 
             if (ident_idx.eql(qualified_ident)) {
-                return doc_comments.extractDocForDef(allocator, source, store, def) catch null;
+                return try doc_comments.extractDocForDef(allocator, source, store, def);
             }
         }
 
@@ -1209,7 +1184,7 @@ pub const SyntaxChecker = struct {
             };
 
             if (ident_idx.eql(qualified_ident)) {
-                return doc_comments.extractDocForStatement(allocator, source, store, stmt, stmt_idx) catch null;
+                return try doc_comments.extractDocForStatement(allocator, source, store, stmt, stmt_idx);
             }
         }
 
@@ -1248,7 +1223,7 @@ pub const SyntaxChecker = struct {
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
 
         // Find the definition at this position
-        const result = self.findDefinitionAtOffset(module_env, target_offset, uri) orelse return null;
+        const result = try self.findDefinitionAtOffset(module_env, target_offset, uri) orelse return null;
 
         return result;
     }
@@ -1259,7 +1234,7 @@ pub const SyntaxChecker = struct {
 
     /// Find the definition location for the expression at the given byte offset.
     /// Looks for lookups (e_lookup_local, e_lookup_external) and returns the definition location.
-    fn findDefinitionAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32, current_uri: []const u8) ?DefinitionResult {
+    fn findDefinitionAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32, current_uri: []const u8) anyerror!?DefinitionResult {
         var best_expr: ?CIR.Expr.Idx = null;
         var best_size: u32 = std.math.maxInt(u32);
 
@@ -1271,7 +1246,7 @@ pub const SyntaxChecker = struct {
             // Check type annotation on this definition
             if (def.annotation) |anno_idx| {
                 const annotation = module_env.store.getAnnotation(anno_idx);
-                if (self.findTypeAnnoAtOffset(module_env, annotation.anno, target_offset)) |result| {
+                if (try self.findTypeAnnoAtOffset(module_env, annotation.anno, target_offset)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
                         return DefinitionResult{
@@ -1289,7 +1264,7 @@ pub const SyntaxChecker = struct {
 
             if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
                 // First check for type annotations in nested blocks
-                if (self.findTypeAnnoInExpr(module_env, expr_idx, target_offset, current_uri)) |result| {
+                if (try self.findTypeAnnoInExpr(module_env, expr_idx, target_offset, current_uri)) |result| {
                     return result;
                 }
                 // Then search for lookup expressions
@@ -1315,7 +1290,7 @@ pub const SyntaxChecker = struct {
                     const module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
 
                     // Try to find the module in the schedulers
-                    if (self.findModuleByName(module_name)) |result| {
+                    if (try self.findModuleByName(module_name)) |result| {
                         return result;
                     }
                 }
@@ -1332,7 +1307,7 @@ pub const SyntaxChecker = struct {
             };
 
             if (maybe_type_anno) |type_anno_idx| {
-                if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
+                if (try self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
                         return DefinitionResult{
@@ -1393,7 +1368,7 @@ pub const SyntaxChecker = struct {
                     if (std.mem.find(u8, region_text, ".")) |dot_pos| {
                         const module_name = region_text[0..dot_pos];
                         self.logDebug(.build, "[DEF] e_lookup_external: extracted module='{s}' from '{s}'", .{ module_name, region_text });
-                        return self.findModuleByName(module_name);
+                        return try self.findModuleByName(module_name);
                     }
                     self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
                     return null;
@@ -1402,38 +1377,26 @@ pub const SyntaxChecker = struct {
                     // Static dispatch - cursor is on method name
                     // Get the type of the receiver to find which module provides the method
                     const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
-                    var type_writer = module_env.initTypeWriter() catch |err| {
-                        self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
-                        return null;
-                    };
+                    var type_writer = try module_env.initTypeWriter();
                     defer type_writer.deinit();
 
-                    type_writer.write(receiver_type_var, .one_line) catch |err| {
-                        self.logDebug(.build, "[DEF] type_writer.write failed: {s}", .{@errorName(err)});
-                        return null;
-                    };
+                    try type_writer.write(receiver_type_var, .one_line);
                     const type_str = type_writer.get();
 
                     const base_type = extractBaseTypeName(type_str);
 
                     self.logDebug(.build, "[DEF] e_dot_access type_str='{s}', base_type='{s}'", .{ type_str, base_type });
 
-                    return self.findModuleByName(base_type);
+                    return try self.findModuleByName(base_type);
                 },
                 .e_dispatch_call => |method_call| {
                     // Attached method call - navigate to the provider module for the receiver type
                     // Get the type of the receiver to find which module provides the method
                     const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                    var type_writer = module_env.initTypeWriter() catch |err| {
-                        self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
-                        return null;
-                    };
+                    var type_writer = try module_env.initTypeWriter();
                     defer type_writer.deinit();
 
-                    type_writer.write(receiver_type_var, .one_line) catch |err| {
-                        self.logDebug(.build, "[DEF] type_writer.write failed: {s}", .{@errorName(err)});
-                        return null;
-                    };
+                    try type_writer.write(receiver_type_var, .one_line);
                     const type_str = type_writer.get();
 
                     // Extract the base type name (e.g., "Str" from complex type)
@@ -1443,7 +1406,7 @@ pub const SyntaxChecker = struct {
 
                     // Find the module for this type
                     // TODO: Also navigate to the specific method definition within the module
-                    const result = self.findModuleByName(base_type);
+                    const result = try self.findModuleByName(base_type);
                     if (result == null) {
                         self.logDebug(.build, "[DEF] findModuleByName returned null for '{s}'", .{base_type});
                     }
@@ -1459,7 +1422,7 @@ pub const SyntaxChecker = struct {
     // isBuiltinType moved to completion/builtins.zig module
 
     /// Helper function to find a module by name and return a DefinitionResult pointing to it
-    fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) ?DefinitionResult {
+    fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) anyerror!?DefinitionResult {
         const env = self.getModuleLookupEnv() orelse return null;
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
@@ -1473,12 +1436,11 @@ pub const SyntaxChecker = struct {
             self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
 
             // Write embedded builtin source to roc cache
-            const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch return null;
-            const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch {
-                self.allocator.free(cache_dir);
-                return null;
+            const cache_dir = try self.cache_config.getModuleCacheDir(self.allocator);
+            const builtin_cache_path = blk: {
+                defer self.allocator.free(cache_dir);
+                break :blk try std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" });
             };
-            self.allocator.free(cache_dir);
 
             // Write file if it doesn't exist
             if (std.Io.Dir.cwd().access(self.std_io, builtin_cache_path, .{})) |_| {
@@ -1499,11 +1461,10 @@ pub const SyntaxChecker = struct {
                 };
             }
 
-            const module_uri = uri_util.pathToUri(self.allocator, builtin_cache_path) catch {
-                self.allocator.free(builtin_cache_path);
-                return null;
+            const module_uri = blk: {
+                defer self.allocator.free(builtin_cache_path);
+                break :blk try uri_util.pathToUri(self.allocator, builtin_cache_path);
             };
-            self.allocator.free(builtin_cache_path);
 
             return DefinitionResult{
                 .uri = module_uri,
@@ -1516,7 +1477,7 @@ pub const SyntaxChecker = struct {
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
             if (sched.getModuleState(base_name)) |mod_state| {
-                const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch return null;
+                const module_uri = try uri_util.pathToUri(self.allocator, mod_state.path);
                 return DefinitionResult{
                     .uri = module_uri,
                     .range = .{
@@ -1559,7 +1520,7 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         type_anno_idx: CIR.TypeAnno.Idx,
         target_offset: u32,
-    ) ?DefinitionResult {
+    ) anyerror!?DefinitionResult {
         const region = module_env.store.getTypeAnnoRegion(type_anno_idx);
         if (!cir_queries.regionContainsOffset(region, target_offset)) return null;
 
@@ -1587,7 +1548,7 @@ pub const SyntaxChecker = struct {
                     },
                     .builtin, .external, .pending => {
                         // Builtin, external, or pending type - find the module
-                        return self.findModuleByName(type_name);
+                        return try self.findModuleByName(type_name);
                     },
                 }
             },
@@ -1595,7 +1556,7 @@ pub const SyntaxChecker = struct {
                 // Type with args like `List(Str)` - check args first, then the base type
                 const args_slice = module_env.store.sliceTypeAnnos(apply.args);
                 for (args_slice) |arg_idx| {
-                    if (self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
                         return result;
                     }
                 }
@@ -1618,7 +1579,7 @@ pub const SyntaxChecker = struct {
                     },
                     .builtin, .external, .pending => {
                         // Builtin, external, or pending type - find the module
-                        return self.findModuleByName(type_name);
+                        return try self.findModuleByName(type_name);
                     },
                 }
             },
@@ -1627,7 +1588,7 @@ pub const SyntaxChecker = struct {
                 const fields_slice = module_env.store.sliceAnnoRecordFields(rec.fields);
                 for (fields_slice) |field_idx| {
                     const field = module_env.store.getAnnoRecordField(field_idx);
-                    if (self.findTypeAnnoAtOffset(module_env, field.ty, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, field.ty, target_offset)) |result| {
                         return result;
                     }
                 }
@@ -1637,12 +1598,12 @@ pub const SyntaxChecker = struct {
                 // Check tag types
                 const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
-                    if (self.findTypeAnnoAtOffset(module_env, tag_idx, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, tag_idx, target_offset)) |result| {
                         return result;
                     }
                 }
                 if (tu.ext) |ext_idx| {
-                    if (self.findTypeAnnoAtOffset(module_env, ext_idx, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, ext_idx, target_offset)) |result| {
                         return result;
                     }
                 }
@@ -1652,7 +1613,7 @@ pub const SyntaxChecker = struct {
                 // Check tag argument types
                 const args_slice = module_env.store.sliceTypeAnnos(t.args);
                 for (args_slice) |arg_idx| {
-                    if (self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
                         return result;
                     }
                 }
@@ -1662,11 +1623,11 @@ pub const SyntaxChecker = struct {
                 // Check function argument and return types
                 const args_slice = module_env.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
-                    if (self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
                         return result;
                     }
                 }
-                if (self.findTypeAnnoAtOffset(module_env, f.ret, target_offset)) |result| {
+                if (try self.findTypeAnnoAtOffset(module_env, f.ret, target_offset)) |result| {
                     return result;
                 }
                 return null;
@@ -1675,7 +1636,7 @@ pub const SyntaxChecker = struct {
                 // Check tuple element types
                 const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
                 for (elems_slice) |elem_idx| {
-                    if (self.findTypeAnnoAtOffset(module_env, elem_idx, target_offset)) |result| {
+                    if (try self.findTypeAnnoAtOffset(module_env, elem_idx, target_offset)) |result| {
                         return result;
                     }
                 }
@@ -1683,7 +1644,7 @@ pub const SyntaxChecker = struct {
             },
             .parens => |p| {
                 // Unwrap and recurse
-                return self.findTypeAnnoAtOffset(module_env, p.anno, target_offset);
+                return try self.findTypeAnnoAtOffset(module_env, p.anno, target_offset);
             },
             .rigid_var, .rigid_var_lookup, .underscore, .malformed => {
                 // These don't have type definitions to navigate to
@@ -1699,7 +1660,7 @@ pub const SyntaxChecker = struct {
         expr_idx: CIR.Expr.Idx,
         target_offset: u32,
         current_uri: []const u8,
-    ) ?DefinitionResult {
+    ) anyerror!?DefinitionResult {
         const expr = module_env.store.getExpr(expr_idx);
 
         switch (expr) {
@@ -1720,7 +1681,7 @@ pub const SyntaxChecker = struct {
                     };
 
                     if (maybe_type_anno) |type_anno_idx| {
-                        if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
+                        if (try self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
                             if (result.uri.len == 0) {
                                 return DefinitionResult{
                                     .uri = current_uri,
@@ -1734,50 +1695,50 @@ pub const SyntaxChecker = struct {
                     // Recurse into expressions within the statement
                     const stmt_parts = module_lookup.getStatementParts(stmt);
                     if (stmt_parts.expr) |stmt_expr| {
-                        if (self.findTypeAnnoInExpr(module_env, stmt_expr, target_offset, current_uri)) |result| {
+                        if (try self.findTypeAnnoInExpr(module_env, stmt_expr, target_offset, current_uri)) |result| {
                             return result;
                         }
                     }
                     if (stmt_parts.expr2) |stmt_expr| {
-                        if (self.findTypeAnnoInExpr(module_env, stmt_expr, target_offset, current_uri)) |result| {
+                        if (try self.findTypeAnnoInExpr(module_env, stmt_expr, target_offset, current_uri)) |result| {
                             return result;
                         }
                     }
                 }
                 // Also check final expression
-                return self.findTypeAnnoInExpr(module_env, block.final_expr, target_offset, current_uri);
+                return try self.findTypeAnnoInExpr(module_env, block.final_expr, target_offset, current_uri);
             },
             .e_lambda => |lambda| {
-                return self.findTypeAnnoInExpr(module_env, lambda.body, target_offset, current_uri);
+                return try self.findTypeAnnoInExpr(module_env, lambda.body, target_offset, current_uri);
             },
             .e_closure => |closure| {
-                return self.findTypeAnnoInExpr(module_env, closure.lambda_idx, target_offset, current_uri);
+                return try self.findTypeAnnoInExpr(module_env, closure.lambda_idx, target_offset, current_uri);
             },
             .e_if => |if_expr| {
                 const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
                 for (branch_indices) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    if (self.findTypeAnnoInExpr(module_env, branch.cond, target_offset, current_uri)) |result| {
+                    if (try self.findTypeAnnoInExpr(module_env, branch.cond, target_offset, current_uri)) |result| {
                         return result;
                     }
-                    if (self.findTypeAnnoInExpr(module_env, branch.body, target_offset, current_uri)) |result| {
+                    if (try self.findTypeAnnoInExpr(module_env, branch.body, target_offset, current_uri)) |result| {
                         return result;
                     }
                 }
-                return self.findTypeAnnoInExpr(module_env, if_expr.final_else, target_offset, current_uri);
+                return try self.findTypeAnnoInExpr(module_env, if_expr.final_else, target_offset, current_uri);
             },
             .e_match => |match_expr| {
-                if (self.findTypeAnnoInExpr(module_env, match_expr.cond, target_offset, current_uri)) |result| {
+                if (try self.findTypeAnnoInExpr(module_env, match_expr.cond, target_offset, current_uri)) |result| {
                     return result;
                 }
                 const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
                 for (branch_indices) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
-                    if (self.findTypeAnnoInExpr(module_env, branch.value, target_offset, current_uri)) |result| {
+                    if (try self.findTypeAnnoInExpr(module_env, branch.value, target_offset, current_uri)) |result| {
                         return result;
                     }
                     if (branch.guard) |guard| {
-                        if (self.findTypeAnnoInExpr(module_env, guard, target_offset, current_uri)) |result| {
+                        if (try self.findTypeAnnoInExpr(module_env, guard, target_offset, current_uri)) |result| {
                             return result;
                         }
                     }
@@ -1785,12 +1746,12 @@ pub const SyntaxChecker = struct {
                 return null;
             },
             .e_call => |call| {
-                if (self.findTypeAnnoInExpr(module_env, call.func, target_offset, current_uri)) |result| {
+                if (try self.findTypeAnnoInExpr(module_env, call.func, target_offset, current_uri)) |result| {
                     return result;
                 }
                 const args = module_env.store.sliceExpr(call.args);
                 for (args) |arg| {
-                    if (self.findTypeAnnoInExpr(module_env, arg, target_offset, current_uri)) |result| {
+                    if (try self.findTypeAnnoInExpr(module_env, arg, target_offset, current_uri)) |result| {
                         return result;
                     }
                 }
@@ -1855,7 +1816,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Find all lookups that reference this pattern
-        var lookup_regions = cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
+        var lookup_regions = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
         defer lookup_regions.deinit(self.allocator);
         try regions.appendSlice(self.allocator, lookup_regions.items);
 
@@ -1881,11 +1842,15 @@ pub const SyntaxChecker = struct {
         const env = env_handle.envPtr();
 
         // Convert URI to absolute path to match against module paths
-        const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
+        const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, allocator) catch
-            allocator.dupeZ(u8, path) catch return &[_]SymbolInformation{};
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // File not resolvable on disk (e.g. unsaved buffer): fall back to the
+            // given path verbatim.
+            else => try allocator.dupeZ(u8, path),
+        };
         defer allocator.free(absolute_path);
 
         // Override readFile for the current file so in-memory source is used.
@@ -1901,7 +1866,7 @@ pub const SyntaxChecker = struct {
         };
 
         // Drain reports but ignore them for symbols (must still free to avoid leaks)
-        const drained = env.drainReports() catch return &[_]SymbolInformation{};
+        const drained = try env.drainReports();
         defer self.freeDrainedWithReports(drained);
 
         // Get the module env from the scheduler
@@ -1928,7 +1893,7 @@ pub const SyntaxChecker = struct {
         };
 
         // Build line offset table
-        const line_offsets = pos.buildLineOffsets(allocator, source) catch return &[_]SymbolInformation{};
+        const line_offsets = try pos.buildLineOffsets(allocator, source);
         defer line_offsets.deinit();
 
         var symbols: std.ArrayList(SymbolInformation) = .empty;
@@ -2016,10 +1981,10 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve a local binding's type var for chained access completion.
-    fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32) ?types.Var {
+    fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32) Allocator.Error!?types.Var {
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
-        scope.build(module_env) catch return null;
+        try scope.build(module_env);
 
         for (scope.bindings.items) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
@@ -2062,7 +2027,7 @@ pub const SyntaxChecker = struct {
         env: *BuildEnv,
         access_chain: []const u8,
         chain_start: u32,
-    ) ?struct { module_env: *ModuleEnv, type_var: types.Var } {
+    ) Allocator.Error!?struct { module_env: *ModuleEnv, type_var: types.Var } {
         var idx: usize = 0;
         const first = nextChainSegment(access_chain, idx) orelse return null;
         idx = first.next;
@@ -2078,7 +2043,7 @@ pub const SyntaxChecker = struct {
             // NOTE: Nested nominal/module members are often stored as qualified
             // identifiers (e.g. `MyType.Sub`). Prefer exact lookup first, then
             // try the qualified path and finally unqualified suffix matching.
-            const def_info = findDefinitionForNamespaceMember(
+            const def_info = try findDefinitionForNamespaceMember(
                 self.allocator,
                 resolved_env,
                 first.segment,
@@ -2087,33 +2052,33 @@ pub const SyntaxChecker = struct {
             var type_var = ModuleEnv.varFrom(def_info.pattern_idx);
             var namespace_prefix = std.ArrayList(u8).empty;
             defer namespace_prefix.deinit(self.allocator);
-            namespace_prefix.appendSlice(self.allocator, first.segment) catch return null;
-            namespace_prefix.append(self.allocator, '.') catch return null;
-            namespace_prefix.appendSlice(self.allocator, member.segment) catch return null;
+            try namespace_prefix.appendSlice(self.allocator, first.segment);
+            try namespace_prefix.append(self.allocator, '.');
+            try namespace_prefix.appendSlice(self.allocator, member.segment);
 
             while (nextChainSegment(access_chain, idx)) |segment| {
                 idx = segment.next;
 
                 // Prefer namespace/member traversal for uppercase segments before
                 // falling back to structural field traversal.
-                if (findDefinitionByQualifiedPrefix(self.allocator, resolved_env, namespace_prefix.items, segment.segment)) |next_def| {
+                if (try findDefinitionByQualifiedPrefix(self.allocator, resolved_env, namespace_prefix.items, segment.segment)) |next_def| {
                     type_var = ModuleEnv.varFrom(next_def.pattern_idx);
-                    namespace_prefix.append(self.allocator, '.') catch return null;
-                    namespace_prefix.appendSlice(self.allocator, segment.segment) catch return null;
+                    try namespace_prefix.append(self.allocator, '.');
+                    try namespace_prefix.appendSlice(self.allocator, segment.segment);
                     continue;
                 }
 
                 const next_var = builder.getFieldTypeVarFromTypeVar(resolved_env, type_var, segment.segment) orelse return null;
                 type_var = next_var;
 
-                namespace_prefix.append(self.allocator, '.') catch return null;
-                namespace_prefix.appendSlice(self.allocator, segment.segment) catch return null;
+                try namespace_prefix.append(self.allocator, '.');
+                try namespace_prefix.appendSlice(self.allocator, segment.segment);
             }
 
             return .{ .module_env = resolved_env, .type_var = type_var };
         }
 
-        var type_var = self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start) orelse return null;
+        var type_var = try self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start) orelse return null;
         while (nextChainSegment(access_chain, idx)) |segment| {
             idx = segment.next;
             const next_var = builder.getFieldTypeVarFromTypeVar(module_env, type_var, segment.segment) orelse return null;
@@ -2133,12 +2098,12 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         namespace_prefix: []const u8,
         member_name: []const u8,
-    ) ?module_lookup.DefinitionInfo {
+    ) Allocator.Error!?module_lookup.DefinitionInfo {
         if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
             return def_info;
         }
 
-        if (findDefinitionByQualifiedPrefix(allocator, module_env, namespace_prefix, member_name)) |def_info| {
+        if (try findDefinitionByQualifiedPrefix(allocator, module_env, namespace_prefix, member_name)) |def_info| {
             return def_info;
         }
 
@@ -2151,8 +2116,8 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         prefix: []const u8,
         member_name: []const u8,
-    ) ?module_lookup.DefinitionInfo {
-        const qualified = std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name }) catch return null;
+    ) Allocator.Error!?module_lookup.DefinitionInfo {
+        const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, member_name });
         defer allocator.free(qualified);
         return module_lookup.findDefinitionByName(module_env, qualified);
     }
@@ -2326,7 +2291,7 @@ pub const SyntaxChecker = struct {
                 self.logDebug(.completion, "completion: after_record_dot for '{s}' at offset {d}", .{ record_access.access_chain, record_access.member_start });
                 if (module_env_opt) |module_env| {
                     var chain_resolved = false;
-                    if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, record_access.access_chain, record_access.chain_start)) |resolved| {
+                    if (try resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, record_access.access_chain, record_access.chain_start)) |resolved| {
                         chain_resolved = true;
                         try builder.addFieldsFromTypeVar(resolved.module_env, resolved.type_var);
                         try builder.addTupleIndexCompletions(resolved.module_env, resolved.type_var);
@@ -2400,7 +2365,7 @@ pub const SyntaxChecker = struct {
                         // Fall back to resolving the call chain textually.
                         if (info.call_chain) |call_chain| {
                             self.logDebug(.completion, "completion: after_receiver_dot fallback using call_chain='{s}'", .{call_chain});
-                            if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, call_chain, info.chain_start)) |resolved| {
+                            if (try resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, call_chain, info.chain_start)) |resolved| {
                                 const ret_type = extractReturnType(resolved.module_env, resolved.type_var);
                                 try builder.addFieldsFromTypeVar(resolved.module_env, ret_type);
                                 try builder.addTupleIndexCompletions(resolved.module_env, ret_type);

@@ -473,6 +473,7 @@ pub const WasmError = enum(u8) {
 const ResponseWriteError = error{
     OutOfBufferSpace,
     WriteFailed,
+    OutOfMemory,
 };
 
 fn cleanupReplState() void {
@@ -588,6 +589,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
         error.WriteFailed => @intFromEnum(WasmError.internal_error),
+        error.OutOfMemory => @intFromEnum(WasmError.internal_error),
     };
 }
 
@@ -816,7 +818,7 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -848,7 +850,7 @@ fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -1302,7 +1304,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.tokenize_reports.append(report) catch continue;
+        try result.tokenize_reports.append(report);
     }
 
     // Collect parse diagnostics with additional error handling
@@ -1312,7 +1314,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.parse_reports.append(report) catch continue;
+        try result.parse_reports.append(report);
     }
 
     // Stage 2: Canonicalization (always run, even with parse errors)
@@ -1390,7 +1392,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.can_reports.append(report) catch continue;
+        try result.can_reports.append(report);
     }
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
@@ -1560,10 +1562,10 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
     var diagnostics = std.array_list.Managed(Diagnostic).init(allocator);
     defer diagnostics.deinit();
-    extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.parse_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.can_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.type_reports) catch {};
+    try extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.parse_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.can_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.type_reports);
 
     // TIER 2: Count ALL diagnostics from reports (for SUMMARY display)
     var total_errors: u32 = 0;
@@ -2149,7 +2151,7 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
 fn extractDiagnosticsFromReports(
     diagnostics: *std.array_list.Managed(Diagnostic),
     reports: std.array_list.Managed(reporting.Report),
-) !void {
+) Allocator.Error!void {
     var count: usize = 0;
     const max_diagnostics = 100;
     for (reports.items) |*report| {

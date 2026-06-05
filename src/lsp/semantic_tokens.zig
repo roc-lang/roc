@@ -330,7 +330,7 @@ pub fn extractSemanticTokensWithImports(
 
     if (imported_envs) |envs| {
         for (envs) |imp_env| {
-            import_context.addModuleExports(imp_env) catch {};
+            try import_context.addModuleExports(imp_env);
         }
     }
 

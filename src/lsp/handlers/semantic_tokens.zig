@@ -44,17 +44,21 @@ pub fn handler(comptime ServerType: type) type {
             defer if (imported_envs) |envs| self.allocator.free(envs);
 
             // Convert URI to path and get imports
-            if (uri_util.uriToPath(self.allocator, params.textDocument.uri)) |path| {
+            {
+                const path = try uri_util.uriToPath(self.allocator, params.textDocument.uri);
                 defer self.allocator.free(path);
-                // Get absolute path
-                if (std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator)) |abs_path| {
-                    defer self.allocator.free(abs_path);
+                // Get absolute path. A file that can't be resolved on disk (e.g.
+                // an unsaved buffer) simply yields no cross-module import context.
+                const abs_path = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => null,
+                };
+                if (abs_path) |ap| {
+                    defer self.allocator.free(ap);
                     // Get imported modules from the syntax checker's cached build
-                    if (self.syntax_checker.getImportedModuleEnvs(abs_path)) |maybe_envs| {
-                        imported_envs = maybe_envs;
-                    } else |_| {}
-                } else |_| {}
-            } else |_| {}
+                    imported_envs = try self.syntax_checker.getImportedModuleEnvs(ap);
+                }
+            }
 
             // Extract semantic tokens using CIR with cross-module context
             const tokens = semantic_tokens.extractSemanticTokensWithImports(

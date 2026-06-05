@@ -87,7 +87,13 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Try CIR-based highlighting first (scope-aware)
-            if (self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch null) |result| {
+            const cir_highlights = self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // Non-OOM failures (e.g. unresolvable build) fall through to
+                // token-based highlighting below.
+                else => null,
+            };
+            if (cir_highlights) |result| {
                 defer result.deinit(self.allocator);
 
                 // Convert to DocumentHighlight array

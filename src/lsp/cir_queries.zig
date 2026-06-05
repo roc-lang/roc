@@ -260,6 +260,8 @@ const CollectReferencesContext = struct {
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
     results: *std.ArrayList(LspRange),
+    /// Set when appending a result fails; surfaced by the driving function.
+    oom: bool = false,
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
@@ -268,7 +270,10 @@ const CollectReferencesContext = struct {
                 if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
                     const region = ctx.store.getExprRegion(expr_idx);
                     if (regionToRange(ctx.module_env, region)) |range| {
-                        ctx.results.append(ctx.allocator, range) catch {};
+                        ctx.results.append(ctx.allocator, range) catch {
+                            ctx.oom = true;
+                            return .stop;
+                        };
                     }
                 }
             },
@@ -473,8 +478,9 @@ pub fn collectLookupReferences(
     module_env: *ModuleEnv,
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
-) std.ArrayList(LspRange) {
+) std.mem.Allocator.Error!std.ArrayList(LspRange) {
     var results: std.ArrayList(LspRange) = .empty;
+    errdefer results.deinit(allocator);
 
     var ctx = CollectReferencesContext{
         .store = &module_env.store,
@@ -500,6 +506,8 @@ pub fn collectLookupReferences(
     if (!visitor.stopped) {
         visitor.walkModule(&module_env.store, module_env.all_statements);
     }
+
+    if (ctx.oom) return error.OutOfMemory;
 
     return results;
 }

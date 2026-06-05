@@ -1025,7 +1025,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
-    if (readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path)) |source| {
         return rocRunDefaultApp(ctx, args, source);
     }
 
@@ -1396,26 +1396,39 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
 /// Check if a file is a default_app (headerless file with a main! function).
 /// On success, returns the file source (caller owns the allocation).
 /// Returns null if the file is not a default_app.
-fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) ?[]const u8 {
+fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) Allocator.Error!?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch return null;
+    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // Any other read failure (e.g. file not found) means this isn't a
+        // default app to handle here; fall through to the normal path.
+        else => return null,
+    };
 
     const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch {
         ctx.gpa.free(source);
-        return null;
+        return error.OutOfMemory;
     };
 
     var env = ModuleEnv.init(ctx.gpa, source) catch {
         ctx.gpa.free(source);
-        return null;
+        return error.OutOfMemory;
     };
     defer env.deinit();
     env.common.source = source;
     env.module_name = module_name;
 
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
-        ctx.gpa.free(source);
-        return null;
+    const ast = parse.parse(ctx.gpa, &env.common) catch |err| switch (err) {
+        error.OutOfMemory => {
+            ctx.gpa.free(source);
+            return error.OutOfMemory;
+        },
+        // A too-nested file isn't a default app to handle here; fall through
+        // to the normal path, which reports the underlying parse error.
+        error.TooNested => {
+            ctx.gpa.free(source);
+            return null;
+        },
     };
     defer ast.deinit();
 
@@ -2334,21 +2347,21 @@ fn resolvePlatformSpecToPaths(ctx: *CliCtx, platform_spec: []const u8, base_dir:
 /// - Windows: %LOCALAPPDATA%\roc\packages\
 fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
     // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+    if (try getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
         defer allocator.free(xdg_cache);
         return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
     }
 
     // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
     if (comptime builtin.os.tag == .windows) {
-        if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+        if (try getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
             defer allocator.free(local_app_data);
             return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
         }
     }
 
     // Fall back to ~/.cache/roc/packages (Unix)
-    if (getEnvVar(allocator, "HOME")) |home| {
+    if (try getEnvVar(allocator, "HOME")) |home| {
         defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
     }
@@ -2358,12 +2371,12 @@ fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
 
 /// Cross-platform helper to get environment variable.
 /// Returns null if the variable is not set. Caller must free the returned slice.
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
-    const key_z = allocator.dupeZ(u8, key) catch return null;
+fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) Allocator.Error!?[]const u8 {
+    const key_z = try allocator.dupeZ(u8, key);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
     const len = std.mem.len(value);
-    return allocator.dupe(u8, value[0..len]) catch null;
+    return try allocator.dupe(u8, value[0..len]);
 }
 
 /// Resolve a URL bundle (platform or package) by downloading and caching it.
@@ -3043,9 +3056,9 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     // Headerless apps use a simple builtin platform and cannot be compiled
-    if (readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path)) |source| {
         ctx.gpa.free(source);
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .build_not_supported_for_headerless = .{ .app_path = args.path },
         });
         return error.UnsupportedTarget;
@@ -3394,7 +3407,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3428,7 +3441,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         return error.UnsupportedTarget;
     } else blk: {
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            try renderProblem(ctx.gpa, ctx.io.stderr(), .{
                 .platform_validation_failed = .{
                     .message = "No compatible target found. The platform does not support any target compatible with this system.",
                 },
@@ -3764,7 +3777,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3798,7 +3811,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         return error.UnsupportedTarget;
     } else blk: {
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            try renderProblem(ctx.gpa, ctx.io.stderr(), .{
                 .platform_validation_failed = .{
                     .message = "No compatible target found. The platform does not support any target compatible with this system.",
                 },
@@ -4902,13 +4915,13 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
 }
 
 fn envVarNonEmpty(allocator: Allocator, name: []const u8) !bool {
-    const value = getEnvVar(allocator, name) orelse return false;
+    const value = (try getEnvVar(allocator, name)) orelse return false;
     defer allocator.free(value);
     return value.len > 0;
 }
 
 fn envVarEquals(allocator: Allocator, name: []const u8, expected: []const u8) !bool {
-    const value = getEnvVar(allocator, name) orelse return false;
+    const value = (try getEnvVar(allocator, name)) orelse return false;
     defer allocator.free(value);
     return std.mem.eql(u8, value, expected);
 }

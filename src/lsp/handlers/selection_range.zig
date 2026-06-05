@@ -107,7 +107,12 @@ pub fn handler(comptime ServerType: type) type {
                     };
                 };
 
-                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch null;
+                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    // An unparseable file or out-of-range position yields a null
+                    // selection range for this position (allowed by LSP).
+                    else => null,
+                };
                 try results.append(self.allocator, selection_range);
             }
 
