@@ -439,7 +439,7 @@ pub const BuildEnv = struct {
 
     /// Register a directory as a workspace root, skipping it if an existing root
     /// already contains it. Takes ownership of nothing; copies `dir` when stored.
-    fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) !void {
+    fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) Allocator.Error!void {
         if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
         try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
     }
@@ -1519,7 +1519,7 @@ pub const BuildEnv = struct {
         });
     }
 
-    fn putPackageShorthand(self: *BuildEnv, pack: *Package, alias: []const u8, target_name: []const u8, root_file: []const u8) ![]const u8 {
+    fn putPackageShorthand(self: *BuildEnv, pack: *Package, alias: []const u8, target_name: []const u8, root_file: []const u8) Allocator.Error![]const u8 {
         const key = try self.gpa.dupe(u8, alias);
         errdefer self.gpa.free(key);
 
