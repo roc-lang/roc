@@ -720,7 +720,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn addWatchRecursiveLinux(self: *Watcher, path: []const u8) Allocator.Error!void {
+    fn addWatchRecursiveLinux(self: *Watcher, path: []const u8) (Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{InotifyAddWatchFailed})!void {
         const flags = std.os.linux.IN.CREATE | std.os.linux.IN.DELETE |
             std.os.linux.IN.MODIFY | std.os.linux.IN.MOVED_FROM |
             std.os.linux.IN.MOVED_TO | std.os.linux.IN.CLOSE_WRITE;
@@ -850,7 +850,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn setupWindowsWatch(self: *Watcher, path: []const u8) Allocator.Error!void {
+    fn setupWindowsWatch(self: *Watcher, path: []const u8) (Allocator.Error || error{ InvalidUtf8, FailedToOpenDirectory, FailedToCreateEvent, ReadDirectoryChangesFailed })!void {
         // Convert path to wide string
         var path_w_buf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
         const path_w_len = try std.unicode.utf8ToUtf16Le(path_w_buf[0..], path);
@@ -926,7 +926,7 @@ pub const Watcher = struct {
         try self.startWindowsRead(self.impl.handles.items.len - 1);
     }
 
-    fn startWindowsRead(self: *Watcher, index: usize) Allocator.Error!void {
+    fn startWindowsRead(self: *Watcher, index: usize) (Allocator.Error || error{ReadDirectoryChangesFailed})!void {
         const ReadDirectoryChangesW = struct {
             extern "kernel32" fn ReadDirectoryChangesW(
                 hDirectory: std.os.windows.HANDLE,
