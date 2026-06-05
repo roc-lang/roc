@@ -1274,7 +1274,7 @@ pub const BuildEnv = struct {
                 }
 
                 // Extract targets config from the platform AST
-                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast) catch null;
+                info.targets_config = try targets_config_mod.TargetsConfig.fromAST(self.gpa, ast);
             },
             .module => {
                 info.kind = .module;

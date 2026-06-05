@@ -330,7 +330,7 @@ pub fn extractSemanticTokensWithImports(
 
     if (imported_envs) |envs| {
         for (envs) |imp_env| {
-            import_context.addModuleExports(imp_env) catch {};
+            try import_context.addModuleExports(imp_env);
         }
     }
 
@@ -385,7 +385,7 @@ const ImportContext = struct {
     }
 
     /// Add exports from a module to the context.
-    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) !void {
+    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) std.mem.Allocator.Error!void {
         const module_name = module_env.module_name;
         if (module_name.len == 0) return;
 

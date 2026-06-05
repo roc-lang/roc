@@ -169,7 +169,7 @@ pub const SyntaxChecker = struct {
         if (session.drained_reports) |drained_reports| {
             // if the build succeeded, consider snapshotting the BuildEnv for completions
             if (self.shouldSnapshotBuild(env, session.absolute_path, drained_reports)) {
-                self.storeSnapshotEnv(env_handle, session.absolute_path);
+                try self.storeSnapshotEnv(env_handle, session.absolute_path);
             }
             for (drained_reports) |entry| {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
@@ -289,7 +289,7 @@ pub const SyntaxChecker = struct {
         return true;
     }
 
-    fn storeSnapshotEnv(self: *SyntaxChecker, env_handle: *BuildEnvHandle, absolute_path: []const u8) void {
+    fn storeSnapshotEnv(self: *SyntaxChecker, env_handle: *BuildEnvHandle, absolute_path: []const u8) std.mem.Allocator.Error!void {
         self.logDebug(.completion, "storeSnapshotEnv: path={s}", .{absolute_path});
         if (self.snapshot_envs.fetchRemove(absolute_path)) |removed| {
             self.logDebug(.completion, "storeSnapshotEnv: replacing existing snapshot", .{});
@@ -297,10 +297,10 @@ pub const SyntaxChecker = struct {
             self.allocator.free(removed.key);
         }
 
-        const owned_path = self.allocator.dupe(u8, absolute_path) catch return;
-        self.snapshot_envs.put(self.allocator, owned_path, env_handle) catch {
+        const owned_path = try self.allocator.dupe(u8, absolute_path);
+        self.snapshot_envs.put(self.allocator, owned_path, env_handle) catch |err| {
             self.allocator.free(owned_path);
-            return;
+            return err;
         };
         env_handle.retain(owner_snapshot);
         self.logDebug(.completion, "storeSnapshotEnv: stored snapshot count={d}", .{self.snapshot_envs.count()});
@@ -309,15 +309,36 @@ pub const SyntaxChecker = struct {
     fn clearSnapshots(self: *SyntaxChecker) void {
         // Collect all handles and keys before clearing the map so we can
         // release snapshot ownership without mutating the map mid-iteration.
+        const count = self.snapshot_envs.count();
         var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .empty;
         defer envs.deinit(self.allocator);
         var keys: std.ArrayListUnmanaged([]const u8) = .empty;
         defer keys.deinit(self.allocator);
 
+        // Pre-reserve so the appends below cannot fail. If reserving fails we
+        // fall back to releasing each entry as we iterate; this still avoids
+        // leaking the handle refcount and key on OOM.
+        const reserved = blk: {
+            envs.ensureTotalCapacity(self.allocator, count) catch break :blk false;
+            keys.ensureTotalCapacity(self.allocator, count) catch break :blk false;
+            break :blk true;
+        };
+
+        if (!reserved) {
+            // OOM path: release/free directly while iterating, then clear.
+            var it = self.snapshot_envs.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.*.release(owner_snapshot);
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.snapshot_envs.clearRetainingCapacity();
+            return;
+        }
+
         var it = self.snapshot_envs.iterator();
         while (it.next()) |entry| {
-            envs.append(self.allocator, entry.value_ptr.*) catch {};
-            keys.append(self.allocator, entry.key_ptr.*) catch {};
+            envs.appendAssumeCapacity(entry.value_ptr.*);
+            keys.appendAssumeCapacity(entry.key_ptr.*);
         }
 
         // Clear the map FIRST so snapshot ownership is only represented by handles.
@@ -1855,7 +1876,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Find all lookups that reference this pattern
-        var lookup_regions = cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
+        var lookup_regions = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
         defer lookup_regions.deinit(self.allocator);
         try regions.appendSlice(self.allocator, lookup_regions.items);
 
@@ -1901,7 +1922,7 @@ pub const SyntaxChecker = struct {
         };
 
         // Drain reports but ignore them for symbols (must still free to avoid leaks)
-        const drained = env.drainReports() catch return &[_]SymbolInformation{};
+        const drained = try env.drainReports();
         defer self.freeDrainedWithReports(drained);
 
         // Get the module env from the scheduler

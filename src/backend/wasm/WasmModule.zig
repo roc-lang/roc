@@ -5381,21 +5381,21 @@ test "preload + merge + encode roundtrip with real builtins" {
     app_module.enableMemory(2);
     app_module.enableStackPointer(131072);
     app_module.enableTable();
-    app_module.addExport("memory", .memory, 0) catch unreachable;
+    try app_module.addExport("memory", .memory, 0);
 
     // Add RocCall function: (i32, i32, i32) -> void
     const roc_call_type_idx = try app_module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
     const roc_call_fn_idx = try app_module.addFunction(roc_call_type_idx);
     const roc_call_body = [_]u8{ 0x00, Op.end };
     try app_module.setFunctionBody(roc_call_fn_idx, &roc_call_body);
-    app_module.addExport("roc__main_for_host_1_exposed", .func, roc_call_fn_idx) catch unreachable;
+    try app_module.addExport("roc__main_for_host_1_exposed", .func, roc_call_fn_idx);
 
     // Add eval wrapper: (i32) -> i32
     const eval_type_idx = try app_module.addFuncType(&.{.i32}, &.{.i32});
     const eval_fn_idx = try app_module.addFunction(eval_type_idx);
     const eval_body = [_]u8{ 0x00, Op.i32_const, 42, Op.end };
     try app_module.setFunctionBody(eval_fn_idx, &eval_body);
-    app_module.addExport("main", .func, eval_fn_idx) catch unreachable;
+    try app_module.addExport("main", .func, eval_fn_idx);
 
     // Encode the module
     const encoded = try app_module.encode(allocator);

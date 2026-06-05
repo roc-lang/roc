@@ -412,135 +412,79 @@ pub const DocType = union(enum) {
         }
     }
 
+    /// Frees a child `DocType` that was individually heap-allocated: first
+    /// recursively frees its contents, then destroys the node itself.
+    fn deinitChild(child: *const DocType, gpa: Allocator) void {
+        child.deinit(gpa);
+        gpa.destroy(child);
+    }
+
+    /// Recursively frees everything owned by this `DocType`, but not the node
+    /// itself (the caller owns that storage). Recursion depth is bounded by the
+    /// depth of the type structure, so no growable allocation is needed and this
+    /// destructor cannot fail.
     pub fn deinit(self: *const DocType, gpa: Allocator) void {
-        const Frame = struct {
-            node: *const DocType,
-            children_done: bool,
-        };
-
-        const Stack = struct {
-            fn append(stack: *std.ArrayList(Frame), allocator: Allocator, frame: Frame) void {
-                stack.append(allocator, frame) catch @panic("out of memory while deinitializing DocType");
-            }
-        };
-
-        var stack = std.ArrayList(Frame).empty;
-        defer stack.deinit(gpa);
-
-        Stack.append(&stack, gpa, .{ .node = self, .children_done = false });
-        while (stack.pop()) |frame| {
-            const node = frame.node;
-            if (!frame.children_done) {
-                Stack.append(&stack, gpa, .{ .node = node, .children_done = true });
-                switch (node.*) {
-                    .function => |func| {
-                        Stack.append(&stack, gpa, .{ .node = func.ret, .children_done = false });
-                        for (func.args) |arg| {
-                            Stack.append(&stack, gpa, .{ .node = arg, .children_done = false });
-                        }
-                    },
-                    .record => |rec| {
-                        if (rec.ext) |ext| {
-                            Stack.append(&stack, gpa, .{ .node = ext, .children_done = false });
-                        }
-                        for (rec.fields) |field| {
-                            Stack.append(&stack, gpa, .{ .node = field.type, .children_done = false });
-                        }
-                    },
-                    .tag_union => |tu| {
-                        if (tu.ext) |ext| {
-                            Stack.append(&stack, gpa, .{ .node = ext, .children_done = false });
-                        }
-                        for (tu.tags) |tag| {
-                            for (tag.args) |arg| {
-                                Stack.append(&stack, gpa, .{ .node = arg, .children_done = false });
-                            }
-                        }
-                    },
-                    .tuple => |tup| {
-                        for (tup.elems) |elem| {
-                            Stack.append(&stack, gpa, .{ .node = elem, .children_done = false });
-                        }
-                    },
-                    .apply => |app| {
-                        Stack.append(&stack, gpa, .{ .node = app.constructor, .children_done = false });
-                        for (app.args) |arg| {
-                            Stack.append(&stack, gpa, .{ .node = arg, .children_done = false });
-                        }
-                    },
-                    .where_clause => |wc| {
-                        Stack.append(&stack, gpa, .{ .node = wc.type, .children_done = false });
-                        for (wc.constraints) |constraint| {
-                            Stack.append(&stack, gpa, .{ .node = constraint.signature, .children_done = false });
-                        }
-                    },
-                    .type_ref, .type_var, .wildcard, .@"error" => {},
+        switch (self.*) {
+            .type_ref => |ref| {
+                gpa.free(ref.module_path);
+                gpa.free(ref.type_name);
+            },
+            .type_var => |name| {
+                gpa.free(name);
+            },
+            .function => |func| {
+                for (func.args) |arg| {
+                    deinitChild(arg, gpa);
                 }
-                continue;
-            }
-
-            switch (node.*) {
-                .type_ref => |ref| {
-                    gpa.free(ref.module_path);
-                    gpa.free(ref.type_name);
-                },
-                .type_var => |name| {
-                    gpa.free(name);
-                },
-                .function => |func| {
-                    for (func.args) |arg| {
-                        gpa.destroy(arg);
+                gpa.free(func.args);
+                deinitChild(func.ret, gpa);
+            },
+            .record => |rec| {
+                if (rec.ext) |ext| {
+                    deinitChild(ext, gpa);
+                }
+                for (rec.fields) |field| {
+                    gpa.free(field.name);
+                    deinitChild(field.type, gpa);
+                }
+                gpa.free(rec.fields);
+            },
+            .tag_union => |tu| {
+                for (tu.tags) |tag| {
+                    gpa.free(tag.name);
+                    for (tag.args) |arg| {
+                        deinitChild(arg, gpa);
                     }
-                    gpa.free(func.args);
-                    gpa.destroy(func.ret);
-                },
-                .record => |rec| {
-                    if (rec.ext) |ext| {
-                        gpa.destroy(ext);
-                    }
-                    for (rec.fields) |field| {
-                        gpa.free(field.name);
-                        gpa.destroy(field.type);
-                    }
-                    gpa.free(rec.fields);
-                },
-                .tag_union => |tu| {
-                    for (tu.tags) |tag| {
-                        gpa.free(tag.name);
-                        for (tag.args) |arg| {
-                            gpa.destroy(arg);
-                        }
-                        gpa.free(tag.args);
-                    }
-                    gpa.free(tu.tags);
-                    if (tu.ext) |ext| {
-                        gpa.destroy(ext);
-                    }
-                },
-                .tuple => |tup| {
-                    for (tup.elems) |elem| {
-                        gpa.destroy(elem);
-                    }
-                    gpa.free(tup.elems);
-                },
-                .apply => |app| {
-                    gpa.destroy(app.constructor);
-                    for (app.args) |arg| {
-                        gpa.destroy(arg);
-                    }
-                    gpa.free(app.args);
-                },
-                .where_clause => |wc| {
-                    gpa.destroy(wc.type);
-                    for (wc.constraints) |constraint| {
-                        gpa.free(constraint.type_var);
-                        gpa.free(constraint.method_name);
-                        gpa.destroy(constraint.signature);
-                    }
-                    gpa.free(wc.constraints);
-                },
-                .wildcard, .@"error" => {},
-            }
+                    gpa.free(tag.args);
+                }
+                gpa.free(tu.tags);
+                if (tu.ext) |ext| {
+                    deinitChild(ext, gpa);
+                }
+            },
+            .tuple => |tup| {
+                for (tup.elems) |elem| {
+                    deinitChild(elem, gpa);
+                }
+                gpa.free(tup.elems);
+            },
+            .apply => |app| {
+                deinitChild(app.constructor, gpa);
+                for (app.args) |arg| {
+                    deinitChild(arg, gpa);
+                }
+                gpa.free(app.args);
+            },
+            .where_clause => |wc| {
+                deinitChild(wc.type, gpa);
+                for (wc.constraints) |constraint| {
+                    gpa.free(constraint.type_var);
+                    gpa.free(constraint.method_name);
+                    deinitChild(constraint.signature, gpa);
+                }
+                gpa.free(wc.constraints);
+            },
+            .wildcard, .@"error" => {},
         }
     }
 };

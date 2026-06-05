@@ -176,7 +176,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -225,7 +225,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }

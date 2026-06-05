@@ -1303,7 +1303,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.tokenize_reports.append(report) catch continue;
+        try result.tokenize_reports.append(report);
     }
 
     // Collect parse diagnostics with additional error handling
@@ -1313,7 +1313,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.parse_reports.append(report) catch continue;
+        try result.parse_reports.append(report);
     }
 
     // Stage 2: Canonicalization (always run, even with parse errors)
@@ -1391,7 +1391,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.can_reports.append(report) catch continue;
+        try result.can_reports.append(report);
     }
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)

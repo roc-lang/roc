@@ -76,6 +76,7 @@ pub const ExtractWriter = struct {
 
     pub const MakeDirError = error{
         DirectoryCreateFailed,
+        OutOfMemory,
     };
 
     pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!*std.Io.Writer {
@@ -261,10 +262,12 @@ pub const BufferExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
-        const dir_copy = self.allocator.dupe(u8, path) catch return error.DirectoryCreateFailed;
-        self.directories.append(dir_copy) catch {
-            self.allocator.free(dir_copy);
-            return error.DirectoryCreateFailed;
+        const dir_copy = self.allocator.dupe(u8, path) catch return error.OutOfMemory;
+        self.directories.append(dir_copy) catch |err| switch (err) {
+            error.OutOfMemory => {
+                self.allocator.free(dir_copy);
+                return error.OutOfMemory;
+            },
         };
     }
 };
@@ -330,26 +333,16 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             };
         }
 
-        // Use stack buffer for small components to avoid allocation
-        var upper_buf: [256]u8 = undefined;
-        const upper_component = if (component.len <= upper_buf.len) blk: {
-            for (component, 0..) |c, i| {
-                upper_buf[i] = std.ascii.toUpper(c);
-            }
-            break :blk upper_buf[0..component.len];
-        } else blk: {
-            break :blk std.ascii.allocUpperString(std.heap.page_allocator, component) catch component;
-        };
-        defer if (component.len > upper_buf.len and upper_component.ptr != component.ptr)
-            std.heap.page_allocator.free(upper_component);
-
-        const base_name = if (std.mem.findScalar(u8, upper_component, '.')) |dot_pos|
-            upper_component[0..dot_pos]
+        // The Windows reserved-name check is case-insensitive on the base name
+        // (the part before the first '.'). Compare without allocating so this
+        // validator cannot fail on OOM.
+        const base_name = if (std.mem.findScalar(u8, component, '.')) |dot_pos|
+            component[0..dot_pos]
         else
-            upper_component;
+            component;
 
         for (WINDOWS_RESERVED_NAMES) |reserved| {
-            if (std.mem.eql(u8, base_name, reserved)) {
+            if (std.ascii.eqlIgnoreCase(base_name, reserved)) {
                 return PathValidationError{
                     .path = path,
                     .reason = .windows_reserved_name,

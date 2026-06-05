@@ -212,8 +212,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         if (mod.is_platform_sibling or mod.is_platform_main) {
             const artifact = mod.semantic.checked_artifact orelse continue;
             type_table.clearVarMap();
-            if (collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table)) |mod_info| {
-                collected_modules.append(gpa, mod_info) catch {};
+            if (try collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table)) |mod_info| {
+                var owned_mod_info = mod_info;
+                errdefer owned_mod_info.deinit(gpa);
+                try collected_modules.append(gpa, owned_mod_info);
             }
         }
     }
@@ -709,13 +711,13 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
                     var type_buf = std.ArrayList(u8).empty;
                     defer type_buf.deinit(gpa);
 
-                    printTypeAnnoToBuf(gpa, &env, parse_ast, entry.type_anno, &type_buf);
+                    try printTypeAnnoToBuf(gpa, &env, parse_ast, entry.type_anno, &type_buf);
 
                     // Generate stub expression from type annotation
                     var stub_buf = std.ArrayList(u8).empty;
                     defer stub_buf.deinit(gpa);
 
-                    generateStubExprFromTypeAnno(gpa, &env, parse_ast, entry.type_anno, &stub_buf);
+                    try generateStubExprFromTypeAnno(gpa, &env, parse_ast, entry.type_anno, &stub_buf);
 
                     try requires_entries.append(gpa, .{
                         .name = try gpa.dupe(u8, name),
@@ -2090,15 +2092,13 @@ fn typeStringAlloc(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
-) []const u8 {
+) Allocator.Error![]const u8 {
     var buf = std.ArrayList(u8).empty;
+    errdefer buf.deinit(gpa);
     var active = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(gpa);
     defer active.deinit();
-    writeTypeString(gpa, artifact, checked_type, &buf, &active) catch {
-        buf.deinit(gpa);
-        return gpa.dupe(u8, "") catch "";
-    };
-    return buf.toOwnedSlice(gpa) catch "";
+    try writeTypeString(gpa, artifact, checked_type, &buf, &active);
+    return buf.toOwnedSlice(gpa);
 }
 
 fn writeTypeString(
@@ -2273,16 +2273,14 @@ fn extractRecordFields(
     gpa: std.mem.Allocator,
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
-) []const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
+) Allocator.Error![]const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
     var fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
     defer fields.deinit(gpa);
-    if (!(collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields) catch {
-        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
-    })) {
+    if (!(try collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields))) {
         return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
     }
 
-    var indices = gpa.alloc(usize, fields.items.len) catch return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    var indices = try gpa.alloc(usize, fields.items.len);
     defer gpa.free(indices);
     for (0..fields.items.len) |i| indices[i] = i;
 
@@ -2301,14 +2299,25 @@ fn extractRecordFields(
     std.mem.sort(usize, indices, SortCtx{ .fields = fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
 
     var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+    errdefer {
+        for (result_list.items) |item| {
+            gpa.free(item.name);
+            gpa.free(item.type_str);
+        }
+        result_list.deinit(gpa);
+    }
     for (indices) |idx| {
         const field = fields.items[idx];
-        result_list.append(gpa, .{
-            .name = gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(field.name)) catch continue,
-            .type_str = typeStringAlloc(gpa, artifact, field.ty),
-        }) catch continue;
+        const name = try gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(field.name));
+        errdefer gpa.free(name);
+        const type_str = try typeStringAlloc(gpa, artifact, field.ty);
+        errdefer gpa.free(type_str);
+        try result_list.append(gpa, .{
+            .name = name,
+            .type_str = type_str,
+        });
     }
-    return result_list.toOwnedSlice(gpa) catch &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+    return result_list.toOwnedSlice(gpa);
 }
 
 fn collectRecordFieldsForRoot(
@@ -2340,22 +2349,48 @@ fn collectModuleTypeInfo(
     module_name: []const u8,
     hosted_indices: []const HostedProcGlobalIndex,
     type_table: *TypeTable,
-) ?CollectedModuleTypeInfo {
-    var main_type_str: []const u8 = gpa.dupe(u8, "") catch "";
+) Allocator.Error!?CollectedModuleTypeInfo {
+    var main_type_str: []const u8 = try gpa.dupe(u8, "");
+    errdefer gpa.free(main_type_str);
     for (artifact.checked_types.nominal_declarations) |declaration| {
         const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(declaration.nominal.type_name));
         if (std.mem.eql(u8, type_name, module_name)) {
-            if (main_type_str.len > 0) gpa.free(main_type_str);
-            main_type_str = typeStringAlloc(gpa, artifact, declaration.declaration_root);
+            gpa.free(main_type_str);
+            main_type_str = try typeStringAlloc(gpa, artifact, declaration.declaration_root);
             break;
         }
     }
 
     // Collect functions
     var functions = std.ArrayList(CollectedModuleTypeInfo.CollectedFunctionInfo).empty;
+    errdefer {
+        for (functions.items) |f| {
+            gpa.free(f.name);
+            gpa.free(f.type_str);
+        }
+        functions.deinit(gpa);
+    }
     var hosted_functions = std.ArrayList(CollectedModuleTypeInfo.CollectedHostedFunctionInfo).empty;
+    errdefer {
+        for (hosted_functions.items) |h| {
+            gpa.free(h.name);
+            gpa.free(h.type_str);
+            for (h.arg_fields) |field| {
+                gpa.free(field.name);
+                gpa.free(field.type_str);
+            }
+            gpa.free(h.arg_fields);
+            for (h.ret_fields) |field| {
+                gpa.free(field.name);
+                gpa.free(field.type_str);
+            }
+            gpa.free(h.ret_fields);
+            if (h.arg_type_ids.len > 0) gpa.free(h.arg_type_ids);
+        }
+        hosted_functions.deinit(gpa);
+    }
 
-    const module_prefix = std.fmt.allocPrint(gpa, "{s}.", .{module_name}) catch return null;
+    const module_prefix = try std.fmt.allocPrint(gpa, "{s}.", .{module_name});
     defer gpa.free(module_prefix);
 
     for (artifact.top_level_values.entries) |entry| {
@@ -2371,23 +2406,39 @@ fn collectModuleTypeInfo(
             continue;
 
         const checked_type = checkedTypeRootForScheme(artifact, entry.source_scheme);
-        const type_str = typeStringAlloc(gpa, artifact, checked_type);
+        const type_str = try typeStringAlloc(gpa, artifact, checked_type);
+        errdefer gpa.free(type_str);
 
         if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |_| {
             // Extract record fields from function arg and return types.
             var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+            errdefer {
+                for (arg_fields) |field| {
+                    gpa.free(field.name);
+                    gpa.free(field.type_str);
+                }
+                gpa.free(arg_fields);
+            }
             var ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+            errdefer {
+                for (ret_fields) |field| {
+                    gpa.free(field.name);
+                    gpa.free(field.type_str);
+                }
+                gpa.free(ret_fields);
+            }
             var arg_type_ids: []const u64 = &.{};
+            errdefer if (arg_type_ids.len > 0) gpa.free(arg_type_ids);
             var ret_type_id: u64 = 0;
 
             if (functionPayloadForRoot(artifact, checked_type)) |func| {
-                ret_fields = extractRecordFields(gpa, artifact, func.ret);
+                ret_fields = try extractRecordFields(gpa, artifact, func.ret);
                 if (func.args.len == 1) {
-                    arg_fields = extractRecordFields(gpa, artifact, func.args[0]);
+                    arg_fields = try extractRecordFields(gpa, artifact, func.args[0]);
                 }
                 ret_type_id = type_table.getOrInsert(artifact, func.ret);
                 if (func.args.len > 0) {
-                    const ids = gpa.alloc(u64, func.args.len) catch continue;
+                    const ids = try gpa.alloc(u64, func.args.len);
                     for (func.args, 0..) |arg, i| {
                         ids[i] = type_table.getOrInsert(artifact, arg);
                     }
@@ -2397,34 +2448,32 @@ fn collectModuleTypeInfo(
                 ret_type_id = type_table.insertUnit();
             }
 
-            hosted_functions.append(gpa, .{
+            const name = try gpa.dupe(u8, local_name);
+            errdefer gpa.free(name);
+            try hosted_functions.append(gpa, .{
                 .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
-                .name = gpa.dupe(u8, local_name) catch continue,
+                .name = name,
                 .type_str = type_str,
                 .arg_fields = arg_fields,
                 .ret_fields = ret_fields,
                 .arg_type_ids = arg_type_ids,
                 .ret_type_id = ret_type_id,
-            }) catch {
-                gpa.free(type_str);
-                continue;
-            };
+            });
         } else switch (entry.value) {
             .procedure_binding => {
-                functions.append(gpa, .{
-                    .name = gpa.dupe(u8, local_name) catch continue,
+                const name = try gpa.dupe(u8, local_name);
+                errdefer gpa.free(name);
+                try functions.append(gpa, .{
+                    .name = name,
                     .type_str = type_str,
-                }) catch {
-                    gpa.free(type_str);
-                    continue;
-                };
+                });
             },
             .const_ref => gpa.free(type_str),
         }
     }
 
     return CollectedModuleTypeInfo{
-        .name = gpa.dupe(u8, module_name) catch return null,
+        .name = try gpa.dupe(u8, module_name),
         .main_type = main_type_str,
         .functions = functions,
         .hosted_functions = hosted_functions,
@@ -2432,7 +2481,7 @@ fn collectModuleTypeInfo(
 }
 
 /// Print a type annotation to a buffer (for requires entries which use AST types)
-fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) void {
+fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) Allocator.Error!void {
     const type_anno = ast.store.getTypeAnno(type_anno_idx);
 
     switch (type_anno) {
@@ -2440,17 +2489,17 @@ fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse
             const arrow = if (f.effectful) "=>" else "->";
             const args = ast.store.typeAnnoSlice(f.args);
             if (args.len == 0) {
-                buf.appendSlice(gpa, "()") catch {};
+                try buf.appendSlice(gpa, "()");
             } else {
                 for (args, 0..) |arg_idx, i| {
-                    if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                    printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
+                    if (i > 0) try buf.appendSlice(gpa, ", ");
+                    try printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
                 }
             }
-            buf.appendSlice(gpa, " ") catch {};
-            buf.appendSlice(gpa, arrow) catch {};
-            buf.appendSlice(gpa, " ") catch {};
-            printTypeAnnoToBuf(gpa, env, ast, f.ret, buf);
+            try buf.appendSlice(gpa, " ");
+            try buf.appendSlice(gpa, arrow);
+            try buf.appendSlice(gpa, " ");
+            try printTypeAnnoToBuf(gpa, env, ast, f.ret, buf);
         },
         .ty => |t| {
             // Print qualified type name
@@ -2458,93 +2507,93 @@ fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse
             for (qualifiers) |qual_tok_idx| {
                 const qual_tok: parse.tokenize.Token.Idx = @intCast(qual_tok_idx);
                 if (ast.tokens.resolveIdentifier(qual_tok)) |ident_idx| {
-                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-                    buf.append(gpa, '.') catch {};
+                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+                    try buf.append(gpa, '.');
                 }
             }
             if (ast.tokens.resolveIdentifier(t.token)) |ident_idx| {
-                buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+                try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
             }
         },
         .ty_var => |tv| {
             if (ast.tokens.resolveIdentifier(tv.tok)) |ident_idx| {
-                buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+                try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
             }
         },
         .record => |r| {
-            buf.appendSlice(gpa, "{ ") catch {};
+            try buf.appendSlice(gpa, "{ ");
             const fields = ast.store.annoRecordFieldSlice(r.fields);
             for (fields, 0..) |field_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                if (i > 0) try buf.appendSlice(gpa, ", ");
                 const field = ast.store.getAnnoRecordField(field_idx) catch continue;
                 if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
-                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-                    buf.appendSlice(gpa, " : ") catch {};
+                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+                    try buf.appendSlice(gpa, " : ");
                 }
-                printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
+                try printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
             }
             switch (r.ext) {
                 .closed => {},
-                .open => buf.appendSlice(gpa, ", ..") catch {},
+                .open => try buf.appendSlice(gpa, ", .."),
                 .named => |named| {
-                    buf.appendSlice(gpa, ", ..") catch {};
-                    printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
+                    try buf.appendSlice(gpa, ", ..");
+                    try printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
                 },
             }
-            buf.appendSlice(gpa, " }") catch {};
+            try buf.appendSlice(gpa, " }");
         },
         .tag_union => |tu| {
-            buf.append(gpa, '[') catch {};
+            try buf.append(gpa, '[');
             const tags = ast.store.typeAnnoSlice(tu.tags);
             for (tags, 0..) |tag_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                printTypeAnnoToBuf(gpa, env, ast, tag_idx, buf);
+                if (i > 0) try buf.appendSlice(gpa, ", ");
+                try printTypeAnnoToBuf(gpa, env, ast, tag_idx, buf);
             }
             switch (tu.ext) {
                 .closed => {},
-                .open => buf.appendSlice(gpa, ", ..") catch {},
+                .open => try buf.appendSlice(gpa, ", .."),
                 .named => |named| {
-                    buf.appendSlice(gpa, ", ..") catch {};
-                    printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
+                    try buf.appendSlice(gpa, ", ..");
+                    try printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
                 },
             }
-            buf.append(gpa, ']') catch {};
+            try buf.append(gpa, ']');
         },
         .tuple => |t| {
-            buf.append(gpa, '(') catch {};
+            try buf.append(gpa, '(');
             const annos = ast.store.typeAnnoSlice(t.annos);
             for (annos, 0..) |anno_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                printTypeAnnoToBuf(gpa, env, ast, anno_idx, buf);
+                if (i > 0) try buf.appendSlice(gpa, ", ");
+                try printTypeAnnoToBuf(gpa, env, ast, anno_idx, buf);
             }
-            buf.append(gpa, ')') catch {};
+            try buf.append(gpa, ')');
         },
         .apply => |a| {
             const args = ast.store.typeAnnoSlice(a.args);
             if (args.len > 0) {
-                printTypeAnnoToBuf(gpa, env, ast, args[0], buf);
+                try printTypeAnnoToBuf(gpa, env, ast, args[0], buf);
                 if (args.len > 1) {
-                    buf.append(gpa, ' ') catch {};
+                    try buf.append(gpa, ' ');
                     for (args[1..], 0..) |arg_idx, i| {
-                        if (i > 0) buf.append(gpa, ' ') catch {};
-                        printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
+                        if (i > 0) try buf.append(gpa, ' ');
+                        try printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
                     }
                 }
             }
         },
         .parens => |p| {
-            buf.append(gpa, '(') catch {};
-            printTypeAnnoToBuf(gpa, env, ast, p.anno, buf);
-            buf.append(gpa, ')') catch {};
+            try buf.append(gpa, '(');
+            try printTypeAnnoToBuf(gpa, env, ast, p.anno, buf);
+            try buf.append(gpa, ')');
         },
         .underscore => {
-            buf.append(gpa, '_') catch {};
+            try buf.append(gpa, '_');
         },
         .underscore_type_var => {
-            buf.append(gpa, '_') catch {};
+            try buf.append(gpa, '_');
         },
         .malformed => {
-            buf.appendSlice(gpa, "<malformed>") catch {};
+            try buf.appendSlice(gpa, "<malformed>");
         },
     }
 }
@@ -2552,7 +2601,7 @@ fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse
 /// Generate a stub expression from a type annotation.
 /// This produces valid Roc expressions that will crash at runtime rather than compile-time.
 /// Uses `...` inside lambdas to defer the crash to runtime.
-fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) void {
+fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) Allocator.Error!void {
     const type_anno = ast.store.getTypeAnno(type_anno_idx);
 
     switch (type_anno) {
@@ -2561,15 +2610,15 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
             const args = ast.store.typeAnnoSlice(f.args);
             if (args.len == 0) {
                 // No args: || body
-                buf.appendSlice(gpa, "|| ") catch {};
+                try buf.appendSlice(gpa, "|| ");
             } else {
                 // Has args: |_, _, ...| body
-                buf.append(gpa, '|') catch {};
+                try buf.append(gpa, '|');
                 for (0..args.len) |i| {
-                    if (i > 0) buf.appendSlice(gpa, ", ") catch {};
-                    buf.append(gpa, '_') catch {};
+                    if (i > 0) try buf.appendSlice(gpa, ", ");
+                    try buf.append(gpa, '_');
                 }
-                buf.appendSlice(gpa, "| ") catch {};
+                try buf.appendSlice(gpa, "| ");
             }
 
             // Check if return type is unit {}
@@ -2579,32 +2628,32 @@ fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *c
                 const fields = ast.store.annoRecordFieldSlice(record.fields);
                 if (fields.len == 0 and record.ext == .closed) {
                     // Return type is {} (unit) - return empty record
-                    buf.appendSlice(gpa, "{}") catch {};
+                    try buf.appendSlice(gpa, "{}");
                     return;
                 }
             }
 
             // Non-unit return type - use { ... } to crash at runtime (not compile-time)
             // The block syntax is required for single-line lambdas
-            buf.appendSlice(gpa, "{ ... }") catch {};
+            try buf.appendSlice(gpa, "{ ... }");
         },
         .record => |r| {
-            buf.appendSlice(gpa, "{ ") catch {};
+            try buf.appendSlice(gpa, "{ ");
             const fields = ast.store.annoRecordFieldSlice(r.fields);
             for (fields, 0..) |field_idx, i| {
-                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                if (i > 0) try buf.appendSlice(gpa, ", ");
                 const field = ast.store.getAnnoRecordField(field_idx) catch continue;
                 if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
-                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
-                    buf.appendSlice(gpa, ": ") catch {};
+                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+                    try buf.appendSlice(gpa, ": ");
                 }
-                generateStubExprFromTypeAnno(gpa, env, ast, field.ty, buf);
+                try generateStubExprFromTypeAnno(gpa, env, ast, field.ty, buf);
             }
-            buf.appendSlice(gpa, " }") catch {};
+            try buf.appendSlice(gpa, " }");
         },
         else => {
             // For all other types, use { ... } to crash at runtime
-            buf.appendSlice(gpa, "{ ... }") catch {};
+            try buf.appendSlice(gpa, "{ ... }");
         },
     }
 }
