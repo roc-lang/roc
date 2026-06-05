@@ -428,7 +428,7 @@ fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFail
 }
 
 /// Cross-platform hardlink creation
-fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator.Error || error{ PathAlreadyExists, Unexpected })!void {
+fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator.Error || error{ InvalidUtf8, PathAlreadyExists, Unexpected })!void {
     if (comptime builtin.target.os.tag == .windows) {
         // On Windows, use CreateHardLinkW
         const source_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, source);

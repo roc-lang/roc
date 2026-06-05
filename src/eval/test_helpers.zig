@@ -42,7 +42,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
             extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
         };
 
-        fn open(allocator: Allocator, path: []const u8) Allocator.Error!@This() {
+        fn open(allocator: Allocator, path: []const u8) (Allocator.Error || error{ InvalidUtf8, LlvmBackendUnavailable })!@This() {
             const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
             defer allocator.free(wide_path);
             const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
