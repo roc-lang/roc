@@ -642,70 +642,31 @@ const Env = struct {
 
 // unify //
 
-/// Unify two types where `a` is the expected type and `b` is the actual type
-fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return self.unifyInContext(a, b, env, .none);
-}
-
-/// Unify two types where `a` is the expected type and `b` is the actual type
-/// Accepts a full unifier config for fine-grained control
-fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyInContextWith(a, b, env, ctx, .poison_to_err);
-}
-
-/// Thin wrapper for `write_no_report` unification: merges on success, records
-/// and poisons nothing on mismatch. The branch-vs-expected caller
-/// (`checkBranchBodyAgainstExpected`) owns the diagnostic and rollback, and
-/// carries the load-bearing operand-order rationale.
-fn unifyWriteNoReportInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyInContextWith(a, b, env, ctx, .write_no_report);
-}
-
-fn unifyInContextWith(
-    self: *Self,
-    a: Var,
-    b: Var,
-    env: *Env,
-    ctx: problem.Context,
-    mismatch_behavior: unifier.MismatchBehavior,
-) std.mem.Allocator.Error!unifier.Result {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Unify
-    const result = switch (mismatch_behavior) {
-        .poison_to_err => try unifier.unifyInContext(
-            self.cir.gpa,
-            self.cir.getIdentStoreConst(),
-            self.cir.qualified_module_ident,
-            self.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.unify_scratch,
-            &self.occurs_scratch,
-            a,
-            b,
-            ctx,
-        ),
-        .write_no_report => try unifier.unifyWriteNoReport(
-            self.cir.gpa,
-            self.cir.getIdentStoreConst(),
-            self.cir.qualified_module_ident,
-            self.types,
-            &self.problems,
-            &self.snapshots,
-            &self.type_writer,
-            &self.unify_scratch,
-            &self.occurs_scratch,
-            a,
-            b,
-            ctx,
-        ),
+/// Build the borrowed dependency bundle the unifier needs. Cheap (9 pointers);
+/// constructed per call and inlined.
+fn unifyEnv(self: *Self) unifier.Env {
+    return .{
+        // problems is owned by self.gpa.
+        .problems_gpa = self.gpa,
+        .ident_store = self.cir.getIdentStoreConst(),
+        .qualified_module_ident = self.cir.qualified_module_ident,
+        .types = self.types,
+        .problems = &self.problems,
+        .snapshots = &self.snapshots,
+        .type_writer = &self.type_writer,
+        .unify_scratch = &self.unify_scratch,
+        .occurs_scratch = &self.occurs_scratch,
     };
+}
+
+/// The single core: run unification, then assign ranks/regions to fresh vars,
+/// copy out deferred constraints, and assert array sync.
+fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.mem.Allocator.Error!unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const unify_env = self.unifyEnv();
+    const result = try unifier.unify(&unify_env, a, b, opts);
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -738,6 +699,22 @@ fn unifyInContextWith(
     self.debugAssertArraysInSync();
 
     return result;
+}
+
+/// Unify two types where `a` is the expected type and `b` is the actual type.
+fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, .{});
+}
+
+/// Unify two types with a context for error reporting.
+fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, .{ .context = ctx });
+}
+
+/// `write_no_report` unification: merges on success, records and poisons
+/// nothing on mismatch. The caller owns the diagnostic and rollback.
+fn unifyWriteNoReport(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, .{ .context = ctx, .on_mismatch = .write_no_report });
 }
 
 /// Check if a variable contains an infinite type after solving a definition.
@@ -1843,6 +1820,59 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
 
 // updating vars //
 
+/// Whether the fresh var built by `unifyWithFresh` uses the current
+/// generalization rank or the target var's own rank.
+const FreshRank = enum { current, target };
+
+/// Unify `target_var` against freshly-built `content`. When `target_var` is a
+/// root flex placeholder we mutate its descriptor in place (the common case),
+/// saving a typeslot and a full unification run.
+fn unifyWithFresh(
+    self: *Self,
+    target_var: Var,
+    content: types_mod.Content,
+    env: *Env,
+    comptime rank_policy: FreshRank,
+) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const resolved_target = self.types.resolveVar(target_var);
+    switch (rank_policy) {
+        .current => {
+            if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
+                // The vast majority of the time, we call unify with on a placeholder
+                // CIR var. In this case, we can safely replace the type descriptor
+                // directly, saving a typeslot and unifcation run
+                var desc = resolved_target.desc;
+                desc.content = content;
+                try self.types.dangerousSetVarDesc(target_var, desc);
+                return;
+            }
+            const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
+            if (builtin.mode == .Debug) {
+                const target_var_rank = self.types.resolveVar(target_var).desc.rank;
+                const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
+                if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
+                    std.debug.panic("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+                }
+            }
+            _ = try self.unify(target_var, fresh_var, env);
+        },
+        .target => {
+            if (resolved_target.is_root and resolved_target.desc.content == .flex) {
+                var desc = resolved_target.desc;
+                desc.content = content;
+                try self.types.dangerousSetVarDesc(target_var, desc);
+                return;
+            }
+            const target_rank = resolved_target.desc.rank;
+            const fresh_var = try self.freshFromContentAtRank(content, env, self.getRegionAt(target_var), target_rank);
+            _ = try self.unify(target_var, fresh_var, env);
+        },
+    }
+}
+
 /// Unify the provided variable with the provided content
 ///
 /// If the var is a flex at the current rank, skip unifcation and simply update
@@ -1850,42 +1880,11 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
 ///
 /// This should primarily be use to set CIR node vars that were initially filled with placeholders
 fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const resolved_target = self.types.resolveVar(target_var);
-    if (resolved_target.is_root and resolved_target.desc.rank == env.rank() and resolved_target.desc.content == .flex) {
-        // The vast majority of the time, we call unify with on a placeholder
-        // CIR var. In this case, we can safely replace the type descriptor
-        // directly, saving a typeslot and unifcation run
-        var desc = resolved_target.desc;
-        desc.content = content;
-        try self.types.dangerousSetVarDesc(target_var, desc);
-    } else {
-        const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
-        if (builtin.mode == .Debug) {
-            const target_var_rank = self.types.resolveVar(target_var).desc.rank;
-            const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
-            if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
-                std.debug.panic("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
-            }
-        }
-        _ = try self.unify(target_var, fresh_var, env);
-    }
+    return self.unifyWithFresh(target_var, content, env, .current);
 }
 
 fn unifyWithTargetRank(self: *Self, target_var: Var, content: types_mod.Content, env: *Env) std.mem.Allocator.Error!void {
-    const resolved_target = self.types.resolveVar(target_var);
-    if (resolved_target.is_root and resolved_target.desc.content == .flex) {
-        var desc = resolved_target.desc;
-        desc.content = content;
-        try self.types.dangerousSetVarDesc(target_var, desc);
-        return;
-    }
-
-    const target_rank = self.types.resolveVar(target_var).desc.rank;
-    const fresh_var = try self.freshFromContentAtRank(content, env, self.getRegionAt(target_var), target_rank);
-    _ = try self.unify(target_var, fresh_var, env);
+    return self.unifyWithFresh(target_var, content, env, .target);
 }
 
 /// Give a var, ensure it's not a redirect and set its rank.
@@ -9331,20 +9330,12 @@ fn probeUnifyWithoutRecordingProblems(
     var probe_snapshots = try SnapshotStore.initCapacity(self.gpa, 8);
     defer probe_snapshots.deinit();
 
-    const result = try unifier.unifyInContext(
-        self.cir.gpa,
-        self.cir.getIdentStoreConst(),
-        self.cir.qualified_module_ident,
-        self.types,
-        &probe_problems,
-        &probe_snapshots,
-        &self.type_writer,
-        &self.unify_scratch,
-        &self.occurs_scratch,
-        expected,
-        actual,
-        .none,
-    );
+    // Probe against throwaway problem/snapshot stores so a mismatch here is
+    // neither recorded nor poisoned — only the ok/not-ok answer matters.
+    var env = self.unifyEnv();
+    env.problems = &probe_problems;
+    env.snapshots = &probe_snapshots;
+    const result = try unifier.unify(&env, expected, actual, .{});
 
     return result.isOk();
 }
@@ -10696,7 +10687,7 @@ fn checkBranchBodyAgainstExpected(
 
     // Commit: fold the body into the accumulator for real (propagates
     // regions/rank into env). Both probes passed, so this cannot mismatch.
-    _ = try self.unifyWriteNoReportInContext(body_var, acc, env, ctx);
+    _ = try self.unifyWriteNoReport(body_var, acc, env, ctx);
 }
 
 fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected_ret: Var, env: *Env) std.mem.Allocator.Error!void {
