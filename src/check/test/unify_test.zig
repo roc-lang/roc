@@ -96,6 +96,24 @@ const TestEnv = struct {
         );
     }
 
+    /// Helper to call the write-no-report unify variant from TestEnv.
+    fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
+        return try unify_mod.unifyWriteNoReport(
+            self.module_env.gpa,
+            self.module_env.getIdentStoreConst(),
+            self.module_env.qualified_module_ident,
+            &self.module_env.types,
+            &self.problems,
+            &self.snapshots,
+            &self.type_writer,
+            &self.scratch,
+            &self.occurs_scratch,
+            a,
+            b,
+            problem_mod.Context.none,
+        );
+    }
+
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
 
     /// Get a desc from a root var
@@ -332,6 +350,25 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
     const result = try env.unify(rigid1, rigid2);
     try std.testing.expectEqual(false, result.isOk());
 }
+test "unifyWriteNoReport - detects mismatch without recording or poisoning" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const b = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
+
+    const result = try env.unifyWriteNoReport(a, b);
+
+    // A mismatch is detected...
+    try std.testing.expectEqual(false, result.isOk());
+    // ...but NOTHING is recorded to the problem store...
+    try std.testing.expectEqual(@as(usize, 0), env.problems.problems.items.len);
+    // ...and neither operand is poisoned to `.err`.
+    try std.testing.expect(env.module_env.types.resolveVar(a).desc.content != .err);
+    try std.testing.expect(env.module_env.types.resolveVar(b).desc.content != .err);
+}
+
 // unification - aliases //
 
 test "unify - aliases with different names but same backing" {
@@ -1928,4 +1965,78 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
     try std.testing.expectEqual(@as(u32, 0), resolved.desc.content.rigid.constraints.count);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
+}
+
+test "unify order - resulting type is order-independent for recursive types" {
+    // The *resulting type* of unification does not depend on operand order, even
+    // for recursive types. Unifying a self-referential type E = [Node(E)] with
+    // B = [Node(r)] binds the embedded flex `r` to the recursive structure
+    // regardless of order.
+    const gpa = std.testing.allocator;
+    const Helper = struct {
+        fn run(e_first: bool) !bool {
+            var env = try TestEnv.init(gpa);
+            defer env.deinit();
+            const ts = &env.module_env.types;
+
+            // E = [Node(E)]  (self-referential tag union)
+            const e = try ts.fresh();
+            const e_tag = try env.mkTag("Node", &[_]Var{e});
+            const e_tu = try env.mkTagUnionClosed(&[_]Tag{e_tag});
+            try ts.setRootVarContent(e, e_tu.content);
+
+            // B = [Node(r)]  (r is a fresh flex "return var")
+            const r = try ts.fresh();
+            const b_tag = try env.mkTag("Node", &[_]Var{r});
+            const b_tu = try env.mkTagUnionClosed(&[_]Tag{b_tag});
+            const b = try ts.freshFromContent(b_tu.content);
+
+            const result = if (e_first) try env.unify(e, b) else try env.unify(b, e);
+            try std.testing.expectEqual(true, result.isOk());
+            return ts.resolveVar(r).desc.content == .structure;
+        }
+    };
+    try std.testing.expectEqual(true, try Helper.run(true));
+    try std.testing.expectEqual(true, try Helper.run(false));
+}
+
+test "unify order - deferred constraint origin var depends on operand order" {
+    // While the resulting *type* is order-independent, two artifacts are NOT:
+    //   1. union_ makes the SECOND operand the surviving root (store.zig).
+    //   2. a deferred static-dispatch constraint is attached to `b`, the second
+    //      operand (unify.zig recordDeferredConstraint / unresolved_b).
+    // So unifying a constrained flex with a concrete type in opposite orders
+    // attaches the deferred constraint to different surviving root vars. This
+    // operand-order sensitivity is why `store.union_`'s survivor choice is
+    // load-bearing — see the documented reliance on it in
+    // `Check.checkBranchBodyAgainstExpected`.
+    const gpa = std.testing.allocator;
+    const Helper = struct {
+        // Resolved root var-id that the deferred constraint is attached to.
+        fn run(flex_first: bool) !u32 {
+            var env = try TestEnv.init(gpa);
+            defer env.deinit();
+            const ts = &env.module_env.types;
+
+            const str = try ts.freshFromContent(Content{ .structure = .empty_record });
+            const fn_var = try ts.freshFromContent(try env.mkFuncPure(&[_]Var{str}, str));
+            const constraint = types_mod.StaticDispatchConstraint{
+                .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("m")),
+                .fn_var = fn_var,
+                .origin = .method_call,
+            };
+            const constraints = try ts.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{constraint});
+            const flex = try ts.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+            const rigid_ident = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("a"));
+            const rigid = try ts.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
+
+            const result = if (flex_first) try env.unify(flex, rigid) else try env.unify(rigid, flex);
+            try std.testing.expectEqual(.ok, result);
+            try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
+            const origin = env.scratch.deferred_constraints.items.items[0].var_;
+            return @intFromEnum(ts.resolveVar(origin).var_);
+        }
+    };
+    // The constraint lands on a different surviving root depending on order.
+    try std.testing.expect((try Helper.run(true)) != (try Helper.run(false)));
 }

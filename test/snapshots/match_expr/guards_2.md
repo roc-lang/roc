@@ -116,16 +116,16 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "long list starting with "))
-									(e-dispatch-call (method "to_str") (constraint-fn-var 216)
+									(e-dispatch-call (method "to_str") (constraint-fn-var 217)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "first"))))
 										(args))
 									(e-literal (string ""))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 124)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 125)
 									(receiver
-										(e-call (constraint-fn-var 90)
+										(e-call (constraint-fn-var 91)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -142,7 +142,7 @@ describe = |value| match value {
 							(value
 								(e-string
 									(e-literal (string "pair of equal values: "))
-									(e-dispatch-call (method "to_str") (constraint-fn-var 268)
+									(e-dispatch-call (method "to_str") (constraint-fn-var 269)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))

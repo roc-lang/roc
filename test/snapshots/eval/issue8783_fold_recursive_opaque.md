@@ -170,7 +170,7 @@ NO CHANGE
 				(e-lookup-local
 					(p-assign (ident "acc")))
 				(e-literal (string " "))
-				(e-call (constraint-fn-var 228)
+				(e-call (constraint-fn-var 229)
 					(e-lookup-local
 						(p-assign (ident "process")))
 					(e-lookup-local
@@ -202,7 +202,7 @@ NO CHANGE
 									(e-lookup-local
 										(p-assign (ident "tag")))
 									(e-literal (string ":"))
-									(e-call (constraint-fn-var 214)
+									(e-call (constraint-fn-var 215)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -239,7 +239,7 @@ NO CHANGE
 			(ty-lookup (name "Elem") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 290)
+		(e-call (constraint-fn-var 291)
 			(e-lookup-local
 				(p-assign (ident "process")))
 			(e-lookup-local

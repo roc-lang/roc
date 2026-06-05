@@ -31,6 +31,7 @@ EXPECTED NOMINAL TYPE - fuzz_crash_032.md:6:26:6:37
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
+TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
@@ -207,6 +208,26 @@ This type is referenced here:
 
 
 **Hint:** You can declare this type with `:=` to make it nominal.
+
+**TYPE MISMATCH**
+The second branch of this `match` does not match the previous branches :
+**fuzz_crash_032.md:7:10:7:21:**
+```roc
+Green => LocalStatus-Complete
+```
+         ^^^^^^^^^^^
+
+The second branch is:
+
+    [LocalStatus, ..]
+
+But the previous branches result in:
+
+    tus
+
+All branches in a `match` must have compatible types.
+__Note:__ You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

@@ -2093,6 +2093,22 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     try std.testing.expect(std.mem.find(u8, result.stderr, "published instantiated nominal backing") == null);
 }
 
+test "roc test issue 9487 static dispatch result compares to tag literal" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9487StaticDispatchEq.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
+}
+
 test "roc docs Builtin.roc succeeds" {
     const testing = std.testing;
     const gpa = testing.allocator;
