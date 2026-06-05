@@ -252,7 +252,7 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
 
     if (fork_result == 0) {
         harness.closeFd(pipe_read);
-        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var child_arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
 
         const run = eval_fn(child_alloc, lowered) catch |err| {
@@ -851,7 +851,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     app_io = io;
 
-    var args_arena = std.heap.ArenaAllocator.init(gpa);
+    var args_arena = collections.SingleThreadArena.init(gpa);
     defer args_arena.deinit();
     const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
 

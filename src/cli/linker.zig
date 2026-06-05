@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const collections = @import("collections");
 const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
 const stack_probe = @import("stack_probe.zig");
@@ -751,7 +752,7 @@ test "macOS platform archives use scoped force_load" {
     const archive_path = try tmp.dir.realPathFileAlloc(std.testing.io, "libhost.a", std.testing.allocator);
     defer std.testing.allocator.free(archive_path);
 
-    var arena_instance = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
 
     var io = Io.create(std.testing.io);
@@ -787,7 +788,7 @@ test "macOS non-archive platform files are passed directly" {
     const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "host.o", std.testing.allocator);
     defer std.testing.allocator.free(object_path);
 
-    var arena_instance = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
 
     var io = Io.create(std.testing.io);

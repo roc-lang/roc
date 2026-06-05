@@ -1242,7 +1242,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
     // Generate and store HTML before canonicalization corrupts the AST/tokens
     logDebug("compileSource: Starting HTML generation\n", .{});
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    var local_arena = base.SingleThreadArena.init(allocator);
     defer local_arena.deinit();
     const temp_alloc = local_arena.allocator();
 
@@ -1749,7 +1749,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
 
     const cir = data.module_env;
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    var local_arena = base.SingleThreadArena.init(allocator);
     defer local_arena.deinit();
     var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
 
@@ -2104,7 +2104,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
     }
 
     const cir = data.module_env;
-    var local_arena = std.heap.ArenaAllocator.init(allocator);
+    var local_arena = base.SingleThreadArena.init(allocator);
     defer local_arena.deinit();
     var sexpr_writer_allocating: std.Io.Writer.Allocating = .init(local_arena.allocator());
     var tree = SExprTree.init(local_arena.allocator());

@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
+const collections = @import("collections");
 const i128h = builtins.compiler_rt_128;
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
@@ -93,7 +94,7 @@ pub fn runWasmStrWithStats(
 
     if (wasm_bytes.len == 0) return error.WasmExecFailed;
 
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = collections.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

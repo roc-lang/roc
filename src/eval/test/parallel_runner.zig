@@ -56,6 +56,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const coverage_options = @import("coverage_options");
 const eval = @import("eval");
+const collections = @import("collections");
 
 /// When true (set via `zig build coverage-eval`), the runner:
 /// - Only builds/runs the interpreter backend (dev/wasm are DCE'd)
@@ -378,7 +379,7 @@ fn forkAndEval(
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
         // immediately so the OS reclaims everything — no deinit needed.
-        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var child_arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
         const result_str = eval_fn(child_alloc, lowered) catch |err| {
             // Write error name to pipe so parent can report it, then exit 2
@@ -610,7 +611,7 @@ fn forkAndEvalWithStats(
     if (fork_result == 0) {
         harness.closeFd(pipe_read);
 
-        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var child_arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         const child_alloc = child_arena.allocator();
         const result = eval_fn(child_alloc, lowered) catch |err| {
             harness.writeAll(pipe_write, @errorName(err));
@@ -2007,7 +2008,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     app_io = io;
 
-    var args_arena = std.heap.ArenaAllocator.init(gpa);
+    var args_arena = collections.SingleThreadArena.init(gpa);
     defer args_arena.deinit();
     const cli = try harness.parseStandardArgs(args_arena.allocator(), init.minimal.args);
     trace_worker.stamp("parseStandardArgs");
@@ -2071,7 +2072,7 @@ pub fn main(init: std.process.Init) !void {
         if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
         const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
 
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         defer arena.deinit();
 
         trace_worker.stamp("pre runSingleTest");
@@ -2101,7 +2102,7 @@ pub fn main(init: std.process.Init) !void {
     // many tests on the same worker.
     if (cli.worker_stream) {
         const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         defer arena.deinit();
 
         const stdout_handle = harness.stdoutFd();
@@ -2155,7 +2156,7 @@ pub fn main(init: std.process.Init) !void {
     // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
     // forkAndEval below, so backend calls run in-process too.
     if (coverage_mode or disable_fork_env != null) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         defer arena.deinit();
 
         var passed: usize = 0;

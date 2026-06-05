@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const roc_base = @import("base");
 const WasmLinking = @import("WasmLinking.zig");
 const index_types = @import("index_types.zig");
 const DefinedFunction = index_types.DefinedFunction;
@@ -5404,7 +5405,7 @@ test "preload + merge + encode roundtrip with real builtins" {
 
     // Verify bytebox can decode it
     const bytebox = @import("bytebox");
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = roc_base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

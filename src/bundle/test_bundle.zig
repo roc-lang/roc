@@ -8,6 +8,7 @@
 //! - Memory-based file system for testing
 
 const std = @import("std");
+const collections = @import("collections");
 const bundle = @import("bundle.zig");
 const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
@@ -1640,7 +1641,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
 
     // Now unbundle using BufferExtractWriter (same as WASM uses)
     // Use arena allocator for BufferExtractWriter to simplify memory management
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
@@ -1726,7 +1727,7 @@ test "unbundleStream with large file (multi-block zstd)" {
     const expected_hash = (try unbundle_mod.validateBase58Hash(hash_str)).?;
 
     // Use arena allocator for BufferExtractWriter to simplify memory management
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

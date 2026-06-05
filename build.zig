@@ -2549,7 +2549,9 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = b.createModule(.{
                         .root_source_file = b.path("src/build/test_harness.zig"),
+                        .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
                     }) },
+                    .{ .name = "collections", .module = roc_modules.collections },
                 },
             }),
         });
@@ -2711,6 +2713,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
@@ -2761,6 +2764,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
@@ -2830,6 +2834,7 @@ pub fn build(b: *std.Build) void {
     eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_test_exe.root_module.addImport("test_harness", b.createModule(.{
         .root_source_file = b.path("src/build/test_harness.zig"),
+        .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
     }));
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
     try addLlvmSupportToStep(
@@ -2877,6 +2882,7 @@ pub fn build(b: *std.Build) void {
     eval_host_effects_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_host_effects_exe.root_module.addImport("test_harness", b.createModule(.{
         .root_source_file = b.path("src/build/test_harness.zig"),
+        .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
     }));
     eval_host_effects_exe.step.dependOn(&write_compiled_builtins.step);
     try addLlvmSupportToStep(
@@ -3919,6 +3925,7 @@ pub fn build(b: *std.Build) void {
                 eval_coverage_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
                 eval_coverage_exe.root_module.addImport("test_harness", b.createModule(.{
                     .root_source_file = b.path("src/build/test_harness.zig"),
+                    .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
                 }));
                 eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
                 try addLlvmSupportToStep(
@@ -4775,6 +4782,7 @@ fn addLlvmSupportToStep(
     step.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },

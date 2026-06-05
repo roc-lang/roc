@@ -11,6 +11,10 @@ pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
+/// Single-threaded arena allocator, re-exported from `collections` for callers
+/// that already depend on `base`.
+pub const SingleThreadArena = @import("collections").SingleThreadArena;
+
 pub const safe_memory = @import("safe_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_overflow = @import("stack_overflow.zig");

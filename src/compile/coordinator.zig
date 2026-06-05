@@ -267,13 +267,14 @@ pub const WorkerAllocators = struct {
     /// In multi-threaded mode, this is smp_allocator for thread safety.
     gpa: Allocator,
 
-    /// Underlying arena implementation
-    arena_impl: std.heap.ArenaAllocator,
+    /// Underlying arena implementation. Each worker (and the inline path) owns
+    /// its own `WorkerAllocators`, so this arena is never touched concurrently.
+    arena_impl: base.SingleThreadArena,
 
     pub fn init(backing: Allocator) WorkerAllocators {
         return .{
             .gpa = backing,
-            .arena_impl = std.heap.ArenaAllocator.init(backing),
+            .arena_impl = base.SingleThreadArena.init(backing),
         };
     }
 
@@ -2496,7 +2497,7 @@ pub const Coordinator = struct {
 
     fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
         const allocator = self.cache_manager.?.allocator;
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = base.SingleThreadArena.init(allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
@@ -3955,7 +3956,7 @@ fn compileAppWithCheckedModuleCache(
     defer coord.deinit();
     coord.enable_hosted_transform = true;
 
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

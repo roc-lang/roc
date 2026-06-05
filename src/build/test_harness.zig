@@ -11,6 +11,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
 /// Monotonic timer replacement for std.time.Timer (removed in Zig 0.16).
@@ -591,7 +592,7 @@ pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !
 }
 
 test "parseStandardArgsFromSlice preserves help and explicit timeout" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     const args = try parseStandardArgsFromSlice(&.{
@@ -607,7 +608,7 @@ test "parseStandardArgsFromSlice preserves help and explicit timeout" {
 }
 
 test "parseStandardArgsFromSlice treats threads zero as default and keeps repeatable filters" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     const args = try parseStandardArgsFromSlice(&.{
@@ -630,7 +631,7 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
 }
 
 test "parseStandardArgsFromSlice parses llvm aliases" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     const args = try parseStandardArgsFromSlice(&.{
@@ -643,7 +644,7 @@ test "parseStandardArgsFromSlice parses llvm aliases" {
 }
 
 test "parseStandardArgsFromSlice parses --worker and --worker-backend without polluting positional" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     const args = try parseStandardArgsFromSlice(&.{
@@ -755,7 +756,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     _ = std.c.setsid();
                 }
 
-                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
                 const allocator = arena.allocator();
 
                 const result = cfg.runTest(allocator, specs[test_idx], timeout_ms);
@@ -956,7 +957,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Effectively unused under the Child-based path; kept as defense in
         /// depth for callers that don't build a `worker_argv_template`.
         fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);

@@ -15,7 +15,7 @@ test "platform resolution - basic cli platform" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -54,7 +54,7 @@ test "platform resolution - no platform in file" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -88,7 +88,7 @@ test "platform resolution - file not found" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -106,7 +106,7 @@ test "platform resolution - insecure HTTP URL rejected" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -205,7 +205,7 @@ test "integration - error handling for non-existent file" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

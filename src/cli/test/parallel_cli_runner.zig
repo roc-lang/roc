@@ -21,6 +21,7 @@ const Allocator = std.mem.Allocator;
 const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
+const collections = @import("collections");
 
 var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 /// Override the default debug IO so that `std.Options.debug_io` uses a properly
@@ -631,7 +632,7 @@ pub fn main(init: std.process.Init) !void {
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
-    var spec_arena = std.heap.ArenaAllocator.init(gpa);
+    var spec_arena = collections.SingleThreadArena.init(gpa);
     defer spec_arena.deinit();
 
     const args = try harness.parseStandardArgs(spec_arena.allocator(), init.minimal.args);
@@ -656,7 +657,7 @@ pub fn main(init: std.process.Init) !void {
     // harness runs N worker processes in parallel instead of forking.
     if (args.worker_index) |idx| {
         if (idx >= tests.len) std.process.exit(2);
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         defer arena.deinit();
         const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
         serializeResult(std.Io.File.stdout().handle, result);
@@ -670,7 +671,7 @@ pub fn main(init: std.process.Init) !void {
     // with `--worker-stream` would fall through to the parent path below
     // and reentrantly spawn its own pool of workers — fork-bombing the box.
     if (args.worker_stream) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         defer arena.deinit();
 
         const stdin_handle = std.Io.File.stdin().handle;

@@ -24,6 +24,7 @@ const has_fork = switch (builtin.os.tag) {
 
 const eval_mod = @import("eval");
 const test_helpers = eval_mod.test_helpers;
+const collections = @import("collections");
 const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
@@ -379,7 +380,7 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
             _ = std.c.close(dev_null);
         }
 
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.page_allocator);
         const child_alloc = arena.allocator();
 
         const result = work(child_alloc, source) catch |err| {
