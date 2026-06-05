@@ -275,6 +275,14 @@ pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
     return result.idx;
 }
 
+/// Whether `idx` refers to an entry within this interner's data. Offset 0 is the
+/// reserved "unused" sentinel, and any offset at or beyond the bytes buffer was
+/// never produced by this interner — so an Idx from another store fails this.
+pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
+    const offset = @intFromEnum(idx);
+    return offset != 0 and offset < self.bytes.items.items.len;
+}
+
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
