@@ -3393,17 +3393,6 @@ const Lowerer = struct {
         };
     }
 
-    fn callableVariantIndex(self: *Lowerer, ty: Type.TypeId, variant: Type.FnVariantId) u16 {
-        const variants = switch (self.types.get(ty)) {
-            .callable => |variants| self.types.fnVariantSpan(variants),
-            else => Common.invariant("callable operation expected callable type"),
-        };
-        for (variants, 0..) |item, index| {
-            if (item.id == variant) return @intCast(index);
-        }
-        Common.invariant("callable operation referenced variant absent from Lambda Mono type");
-    }
-
     fn recordFields(self: *Lowerer, ty: Type.TypeId) []const Type.Field {
         return switch (self.types.get(ty)) {
             .record => |fields| self.types.fieldSpan(fields),
