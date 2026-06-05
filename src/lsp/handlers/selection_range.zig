@@ -107,7 +107,10 @@ pub fn handler(comptime ServerType: type) type {
                     };
                 };
 
-                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch null;
+                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => null,
+                };
                 try results.append(self.allocator, selection_range);
             }
 
@@ -150,13 +153,12 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
 
     // Parse to get AST
-    var module_env = can.ModuleEnv.init(allocator, source) catch {
-        return error.ParseFailed;
-    };
+    var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch {
-        return error.ParseFailed;
+    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TooNested => return error.ParseFailed,
     };
     defer ast.deinit();
 

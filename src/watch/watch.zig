@@ -680,7 +680,12 @@ pub const Watcher = struct {
                 if (std.mem.endsWith(u8, name, ".roc")) {
                     for (self.impl.watch_descriptors.items) |wd| {
                         if (wd.wd == event.wd) {
-                            const full_path = std.fs.path.join(self.allocator, &.{ wd.path, name }) catch break;
+                            const full_path = std.fs.path.join(self.allocator, &.{ wd.path, name }) catch |err| switch (err) {
+                                error.OutOfMemory => {
+                                    std.log.err("Out of memory building path for changed file: {s}", .{name});
+                                    break;
+                                },
+                            };
                             defer self.allocator.free(full_path);
                             self.callback(.{ .path = full_path });
                             break;
@@ -691,7 +696,12 @@ pub const Watcher = struct {
                 if (event.mask & std.os.linux.IN.CREATE != 0 and event.mask & std.os.linux.IN.ISDIR != 0) {
                     for (self.impl.watch_descriptors.items) |wd| {
                         if (wd.wd == event.wd) {
-                            const new_dir = std.fs.path.join(self.allocator, &.{ wd.path, name }) catch break;
+                            const new_dir = std.fs.path.join(self.allocator, &.{ wd.path, name }) catch |err| switch (err) {
+                                error.OutOfMemory => {
+                                    std.log.err("Out of memory building path for new directory: {s}", .{name});
+                                    break;
+                                },
+                            };
                             defer self.allocator.free(new_dir);
                             self.addWatchRecursiveLinux(new_dir) catch |err| {
                                 std.log.err("Failed to watch new directory: {}", .{err});
@@ -704,7 +714,12 @@ pub const Watcher = struct {
                             var it = dir.iterate();
                             while (it.next(self.std_io) catch null) |entry| {
                                 if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
-                                    const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch continue;
+                                    const full_path = std.fs.path.join(self.allocator, &.{ new_dir, entry.name }) catch |err| switch (err) {
+                                        error.OutOfMemory => {
+                                            std.log.err("Out of memory building path for file in new directory: {s}", .{entry.name});
+                                            continue;
+                                        },
+                                    };
                                     defer self.allocator.free(full_path);
                                     self.callback(.{ .path = full_path });
                                 }
@@ -1029,11 +1044,14 @@ pub const Watcher = struct {
             // Check if it's a .roc file
             if (std.mem.endsWith(u8, filename_utf8, ".roc")) {
                 // Create full path
-                const full_path = std.fs.path.join(self.allocator, &.{ base_path, filename_utf8 }) catch {
-                    // Skip this file if we can't create the path
-                    if (info.NextEntryOffset == 0) break;
-                    offset += info.NextEntryOffset;
-                    continue;
+                const full_path = std.fs.path.join(self.allocator, &.{ base_path, filename_utf8 }) catch |err| switch (err) {
+                    error.OutOfMemory => {
+                        std.log.err("Out of memory building path for changed file: {s}", .{filename_utf8});
+                        // Skip this file if we can't create the path
+                        if (info.NextEntryOffset == 0) break;
+                        offset += info.NextEntryOffset;
+                        continue;
+                    },
                 };
                 defer self.allocator.free(full_path);
 

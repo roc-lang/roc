@@ -2001,9 +2001,12 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     }
 
-    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
-        return;
+    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
+            return;
+        },
     };
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"hover_info\":");
