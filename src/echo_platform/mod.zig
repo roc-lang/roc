@@ -78,7 +78,7 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
 
         /// Allocate with a size prefix so realloc/dealloc can recover the old length.
         fn rocAlloc(alloc_args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             const total = alloc_args.length + size_prefix;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(alloc_args.alignment, @alignOf(usize)));
             const raw = alloc.rawAlloc(total, align_enum, @returnAddress()) orelse {
@@ -93,12 +93,18 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             alloc_args.answer = @ptrCast(raw + size_prefix);
         }
 
-        fn rocDealloc(_: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-            // No-op for simplicity — short-lived process, pages freed on exit
+        fn rocDealloc(dealloc_args: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
+            // Recover the length rocAlloc stored in the prefix, then free the whole block.
+            const user_ptr: [*]u8 = @ptrCast(dealloc_args.ptr);
+            const raw = user_ptr - size_prefix;
+            const length = @as(*const usize, @ptrCast(@alignCast(raw))).*;
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(dealloc_args.alignment, @alignOf(usize)));
+            alloc.rawFree(raw[0 .. length + size_prefix], align_enum, @returnAddress());
         }
 
         fn rocRealloc(realloc_args: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
-            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(realloc_args.alignment, @alignOf(usize)));
 
             // Read old size from prefix
@@ -125,6 +131,9 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             if (copy_len > 0) {
                 @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
             }
+
+            // Free the old block now that its contents have been copied.
+            alloc.rawFree(old_raw[0 .. old_size + size_prefix], align_enum, @returnAddress());
 
             realloc_args.answer = @ptrCast(new_ptr);
         }
@@ -188,12 +197,15 @@ pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) Roc
     if (comptime is_wasm) return RocList.empty();
     if (app_args.len == 0) return RocList.empty();
 
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.smp_allocator;
     const roc_strs = allocator.alloc(RocStr, app_args.len) catch return RocList.empty();
+    defer allocator.free(roc_strs);
 
     for (app_args, 0..) |arg, i| {
         const sanitized = sanitizeUtf8(arg, allocator);
         roc_strs[i] = RocStr.fromSlice(sanitized, roc_ops);
+        // fromSlice copied the bytes into Roc memory, so the host scratch is done.
+        if (sanitized.ptr != arg.ptr) allocator.free(sanitized);
     }
 
     return RocList.fromSlice(RocStr, roc_strs, true, roc_ops);
