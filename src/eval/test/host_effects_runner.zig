@@ -228,8 +228,8 @@ fn decodeRun(buf: []const u8, gpa: std.mem.Allocator) ?RuntimeHostEnv.RecordedRu
 
 fn serializeRun(fd: posix.fd_t, run: RuntimeHostEnv.RecordedRun) void {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(std.heap.page_allocator);
-    appendEncodedRun(std.heap.page_allocator, &buf, run) catch return;
+    defer buf.deinit(base.defaultGpa());
+    appendEncodedRun(base.defaultGpa(), &buf, run) catch return;
     harness.writeAll(fd, buf.items);
 }
 
@@ -253,7 +253,7 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
 
     if (fork_result == 0) {
         harness.closeFd(pipe_read);
-        var child_arena = collections.SingleThreadArena.init(std.heap.page_allocator);
+        var child_arena = collections.SingleThreadArena.init(base.defaultGpa());
         const child_alloc = child_arena.allocator();
 
         const run = eval_fn(child_alloc, lowered) catch |err| {
@@ -278,7 +278,7 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
             break;
         };
         if (bytes_read == 0) break;
-        result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+        result_buf.appendSlice(base.defaultGpa(), read_buf[0..bytes_read]) catch {
             read_error = true;
             break;
         };
@@ -289,30 +289,30 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
     const status = wait_result.status;
     const termination_signal: u8 = @truncate(status & 0x7f);
     if (termination_signal != 0) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .signal_death = termination_signal };
     }
 
     const exit_code: u8 = @truncate((status >> 8) & 0xff);
     if (exit_code == 2) {
-        const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-            result_buf.deinit(std.heap.page_allocator);
+        const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+            result_buf.deinit(base.defaultGpa());
             return .{ .child_error = "ChildExecFailed" };
         };
         return .{ .child_error = owned };
     }
     if (exit_code != 0 or read_error) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     }
 
-    const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-        result_buf.deinit(std.heap.page_allocator);
+    const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     };
-    defer std.heap.page_allocator.free(owned);
+    defer base.defaultGpa().free(owned);
 
-    const decoded = decodeRun(owned, std.heap.page_allocator) orelse return .{ .child_error = "DecodeFailed" };
+    const decoded = decodeRun(owned, base.defaultGpa()) orelse return .{ .child_error = "DecodeFailed" };
     return .{ .success = decoded };
 }
 
@@ -536,7 +536,7 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
     var run_bufs: [NUM_BACKENDS]?[]u8 = .{ null, null };
     defer {
         for (run_bufs) |maybe_buf| {
-            if (maybe_buf) |buf| std.heap.page_allocator.free(buf);
+            if (maybe_buf) |buf| base.defaultGpa().free(buf);
         }
     }
 
@@ -556,12 +556,12 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
         header.backend_message_lens[i] = if (backend_detail.message) |msg| @intCast(msg.len) else 0;
         if (backend_detail.run) |run| {
             var buf: std.ArrayListUnmanaged(u8) = .empty;
-            appendEncodedRun(std.heap.page_allocator, &buf, run) catch {
+            appendEncodedRun(base.defaultGpa(), &buf, run) catch {
                 header.backend_run_lens[i] = 0;
                 continue;
             };
-            const owned = buf.toOwnedSlice(std.heap.page_allocator) catch {
-                buf.deinit(std.heap.page_allocator);
+            const owned = buf.toOwnedSlice(base.defaultGpa()) catch {
+                buf.deinit(base.defaultGpa());
                 header.backend_run_lens[i] = 0;
                 continue;
             };
