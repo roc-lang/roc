@@ -319,7 +319,7 @@ fn rocReallocFn(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const copy_size = @min(old_info.value.size, realloc_args.new_length);
     @memcpy(new_base_ptr[0..copy_size], old_bytes[0..copy_size]);
 
-    freeTrackedBytes(undefined, realloc_args.answer, old_info.value);
+    freeTrackedBytes(undefined, realloc_args.answer.?, old_info.value);
     realloc_args.answer = @ptrCast(new_base_ptr);
 
     self.allocation_tracker.put(@intFromPtr(new_base_ptr), .{
