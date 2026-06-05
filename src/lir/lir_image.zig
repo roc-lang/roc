@@ -7,7 +7,6 @@
 //! never reconstructs compiler data.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
