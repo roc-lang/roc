@@ -13,7 +13,9 @@ const mib: usize = 1024 * 1024;
 const gib: usize = 1024 * mib;
 const rss_medium: usize = 1 * gib;
 const rss_large: usize = 2 * gib;
-const rss_xlarge: usize = 8 * gib;
+// Capped to fit the smallest CI runner's available memory (macOS runners
+// report ~7 GiB); a larger bound makes zig build reject the step outright.
+const rss_xlarge: usize = 6 * gib;
 const test_timing_dir = ".zig-cache/roc-test-timings";
 const test_timing_keep_generation_count = 2;
 
