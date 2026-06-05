@@ -251,11 +251,10 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) []const u8 {
             in_i += 1;
         }
     }
-    const resized = allocator.resize(buf, out_i);
-    if (!resized) {
-        // resize can fail but the buffer remains valid; keep original allocation
-    }
-    return buf[0..out_i];
+    // realloc to the exact length so the returned slice is the whole allocation
+    // and callers can free it (a plain resize can decline a shrink, e.g. across
+    // smp size classes, which would leave the returned sub-slice unfreeable).
+    return allocator.realloc(buf, out_i) catch buf[0..out_i];
 }
 
 const testing = std.testing;
