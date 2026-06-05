@@ -661,11 +661,22 @@ pub fn main(init: std.process.Init) !void {
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
-        if (builtin.os.tag == .freestanding) break :gpa .{ std.heap.wasm_allocator, false };
-        break :gpa switch (builtin.mode) {
-            .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
-            .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
-        };
+        // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
+        // else uses the fast target allocator — see base.defaultGpa.
+        const use_debug_allocator = builtin.os.tag != .freestanding and
+            (builtin.mode == .Debug or build_options.debug_gpa);
+        if (use_debug_allocator) {
+            // Under Valgrind, use libc's malloc instead: Valgrind can't see the
+            // debug allocator's sub-allocations (it carves them out of mmap'd
+            // pages) but tracks every malloc/free. Debug builds carry the client
+            // requests, so this auto-switches with no flag.
+            if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
+                break :gpa .{ std.heap.c_allocator, false };
+            }
+            break :gpa .{ debug_allocator.allocator(), true };
+        }
+        break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {

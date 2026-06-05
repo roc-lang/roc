@@ -106,7 +106,7 @@ pub fn runWasmStrWithStats(
         return error.WasmExecFailed;
     };
 
-    var module_instance = bytebox.createModuleInstance(.Stack, module_def, std.heap.page_allocator) catch |err| {
+    var module_instance = bytebox.createModuleInstance(.Stack, module_def, arena) catch |err| {
         if (std.debug.runtime_safety) {
             debugPrint("wasm instance create failed: {s}\n", .{@errorName(err)});
         }

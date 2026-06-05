@@ -14,6 +14,7 @@
 const std = @import("std");
 const posix = std.posix;
 const eval = @import("eval");
+const base = @import("base");
 const harness = @import("test_harness");
 
 const helpers = eval.test_helpers;
@@ -234,7 +235,7 @@ fn serializeRun(fd: posix.fd_t, run: RuntimeHostEnv.RecordedRun) void {
 
 fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResult {
     if (comptime !has_fork) {
-        const result = eval_fn(std.heap.page_allocator, lowered) catch |err| {
+        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
         return .{ .success = result };

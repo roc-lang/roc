@@ -7,7 +7,6 @@
 //! never reconstructs compiler data.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -227,7 +226,7 @@ pub fn fillHeaderInSharedMemory(
 /// backed by `gpa.alignedAlloc` whose owning slice is `const`) pass it
 /// directly without a manual `@constCast`.
 pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) const u8, mapped_size: usize) ImageError!ProgramView {
-    return viewMappedImageWithAllocator(header, base_ptr, mapped_size, if (builtin.target.os.tag == .freestanding) std.heap.wasm_allocator else std.heap.smp_allocator);
+    return viewMappedImageWithAllocator(header, base_ptr, mapped_size, base.defaultGpa());
 }
 
 /// View an ARC-inserted LIR program in place from a mapped buffer using the

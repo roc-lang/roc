@@ -108,14 +108,12 @@ pub const Result = union(enum) {
     }
 };
 
-/// Unify two type variables
-///
-/// This function
-/// * Resolves type variables & compresses paths
-/// * Compares variable contents for equality
-/// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(
-    gpa: Allocator,
+/// Borrowed bundle of the stable dependencies every unification needs.
+/// All fields are borrowed; construct cheaply from the owner on each call.
+pub const Env = struct {
+    /// Allocator that owns `problems`; used to grow it. Must be the same
+    /// allocator that created the problem store (see `appendProblem` below).
+    problems_gpa: Allocator,
     ident_store: *const Ident.Store,
     qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
@@ -124,26 +122,7 @@ pub fn unify(
     type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    /// The "expected" variable
-    a: Var,
-    /// The "actual" variable
-    b: Var,
-) std.mem.Allocator.Error!Result {
-    return unifyInContext(
-        gpa,
-        ident_store,
-        qualified_module_ident,
-        types,
-        problems,
-        snapshots,
-        type_writer,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        Context.none,
-    );
-}
+};
 
 /// Controls what a top-level type mismatch does to the two operands.
 pub const MismatchBehavior = enum {
@@ -158,104 +137,26 @@ pub const MismatchBehavior = enum {
     write_no_report,
 };
 
-/// Unify two type variables
+/// Per-call options. Both axes default to the common case.
+pub const Options = struct {
+    context: Context = .none,
+    on_mismatch: MismatchBehavior = .poison_to_err,
+};
+
+/// Unify two type variables.
 ///
-/// This function
 /// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-///
-/// This function accepts a context and optional constraint origin var (for better error reporting)
-pub fn unifyInContext(
-    gpa: Allocator,
-    ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    type_writer: *types_mod.TypeWriter,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    /// The "expected" variable
-    a: Var,
-    /// The "actual" variable
-    b: Var,
-    context: Context,
-) std.mem.Allocator.Error!Result {
-    return unifyWithMismatchBehavior(
-        gpa,
-        ident_store,
-        qualified_module_ident,
-        types,
-        problems,
-        snapshots,
-        type_writer,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        context,
-        .poison_to_err,
-    );
-}
-
-/// Like `unifyInContext`, but merges on success and on a mismatch records
-/// nothing and poisons nothing — returns `Result.mismatch`. The caller owns the
-/// diagnostic and any rollback. See `MismatchBehavior.write_no_report`.
-pub fn unifyWriteNoReport(
-    gpa: Allocator,
-    ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    type_writer: *types_mod.TypeWriter,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-    context: Context,
-) std.mem.Allocator.Error!Result {
-    return unifyWithMismatchBehavior(
-        gpa,
-        ident_store,
-        qualified_module_ident,
-        types,
-        problems,
-        snapshots,
-        type_writer,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        context,
-        .write_no_report,
-    );
-}
-
-fn unifyWithMismatchBehavior(
-    gpa: Allocator,
-    ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    type_writer: *types_mod.TypeWriter,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-    context: Context,
-    mismatch_behavior: MismatchBehavior,
-) std.mem.Allocator.Error!Result {
+pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // First reset the scratch store
-    unify_scratch.reset();
+    env.unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(ident_store, qualified_module_ident, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier.init(env.ident_store, env.qualified_module_ident, env.types, env.unify_scratch, env.occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -263,21 +164,21 @@ fn unifyWithMismatchBehavior(
         }
 
         // write_no_report: no record, no poison — the caller owns it.
-        if (mismatch_behavior == .write_no_report) return Result.mismatch;
+        if (opts.on_mismatch == .write_no_report) return Result.mismatch;
 
-        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-        const problem_idx = try problems.appendProblem(gpa, .{ .type_mismatch = .{
+        const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
+        const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
+        const problem_idx = try env.problems.appendProblem(env.problems_gpa, .{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
                 .expected_snapshot = expected_snapshot,
                 .actual_var = b,
                 .actual_snapshot = actual_snapshot,
             },
-            .context = context,
+            .context = opts.context,
         } });
         // Only `poison_to_err` reaches here (`write_no_report` returned above).
-        types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+        env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
         return Result{ .problem = problem_idx };
     };
 

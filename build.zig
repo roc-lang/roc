@@ -2233,6 +2233,7 @@ pub fn build(b: *std.Build) void {
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
     const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
+    const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     if (shared_memory_size) |size| {
         if (size == 0) {
@@ -2275,6 +2276,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
+    build_options.addOption(bool, "debug_gpa", debug_gpa);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     const compiler_version_git = getCompilerVersionGit(b);
