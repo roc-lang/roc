@@ -938,6 +938,12 @@ pub const Store = struct {
     ///
     /// The merge direction (a -> b) is load-bearing and must not be changed.
     /// Multiple parts of the unification algorithm depend on this specific order.
+    /// Callers therefore control which variable survives by choosing operand
+    /// order: a variable that must remain canonical (e.g. a shared expected-return
+    /// var reused across branches and embedded in a function's annotated type)
+    /// has to be passed as `b`. Passing it as `a` redirects it away and can tie a
+    /// recursive type parameter off to a duplicate rigid, producing a spurious
+    /// mismatch (see `Check.checkBranchBodyAgainstExpected`).
     /// Alias spelling is not preserved by choosing an alias representative; source
     /// alias views stay separate from the concrete solved backing variable.
     ///
