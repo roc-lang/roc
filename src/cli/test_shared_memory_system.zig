@@ -144,11 +144,11 @@ fn compileLirImageForSharedTest(
     allocator: std.mem.Allocator,
     source: []const u8,
     imports: []const test_helpers.ModuleSource,
-) Allocator.Error!test_helpers.CompiledTargetProgram {
+) anyerror!test_helpers.CompiledTargetProgram {
     return test_helpers.compileProgramForTarget(allocator, std.testing.io, .module, source, imports, .native);
 }
 
-fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) Allocator.Error!void {
+fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) anyerror!void {
     const used = compiled.lowered.shm.getUsedSize();
     try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);

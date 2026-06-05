@@ -750,6 +750,13 @@ pub const Coordinator = struct {
     /// remaining tasks from the channel.
     shutting_down: std.atomic.Value(bool),
 
+    /// Set by a worker thread when it runs out of memory while producing a
+    /// result (e.g. constructing a failure report). Worker threads have a
+    /// `void` signature and cannot return errors, so they record the OOM here;
+    /// the coordinator loop observes it and aborts the build with
+    /// `error.OutOfMemory` instead of hanging or silently dropping the failure.
+    worker_oom: std.atomic.Value(bool),
+
     /// Total modules remaining across all packages
     total_remaining: usize,
 
@@ -844,6 +851,7 @@ pub const Coordinator = struct {
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
+            .worker_oom = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
@@ -2290,12 +2298,16 @@ pub const Coordinator = struct {
         var iterations_without_progress: u32 = 0;
 
         while (!self.isComplete()) {
+            // A worker thread ran out of memory while producing a result. It
+            // cannot return the error itself, so it recorded the OOM here.
+            if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
+
             var made_progress = false;
 
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
-                    const result = self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
+                    const result = try self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
                     inline_worker_allocs.resetArena();
                     try self.handleResult(result);
                     made_progress = true;
@@ -2420,7 +2432,7 @@ pub const Coordinator = struct {
     }
 
     /// Execute a task inline with explicit worker allocators.
-    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) WorkerResult {
+    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         return switch (task) {
             .parse => |t| self.executeParse(t, allocators),
             .canonicalize => |t| self.executeCanonicalize(t, allocators),
@@ -2461,34 +2473,28 @@ pub const Coordinator = struct {
     }
 
     fn appendWorkerFailureReport(
-        self: *Coordinator,
         allocator: Allocator,
         reports: *std.ArrayList(Report),
         title: []const u8,
         path: []const u8,
         err: anyerror,
-    ) void {
+    ) Allocator.Error!void {
         var rep = Report.init(allocator, title, .fatal);
-        const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
-        defer if (msg) |owned| allocator.free(owned);
-        rep.addErrorMessage(msg orelse @errorName(err)) catch |report_err| {
-            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(report_err) });
-        };
-        reports.append(allocator, rep) catch |append_err| {
-            rep.deinit();
-            self.bugReport("BUG: failed to append worker failure report for {s}: {s}\n", .{ path, @errorName(append_err) });
-        };
+        errdefer rep.deinit();
+        const msg = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) });
+        defer allocator.free(msg);
+        try rep.addErrorMessage(msg);
+        try reports.append(allocator, rep);
     }
 
     fn workerFailureReports(
-        self: *Coordinator,
         allocator: Allocator,
         title: []const u8,
         path: []const u8,
         err: anyerror,
-    ) std.ArrayList(Report) {
+    ) Allocator.Error!std.ArrayList(Report) {
         var reports = std.ArrayList(Report).empty;
-        self.appendWorkerFailureReport(allocator, &reports, title, path, err);
+        try appendWorkerFailureReport(allocator, &reports, title, path, err);
         return reports;
     }
 
@@ -3577,7 +3583,7 @@ pub const Coordinator = struct {
     }
 
     /// Execute a parse task (pure function)
-    fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) WorkerResult {
+    fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         return self.executeParseFallible(task, allocators) catch |err| {
             const title = switch (err) {
                 error.FileNotFound => "FILE NOT FOUND",
@@ -3589,7 +3595,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, title, task.path, err),
+                    .reports = try workerFailureReports(allocators.result, title, task.path, err),
                     .partial_env = null,
                 },
             };
@@ -3708,7 +3714,7 @@ pub const Coordinator = struct {
     }
 
     /// Execute a canonicalize task (pure function)
-    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) WorkerResult {
+    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         return self.executeCanonicalizeFallible(task, allocators) catch |err| {
             return .{
                 .compile_failed = .{
@@ -3716,7 +3722,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
+                    .reports = try workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
                     .partial_env = task.module_env,
                 },
             };
@@ -3792,7 +3798,7 @@ pub const Coordinator = struct {
     }
 
     /// Execute a type-check task (pure function)
-    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
+    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         return self.executeTypeCheckFallible(task, allocators) catch |err| {
             return .{
                 .compile_failed = .{
@@ -3800,7 +3806,7 @@ pub const Coordinator = struct {
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
+                    .reports = try workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
                     .partial_env = task.module_env,
                 },
             };
@@ -3909,8 +3915,15 @@ pub const Coordinator = struct {
             // is closed and drained.
             const t = self.task_channel.recv() orelse break;
 
-            // Execute task
-            const result = self.executeTaskInline(t, worker_allocs.taskAllocators());
+            // Execute task. On OOM we cannot return an error from this `void`
+            // thread entry point, so record it for the coordinator to observe
+            // and stop pulling work — the coordinator aborts the build.
+            const result = self.executeTaskInline(t, worker_allocs.taskAllocators()) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    self.worker_oom.store(true, .release);
+                    break;
+                },
+            };
 
             // Reset arena between tasks to reclaim temporary allocations
             worker_allocs.resetArena();

@@ -691,7 +691,7 @@ fn reproduceWithBinary(
     allocator: Allocator,
     block: *const Block,
     block_index: usize,
-) Allocator.Error!bool {
+) anyerror!bool {
     const wrapper = try wrapForBinary(allocator, block);
     defer allocator.free(wrapper);
 

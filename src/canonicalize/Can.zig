@@ -5371,13 +5371,18 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         full_path,
         self.env.gpa,
     ) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {
+            error.OutOfMemory => unreachable,
             error.FileNotFound => .{ .file_import_not_found = .{
                 .path = path_string,
                 .region = region,
             } },
-            else => .{ .file_import_io_error = .{
+            error.AccessDenied, error.StreamTooLong, error.IoError => .{ .file_import_io_error = .{
                 .path = path_string,
                 .region = region,
             } },
@@ -6090,7 +6095,7 @@ fn recordNumeralLiteralForExpr(
 
 /// Parse an integer literal's textual form into a CIR.IntValue, honoring an
 /// optional leading minus and `0x`/`0o`/`0b`/`0d` base prefixes.
-pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) ?CIR.IntValue {
+pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) std.mem.Allocator.Error!?CIR.IntValue {
     const is_negated = num_text[0] == '-';
     const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
@@ -6124,8 +6129,9 @@ pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) ?CIR.Int
 
     const digit_part = num_text[first_digit..];
 
-    const u128_val = parseIntWithUnderscores(allocator, u128, digit_part, int_base) catch {
-        return null;
+    const u128_val = parseIntWithUnderscores(allocator, u128, digit_part, int_base) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidCharacter, error.Overflow => return null,
     };
 
     // If this had a minus sign, but negating it would result in a negative number

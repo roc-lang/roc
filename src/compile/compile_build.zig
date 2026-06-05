@@ -651,13 +651,13 @@ pub const BuildEnv = struct {
                         std.debug.print("[TRANSFER]   Module {s} not in scheduler, creating\n", .{coord_mod.name});
                     }
                     // Create the module in the scheduler
-                    _ = sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
+                    _ = try sched.ensureModule(coord_mod.name, coord_mod.path);
                     maybe_sched_mod = sched.getModuleState(coord_mod.name);
                 }
                 const sched_mod = maybe_sched_mod orelse continue;
 
                 // Transfer depth from coordinator to scheduler
-                sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth) catch {};
+                try sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth);
                 if (comptime trace_build) {
                     std.debug.print("[TRANSFER]   Transferred depth {} for {s}\n", .{ coord_mod.depth, coord_mod.name });
                 }
@@ -734,7 +734,7 @@ pub const BuildEnv = struct {
                 // Emit reports to sink for deterministic ordering
                 // Then clear scheduler's reports to transfer ownership to sink
                 for (sched_mod.reports.items) |rep| {
-                    self.sink.emitReport(coord_entry.key_ptr.*, coord_mod.name, rep);
+                    try self.sink.emitReport(coord_entry.key_ptr.*, coord_mod.name, rep);
                 }
                 sched_mod.reports.clearRetainingCapacity();
             }
@@ -772,7 +772,7 @@ pub const BuildEnv = struct {
     // External import classification now comes from CIR qualifier metadata.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
 
-    fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
+    fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) Allocator.Error!void {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return;
 
@@ -786,17 +786,16 @@ pub const BuildEnv = struct {
             return;
         };
 
-        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, qualified.module) catch {
-            return;
+        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, qualified.module) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PathOutsideWorkspace => return,
         };
         defer self.ws.gpa.free(mod_path);
 
         const sched = self.ws.schedulers.get(target_pkg_name) orelse {
             return;
         };
-        sched.*.scheduleModule(qualified.module, mod_path, 1) catch {
-            // Continue anyway - dependency resolution will handle missing modules
-        };
+        try sched.*.scheduleModule(qualified.module, mod_path, 1);
     }
 
     fn resolverIsReady(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) bool {
@@ -859,9 +858,12 @@ pub const BuildEnv = struct {
             null;
     }
 
-    fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
+    fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) Allocator.Error![]const u8 {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
-        return self.ws.dottedToPath(root_dir, import_name) catch import_name;
+        return self.ws.dottedToPath(root_dir, import_name) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PathOutsideWorkspace => import_name,
+        };
     }
 
     fn makeResolver(self: *BuildEnv) ImportResolver {
@@ -956,15 +958,13 @@ pub const BuildEnv = struct {
         }
     };
 
-    fn detectPackageCycle(self: *BuildEnv, from_pkg: []const u8, to_pkg: []const u8) bool {
+    fn detectPackageCycle(self: *BuildEnv, from_pkg: []const u8, to_pkg: []const u8) Allocator.Error!bool {
         // Simple DFS walk on shorthand edges to detect if to_pkg reaches from_pkg
         if (std.mem.eql(u8, from_pkg, to_pkg)) return true;
 
         var stack = std.ArrayList([]const u8).empty;
         defer stack.deinit(self.gpa);
-        stack.append(self.gpa, to_pkg) catch {
-            return false;
-        };
+        try stack.append(self.gpa, to_pkg);
 
         var visited = std.StringHashMapUnmanaged(void){};
         defer visited.deinit(self.gpa);
@@ -974,9 +974,7 @@ pub const BuildEnv = struct {
             const cur = stack.items[idx];
             stack.items.len = idx;
             if (visited.contains(cur)) continue;
-            visited.put(self.gpa, cur, {}) catch {
-                return false;
-            };
+            try visited.put(self.gpa, cur, {});
 
             if (std.mem.eql(u8, cur, from_pkg)) return true;
 
@@ -984,9 +982,7 @@ pub const BuildEnv = struct {
             var it = pkg.shorthands.iterator();
             while (it.next()) |e| {
                 const next = e.value_ptr.name;
-                stack.append(self.gpa, next) catch {
-                    return false;
-                };
+                try stack.append(self.gpa, next);
             }
         }
         return false;
@@ -1018,7 +1014,7 @@ pub const BuildEnv = struct {
                     break :blk report;
                 },
             };
-            self.sink.emitReport("main", file_abs, report);
+            try self.sink.emitReport("main", file_abs, report);
             try self.sink.buildOrder(&[_][]const u8{"main"}, &[_][]const u8{file_abs}, &[_]u32{0});
             self.sink.tryEmit();
             return err;
@@ -1042,11 +1038,11 @@ pub const BuildEnv = struct {
 
             for (ast.tokenize_diagnostics.items) |diagnostic| {
                 const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, file_abs);
-                self.sink.emitReport(pkg_name, module_name, report);
+                try self.sink.emitReport(pkg_name, module_name, report);
             }
             for (ast.parse_diagnostics.items) |diagnostic| {
                 const report = try ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, file_abs);
-                self.sink.emitReport(pkg_name, module_name, report);
+                try self.sink.emitReport(pkg_name, module_name, report);
             }
 
             // Build the order so drainReports can find these reports
@@ -1510,9 +1506,9 @@ pub const BuildEnv = struct {
         sink: *OrderedSink,
         pkg: []const u8,
 
-        fn emit(ctx: ?*anyopaque, module_name: []const u8, report: Report) void {
+        fn emit(ctx: ?*anyopaque, module_name: []const u8, report: Report) Allocator.Error!void {
             var self: *PkgSinkCtx = @ptrCast(@alignCast(ctx.?));
-            self.sink.emitReport(self.pkg, module_name, report);
+            try self.sink.emitReport(self.pkg, module_name, report);
         }
     };
 
@@ -1568,7 +1564,7 @@ pub const BuildEnv = struct {
                 // Also schedule the external module so it gets built
                 // This is needed so the module is ready when we populate module_envs_map
                 if (sched.resolver) |res| {
-                    res.scheduleExternal(res.ctx, pkm.target_package, pkm.import_name);
+                    try res.scheduleExternal(res.ctx, pkm.target_package, pkm.import_name);
                 }
             }
         }
@@ -1698,7 +1694,7 @@ pub const BuildEnv = struct {
             }
 
             // Detect package-level cycles: if alias already on the path, report cycle
-            if (self.detectPackageCycle(pkg_name, alias)) {
+            if (try self.detectPackageCycle(pkg_name, alias)) {
                 // Build a more descriptive cycle message using source-level identifiers (aliases)
                 // Do not include file paths here (cycle messages should show source identities).
                 const msg = try std.fmt.allocPrint(self.gpa, "Package-level cycle detected involving aliases: {s} ... {s}", .{ pkg_name, alias });
@@ -1746,7 +1742,7 @@ pub const BuildEnv = struct {
         try rep.addErrorMessage(owned);
         // Route through OrderedSink with a stable fully-qualified identity so it participates in ordering.
         // We use "workspace:root" as the fq module identity.
-        self.sink.emitReport("workspace", "root", rep);
+        try self.sink.emitReport("workspace", "root", rep);
     }
 
     // Compute global deterministic emission of accumulated reports:
@@ -1812,7 +1808,10 @@ pub const BuildEnv = struct {
         var out = try self.gpa.alloc(DrainedModuleReports, drained.len);
         var i: usize = 0;
         while (i < drained.len) : (i += 1) {
-            const path = self.moduleToPath(drained[i].pkg_name, drained[i].module_name) catch try self.gpa.dupe(u8, "");
+            const path = self.moduleToPath(drained[i].pkg_name, drained[i].module_name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPackageName, error.PathOutsideWorkspace => try self.gpa.dupe(u8, ""),
+            };
             out[i] = .{
                 .abs_path = path,
                 .reports = drained[i].reports,
@@ -2300,8 +2299,8 @@ pub const BuildEnv = struct {
 
     /// Drain reports and render them to a writer. Returns error/warning counts.
     /// Replaces the repeated drain → iterate → render boilerplate pattern.
-    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) RenderDiagnosticsResult {
-        const drained = self.drainReports() catch &[_]DrainedModuleReports{};
+    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) Allocator.Error!RenderDiagnosticsResult {
+        const drained = try self.drainReports();
         defer self.freeDrainedReports(drained);
 
         var total_error_count: usize = 0;
@@ -2542,7 +2541,7 @@ pub const OrderedSink = struct {
     }
 
     // Emit with package and module names
-    pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) void {
+    pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) Allocator.Error!void {
         self.lock.lockUncancelable(self.std_io);
         defer self.lock.unlock(self.std_io);
 
@@ -2561,26 +2560,20 @@ pub const OrderedSink = struct {
         } else {
             entry_index = self.entries.items.len;
             const reports_list = std.array_list.Managed(Report).init(self.gpa);
-            self.entries.append(.{
+            try self.entries.append(.{
                 .pkg_name = pkg_name,
                 .module_name = module_name,
                 .depth = std.math.maxInt(u32),
                 .reports = reports_list,
                 .ready = false,
                 .emitted = false,
-            }) catch return;
-            if (self.index.put(key, entry_index) catch null == null) {
-                return;
-            }
+            });
+            try self.index.put(key, entry_index);
             // Note: do not append to order here; buildOrder will populate and sort later
         }
 
         // Record report; take ownership by appending to per-module list
-        self.entries.items[entry_index].reports.append(report) catch {
-            var r = report;
-            r.deinit();
-            return;
-        };
+        try self.entries.items[entry_index].reports.append(report);
         self.entries.items[entry_index].ready = true;
 
         // Attempt ordered emission only if order has been built

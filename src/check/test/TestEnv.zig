@@ -259,7 +259,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type Check - Pass all imported modules
     var checker = try Check.init(
@@ -369,7 +369,7 @@ pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || err
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     // Type Check - Pass the imported modules in other_modules parameter
     var checker = try Check.init(

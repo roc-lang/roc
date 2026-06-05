@@ -1416,7 +1416,7 @@ fn compileSource(source: []const u8, module_name: []const u8) anyerror!CompilerS
 
         // Resolve imports - map each import to its index in imported_envs
         type_can_ir.imports.clearResolvedModules();
-        type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
+        try type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
         type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Use pointer to the stored CIR to ensure solver references valid memory

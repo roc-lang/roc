@@ -178,10 +178,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer build_env.deinit();
 
     build_env.build(synthetic_app_path) catch {
-        _ = build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
-    _ = build_env.renderDiagnostics(stderr);
+    _ = try build_env.renderDiagnostics(stderr);
 
     const modules = build_env.getModulesInSerializationOrder(gpa) catch {
         return error.ModuleRetrieval;
@@ -282,10 +282,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer glue_build_env.deinit();
 
     glue_build_env.build(glue_spec_abs) catch {
-        _ = glue_build_env.renderDiagnostics(stderr);
+        _ = try glue_build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
-    _ = glue_build_env.renderDiagnostics(stderr);
+    _ = try glue_build_env.renderDiagnostics(stderr);
 
     const root_artifact = glue_build_env.executableRootCheckedArtifact();
     const imported_artifacts = glue_build_env.collectImportedArtifactViews(gpa, root_artifact) catch {

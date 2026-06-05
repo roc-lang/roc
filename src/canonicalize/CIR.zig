@@ -885,7 +885,7 @@ pub const Import = struct {
             self: *Store,
             env: anytype,
             available_modules: []const *const @import("ModuleEnv.zig"),
-        ) void {
+        ) std.mem.Allocator.Error!void {
             const import_count: usize = @intCast(self.imports.len());
             if (import_count == 0) return;
 
@@ -893,7 +893,7 @@ pub const Import = struct {
             // "first match in iteration order" semantics of the previous linear scan.
             var name_to_idx = std.StringHashMap(u32).init(env.gpa);
             defer name_to_idx.deinit();
-            name_to_idx.ensureTotalCapacity(@intCast(available_modules.len)) catch return;
+            try name_to_idx.ensureTotalCapacity(@intCast(available_modules.len));
             var compiler_builtin_module_idx: ?u32 = null;
             for (available_modules, 0..) |module_env, module_idx| {
                 if (module_env.module_role == .builtin and compiler_builtin_module_idx == null) {

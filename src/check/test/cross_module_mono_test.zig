@@ -190,7 +190,7 @@ const MonoTestEnv = struct {
         try imported_envs_list.append(gpa, builtin_module.env);
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -304,7 +304,7 @@ const MonoTestEnv = struct {
         }
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -424,7 +424,7 @@ const MonoTestEnv = struct {
         }
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -743,7 +743,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     try imported_envs_list.append(gpa, builtin_module.env);
 
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
     var checker = try Check.init(
         gpa,

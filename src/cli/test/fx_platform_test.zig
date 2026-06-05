@@ -310,7 +310,7 @@ fn expectDevRuntimeDivisionByZero() anyerror!void {
 // test runner.
 
 /// Shared body for IO spec tests with a specific backend.
-fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) Allocator.Error!void {
+fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) anyerror!void {
     try runIoSpecTestWithEnv(opt_flag, spec, null);
 }
 

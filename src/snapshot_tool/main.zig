@@ -802,7 +802,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     }
 }
 
-fn checkSnapshotExpectations(gpa: Allocator) (std.Thread.SpawnError || std.Io.Dir.Iterator.Error)!bool {
+fn checkSnapshotExpectations(gpa: Allocator) anyerror!bool {
     // Load builtin modules using the same code path as roc check
     const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
     defer gpa.destroy(builtin_modules_ptr);
@@ -1202,7 +1202,7 @@ fn processSnapshotContent(
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
         }
         can_ir.imports.clearResolvedModules();
-        can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+        try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
         can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         var checker = try Check.init(
@@ -1258,7 +1258,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
             can_ir.imports.clearResolvedModules();
-            can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+            try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
             can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
             var checker = try Check.init(
@@ -3022,7 +3022,10 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
 
     const imported_modules: []const *const ModuleEnv = &.{builtin_env};
     validation_env.imports.clearResolvedModules();
-    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules);
+    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve imports: {}", .{ source_path, err });
+        return false;
+    };
     validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
 
     var checker = Check.init(
@@ -4657,7 +4660,7 @@ fn renderSnapshotReplTypeProblems(
     try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
 
     can_ir.imports.clearResolvedModules();
-    can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
+    try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
     can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
     var checker = try Check.init(
@@ -5124,7 +5127,7 @@ fn searchDirectoryForBuiltin(
     dir: *std.Io.Dir,
     relative_path: []const u8,
     files_with_builtin: *std.array_list.Managed([]const u8),
-) Allocator.Error!void {
+) anyerror!void {
     var iter = dir.iterate();
     while (try iter.next(std.testing.io)) |entry| {
         const full_path = if (relative_path.len > 0)

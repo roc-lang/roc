@@ -634,8 +634,8 @@ fn renderValidationError(
     if (rendered) {} else {}
 }
 
-fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) void {
-    const diag = build_env.renderDiagnostics(stderr);
+fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) Allocator.Error!void {
+    const diag = try build_env.renderDiagnostics(stderr);
     if (diag.errors > 0) {} else {}
 }
 
@@ -3392,7 +3392,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -3508,11 +3508,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     build_env.setTarget(target);
     build_env.compileDiscovered() catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
         if (args.allow_errors) return;
@@ -3762,7 +3762,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
@@ -3866,11 +3866,11 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     build_env.setTarget(target);
     build_env.compileDiscovered() catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
         if (args.allow_errors) return;
@@ -4579,15 +4579,15 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr);
         return err;
     };
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr);
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(stderr);
+    const diag = try build_env.renderDiagnostics(stderr);
     if (diag.errors > 0) return error.CompilationFailed;
 
     const modules = try build_env.getCompiledModules(ctx.gpa);
@@ -5918,7 +5918,7 @@ test "appendWindowsQuotedArg" {
 
     // Helper to test the quoting function
     const testQuote = struct {
-        fn run(input: []const u8, expected: []const u8) Allocator.Error!void {
+        fn run(input: []const u8, expected: []const u8) anyerror!void {
             var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
             defer cmd.deinit();
             try appendWindowsQuotedArg(&cmd, input);

@@ -115,7 +115,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
-            _ = env.types.fresh() catch unreachable;
+            _ = try env.types.fresh();
         }
     }
 

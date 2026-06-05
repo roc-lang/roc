@@ -183,8 +183,9 @@ const Exact = struct {
 /// Parse a numeric token into exact base-256 digit facts and a compact payload when possible.
 pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std.mem.Allocator.Error!Owned {
     const split = splitDeprecatedSuffix(raw_text, kind);
-    const exact = parseExact(allocator, split.number_text, kind) catch {
-        return .{
+    const exact = parseExact(allocator, split.number_text, kind) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidNumeral => return .{
             .kind = kind,
             .compact = .invalid,
             .before = try allocator.alloc(u8, 0),
@@ -192,7 +193,7 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
             .after_decimal_digit_count = 0,
             .is_negative = false,
             .had_decimal_point = kind == .frac,
-        };
+        },
     };
     errdefer exact.deinit(allocator);
 
@@ -404,7 +405,10 @@ fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Alloca
     const exponent: i64 = if (exp_index) |index| blk: {
         const exp_text = unsigned_text[index + 1 ..];
         if (exp_text.len == 0) return error.InvalidNumeral;
-        break :blk parseI64NoUnderscores(allocator, exp_text) catch return error.InvalidNumeral;
+        break :blk parseI64NoUnderscores(allocator, exp_text) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidCharacter, error.Overflow => return error.InvalidNumeral,
+        };
     } else 0;
 
     var before_raw = std.ArrayList(u8).empty;
@@ -538,7 +542,10 @@ fn compactFrac(
     allocator: std.mem.Allocator,
     text: []const u8,
 ) std.mem.Allocator.Error!Compact {
-    const parts = decimalParts(allocator, text[@intFromBool(text.len > 0 and text[0] == '-')..]) catch return .invalid;
+    const parts = decimalParts(allocator, text[@intFromBool(text.len > 0 and text[0] == '-')..]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidNumeral => return .invalid,
+    };
     defer parts.deinit(allocator);
 
     const is_negative = text.len > 0 and text[0] == '-';

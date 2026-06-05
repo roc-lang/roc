@@ -93,7 +93,7 @@ pub const Mode = enum { single_threaded, multi_threaded };
 /// Destination for reports (can be stdout, memory buffer, etc.)
 pub const ReportSink = struct {
     ctx: ?*anyopaque,
-    emitFn: *const fn (ctx: ?*anyopaque, module_name: []const u8, report: Report) void,
+    emitFn: *const fn (ctx: ?*anyopaque, module_name: []const u8, report: Report) Allocator.Error!void,
 };
 
 /// Optional scheduling hook for observability/integration (e.g. global work-stealing)
@@ -117,7 +117,7 @@ pub const ScheduleHook = struct {
 pub const ImportResolver = struct {
     ctx: ?*anyopaque,
     /// Ensure the external import is scheduled for building in its owning package
-    scheduleExternal: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void,
+    scheduleExternal: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) Allocator.Error!void,
     /// Return true if the external import is fully type-checked and its ModuleEnv is ready
     isReady: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) bool,
     /// Get a pointer to the external ModuleEnv once ready (null if not ready)
@@ -125,7 +125,7 @@ pub const ImportResolver = struct {
     /// Get the published checked artifact for the external import once ready (null if not ready)
     getArtifact: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) ?*const CheckedArtifact.CheckedModuleArtifact,
     /// Resolve a local module import to a filesystem path within the current package
-    resolveLocalPath: *const fn (ctx: ?*anyopaque, current_package: []const u8, root_dir: []const u8, import_name: []const u8) []const u8,
+    resolveLocalPath: *const fn (ctx: ?*anyopaque, current_package: []const u8, root_dir: []const u8, import_name: []const u8) Allocator.Error![]const u8,
 };
 
 /// Module identifier - index into the modules list
@@ -1150,7 +1150,7 @@ pub const PackageEnv = struct {
 
         for (external_imports) |import_name| {
             try st.external_imports.append(self.gpa, try self.gpa.dupe(u8, import_name));
-            if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, import_name);
+            if (self.resolver) |r| try r.scheduleExternal(r.ctx, self.package_name, import_name);
         }
         for (self.additional_known_modules.items) |km| {
             var exists = false;
@@ -1162,7 +1162,7 @@ pub const PackageEnv = struct {
             }
             if (!exists) {
                 try st.external_imports.append(self.gpa, try self.gpa.dupe(u8, km.import_name));
-                if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, km.import_name);
+                if (self.resolver) |r| try r.scheduleExternal(r.ctx, self.package_name, km.import_name);
             }
         }
 
@@ -1253,7 +1253,7 @@ pub const PackageEnv = struct {
             if (qualified) {
                 // Qualified imports refer to external packages; track and schedule externally
                 try st.external_imports.append(self.gpa, mod_name);
-                if (self.resolver) |r| r.scheduleExternal(r.ctx, self.package_name, mod_name);
+                if (self.resolver) |r| try r.scheduleExternal(r.ctx, self.package_name, mod_name);
                 // External dependencies are resolved by the workspace; skip local scheduling/cycle detection
                 continue;
             }
@@ -1441,7 +1441,7 @@ pub const PackageEnv = struct {
         czer.deinit();
 
         env.imports.clearResolvedModules();
-        env.imports.resolveImportsByExactModuleName(env, imported_envs);
+        try env.imports.resolveImportsByExactModuleName(env, imported_envs);
         env.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Type check using the SAME module_envs_map
@@ -1980,7 +1980,7 @@ pub const PackageEnv = struct {
     fn resolveModulePath(self: *PackageEnv, mod_name: []const u8) Allocator.Error![]const u8 {
         // Allow resolver to provide local path resolution if present
         if (self.resolver) |r| {
-            return r.resolveLocalPath(r.ctx, self.package_name, self.root_dir, mod_name);
+            return try r.resolveLocalPath(r.ctx, self.package_name, self.root_dir, mod_name);
         }
 
         // Default: convert dotted module name to path under root_dir
@@ -2097,7 +2097,7 @@ pub const PackageEnv = struct {
             const st = &self.modules.items[id];
             if (st.phase != .Done) break; // can't emit beyond an unfinished module in order
             // Emit all reports for this module
-            for (st.reports.items) |rep| self.sink.emitFn(self.sink.ctx, st.name, rep);
+            for (st.reports.items) |rep| try self.sink.emitFn(self.sink.ctx, st.name, rep);
             // Clear reports to transfer ownership - reports are shallow-copied when passed to emitFn,
             // so OrderedSink now owns the heap allocations. We must not free them here.
             st.reports.clearRetainingCapacity();

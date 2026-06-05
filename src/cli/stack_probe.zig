@@ -152,7 +152,7 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) Allocator.Error![]
 }
 
 /// Write the stack probe object file to a path.
-pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) Allocator.Error!void {
+pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) anyerror!void {
     const obj_bytes = try generateStackProbeObject(allocator);
     defer allocator.free(obj_bytes);
 
