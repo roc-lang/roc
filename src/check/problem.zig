@@ -38,6 +38,7 @@ pub const RecursiveDispatch = types.RecursiveDispatch;
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
 pub const NegativeUnsignedInt = types.NegativeUnsignedInt;
 pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
+pub const LiteralDefaulted = types.LiteralDefaulted;
 pub const UnusedValue = types.UnusedValue;
 
 // Match/exhaustiveness errors

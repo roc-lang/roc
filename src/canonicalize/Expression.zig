@@ -357,6 +357,7 @@ pub const Expr = union(enum) {
         method_name_region: base.Region,
         args: Expr.Span,
         constraint_fn_var: TypeVar,
+        surface_origin: SurfaceOrigin,
     },
     /// Compiler-created interpolation dispatch.
     ///
@@ -653,6 +654,22 @@ pub const Expr = union(enum) {
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
             return Binop{ .op = op, .lhs = lhs, .rhs = rhs };
         }
+    };
+
+    /// The surface syntax a dispatch call was desugared from, recorded as
+    /// explicit CIR data so re-emission can reproduce the operator form.
+    /// Operator forms carry contracts the method-call form does not (e.g.
+    /// arithmetic binops: `ret = lhs`), so re-emitting them as `.method()`
+    /// calls would weaken the program.
+    pub const SurfaceOrigin = union(enum) {
+        /// Written as a method call (`a.plus(b)`) in the source.
+        method_call,
+        /// Desugared from a binary operator expression (`a + b`).
+        binop: Binop.Op,
+        /// Desugared from unary negation (`-a`).
+        unary_minus,
+        /// Desugared from unary logical not (`!a`).
+        unary_not,
     };
 
     /// Unary minus operation for numeric negation.

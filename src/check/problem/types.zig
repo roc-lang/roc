@@ -53,6 +53,7 @@ pub const Problem = union(enum) {
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
+    literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
@@ -183,6 +184,22 @@ pub const InvalidNumericLiteral = struct {
     literal_var: Var,
     expected_type: SnapshotContentIdx,
     is_fractional: bool,
+    region: base.Region,
+};
+
+/// Warning (the Haskell §4.3.4 / `-Wtype-defaults` analogue): an open literal
+/// (number or string) unreachable from its definition's type was defaulted at the
+/// generalization boundary. Such a literal is shared by every instantiation of the
+/// def and can never adapt per call site; the warning lets the user pin a
+/// different type with an annotation.
+pub const LiteralDefaulted = struct {
+    literal_var: Var,
+    /// Which kind defaulted (numeral vs. quote), so the report can word the
+    /// message and hint per kind.
+    kind: types_mod.StaticDispatchConstraint.LiteralKind,
+    /// Snapshot of the committed default type (e.g. `Dec`) for rendering.
+    default_snapshot: SnapshotContentIdx,
+    /// The literal's own source region.
     region: base.Region,
 };
 
