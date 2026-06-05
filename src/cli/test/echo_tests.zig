@@ -3,10 +3,9 @@
 //! interpreter and the dev backend.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const util = @import("util.zig");
 
-fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expected_stdout: []const u8) Allocator.Error!void {
+fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expected_stdout: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
     const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
@@ -20,7 +19,7 @@ fn runEchoExpectOutput(opt_args: []const []const u8, roc_file: []const u8, expec
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
 }
 
-fn runEchoExpectExitCode(opt_args: []const []const u8, roc_file: []const u8, expected_code: u32) Allocator.Error!void {
+fn runEchoExpectExitCode(opt_args: []const []const u8, roc_file: []const u8, expected_code: u32) anyerror!void {
     const gpa = std.testing.allocator;
     const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);
@@ -75,7 +74,7 @@ test "echo platform: custom error issue 9255 repro (dev backend)" {
     try testing.expectEqualStrings("Program exited with error: SomeCustomError(41.0)\n", result.stdout);
 }
 
-fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) Allocator.Error!void {
+fn runEchoExpectFailure(opt_args: []const []const u8, roc_file: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
     const result = try util.runRoc(gpa, opt_args, roc_file);
     defer gpa.free(result.stdout);

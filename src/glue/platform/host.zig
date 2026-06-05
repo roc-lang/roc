@@ -643,7 +643,7 @@ fn parseTypesJson(
 /// Platform host entrypoint
 /// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
 /// If no entry point names are provided, defaults to ["main"].
-fn platform_main(args: [][*:0]u8, std_io: std.Io) Allocator.Error!c_int {
+fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ MissingPlatformPath, MissingEntrypointNames })!c_int {
     if (args.len < 1) {
         return error.MissingPlatformPath;
     }

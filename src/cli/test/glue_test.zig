@@ -12,7 +12,7 @@ fn runGlueCommand(
     opt: []const u8,
     glue_spec: []const u8,
     tmp_path: []const u8,
-) Allocator.Error!util.RocResult {
+) anyerror!util.RocResult {
     const result = try util.runRocCommand(allocator, &.{
         "glue",
         opt,
@@ -26,7 +26,7 @@ fn runGlueCommand(
     return result;
 }
 
-fn checkGlueSuccess(result: util.RocResult, label: []const u8) Allocator.Error!void {
+fn checkGlueSuccess(result: util.RocResult, label: []const u8) anyerror!void {
     if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("\n{s} command failed!\nstderr:\n{s}\nstdout:\n{s}\nExit term: {}\n", .{
             label, result.stderr, result.stdout, result.term,
