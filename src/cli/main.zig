@@ -666,7 +666,16 @@ pub fn main(init: std.process.Init) !void {
         // else uses the fast target allocator — see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .Debug or build_options.debug_gpa);
-        if (use_debug_allocator) break :gpa .{ debug_allocator.allocator(), true };
+        if (use_debug_allocator) {
+            // Under Valgrind, use libc's malloc instead: Valgrind can't see the
+            // debug allocator's sub-allocations (it carves them out of mmap'd
+            // pages) but tracks every malloc/free. Debug builds carry the client
+            // requests, so this auto-switches with no flag.
+            if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
+                break :gpa .{ std.heap.c_allocator, false };
+            }
+            break :gpa .{ debug_allocator.allocator(), true };
+        }
         break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
