@@ -499,7 +499,7 @@ const CheckTypeCheckerPatternsStep = struct {
 /// unused-suppression bans below): their idioms — e.g. zero-valued enum
 /// constants like `AddrSpace = @enumFromInt(0)` and `_ =` suppressions in
 /// upstream TODO stubs — are correct at the source and rewriting them would
-/// only diverge from upstream. This mirrors how ci/tidy.zig skips crates/.
+/// only diverge from upstream.
 const vendored_zig_marker = "Adapted from the Zig compiler";
 
 /// Build step that checks for @enumFromInt(0) usage in all .zig files.
@@ -621,7 +621,7 @@ const CheckEnumFromIntZeroStep = struct {
 
             // Vendored Zig-compiler files use upstream idioms this check would
             // flag (e.g. zero-valued enum constants like `AddrSpace = @enumFromInt(0)`);
-            // exempt them, mirroring how ci/tidy.zig skips crates/.
+            // exempt them.
             if (std.mem.find(u8, content, vendored_zig_marker) != null) continue;
 
             var line_number: usize = 1;

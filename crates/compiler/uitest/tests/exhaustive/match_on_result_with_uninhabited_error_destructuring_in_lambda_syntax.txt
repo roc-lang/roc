@@ -1,5 +1,0 @@
-app "test" provides [x] to "./platform"
-
-x : Result Str [] -> Str
-x = \Ok s -> s
-#^{-1} Result Str [] -[[x(0)]]-> Str

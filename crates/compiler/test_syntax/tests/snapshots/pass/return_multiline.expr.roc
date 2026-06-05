@@ -1,4 +1,0 @@
-return
-        something
-            |> pipeToFunction
-                |> andAnother
