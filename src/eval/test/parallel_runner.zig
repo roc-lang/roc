@@ -315,7 +315,7 @@ fn drainClosedPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) bool {
     while (true) {
         const bytes_read = posix.read(fd, &read_buf) catch return false;
         if (bytes_read == 0) return true;
-        buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch return false;
+        buf.appendSlice(base.defaultGpa(), read_buf[0..bytes_read]) catch return false;
     }
 }
 
@@ -379,7 +379,7 @@ fn forkAndEval(
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
         // immediately so the OS reclaims everything — no deinit needed.
-        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var child_arena = std.heap.ArenaAllocator.init(base.defaultGpa());
         const child_alloc = child_arena.allocator();
         const result_str = eval_fn(child_alloc, lowered) catch |err| {
             // Write error name to pipe so parent can report it, then exit 2
@@ -417,7 +417,7 @@ fn forkAndEval(
         const poll_timeout = remainingPollTimeoutMs(deadline_ptr);
         if (poll_timeout == 0) {
             killAndReapForkedBackend(fork_result);
-            result_buf.deinit(std.heap.page_allocator);
+            result_buf.deinit(base.defaultGpa());
             return .{ .timed_out = {} };
         }
 
@@ -427,7 +427,7 @@ fn forkAndEval(
         };
         if (poll_count == 0) {
             killAndReapForkedBackend(fork_result);
-            result_buf.deinit(std.heap.page_allocator);
+            result_buf.deinit(base.defaultGpa());
             return .{ .timed_out = {} };
         }
 
@@ -438,7 +438,7 @@ fn forkAndEval(
                 break;
             };
             if (bytes_read == 0) break;
-            result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+            result_buf.appendSlice(base.defaultGpa(), read_buf[0..bytes_read]) catch {
                 read_error = true;
                 break;
             };
@@ -455,7 +455,7 @@ fn forkAndEval(
 
     if (read_error) {
         killAndReapForkedBackend(fork_result);
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     }
 
@@ -466,27 +466,27 @@ fn forkAndEval(
     const termination_signal: u8 = @truncate(status & 0x7f);
 
     if (termination_signal != 0) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .signal_death = termination_signal };
     }
 
     const exit_code: u8 = @truncate((status >> 8) & 0xff);
     if (exit_code == 2) {
         // Child wrote error name to pipe and exited 2.
-        const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-            result_buf.deinit(std.heap.page_allocator);
+        const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+            result_buf.deinit(base.defaultGpa());
             return .{ .child_error = "ChildExecFailed" };
         };
         return .{ .child_error = owned };
     }
     if (exit_code != 0) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     }
 
     // Success — return the string read from the pipe.
-    const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-        result_buf.deinit(std.heap.page_allocator);
+    const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     };
     return .{ .success = owned };
@@ -611,7 +611,7 @@ fn forkAndEvalWithStats(
     if (fork_result == 0) {
         harness.closeFd(pipe_read);
 
-        var child_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var child_arena = std.heap.ArenaAllocator.init(base.defaultGpa());
         const child_alloc = child_arena.allocator();
         const result = eval_fn(child_alloc, lowered) catch |err| {
             harness.writeAll(pipe_write, @errorName(err));
@@ -638,7 +638,7 @@ fn forkAndEvalWithStats(
             break;
         };
         if (bytes_read == 0) break;
-        result_buf.appendSlice(std.heap.page_allocator, read_buf[0..bytes_read]) catch {
+        result_buf.appendSlice(base.defaultGpa(), read_buf[0..bytes_read]) catch {
             read_error = true;
             break;
         };
@@ -650,29 +650,29 @@ fn forkAndEvalWithStats(
     const termination_signal: u8 = @truncate(status & 0x7f);
 
     if (termination_signal != 0) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .signal_death = termination_signal };
     }
 
     const exit_code: u8 = @truncate((status >> 8) & 0xff);
     if (exit_code == 2) {
-        const owned = result_buf.toOwnedSlice(std.heap.page_allocator) catch {
-            result_buf.deinit(std.heap.page_allocator);
+        const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
+            result_buf.deinit(base.defaultGpa());
             return .{ .child_error = "ChildExecFailed" };
         };
         return .{ .child_error = owned };
     }
     if (exit_code != 0 or read_error or result_buf.items.len < 4) {
-        result_buf.deinit(std.heap.page_allocator);
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     }
 
     const allocation_count: u32 = @bitCast(result_buf.items[0..4].*);
-    const output = std.heap.page_allocator.dupe(u8, result_buf.items[4..]) catch {
-        result_buf.deinit(std.heap.page_allocator);
+    const output = base.defaultGpa().dupe(u8, result_buf.items[4..]) catch {
+        result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
     };
-    result_buf.deinit(std.heap.page_allocator);
+    result_buf.deinit(base.defaultGpa());
     return .{ .success = .{
         .output = output,
         .allocation_count = allocation_count,
@@ -1390,8 +1390,8 @@ fn serializeOutcomeToBuffer(
 /// Serialize a TestOutcome to fd (one-shot worker mode, parent reads to EOF).
 fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(std.heap.page_allocator);
-    serializeOutcomeToBuffer(&buf, std.heap.page_allocator, outcome, duration_ns) catch return;
+    defer buf.deinit(base.defaultGpa());
+    serializeOutcomeToBuffer(&buf, base.defaultGpa(), outcome, duration_ns) catch return;
     harness.writeAll(fd, buf.items);
 }
 
@@ -1399,8 +1399,8 @@ fn serializeOutcome(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void
 /// before the wire bytes so the parent can frame multiple results.
 fn serializeOutcomeStreamed(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u64) void {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer buf.deinit(std.heap.page_allocator);
-    serializeOutcomeToBuffer(&buf, std.heap.page_allocator, outcome, duration_ns) catch return;
+    defer buf.deinit(base.defaultGpa());
+    serializeOutcomeToBuffer(&buf, base.defaultGpa(), outcome, duration_ns) catch return;
 
     const length: u32 = @intCast(buf.items.len);
     harness.writeAll(fd, std.mem.asBytes(&length));
@@ -2072,7 +2072,7 @@ pub fn main(init: std.process.Init) !void {
         if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
         const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
 
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(base.defaultGpa());
         defer arena.deinit();
 
         trace_worker.stamp("pre runSingleTest");
@@ -2102,7 +2102,7 @@ pub fn main(init: std.process.Init) !void {
     // many tests on the same worker.
     if (cli.worker_stream) {
         const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(base.defaultGpa());
         defer arena.deinit();
 
         const stdout_handle = harness.stdoutFd();
@@ -2156,7 +2156,7 @@ pub fn main(init: std.process.Init) !void {
     // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
     // forkAndEval below, so backend calls run in-process too.
     if (coverage_mode or disable_fork_env != null) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(base.defaultGpa());
         defer arena.deinit();
 
         var passed: usize = 0;

@@ -27,14 +27,14 @@ const CoreCtx = @import("ctx").CoreCtx;
 // function pointers.
 fn testRocAlloc(args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
     const align_enum = std.mem.Alignment.fromByteUnits(@max(args.alignment, @alignOf(usize)));
-    const raw = std.heap.page_allocator.rawAlloc(args.length, align_enum, @returnAddress()) orelse {
+    const raw = base.defaultGpa().rawAlloc(args.length, align_enum, @returnAddress()) orelse {
         std.debug.panic("embedding smoke test roc_alloc OOM", .{});
     };
     args.answer = @ptrCast(raw);
 }
 
 fn testRocDealloc(_: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-    // No-op for the smoke test — page_allocator pages are reclaimed at exit.
+    // No-op for the smoke test — pages are reclaimed at exit.
 }
 
 fn testRocRealloc(_: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {

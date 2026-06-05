@@ -656,7 +656,7 @@ pub fn main(init: std.process.Init) !void {
     // harness runs N worker processes in parallel instead of forking.
     if (args.worker_index) |idx| {
         if (idx >= tests.len) std.process.exit(2);
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         defer arena.deinit();
         const result = runSingleTest(arena.allocator(), tests[idx], args.timeout_ms);
         serializeResult(std.Io.File.stdout().handle, result);
@@ -670,7 +670,7 @@ pub fn main(init: std.process.Init) !void {
     // with `--worker-stream` would fall through to the parent path below
     // and reentrantly spawn its own pool of workers — fork-bombing the box.
     if (args.worker_stream) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         defer arena.deinit();
 
         const stdin_handle = std.Io.File.stdin().handle;

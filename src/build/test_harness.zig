@@ -755,7 +755,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     _ = std.c.setsid();
                 }
 
-                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
                 const allocator = arena.allocator();
 
                 const result = cfg.runTest(allocator, specs[test_idx], timeout_ms);
@@ -796,7 +796,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     cfg.default_result;
             }
 
-            s.buf.deinit(std.heap.page_allocator);
+            s.buf.deinit(std.heap.smp_allocator);
         }
 
         fn drainPipe(fd: posix.fd_t, buf: *std.ArrayListUnmanaged(u8)) void {
@@ -804,7 +804,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             while (true) {
                 const n = posixRead(fd, &read_buf) catch break;
                 if (n == 0) break;
-                buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch break;
+                buf.appendSlice(std.heap.smp_allocator, read_buf[0..n]) catch break;
             }
         }
 
@@ -899,7 +899,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         const n = posixRead(pfd.fd, &read_buf) catch 0;
                         if (n > 0) {
                             if (slots[slot_idx]) |*s| {
-                                s.buf.appendSlice(std.heap.page_allocator, read_buf[0..n]) catch {};
+                                s.buf.appendSlice(std.heap.smp_allocator, read_buf[0..n]) catch {};
                             }
                         }
                     }
@@ -956,7 +956,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Effectively unused under the Child-based path; kept as defense in
         /// depth for callers that don't build a `worker_argv_template`.
         fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);

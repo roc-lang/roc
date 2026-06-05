@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const testing = std.testing;
 
 /// Forking is needed so a single crashing block (e.g. annotation-only function
@@ -379,7 +380,7 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
             _ = std.c.close(dev_null);
         }
 
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = std.heap.ArenaAllocator.init(base.defaultGpa());
         const child_alloc = arena.allocator();
 
         const result = work(child_alloc, source) catch |err| {
@@ -773,7 +774,7 @@ fn wrapForBinary(allocator: Allocator, block: *const Block) ![]u8 {
 fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) !void {
     std.debug.assert(shard_index < shard_count);
 
-    const allocator = std.heap.page_allocator;
+    const allocator = base.defaultGpa();
 
     const ctx = CoreCtx.default(allocator, allocator, std.testing.io);
     const source = ctx.readFile(builtin_roc_path, allocator) catch |err| {

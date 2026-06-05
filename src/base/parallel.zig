@@ -48,8 +48,6 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
     }
 
     if (ctx.options.use_per_thread_arenas) {
-        // Use per-thread arena allocator with page allocator that clears between work items
-        // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         var arena = std.heap.ArenaAllocator.init(ctx.base_allocator);
         defer arena.deinit();
 

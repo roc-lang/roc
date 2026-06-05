@@ -258,10 +258,7 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) []const u8 {
 }
 
 const testing = std.testing;
-// sanitizeUtf8 uses allocator.resize which page_allocator supports but
-// testing.allocator (DebugAllocator) does not handle well with
-// sub-slice frees. Use page_allocator to match production behavior.
-const test_allocator = std.heap.page_allocator;
+const test_allocator = std.testing.allocator;
 
 test "sanitizeUtf8: valid ASCII passes through unchanged" {
     const input = "hello world";
@@ -280,29 +277,34 @@ test "sanitizeUtf8: valid multibyte UTF-8 passes through unchanged" {
 
 test "sanitizeUtf8: single invalid byte becomes replacement char" {
     const result = sanitizeUtf8("\xff", test_allocator);
+    defer test_allocator.free(result);
     try testing.expectEqualStrings("\xef\xbf\xbd", result); // U+FFFD
 }
 
 test "sanitizeUtf8: invalid byte surrounded by valid ASCII" {
     const result = sanitizeUtf8("a\xffb", test_allocator);
+    defer test_allocator.free(result);
     try testing.expectEqualStrings("a\xef\xbf\xbdb", result);
 }
 
 test "sanitizeUtf8: truncated 2-byte sequence" {
     // 0xC3 starts a 2-byte sequence but there's no continuation byte
     const result = sanitizeUtf8("a\xc3", test_allocator);
+    defer test_allocator.free(result);
     try testing.expectEqualStrings("a\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: truncated 3-byte sequence" {
     // 0xE2 starts a 3-byte sequence but only one continuation follows
     const result = sanitizeUtf8("\xe2\x9c", test_allocator);
+    defer test_allocator.free(result);
     // Each byte of the truncated sequence is replaced individually
     try testing.expectEqualStrings("\xef\xbf\xbd\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: multiple consecutive invalid bytes" {
     const result = sanitizeUtf8("\xff\xfe\xfd", test_allocator);
+    defer test_allocator.free(result);
     // Each invalid byte gets its own replacement char
     try testing.expectEqualStrings("\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd", result);
 }
