@@ -130,6 +130,10 @@ in_statement_position: bool = true,
 /// When true, the ? operator crashes on Err instead of returning early.
 in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .empty,
+/// Set when a scope-exit (run from a `defer`, which cannot propagate an error)
+/// fails to allocate. `canonicalizeFile` re-raises it as `error.OutOfMemory`,
+/// so the OOM propagates instead of being silently swallowed by the `defer`.
+scope_exit_oom: bool = false,
 /// Parser declaration scopes corresponding to the active canonical scopes.
 decl_scope_stack: std.ArrayListUnmanaged(ActiveDeclScope) = .empty,
 /// Top active declaration owner for each non-block value name.
@@ -2305,7 +2309,7 @@ fn processAssociatedBlock(
     owner_is_redeclaration: bool,
 ) std.mem.Allocator.Error!void {
     try self.scopeEnter(self.env.gpa, false);
-    defer self.scopeExit(self.env.gpa) catch unreachable;
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     try self.declScopeEnter(assoc.scope);
     defer self.declScopeExit();
 
@@ -3789,6 +3793,10 @@ pub fn canonicalizeFile(
     // published span, so this is the explicit hand-off of canonicalization's
     // diagnostic output to later stages.
     try self.env.publishScratchDiagnostics();
+
+    // A scope-exit `defer` cannot propagate an allocation failure, so it records
+    // it here; re-raise it now rather than letting the OOM be swallowed.
+    if (self.scope_exit_oom) return error.OutOfMemory;
 }
 
 fn poisonRecursiveNonFunctionDefs(
@@ -7253,7 +7261,7 @@ pub fn canonicalizeExpr(
 
             // Enter new scope for function parameters and body
             try self.scopeEnter(self.env.gpa, true); // true = is_function_boundary
-            defer self.scopeExit(self.env.gpa) catch {};
+            defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
             // Canonicalize the lambda args
             const args_start = self.env.store.scratch.?.patterns.top();
@@ -7799,7 +7807,7 @@ pub fn canonicalizeExpr(
             {
                 // Enter a new scope for this branch
                 try self.scopeEnter(self.env.gpa, false);
-                defer self.scopeExit(self.env.gpa) catch {};
+                defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                 // Create the assign pattern for the Ok value
                 const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
@@ -7869,7 +7877,7 @@ pub fn canonicalizeExpr(
             {
                 // Enter a new scope for this branch
                 try self.scopeEnter(self.env.gpa, false);
-                defer self.scopeExit(self.env.gpa) catch {};
+                defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                 // Create the assign pattern for the Err value
                 const err_assign_pattern_idx = try self.env.addPattern(Pattern{
@@ -8251,7 +8259,7 @@ pub fn canonicalizeExpr(
 
                 // Enter a new scope for this branch so pattern variables are isolated
                 try self.scopeEnter(self.env.gpa, false);
-                defer self.scopeExit(self.env.gpa) catch {};
+                defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                 // Mark the start of the scratch match branch patterns
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -8279,7 +8287,7 @@ pub fn canonicalizeExpr(
 
                                 const lowered: LoweredAltPattern = blk: {
                                     try self.scopeEnter(self.env.gpa, false);
-                                    defer self.scopeExit(self.env.gpa) catch {};
+                                    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                                     const pattern_idx = if (try self.canonicalizePattern(alt_pattern_idx)) |pattern_idx|
                                         pattern_idx
@@ -8611,7 +8619,7 @@ fn canonicalizeDoubleQuestionOp(
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         // Create the assign pattern for the Ok value
         const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
@@ -8681,7 +8689,7 @@ fn canonicalizeDoubleQuestionOp(
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         // Create a wildcard pattern for the Err payload (we don't use it)
         const wildcard_pattern_idx = try self.env.addPattern(Pattern{
@@ -8824,7 +8832,7 @@ fn canonicalizeSingleQuestionBinop(
     // === Branch 1: Ok(#ok) => #ok ===
     {
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
             .assign = .{ .ident = ok_val_ident },
@@ -8885,7 +8893,7 @@ fn canonicalizeSingleQuestionBinop(
     // === Branch 2: Err(#err) => return Err(<rhs>(#err)) ===
     {
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         const err_assign_pattern_idx = try self.env.addPattern(Pattern{
             .assign = .{ .ident = err_val_ident },
@@ -9088,7 +9096,7 @@ fn canonicalizeForLoop(
     };
 
     try self.scopeEnter(self.env.gpa, false);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     // Canonicalize the pattern
     const ptrn = try self.canonicalizePatternOrMalformed(ast_patt);
@@ -9376,7 +9384,7 @@ fn buildInnerMap2WithTuple(
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     // Create patterns for parameters
     const patterns_start = self.env.store.scratch.?.patterns.top();
@@ -9428,7 +9436,7 @@ fn buildIntermediateMap2(
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     const patterns_start = self.env.store.scratch.?.patterns.top();
 
@@ -9490,7 +9498,7 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     // Create patterns for all parameters
     const patterns_start = self.env.store.scratch.?.patterns.top();
@@ -9531,7 +9539,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     const patterns_start = self.env.store.scratch.?.patterns.top();
 
@@ -12225,7 +12233,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
 
     // Blocks don't introduce function boundaries, but may contain var statements
     try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     try self.declScopeEnter(e.scope);
     defer self.declScopeExit();
 
@@ -12921,7 +12929,7 @@ pub fn canonicalizeBlockStatement(
 
                 // Enter a new scope for where clause
                 try self.scopeEnter(self.env.gpa, false);
-                defer self.scopeExit(self.env.gpa) catch {}; // See above comment for why this is necessary
+                defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err); // See above comment for why this is necessary
 
                 for (where_slice) |where_idx| {
                     const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
@@ -13641,6 +13649,18 @@ pub fn scopeEnter(self: *Self, gpa: std.mem.Allocator, is_function_boundary: boo
 pub fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
     var popped_scope = try self.scopePop();
     popped_scope.deinit(gpa);
+}
+
+/// Records a failure from a `defer`-invoked `scopeExit`. `defer` cannot propagate
+/// an error, so the call sites route it here; `canonicalizeFile` then re-raises
+/// it. `scopeExit` always pops a scope a matching `scopeEnter` pushed, so a failed
+/// exit leaves a surplus scope (never an underflow) and can only fail with OOM;
+/// any other error would be a scope-balance bug.
+fn recordScopeExitError(self: *Self, err: Scope.Error) void {
+    switch (err) {
+        error.OutOfMemory => self.scope_exit_oom = true,
+        else => unreachable,
+    }
 }
 
 /// Append an existing scope
