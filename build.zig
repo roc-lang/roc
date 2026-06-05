@@ -14,6 +14,8 @@ const gib: usize = 1024 * mib;
 const rss_medium: usize = 1 * gib;
 const rss_large: usize = 2 * gib;
 const rss_xlarge: usize = 8 * gib;
+const test_timing_dir = ".zig-cache/roc-test-timings";
+const test_timing_keep_generation_count = 2;
 
 // Cross-compile target definitions
 
@@ -263,8 +265,153 @@ fn createNoopStep(b: *std.Build, name: []const u8) *Step {
     return step;
 }
 
+const TestTimingCleanupStep = struct {
+    step: Step,
+
+    const ParsedTimingFile = struct {
+        name: []const u8,
+        partition_count: usize,
+        generation: u128,
+    };
+
+    const TimingGroup = struct {
+        name: []u8,
+        partition_count: usize,
+        generations: [test_timing_keep_generation_count]?u128 = [_]?u128{null} ** test_timing_keep_generation_count,
+
+        fn noteGeneration(self: *TimingGroup, generation: u128) void {
+            for (self.generations) |existing| {
+                if (existing != null and existing.? == generation) return;
+            }
+
+            var insert_i: usize = self.generations.len;
+            for (self.generations, 0..) |existing, i| {
+                if (existing == null or generation > existing.?) {
+                    insert_i = i;
+                    break;
+                }
+            }
+            if (insert_i == self.generations.len) return;
+
+            var i = self.generations.len - 1;
+            while (i > insert_i) : (i -= 1) {
+                self.generations[i] = self.generations[i - 1];
+            }
+            self.generations[insert_i] = generation;
+        }
+
+        fn keeps(self: *const TimingGroup, generation: u128) bool {
+            for (self.generations) |existing| {
+                if (existing != null and existing.? == generation) return true;
+            }
+            return false;
+        }
+    };
+
+    fn create(b: *std.Build) *TestTimingCleanupStep {
+        const self = b.allocator.create(TestTimingCleanupStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "cleanup-test-timings",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn parseTimingFileName(file_name: []const u8) ?ParsedTimingFile {
+        if (!std.mem.startsWith(u8, file_name, "zig-")) return null;
+        if (!std.mem.endsWith(u8, file_name, ".tsv")) return null;
+
+        const body = file_name["zig-".len .. file_name.len - ".tsv".len];
+        const dot_partition = std.mem.findScalarLast(u8, body, '.') orelse return null;
+        const partition_index_text = body[dot_partition + 1 ..];
+        if (partition_index_text.len == 0) return null;
+        _ = std.fmt.parseUnsigned(usize, partition_index_text, 10) catch return null;
+
+        const before_partition = body[0..dot_partition];
+        const dot_generation = std.mem.findScalarLast(u8, before_partition, '.') orelse return null;
+        const generation_text = before_partition[dot_generation + 1 ..];
+        if (generation_text.len == 0) return null;
+        const generation = std.fmt.parseUnsigned(u128, generation_text, 10) catch return null;
+
+        const before_generation = before_partition[0..dot_generation];
+        const dot_count = std.mem.findScalarLast(u8, before_generation, '.') orelse return null;
+        const partition_count_text = before_generation[dot_count + 1 ..];
+        if (partition_count_text.len == 0) return null;
+        const partition_count = std.fmt.parseUnsigned(usize, partition_count_text, 10) catch return null;
+
+        const name = before_generation[0..dot_count];
+        if (name.len == 0) return null;
+
+        return .{
+            .name = name,
+            .partition_count = partition_count,
+            .generation = generation,
+        };
+    }
+
+    fn findGroup(groups: []TimingGroup, parsed: ParsedTimingFile) ?usize {
+        for (groups, 0..) |group, i| {
+            if (group.partition_count == parsed.partition_count and std.mem.eql(u8, group.name, parsed.name)) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+        const io = b.graph.io;
+
+        var dir = std.Io.Dir.cwd().openDir(io, test_timing_dir, .{ .iterate = true }) catch return;
+        defer dir.close(io);
+
+        var groups = std.ArrayList(TimingGroup).empty;
+        defer {
+            for (groups.items) |group| allocator.free(group.name);
+            groups.deinit(allocator);
+        }
+
+        var iter = dir.iterate();
+        while (iter.next(io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            const parsed = parseTimingFileName(entry.name) orelse continue;
+            if (findGroup(groups.items, parsed)) |group_i| {
+                groups.items[group_i].noteGeneration(parsed.generation);
+            } else {
+                const owned_name = try allocator.dupe(u8, parsed.name);
+                errdefer allocator.free(owned_name);
+                var group = TimingGroup{
+                    .name = owned_name,
+                    .partition_count = parsed.partition_count,
+                };
+                group.noteGeneration(parsed.generation);
+                try groups.append(allocator, group);
+            }
+        }
+
+        var delete_iter = dir.iterate();
+        while (delete_iter.next(io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            const parsed = parseTimingFileName(entry.name) orelse continue;
+            const group_i = findGroup(groups.items, parsed) orelse continue;
+            if (groups.items[group_i].keeps(parsed.generation)) continue;
+            dir.deleteFile(io, entry.name) catch {};
+        }
+    }
+};
+
 fn defaultTestPartitionCount() usize {
     return std.Thread.getCpuCount() catch 1;
+}
+
+fn defaultInternalRunnerThreadCount(cpu_count: usize) usize {
+    if (cpu_count <= 2) return cpu_count;
+    return @max(2, cpu_count / 2);
 }
 
 fn rocTestRunner(b: *std.Build) Step.Compile.TestRunner {
@@ -282,6 +429,7 @@ const AutoTestRunOptions = struct {
     partition_count: usize,
     max_rss: usize = 0,
     use_runner_partitions: bool = true,
+    timing_cleanup_step: ?*Step = null,
     label: ?[]const u8 = null,
 };
 
@@ -344,6 +492,11 @@ fn addAutoTestRuns(b: *std.Build, options: AutoTestRunOptions) []const *Step.Run
         }
         if (options.run_args.len != 0) {
             run.addArgs(options.run_args);
+        }
+        if (options.use_runner_partitions) {
+            if (options.timing_cleanup_step) |timing_cleanup| {
+                run.step.dependOn(timing_cleanup);
+            }
         }
 
         if (options.parent_step) |parent_step| {
@@ -2496,15 +2649,25 @@ pub fn build(b: *std.Build) void {
     const run_args = parsed_args.run_args;
     const test_filters = parsed_args.test_filters;
     const requested_test_partition_count = b.option(usize, "test-partitions", "Number of automatic Zig test run partitions");
-    const test_partition_count = requested_test_partition_count orelse if (test_filters.len == 0) defaultTestPartitionCount() else 1;
+    const host_cpu_count = defaultTestPartitionCount();
+    const test_partition_count = requested_test_partition_count orelse if (test_filters.len == 0) host_cpu_count else 1;
     if (test_partition_count == 0) {
         std.log.err("-Dtest-partitions must be greater than 0", .{});
         std.process.exit(1);
     }
+    const requested_internal_runner_threads = b.option(usize, "internal-runner-threads", "Default worker count for internal process-pool test runners");
+    if (requested_internal_runner_threads) |thread_count| {
+        if (thread_count == 0) {
+            std.log.err("-Dinternal-runner-threads must be greater than 0", .{});
+            std.process.exit(1);
+        }
+    }
+    const internal_runner_thread_count = requested_internal_runner_threads orelse defaultInternalRunnerThreadCount(host_cpu_count);
     const load_balance_test_partitions = requested_test_partition_count == null and test_filters.len == 0;
     const balanced_test_partition_count = loadBalancedPartitionCount(test_partition_count, 2, load_balance_test_partitions);
     const expensive_test_partition_count = loadBalancedPartitionCount(test_partition_count, 4, load_balance_test_partitions);
     const test_runner = rocTestRunner(b);
+    const test_timing_cleanup_step = &TestTimingCleanupStep.create(b).step;
 
     // llvm configuration
     // By default, use our bundled LLVM from roc-bootstrap. Users can opt-in to system LLVM
@@ -2830,6 +2993,10 @@ pub fn build(b: *std.Build) void {
         const run_parallel_cli = b.addRunArtifact(parallel_cli_runner_exe);
         run_parallel_cli.step.max_rss = rss_large;
         run_parallel_cli.addArg("zig-out/bin/roc");
+        if (!hasRunArg(run_args, "--threads")) {
+            run_parallel_cli.addArg("--threads");
+            run_parallel_cli.addArg(b.fmt("{d}", .{internal_runner_thread_count}));
+        }
         for (test_filters) |f| {
             run_parallel_cli.addArg("--filter");
             run_parallel_cli.addArg(f);
@@ -2867,6 +3034,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = expensive_test_partition_count,
             .max_rss = rss_large,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "roc subcommands",
         });
         for (roc_subcommands_runs) |run| {
@@ -2897,6 +3065,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_medium,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "echo",
         });
         for (echo_runs) |run| {
@@ -2918,7 +3087,10 @@ pub fn build(b: *std.Build) void {
             .filters = test_filters,
             .test_runner = test_runner,
         });
-        glue_test.step.max_rss = rss_large;
+        glue_test.step.max_rss = rss_xlarge;
+        glue_test.root_module.addImport("glue", roc_modules.glue);
+        glue_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        glue_test.step.dependOn(&write_compiled_builtins.step);
 
         const glue_test_runtime_step = createNoopStep(b, "glue-test-runtime-host");
         const glue_runs = addAutoTestRuns(b, .{
@@ -2927,6 +3099,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_large,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "glue",
         });
         for (glue_runs) |run| {
@@ -3159,17 +3332,7 @@ pub fn build(b: *std.Build) void {
         eval_test_exe.root_module.link_libcpp = true;
     }
     // Build eval runner args: forward all --test-filter values as --filter args.
-    const eval_run_args = if (test_filters.len > 0) blk: {
-        var eval_args_list = std.ArrayList([]const u8).empty;
-        for (run_args) |arg| {
-            eval_args_list.append(b.allocator, arg) catch @panic("OOM");
-        }
-        for (test_filters) |f| {
-            eval_args_list.append(b.allocator, "--filter") catch @panic("OOM");
-            eval_args_list.append(b.allocator, f) catch @panic("OOM");
-        }
-        break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
-    } else run_args;
+    const eval_run_args = runnerArgsWithFiltersAndThreads(b, run_args, test_filters, internal_runner_thread_count);
     _ = install_and_run(b, no_bin, eval_test_exe, eval_test_step, eval_test_step, eval_run_args);
 
     const eval_host_effects_exe = b.addExecutable(.{
@@ -3206,17 +3369,7 @@ pub fn build(b: *std.Build) void {
     {
         eval_host_effects_exe.root_module.link_libcpp = true;
     }
-    const eval_host_effects_run_args = if (test_filters.len > 0) blk: {
-        var eval_args_list = std.ArrayList([]const u8).empty;
-        for (run_args) |arg| {
-            eval_args_list.append(b.allocator, arg) catch @panic("OOM");
-        }
-        for (test_filters) |f| {
-            eval_args_list.append(b.allocator, "--filter") catch @panic("OOM");
-            eval_args_list.append(b.allocator, f) catch @panic("OOM");
-        }
-        break :blk eval_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
-    } else run_args;
+    const eval_host_effects_run_args = runnerArgsWithFiltersAndThreads(b, run_args, test_filters, internal_runner_thread_count);
     _ = install_and_run(
         b,
         no_bin,
@@ -3237,7 +3390,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    playground_exe.step.max_rss = rss_large;
+    playground_exe.step.max_rss = rss_xlarge;
     configureBackend(playground_exe, b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
@@ -3273,7 +3426,7 @@ pub fn build(b: *std.Build) void {
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
     }));
-    playground_release_fast_exe.step.max_rss = rss_large;
+    playground_release_fast_exe.step.max_rss = rss_xlarge;
     playground_release_fast_exe.entry = .disabled;
     playground_release_fast_exe.rdynamic = true;
     playground_release_fast_exe.link_function_sections = true;
@@ -3656,6 +3809,12 @@ pub fn build(b: *std.Build) void {
                 zstd,
             );
         }
+        if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
+            module_test.test_step.step.max_rss = rss_xlarge;
+        }
+        if (std.mem.eql(u8, module_test.test_step.name, "compile")) {
+            module_test.test_step.step.max_rss = rss_xlarge;
+        }
 
         // Create individual test step for this module
         const test_exe_name = module_test.test_step.name;
@@ -3669,6 +3828,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_medium,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = test_exe_name,
         });
         if (std.mem.eql(u8, module_test.test_step.name, "base")) {
@@ -3728,6 +3888,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_large,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "snapshot",
         });
         if (snapshot_exe_install) |install| {
@@ -3774,6 +3935,7 @@ pub fn build(b: *std.Build) void {
                 .run_args = run_args,
                 .partition_count = balanced_test_partition_count,
                 .max_rss = rss_large,
+                .timing_cleanup_step = test_timing_cleanup_step,
                 .label = "builtin doc",
             });
         } else {
@@ -3844,6 +4006,7 @@ pub fn build(b: *std.Build) void {
                 .run_args = run_args,
                 .partition_count = 1,
                 .max_rss = rss_medium,
+                .timing_cleanup_step = test_timing_cleanup_step,
                 .label = "builtin doc harness",
             });
         }
@@ -3892,6 +4055,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_large,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "cli",
         });
     }
@@ -3927,6 +4091,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_large,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "repl",
         });
     }
@@ -3963,6 +4128,7 @@ pub fn build(b: *std.Build) void {
             .run_args = run_args,
             .partition_count = balanced_test_partition_count,
             .max_rss = rss_medium,
+            .timing_cleanup_step = test_timing_cleanup_step,
             .label = "watch",
         });
     }
@@ -4355,6 +4521,7 @@ pub fn build(b: *std.Build) void {
                 .run_args = run_args,
                 .partition_count = balanced_test_partition_count,
                 .max_rss = rss_large,
+                .timing_cleanup_step = test_timing_cleanup_step,
                 .label = "fx platform",
             });
             for (fx_runs.focused) |run| {
@@ -4385,6 +4552,7 @@ pub fn build(b: *std.Build) void {
                 .run_args = run_args,
                 .partition_count = balanced_test_partition_count,
                 .max_rss = rss_large,
+                .timing_cleanup_step = test_timing_cleanup_step,
                 .label = "fx platform misc",
             });
             for (fx_misc_runs.focused) |run| {
@@ -4553,11 +4721,12 @@ pub fn build(b: *std.Build) void {
     minici_step.dependOn(check_semantic_audit_step);
     minici_step.dependOn(check_postcheck_architecture_step);
     minici_step.dependOn(check_test_wiring_step);
-    minici_step.dependOn(b.default_step);
     minici_step.dependOn(check_builtin_format_step);
     minici_step.dependOn(check_snapshots_step);
     minici_step.dependOn(checkfx_step);
     minici_step.dependOn(test_step);
+    minici_step.dependOn(playground_step);
+    minici_step.dependOn(&playground_test_install.step);
     minici_step.dependOn(playground_release_fast_test_step);
     minici_step.dependOn(serialization_size_step);
     minici_step.dependOn(test_cli_step);
@@ -5129,6 +5298,37 @@ fn appendFilter(
     const trimmed = std.mem.trim(u8, value, " \t\n\r");
     if (trimmed.len == 0) return;
     list.append(b.allocator, b.dupe(trimmed)) catch @panic("OOM while parsing --test-filter value");
+}
+
+fn hasRunArg(run_args: []const []const u8, needle: []const u8) bool {
+    for (run_args) |arg| {
+        if (std.mem.eql(u8, arg, needle)) return true;
+    }
+    return false;
+}
+
+fn runnerArgsWithFiltersAndThreads(
+    b: *std.Build,
+    run_args: []const []const u8,
+    test_filters: []const []const u8,
+    thread_count: usize,
+) []const []const u8 {
+    const needs_thread_arg = !hasRunArg(run_args, "--threads");
+    if (!needs_thread_arg and test_filters.len == 0) return run_args;
+
+    var args_list = std.ArrayList([]const u8).empty;
+    for (run_args) |arg| {
+        args_list.append(b.allocator, arg) catch @panic("OOM while recording runner arguments");
+    }
+    if (needs_thread_arg) {
+        args_list.append(b.allocator, "--threads") catch @panic("OOM while recording runner thread count");
+        args_list.append(b.allocator, b.fmt("{d}", .{thread_count})) catch @panic("OOM while recording runner thread count");
+    }
+    for (test_filters) |filter| {
+        args_list.append(b.allocator, "--filter") catch @panic("OOM while recording runner filters");
+        args_list.append(b.allocator, filter) catch @panic("OOM while recording runner filters");
+    }
+    return args_list.toOwnedSlice(b.allocator) catch @panic("OOM while finalizing runner arguments");
 }
 
 fn parseBuildArgs(b: *std.Build) ParsedBuildArgs {

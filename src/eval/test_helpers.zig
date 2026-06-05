@@ -528,7 +528,41 @@ pub fn compileProgramForTarget(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) !CompiledTargetProgram {
-    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+    return compileProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null);
+}
+
+/// Same as `compileProgramForTarget` but reuses a pre-published Builtin
+/// artifact owned by the caller.
+pub fn compileProgramForTargetWithBuiltin(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+    pre_published_builtin: PrePublishedBuiltin,
+) !CompiledTargetProgram {
+    return compileProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin);
+}
+
+fn compileProgramForTargetImpl(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) !CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+    );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
     const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);

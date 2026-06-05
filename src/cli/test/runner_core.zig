@@ -38,23 +38,16 @@ pub const TestStats = struct {
 };
 
 fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
-    // and PosixBlock on POSIX (must point at std.c.environ).
-    const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
-        .block = .global,
-    } else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    var env_map = try environ.createMap(allocator);
+    var env_map = try util.buildProcessEnvMap(allocator, null);
     defer env_map.deinit();
 
     // Give every child build/run its own Roc and Zig local cache roots so test
     // runner processes cannot share module/build artifacts or observe one
     // another's cache state.
     const cache_dirs = try util.createIsolatedTestCacheDirs(allocator);
-    defer cache_dirs.deinit(allocator);
+    defer cache_dirs.cleanupAndDeinit(allocator);
     try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+    try env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
     return util.runChildWithTimeout(allocator, argv, .{

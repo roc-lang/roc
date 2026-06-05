@@ -309,7 +309,7 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
 
     const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
         return .{ .status = .crash, .message = "failed to create cache dirs" };
-    defer cache_dirs.deinit(allocator);
+    defer cache_dirs.cleanupAndDeinit(allocator);
 
     const pid = currentProcessIdForFilename();
     const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}_{d}", .{ pid, spec.id }) catch
@@ -320,18 +320,13 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     };
     defer cleanupOutputArtifacts(allocator, output_name);
 
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
-    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
-        .block = .global,
-    } else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    var env_map = environ.createMap(allocator) catch
+    var env_map = util.buildProcessEnvMap(allocator, null) catch
         return .{ .status = .crash, .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
         return .{ .status = .crash, .message = "failed to set roc cache env" };
+    env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir) catch
+        return .{ .status = .crash, .message = "failed to set xdg cache env" };
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .message = "failed to set env" };
 

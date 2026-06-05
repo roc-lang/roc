@@ -53,6 +53,12 @@ fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return @import("../uri.zig").pathToUri(allocator, path);
 }
 
+fn isolateServerCache(allocator: std.mem.Allocator, tmp_path: []const u8, server: anytype) ![]u8 {
+    const cache_dir = try std.fs.path.join(allocator, &.{ tmp_path, ".roc_cache" });
+    server.syntax_checker.cache_config.cache_dir = cache_dir;
+    return cache_dir;
+}
+
 /// Check whether a JSON items array contains a completion item with the given label.
 fn hasCompletionLabel(items: std.json.Value, label: []const u8) bool {
     if (items != .array) return false;
@@ -138,7 +144,8 @@ test "formatting handler formats simple expression" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -244,7 +251,8 @@ test "document symbol handler extracts function declarations" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -343,7 +351,8 @@ test "document symbol handler returns empty for empty document" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -439,7 +448,8 @@ test "folding range handler finds bracket ranges" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -539,7 +549,8 @@ test "selection range handler returns range hierarchy" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -651,7 +662,8 @@ test "document highlight handler finds variable occurrences" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -749,7 +761,8 @@ test "document highlight handler returns empty for non-identifier" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -847,7 +860,8 @@ test "definition handler finds local variable definition" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -956,7 +970,8 @@ test "definition handler returns null for undefined symbol" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -1054,7 +1069,8 @@ test "hover handler returns type info for type annotation" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -1156,7 +1172,8 @@ test "definition handler navigates to builtin type from type annotation" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -1275,7 +1292,8 @@ test "document symbols works after goto definition (regression test)" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -1402,7 +1420,8 @@ test "multiple goto definition calls don't break document symbols" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -1542,7 +1561,8 @@ test "document symbol handler returns symbols with correct names" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
@@ -1687,7 +1707,8 @@ test "document symbol handler works independently of check" {
     const ReaderType = std.Io.Reader;
     const WriterType = std.Io.Writer;
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
-    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
+    const cache_dir = try isolateServerCache(allocator, tmp_path, &server);
+    defer allocator.free(cache_dir);
     defer server.deinit();
     try server.run();
 
