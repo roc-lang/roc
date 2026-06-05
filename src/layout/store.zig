@@ -32,7 +32,6 @@ const ScalarInfo = layout_mod.ScalarInfo;
 const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
-const RefcountedVisitState = enum(u2) { active, no, yes };
 const Var = types.Var;
 const TypeScope = types.TypeScope;
 pub const ModuleVarKey = work_mod.ModuleVarKey;
@@ -136,6 +135,9 @@ pub const Store = struct {
                     .start = 0,
                     .count = 2,
                 },
+                // Both variants are zero-sized (no payload), so this builtin
+                // two-nullary enum contains no refcounted data.
+                .contains_refcounted = false,
             });
             assertAppendIdx(expected_idx, idx);
         }
@@ -420,6 +422,7 @@ pub const Store = struct {
             assertAppendIdx(expected_idx, idx);
         }
 
+        const contains_refcounted = self.computeStructContainsRefcounted(fields);
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
@@ -428,6 +431,7 @@ pub const Store = struct {
                 .start = @intCast(fields_start),
                 .count = @intCast(fields.len),
             },
+            .contains_refcounted = contains_refcounted,
         });
         assertAppendIdx(expected_idx, struct_data_idx);
 
@@ -462,6 +466,7 @@ pub const Store = struct {
             assertAppendIdx(expected_idx, idx);
         }
 
+        const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
@@ -473,6 +478,7 @@ pub const Store = struct {
                     .start = variants_start,
                     .count = @intCast(variant_layouts.len),
                 },
+                .contains_refcounted = contains_refcounted,
             });
             assertAppendIdx(expected_idx, idx);
         }
@@ -676,6 +682,7 @@ pub const Store = struct {
             assertAppendIdx(expected_idx, idx);
         }
 
+        const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
         const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
@@ -684,6 +691,7 @@ pub const Store = struct {
                 .start = @intCast(fields_start),
                 .count = @intCast(temp_fields.items.len),
             },
+            .contains_refcounted = contains_refcounted,
         });
         assertAppendIdx(expected_idx, struct_data_idx);
 
@@ -728,6 +736,7 @@ pub const Store = struct {
             assertAppendIdx(expected_idx, idx);
         }
 
+        const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
         const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
@@ -739,6 +748,7 @@ pub const Store = struct {
                     .start = variants_start,
                     .count = @intCast(variant_layouts.len),
                 },
+                .contains_refcounted = contains_refcounted,
             });
             assertAppendIdx(expected_idx, idx);
         }
@@ -1896,12 +1906,39 @@ pub const Store = struct {
     /// This is more comprehensive than Layout.isRefcounted() which only checks if
     /// the layout itself is heap-allocated. This function also returns true for
     /// tuples/records that contain strings, lists, or boxes.
+    ///
+    /// For struct/tag-union layouts the answer is read from a bit precomputed when
+    /// the layout was committed (`StructData.contains_refcounted`), so this is O(1)
+    /// and never allocates. Closures defer to their captures layout (a bounded
+    /// chain). Recursion is not a concern: recursive back-edges are materialized as
+    /// box layouts, which short-circuit to `true` here.
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
-        var visit_states = std.AutoHashMap(u32, RefcountedVisitState).init(self.allocator);
-        defer visit_states.deinit();
+        return switch (l.tag) {
+            .scalar => l.getScalar().tag == .str,
+            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            .zst => false,
+            .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
+            .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
+            .closure => self.layoutContainsRefcounted(self.getLayout(l.getClosure().captures_layout_idx)),
+        };
+    }
 
-        return self.layoutContainsRefcountedInner(l, &visit_states) catch
-            @panic("layoutContainsRefcounted ran out of memory");
+    /// Compute whether a struct contains refcounted data from its already-committed
+    /// field layouts. Used to populate `StructData.contains_refcounted` at commit time.
+    fn computeStructContainsRefcounted(self: *const Self, fields: []const StructField) bool {
+        for (fields) |field| {
+            if (self.layoutContainsRefcounted(self.getLayout(field.layout))) return true;
+        }
+        return false;
+    }
+
+    /// Compute whether a tag union contains refcounted data from its already-committed
+    /// variant payload layouts. Used to populate `TagUnionData.contains_refcounted`.
+    fn computeTagUnionContainsRefcounted(self: *const Self, variant_layouts: []const Idx) bool {
+        for (variant_layouts) |variant_layout_idx| {
+            if (self.layoutContainsRefcounted(self.getLayout(variant_layout_idx))) return true;
+        }
+        return false;
     }
 
     pub fn rcHelperPlan(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
@@ -1934,66 +1971,6 @@ pub const Store = struct {
 
     pub fn rcHelperTagUnionVariantPlan(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
         return rc_helper.Resolver.init(self).tagUnionVariantPlan(tag_plan, variant_index);
-    }
-
-    fn layoutContainsRefcountedInner(
-        self: *const Self,
-        l: Layout,
-        visit_states: *std.AutoHashMap(u32, RefcountedVisitState),
-    ) std.mem.Allocator.Error!bool {
-        const key: u32 = @bitCast(l);
-        if (visit_states.get(key)) |state| {
-            return switch (state) {
-                // Recursive layout back-edges are materialized through placeholder
-                // indirections, so re-entering an active node implies refcounted data.
-                .active, .yes => true,
-                .no => false,
-            };
-        }
-
-        switch (l.tag) {
-            .scalar => return l.getScalar().tag == .str,
-            .list, .list_of_zst => return true,
-            .box, .box_of_zst => return true,
-            .erased_callable => return true,
-            .zst => return false,
-            .struct_, .tag_union, .closure => {},
-        }
-
-        try visit_states.put(key, .active);
-
-        const contains_refcounted = switch (l.tag) {
-            .struct_ => blk: {
-                const sd = self.getStructData(l.getStruct().idx);
-                const fields = self.struct_fields.sliceRange(sd.getFields());
-                for (0..fields.len) |i| {
-                    const field_layout = self.getLayout(fields.get(i).layout);
-                    if (try self.layoutContainsRefcountedInner(field_layout, visit_states)) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                const tu_data = self.getTagUnionData(l.getTagUnion().idx);
-                const variants = self.getTagUnionVariants(tu_data);
-                for (0..variants.len) |i| {
-                    const variant_layout = self.getLayout(variants.get(i).payload_layout);
-                    if (try self.layoutContainsRefcountedInner(variant_layout, visit_states)) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .closure => blk: {
-                const captures_layout = self.getLayout(l.getClosure().captures_layout_idx);
-                break :blk try self.layoutContainsRefcountedInner(captures_layout, visit_states);
-            },
-            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
-        };
-
-        try visit_states.put(key, if (contains_refcounted) .yes else .no);
-        return contains_refcounted;
     }
 
     fn tagUnionDiscriminantSize(variant_count: usize) u8 {
