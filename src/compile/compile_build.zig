@@ -100,7 +100,14 @@ const PathUtils = struct {
 
     fn isWithinRoot(candidate: []const u8, roots: []const []const u8) bool {
         for (roots) |root| {
-            if (std.mem.startsWith(u8, candidate, root)) return true;
+            if (!std.mem.startsWith(u8, candidate, root)) continue;
+            // Only match whole path segments so root "/x/app" does not capture
+            // sibling "/x/app-secrets". An exact match counts, as does a match
+            // where the next character (or the root's own trailing char) is a
+            // path separator.
+            if (candidate.len == root.len) return true;
+            if (std.fs.path.isSep(candidate[root.len])) return true;
+            if (root.len > 0 and std.fs.path.isSep(root[root.len - 1])) return true;
         }
         return false;
     }
@@ -430,6 +437,13 @@ pub const BuildEnv = struct {
         self.coordinator = coord;
     }
 
+    /// Register a directory as a workspace root, skipping it if an existing root
+    /// already contains it. Takes ownership of nothing; copies `dir` when stored.
+    fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) !void {
+        if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
+        try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
+    }
+
     /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
     /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
     /// discovered state (e.g., TargetsConfig) and change the target before compilation.
@@ -441,7 +455,7 @@ pub const BuildEnv = struct {
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
         self.discovered_root_dir = root_dir;
 
-        try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
+        try self.addWorkspaceRoot(root_dir);
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
@@ -1089,9 +1103,7 @@ pub const BuildEnv = struct {
                 // can be resolved. This is needed for both URL packages (cached paths) and
                 // relative paths that may point outside the app directory (e.g., ../platform/main.roc)
                 if (std.fs.path.dirname(plat_path)) |plat_dir| {
-                    if (!PathUtils.isWithinRoot(plat_dir, self.workspace_roots.items)) {
-                        try self.workspace_roots.append(try self.gpa.dupe(u8, plat_dir));
-                    }
+                    try self.addWorkspaceRoot(plat_dir);
                 }
 
                 // Packages map
@@ -1112,12 +1124,17 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
-                        break :blk try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        errdefer self.gpa.free(abs_path);
+                        if (std.fs.path.dirname(abs_path)) |pkg_dir| {
+                            try self.addWorkspaceRoot(pkg_dir);
+                        }
+                        break :blk abs_path;
                     };
 
                     // TODO: actually handle duplicate keys
@@ -1147,7 +1164,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
@@ -1188,7 +1205,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
@@ -1502,6 +1519,29 @@ pub const BuildEnv = struct {
         });
     }
 
+    fn putPackageShorthand(self: *BuildEnv, pack: *Package, alias: []const u8, target_name: []const u8, root_file: []const u8) ![]const u8 {
+        const key = try self.gpa.dupe(u8, alias);
+        errdefer self.gpa.free(key);
+
+        const name = try self.gpa.dupe(u8, target_name);
+        errdefer self.gpa.free(name);
+
+        const root_file_owned = try self.gpa.dupe(u8, root_file);
+        errdefer self.gpa.free(root_file_owned);
+
+        if (pack.shorthands.fetchRemove(key)) |old_entry| {
+            freeConstSlice(self.gpa, old_entry.key);
+            freeConstSlice(self.gpa, old_entry.value.name);
+            freeConstSlice(self.gpa, old_entry.value.root_file);
+        }
+        try pack.shorthands.put(self.gpa, key, .{
+            .name = name,
+            .root_file = root_file_owned,
+        });
+
+        return name;
+    }
+
     const PkgSinkCtx = struct {
         gpa: Allocator,
         sink: *OrderedSink,
@@ -1594,9 +1634,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            const dep_key = try self.gpa.dupe(u8, alias);
-            const dep_name = try self.gpa.dupe(u8, alias);
-            try self.ensurePackage(dep_name, .platform, abs);
+            try self.ensurePackage(alias, .platform, abs);
 
             // Transfer provides entries and targets_config from parsed header to platform package
             if (self.packages.getPtr(alias)) |plat_pkg| {
@@ -1613,17 +1651,7 @@ pub const BuildEnv = struct {
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
-            // If key already exists, free the old value before overwriting
-            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
-                freeConstSlice(self.gpa, old_entry.key);
-                freeConstSlice(self.gpa, old_entry.value.name);
-                freeConstSlice(self.gpa, old_entry.value.root_file);
-            }
-            try pack.shorthands.put(self.gpa, dep_key, .{
-                .name = dep_name,
-                .root_file = try self.gpa.dupe(u8, abs),
-            });
-
+            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
             try self.populatePackageShorthands(dep_name, &child_info);
 
             // Register platform-exposed modules as packages so apps can import them
@@ -1648,16 +1676,7 @@ pub const BuildEnv = struct {
                 pack = self.packages.getPtr(pkg_name).?;
 
                 // Also add to app's shorthands so imports resolve correctly
-                const mod_key = try self.gpa.dupe(u8, module_name);
-                if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
-                    freeConstSlice(self.gpa, old_entry.key);
-                    freeConstSlice(self.gpa, old_entry.value.name);
-                    freeConstSlice(self.gpa, old_entry.value.root_file);
-                }
-                try pack.shorthands.put(self.gpa, mod_key, .{
-                    .name = try self.gpa.dupe(u8, module_name),
-                    .root_file = try self.gpa.dupe(u8, module_path),
-                });
+                _ = try self.putPackageShorthand(pack, module_name, module_name, module_path);
 
                 // Add to pending list - will be registered after schedulers are created
                 // Use the QUALIFIED name (e.g., "pf.Stdout") because that's how imports are tracked
@@ -1704,10 +1723,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            const dep_key = try self.gpa.dupe(u8, alias);
-            const dep_name = try self.gpa.dupe(u8, alias);
-
-            try self.ensurePackage(dep_name, child_info.kind, abs);
+            try self.ensurePackage(alias, child_info.kind, abs);
 
             // Transfer provides entries from parsed header to platform package
             if (child_info.kind == .platform) {
@@ -1722,17 +1738,7 @@ pub const BuildEnv = struct {
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
-            // If key already exists, free the old value before overwriting
-            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
-                freeConstSlice(self.gpa, old_entry.key);
-                freeConstSlice(self.gpa, old_entry.value.name);
-                freeConstSlice(self.gpa, old_entry.value.root_file);
-            }
-            try pack.shorthands.put(self.gpa, dep_key, .{
-                .name = dep_name,
-                .root_file = try self.gpa.dupe(u8, abs),
-            });
-
+            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
             try self.populatePackageShorthands(dep_name, &child_info);
         }
     }

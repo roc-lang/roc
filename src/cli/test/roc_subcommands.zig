@@ -1833,6 +1833,39 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     try testing.expect(result.stderr.len > 0);
 }
 
+test "roc check succeeds with unused app package shorthand (issue 9488)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/package_shorthand_check_app/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+}
+
+test "roc check resolves and checks a used sibling package shorthand (issue 9488)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/package_shorthand_used_app/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The app imports from a sibling package (declared via a `../` shorthand)
+    // that lives outside the app directory. Registering the package directory
+    // as a workspace root lets the sandbox resolve it, so the package is
+    // genuinely type-checked rather than silently skipped: the planted type
+    // error inside the package must surface, referencing the package file.
+    try testing.expect(result.term == .exited);
+    try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "package_shorthand_used_pkg") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null);
+}
+
 test "roc check does not hang on tag union type alias inside List (issue 9481)" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -2092,6 +2125,22 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     try std.testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
     try std.testing.expect(std.mem.find(u8, result.stderr, "mono nominal materialization") == null);
     try std.testing.expect(std.mem.find(u8, result.stderr, "published instantiated nominal backing") == null);
+}
+
+test "roc test issue 9487 static dispatch result compares to tag literal" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9487StaticDispatchEq.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
 }
 
 test "roc docs Builtin.roc succeeds" {
