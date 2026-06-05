@@ -6363,3 +6363,51 @@ test "check type - tag union - ext hints 2" {
         \\
     );
 }
+
+// Userland reproduction of the `List.join_with` / `join_list_with` situation.
+//
+// `List.join_with : List(item), item -> item where [item.join_with : ...]` has a
+// recursive constraint. For a list-of-lists the element `List(_)` cannot satisfy
+// that constraint with the right shape, so the compiler reroutes to a *separately
+// named* builtin `join_list_with` via a hardcoded probe
+// (Check.zig:listJoinWithListItemsMethodDef, keyed on the `join_with`/`list`
+// idents). Static dispatch has no general overload resolution and the reroute is
+// hardcoded to those builtin idents, so a userland container cannot reproduce the
+// nesting: the base case (element implements the method) type-checks, but the
+// self-nested case has no second binding to resolve to.
+test "static dispatch - userland recursive-constraint method cannot self-nest (no general overload)" {
+    const source =
+        \\Leaf := [L].{
+        \\  join : Vec(Leaf), Leaf -> Leaf
+        \\  join = |_v, sep| sep
+        \\}
+        \\
+        \\Vec(a) := [V(List(a))].{
+        \\  join : Vec(a), a -> a where [a.join : Vec(a), a -> a]
+        \\  join = |_v, sep| sep
+        \\}
+        \\
+        \\leaves : Vec(Leaf)
+        \\leaves = Vec.V([Leaf.L])
+        \\
+        \\ok : Leaf
+        \\ok = leaves.join(Leaf.L)
+        \\
+        \\nested : Vec(Vec(Leaf))
+        \\nested = Vec.V([leaves])
+        \\
+        \\bad : Vec(Leaf)
+        \\bad = nested.join(leaves)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Base case: element type `Leaf` implements `join`, so regular static dispatch
+    // resolves it. (Tolerate the nested error elsewhere in the module.)
+    try test_env.assertDefTypeOptions("ok", "Leaf", .{ .allow_type_errors = true });
+
+    // Self-nested case: element type `Vec(Leaf)` would need a `join` of shape
+    // `Vec(Vec(Leaf)), Vec(Leaf) -> Vec(Leaf)`, but the only `Vec.join` has shape
+    // `Vec(a), a -> a`. No overload to select, no userland reroute -> a type error.
+    try testing.expect(test_env.checker.problems.problems.items.len >= 1);
+}

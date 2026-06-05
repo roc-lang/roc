@@ -893,6 +893,21 @@ fn instantiateVarHelp(
     // Then, instantiate the variable with the provided context
     const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
 
+    if (instantiator.recursion_overflow) {
+        // Non-terminating instantiation — e.g. a self-referential static-dispatch
+        // `where` constraint used at a nesting depth the `var_map` memo cannot
+        // collapse. Report an infinite-type error and yield a fresh err var
+        // instead of using the partial (err-filled) result, rather than hang.
+        const overflow_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
+        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_to_instantiate);
+        _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+            .var_ = var_to_instantiate,
+            .snapshot = snapshot,
+            .def_name = null,
+        } });
+        return try self.freshFromContent(.err, env, overflow_region);
+    }
+
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
     const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
@@ -9840,6 +9855,15 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
+/// Runaway guard for the deferred static-dispatch worklist below. The worklist
+/// legitimately grows while solving (resolving one constraint can reveal more),
+/// but a self-referential `where` constraint (e.g. `Vec(a) ... where
+/// [a.join : Vec(a), a -> a]` used nested) makes each iteration enqueue a fresh
+/// constrained receiver, so the list outruns the index forever. No real module
+/// reaches this many deferred dispatch constraints in one pass; hitting it means
+/// a non-terminating cycle, which we report as an infinite type instead of hanging.
+const max_deferred_dispatch_iterations: usize = 1 << 14;
+
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -9852,6 +9876,21 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
+
+        if (deferred_constraint_index >= max_deferred_dispatch_iterations) {
+            // Runaway: a non-terminating static-dispatch cycle keeps enqueueing
+            // fresh constrained receivers. Report an infinite type and stop,
+            // rather than hang. (See `max_deferred_dispatch_iterations`.)
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, deferred_constraint.var_);
+            _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+                .var_ = deferred_constraint.var_,
+                .snapshot = snapshot,
+                .def_name = null,
+            } });
+            try self.unifyWith(deferred_constraint.var_, .err, env);
+            break;
+        }
+
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
 
