@@ -171,7 +171,7 @@ pub fn lowerCheckedModulesToLir(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
-    verifyCheckedBoundary(modules, target);
+    try verifyCheckedBoundary(modules, target);
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
     defer allocator.free(layout_requests);
@@ -237,10 +237,10 @@ pub fn lowerCheckedModulesToLir(
     };
 }
 
-fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) void {
+fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
     if (builtin.mode != .Debug) return;
     switch (target.checked_module_state) {
-        .complete => modules.root.module.verifyComplete(),
+        .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
     }
 }

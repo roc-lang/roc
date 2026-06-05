@@ -369,7 +369,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.CompilationFailed;
     };
 
-    const glue_result = extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
+    const glue_result = try extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
     defer glue_result.deinit();
     if (glue_result.err_msg) |err_msg| {
         stderr.print("Glue spec error: {s}\n", .{err_msg}) catch {};
@@ -1949,8 +1949,8 @@ const GlueResultFiles = struct {
     }
 };
 
-fn copyRocStrSlice(allocator: Allocator, str: RocStr) []const u8 {
-    return allocator.dupe(u8, str.asSlice()) catch glueInvariant("could not copy glue result string", .{});
+fn copyRocStrSlice(allocator: Allocator, str: RocStr) Allocator.Error![]const u8 {
+    return try allocator.dupe(u8, str.asSlice());
 }
 
 fn extractGlueResult(
@@ -1958,7 +1958,7 @@ fn extractGlueResult(
     writer: *const GlueRocValueWriter,
     result_base: [*]const u8,
     result_layout: layout.Idx,
-) GlueResultFiles {
+) Allocator.Error!GlueResultFiles {
     const ok_index = writer.tagIndex("Builtin.Try", "Ok");
     const err_index = writer.tagIndex("Builtin.Try", "Err");
     const discriminant = writer.readTagDiscriminant(result_base, result_layout);
@@ -1972,9 +1972,7 @@ fn extractGlueResult(
 
         const file_layout = writer.listElementLayout(files_list_layout);
         const file_size = writer.sizeOf(file_layout);
-        const out = allocator.alloc(GlueResultFile, files.len()) catch {
-            glueInvariant("could not allocate glue result file slice", .{});
-        };
+        const out = try allocator.alloc(GlueResultFile, files.len());
         const file_bytes = files.bytes.?;
         for (out, 0..) |*file, index| {
             const file_base = file_bytes + index * file_size;
@@ -1983,8 +1981,8 @@ fn extractGlueResult(
             const name = writer.readValue(name_slot.ptr, RocStr);
             const content = writer.readValue(content_slot.ptr, RocStr);
             file.* = .{
-                .name = copyRocStrSlice(allocator, name),
-                .content = copyRocStrSlice(allocator, content),
+                .name = try copyRocStrSlice(allocator, name),
+                .content = try copyRocStrSlice(allocator, content),
             };
         }
         return .{ .allocator = allocator, .files = out, .err_msg = null };
@@ -1993,7 +1991,7 @@ fn extractGlueResult(
     if (discriminant == err_index) {
         _ = writer.variantPayloadLayout(result_layout, err_index);
         const err = writer.readValue(result_base, RocStr);
-        return .{ .allocator = allocator, .files = &.{}, .err_msg = copyRocStrSlice(allocator, err) };
+        return .{ .allocator = allocator, .files = &.{}, .err_msg = try copyRocStrSlice(allocator, err) };
     }
 
     glueInvariant("glue result Try discriminant {d} was neither Ok nor Err", .{discriminant});

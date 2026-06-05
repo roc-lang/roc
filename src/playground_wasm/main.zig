@@ -473,6 +473,7 @@ pub const WasmError = enum(u8) {
 const ResponseWriteError = error{
     OutOfBufferSpace,
     WriteFailed,
+    OutOfMemory,
 };
 
 fn cleanupReplState() void {
@@ -587,7 +588,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
-        error.WriteFailed => @intFromEnum(WasmError.internal_error),
+        error.WriteFailed, error.OutOfMemory => @intFromEnum(WasmError.internal_error),
     };
 }
 
@@ -1761,16 +1762,19 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     if (defs_count == 0 and stmts_count == 0) {
         const debug_begin = tree.beginNode();
-        tree.pushStaticAtom("empty-cir-debug") catch {};
-        tree.pushStaticAtom("no-defs-or-statements") catch {};
+        try tree.pushStaticAtom("empty-cir-debug");
+        try tree.pushStaticAtom("no-defs-or-statements");
         const debug_attrs = tree.beginNode();
-        tree.endNode(debug_begin, debug_attrs) catch {};
+        try tree.endNode(debug_begin, debug_attrs);
     }
 
     const mutable_cir = @constCast(cir);
-    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    try ModuleEnv.pushToSExprTree(mutable_cir, null, &tree);
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
@@ -2119,8 +2123,11 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
     try writeJsonString(w, sexpr_writer_allocating.written());

@@ -1477,7 +1477,7 @@ pub fn resolveCodeRelocations(self: *Self) void {
 }
 
 /// Resolve all data relocations in place.
-pub fn resolveDataRelocations(self: *Self) void {
+pub fn resolveDataRelocations(self: *Self) Allocator.Error!void {
     // First pass: ensure functions referenced by table_index_* relocations
     // are present in the element section. This is needed because data segments
     // can store function pointers (e.g. hosted_function_ptrs) which need valid
@@ -1491,7 +1491,7 @@ pub fn resolveDataRelocations(self: *Self) void {
                 {
                     const sym = self.linking.symbol_table.items[idx.symbol_index];
                     if (sym.isFunction()) {
-                        _ = self.ensureTableElement(sym.index) catch continue;
+                        _ = try self.ensureTableElement(sym.index);
                     }
                 }
             },
@@ -1514,9 +1514,9 @@ pub fn resolveDataRelocations(self: *Self) void {
 }
 
 /// Resolve both code and data relocations in place.
-pub fn resolveRelocations(self: *Self) void {
+pub fn resolveRelocations(self: *Self) Allocator.Error!void {
     self.resolveCodeRelocations();
-    self.resolveDataRelocations();
+    try self.resolveDataRelocations();
 }
 
 /// Transfer function bodies added via setFunctionBody into the code_bytes
@@ -1866,7 +1866,7 @@ fn traceLiveFunctions(
 /// symbols with `binding=global vis=default`, but no Export section exists.
 /// This must be called after preload so that the surgical linker pipeline can
 /// see and preserve these exports.
-pub fn exportGlobalSymbols(self: *Self) void {
+pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
     for (self.linking.symbol_table.items) |sym| {
         if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
         if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
@@ -1882,7 +1882,7 @@ pub fn exportGlobalSymbols(self: *Self) void {
             }
         }
         if (!already_exported) {
-            self.addExport(name, .func, sym.index) catch {};
+            try self.addExport(name, .func, sym.index);
         }
     }
 }
@@ -4453,7 +4453,7 @@ test "mergeModule + resolveDataRelocations — patches merged data segment bytes
     try std.testing.expectEqual(@as(usize, 3), host.data_segments.items.len);
     try std.testing.expectEqual(@as(usize, 1), host.reloc_data.entries.items.len);
 
-    host.resolveDataRelocations();
+    try host.resolveDataRelocations();
 
     const patch_segment = host.data_segments.items[1];
     const target_segment = host.data_segments.items[2];
@@ -5374,7 +5374,7 @@ test "preload + merge + encode roundtrip with real builtins" {
     _ = try BuiltinSymbols.populate(&app_module);
 
     // Resolve relocations and materialize function bodies
-    app_module.resolveRelocations();
+    try app_module.resolveRelocations();
     try app_module.materializeFuncBodies();
 
     // Enable memory + stack pointer + table (as generateModule does)

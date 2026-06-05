@@ -1499,7 +1499,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
-    var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
+    var cli_args_list = try echo_platform.buildCliArgs(args.app_args, &roc_ops);
 
     var result_buf: [16]u8 align(16) = undefined;
     try evaluateLirImageEntrypoint(
@@ -3278,7 +3278,7 @@ fn rocBuildWasmSurgical(
         }
     }
 
-    wasm_module.exportGlobalSymbols();
+    try wasm_module.exportGlobalSymbols();
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
@@ -3328,7 +3328,7 @@ fn rocBuildWasmSurgical(
     const stack_bytes = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE;
     try codegen.module.finalizeMemoryAndTable(@intCast(stack_bytes));
     codegen.module.ensureMemoryMinBytes(args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY);
-    codegen.module.resolveRelocations();
+    try codegen.module.resolveRelocations();
 
     const called_fns = try ctx.gpa.alloc(bool, codegen.module.liveFunctionCount());
     defer ctx.gpa.free(called_fns);
@@ -5215,7 +5215,10 @@ fn checkFileWithBuildEnvPreserved(
                 const phase = package_env.modules.items[0].phase;
                 if (phase == .Done) break;
 
-                package_env.processModuleByName(module_name) catch break;
+                package_env.processModuleByName(module_name) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => break,
+                };
             }
         }
     }

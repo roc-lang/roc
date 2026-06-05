@@ -50,20 +50,28 @@ pub const CacheConfig = struct {
         // Useful for test isolation and CI on any OS.
         if (self.roc_ctx.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
             return roc_dir;
-        } else |_| {}
+        } else |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.EnvironmentVariableMissing => {},
+        }
         // Respect XDG_CACHE_HOME if set
         if (self.roc_ctx.getEnvVar("XDG_CACHE_HOME", allocator)) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, getCacheDirName() });
-        } else |_| {
+        } else |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.EnvironmentVariableMissing => {},
+            }
             // Fall back to platform defaults
             const home_env = switch (builtin.target.os.tag) {
                 .windows => "APPDATA",
                 else => "HOME",
             };
 
-            const home_dir = self.roc_ctx.getEnvVar(home_env, allocator) catch {
-                return error.NoHomeDirectory;
+            const home_dir = self.roc_ctx.getEnvVar(home_env, allocator) catch |home_err| switch (home_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.EnvironmentVariableMissing => return error.NoHomeDirectory,
             };
             defer allocator.free(home_dir);
 

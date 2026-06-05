@@ -10917,8 +10917,9 @@ const EnvPool = struct {
 
         var releasable_env = env;
         releasable_env.reset(.generalized) catch {
-            // If we can't add to the pool, just deinit this env
+            // If we can't reset the env, deinit it and don't return it to the pool
             releasable_env.deinit(self.gpa);
+            return;
         };
         self.available.append(self.gpa, releasable_env) catch {
             // If we can't add to the pool, just deinit this env
