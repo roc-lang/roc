@@ -172,7 +172,7 @@ pub const ConstStore = struct {
         return backing[offset..][0..len];
     }
 
-    pub fn verifyComplete(self: *const ConstStore) void {
+    pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
         if (@import("builtin").mode != .Debug) return;
         for (self.values.items) |value| {
             switch (value) {
@@ -180,15 +180,11 @@ pub const ConstStore = struct {
                 else => {},
             }
         }
-        const value_state = self.allocator.alloc(VisitState, self.values.items.len) catch |err| switch (err) {
-            error.OutOfMemory => @panic("OOM"),
-        };
+        const value_state = try self.allocator.alloc(VisitState, self.values.items.len);
         defer self.allocator.free(value_state);
         @memset(value_state, .unseen);
 
-        const fn_state = self.allocator.alloc(VisitState, self.fns.items.len) catch |err| switch (err) {
-            error.OutOfMemory => @panic("OOM"),
-        };
+        const fn_state = try self.allocator.alloc(VisitState, self.fns.items.len);
         defer self.allocator.free(fn_state);
         @memset(fn_state, .unseen);
 

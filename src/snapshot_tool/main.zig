@@ -3656,9 +3656,11 @@ fn processDocsSnapshot(
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
+        errdefer mod_docs.deinit(allocator);
         // Override the module name with the clean name from CompiledModuleInfo
+        const clean_name = try allocator.dupe(u8, mod.name);
         allocator.free(mod_docs.name);
-        mod_docs.name = try allocator.dupe(u8, mod.name);
+        mod_docs.name = clean_name;
         try module_docs_list.append(allocator, mod_docs);
     }
 

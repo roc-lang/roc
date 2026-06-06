@@ -260,8 +260,11 @@ const CollectReferencesContext = struct {
     target_pattern: CIR.Pattern.Idx,
     allocator: std.mem.Allocator,
     results: *std.ArrayList(LspRange),
-    /// Set when appending a result fails; surfaced by the driving function.
-    oom: bool = false,
+
+    /// Records an OOM that occurred inside a visit callback. The CirVisitor
+    /// callback signature returns `VisitAction` (no error channel), so OOM is
+    /// stashed here and re-raised by the lsp-level entry point after the walk.
+    oom: ?std.mem.Allocator.Error = null,
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
@@ -270,8 +273,8 @@ const CollectReferencesContext = struct {
                 if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
                     const region = ctx.store.getExprRegion(expr_idx);
                     if (regionToRange(ctx.module_env, region)) |range| {
-                        ctx.results.append(ctx.allocator, range) catch {
-                            ctx.oom = true;
+                        ctx.results.append(ctx.allocator, range) catch |err| {
+                            ctx.oom = err;
                             return .stop;
                         };
                     }
@@ -507,7 +510,8 @@ pub fn collectLookupReferences(
         visitor.walkModule(&module_env.store, module_env.all_statements);
     }
 
-    if (ctx.oom) return error.OutOfMemory;
+    // Re-raise any OOM that was stashed by a visit callback.
+    if (ctx.oom) |err| return err;
 
     return results;
 }

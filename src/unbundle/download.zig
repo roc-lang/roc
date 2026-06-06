@@ -34,7 +34,7 @@ fn getTempDir(allocator: std.mem.Allocator, io: std.Io) !std.Io.Dir {
             const path = std.process.getEnvVarOwned(alloc, name) catch |err| switch (err) {
                 error.EnvironmentVariableNotFound => return null,
                 error.InvalidWtf8 => return null,
-                error.OutOfMemory => return error.FileError,
+                error.OutOfMemory => return error.OutOfMemory,
             };
             defer alloc.free(path);
             return std.Io.Dir.cwd().openDir(io_inner, path, .{}) catch return error.FileError;

@@ -23,8 +23,9 @@ pub fn handler(comptime ServerType: type) type {
                 return try ServerType.sendError(self, id, .invalid_params, "semanticTokens requires params");
             };
 
-            var params = protocol.SemanticTokensParams.fromJson(self.allocator, params_value) catch {
-                return try ServerType.sendError(self, id, .invalid_params, "invalid semanticTokens params");
+            var params = protocol.SemanticTokensParams.fromJson(self.allocator, params_value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return try ServerType.sendError(self, id, .invalid_params, "invalid semanticTokens params"),
             };
             defer params.deinit(self.allocator);
 
@@ -34,9 +35,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Build line info for position conversion
-            var info = line_info.LineInfo.init(self.allocator, doc.text) catch {
-                return try ServerType.sendError(self, id, .internal_error, "failed to build line info");
-            };
+            var info = try line_info.LineInfo.init(self.allocator, doc.text);
             defer info.deinit();
 
             // Try to get imported ModuleEnvs for cross-module semantic tokens
@@ -47,9 +46,9 @@ pub fn handler(comptime ServerType: type) type {
             {
                 const path = try uri_util.uriToPath(self.allocator, params.textDocument.uri);
                 defer self.allocator.free(path);
-                // Get absolute path. A file that can't be resolved on disk (e.g.
-                // an unsaved buffer) simply yields no cross-module import context.
-                const abs_path = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+                // Get absolute path. A missing on-disk file is fine; we just skip
+                // cross-module enrichment, but a genuine OOM must surface.
+                const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => null,
                 };
@@ -61,20 +60,16 @@ pub fn handler(comptime ServerType: type) type {
             }
 
             // Extract semantic tokens using CIR with cross-module context
-            const tokens = semantic_tokens.extractSemanticTokensWithImports(
+            const tokens = try semantic_tokens.extractSemanticTokensWithImports(
                 self.allocator,
                 doc.text,
                 &info,
                 imported_envs,
-            ) catch {
-                return try ServerType.sendError(self, id, .internal_error, "failed to extract tokens");
-            };
+            );
             defer self.allocator.free(tokens);
 
             // Delta-encode the tokens
-            const data = semantic_tokens.deltaEncode(self.allocator, tokens) catch {
-                return try ServerType.sendError(self, id, .internal_error, "failed to encode tokens");
-            };
+            const data = try semantic_tokens.deltaEncode(self.allocator, tokens);
             defer if (data.len > 0) self.allocator.free(data);
 
             // Send the response

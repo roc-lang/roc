@@ -1,8 +1,0 @@
-@0-9 UnaryOp(
-    @1-9 Str(
-        PlainLine(
-            "\"<",
-        ),
-    ),
-    @0-1 Negate,
-)

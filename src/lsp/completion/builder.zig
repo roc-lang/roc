@@ -96,6 +96,7 @@ pub const CompletionBuilder = struct {
         if (self.cached_scope) |*old| old.deinit();
 
         var scope = scope_map.ScopeMap.init(self.allocator);
+        errdefer scope.deinit();
         try scope.build(module_env);
         self.cached_scope = scope;
         self.cached_scope_module_ident = module_ident;
@@ -272,8 +273,8 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         module_name: []const u8,
     ) !void {
-        var type_writer = try module_env.initTypeWriter();
-        defer type_writer.deinit();
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+        defer if (type_writer) |*tw| tw.deinit();
 
         const exposed = &module_env.common.exposed_items;
         var iter = exposed.iterator();
@@ -308,14 +309,17 @@ pub const CompletionBuilder = struct {
 
             var detail: ?[]const u8 = null;
             var documentation: ?[]const u8 = null;
-            {
-                const tw = &type_writer;
+            if (type_writer) |*tw| {
                 if (module_env.common.getNodeIndexById(self.allocator, ident_idx)) |node_idx| {
                     if (node_idx != 0 and module_env.store.isDefNode(node_idx)) {
                         const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
-                        try tw.write(type_var, .one_line);
+                        // Type formatting is best-effort; missing type info is acceptable
+                        tw.write(type_var, .one_line) catch |err| switch (err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            error.WriteFailed => {},
+                        };
                         const type_str = tw.get();
                         if (type_str.len > 0) {
                             detail = try self.allocator.dupe(u8, type_str);
@@ -458,8 +462,8 @@ pub const CompletionBuilder = struct {
     /// Add local definition completions (variables, functions in scope).
     pub fn addLocalCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, cursor_offset: u32) !void {
         // Initialize type writer for formatting types
-        var type_writer = try module_env.initTypeWriter();
-        defer type_writer.deinit();
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+        defer if (type_writer) |*tw| tw.deinit();
 
         const scope = try self.getOrBuildScope(module_env);
 
@@ -478,10 +482,13 @@ pub const CompletionBuilder = struct {
 
             // Get type information for the binding
             var detail: ?[]const u8 = null;
-            {
-                const tw = &type_writer;
+            if (type_writer) |*tw| {
                 const type_var = ModuleEnv.varFrom(binding.pattern_idx);
-                try tw.write(type_var, .one_line);
+                // Type formatting is best-effort; missing type info is acceptable
+                tw.write(type_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
                     detail = try self.allocator.dupe(u8, type_str);
@@ -528,10 +535,13 @@ pub const CompletionBuilder = struct {
 
             // Get type information for the definition
             var detail: ?[]const u8 = null;
-            {
-                const tw = &type_writer;
+            if (type_writer) |*tw| {
                 const type_var = ModuleEnv.varFrom(def.pattern);
-                try tw.write(type_var, .one_line);
+                // Type formatting is best-effort; missing type info is acceptable
+                tw.write(type_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
                     detail = try self.allocator.dupe(u8, type_str);
@@ -585,10 +595,13 @@ pub const CompletionBuilder = struct {
 
                 // Get type information
                 var detail: ?[]const u8 = null;
-                {
-                    const tw = &type_writer;
+                if (type_writer) |*tw| {
                     const type_var = ModuleEnv.varFrom(pattern_idx);
-                    try tw.write(type_var, .one_line);
+                    // Type formatting is best-effort; missing type info is acceptable
+                    tw.write(type_var, .one_line) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.WriteFailed => {},
+                    };
                     const type_str = tw.get();
                     if (type_str.len > 0) {
                         detail = try self.allocator.dupe(u8, type_str);
@@ -750,14 +763,17 @@ pub const CompletionBuilder = struct {
                         .tuple => |tuple| {
                             const elem_vars = type_store.sliceVars(tuple.elems);
 
-                            var type_writer = try module_env.initTypeWriter();
-                            defer type_writer.deinit();
+                            var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+                            defer if (type_writer) |*tw| tw.deinit();
 
                             for (elem_vars, 0..) |elem_var, i| {
                                 var detail: ?[]const u8 = null;
-                                {
-                                    const tw = &type_writer;
-                                    try tw.write(elem_var, .one_line);
+                                if (type_writer) |*tw| {
+                                    // Type formatting is best-effort; missing type info is acceptable
+                                    tw.write(elem_var, .one_line) catch |err| switch (err) {
+                                        error.OutOfMemory => return error.OutOfMemory,
+                                        error.WriteFailed => {},
+                                    };
                                     const type_str = tw.get();
                                     if (type_str.len > 0) {
                                         detail = try self.allocator.dupe(u8, type_str);
@@ -908,8 +924,8 @@ pub const CompletionBuilder = struct {
         self.logDebug("addFieldsFromRecord: record.fields={}, fields_slice.len={}, field_names.len={d}", .{ record.fields, fields_slice.len, field_names.len });
 
         // Initialize type writer for formatting field types
-        var type_writer = try module_env.initTypeWriter();
-        defer type_writer.deinit();
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+        defer if (type_writer) |*tw| tw.deinit();
 
         // Iterate over record fields
         for (field_names, field_vars) |field_name_idx, field_var| {
@@ -919,9 +935,12 @@ pub const CompletionBuilder = struct {
 
             // Get field type for detail
             var detail: ?[]const u8 = null;
-            {
-                const tw = &type_writer;
-                try tw.write(field_var, .one_line);
+            if (type_writer) |*tw| {
+                // Type formatting is best-effort; missing type info is acceptable
+                tw.write(field_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
                     detail = try self.allocator.dupe(u8, type_str);
@@ -1142,12 +1161,15 @@ pub const CompletionBuilder = struct {
 
             // Try to get detail from the constraint's function type
             var detail: ?[]const u8 = null;
-            var type_writer = try module_env.initTypeWriter();
-            defer type_writer.deinit();
+            var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+            defer if (type_writer) |*tw| tw.deinit();
 
-            {
-                const tw = &type_writer;
-                try tw.write(constraint.fn_var, .one_line);
+            if (type_writer) |*tw| {
+                // Type formatting is best-effort; missing type info is acceptable
+                tw.write(constraint.fn_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
                     detail = try self.allocator.dupe(u8, type_str);
@@ -1196,8 +1218,8 @@ pub const CompletionBuilder = struct {
     /// Add methods for a specific source declaration owner by searching method_idents.
     fn addMethodsForOwnerInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) !void {
         // Initialize type writer for formatting method signatures
-        var type_writer = try module_env.initTypeWriter();
-        defer type_writer.deinit();
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
+        defer if (type_writer) |*tw| tw.deinit();
 
         // Get the type name for display purposes
         const type_name = method_owner.type_name;
@@ -1219,13 +1241,18 @@ pub const CompletionBuilder = struct {
 
                 // Look up the method definition to get its type
                 if (self.findMethodType(module_env, qualified_ident)) |method_type_var| {
-                    const tw = &type_writer;
-                    try tw.write(method_type_var, .one_line);
-                    const type_str = tw.get();
-                    if (type_str.len > 0) {
-                        detail = try self.allocator.dupe(u8, type_str);
+                    if (type_writer) |*tw| {
+                        // Type formatting is best-effort; missing type info is acceptable
+                        tw.write(method_type_var, .one_line) catch |err| switch (err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            error.WriteFailed => {},
+                        };
+                        const type_str = tw.get();
+                        if (type_str.len > 0) {
+                            detail = try self.allocator.dupe(u8, type_str);
+                        }
+                        tw.reset();
                     }
-                    tw.reset();
                 }
 
                 // If we couldn't get the type signature, at least show which type it's from
