@@ -44,7 +44,7 @@ const BenchmarkResults = struct {
     total_time: u64,
 };
 
-fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io, path: []const u8) !void {
+fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io, path: []const u8) anyerror!void {
     const operation_name = if (is_parse) "parse" else "tokenizer";
     std.debug.print("Benchmarking {s} on '{s}'\n", .{ operation_name, path });
 
@@ -140,16 +140,16 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io,
 }
 
 /// Benchmarks the parsing of Roc files.
-pub fn benchParse(gpa: Allocator, std_io: std.Io, path: []const u8) !void {
+pub fn benchParse(gpa: Allocator, std_io: std.Io, path: []const u8) anyerror!void {
     try benchParseOrTokenize(true, gpa, std_io, path);
 }
 
 /// Benchmarks the tokenization of Roc files.
-pub fn benchTokenizer(gpa: Allocator, std_io: std.Io, path: []const u8) !void {
+pub fn benchTokenizer(gpa: Allocator, std_io: std.Io, path: []const u8) anyerror!void {
     try benchParseOrTokenize(false, gpa, std_io, path);
 }
 
-fn collectRocFiles(gpa: Allocator, std_io: std.Io, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
+fn collectRocFiles(gpa: Allocator, std_io: std.Io, path: []const u8, roc_files: *std.array_list.Managed(RocFile)) anyerror!void {
     // Check if path is a file or directory
     const stat = std.Io.Dir.cwd().statFile(std_io, path, .{}) catch |err| {
         fatal("Failed to access '{s}': {}", .{ path, err });
@@ -172,7 +172,7 @@ fn collectRocFiles(gpa: Allocator, std_io: std.Io, path: []const u8, roc_files: 
     }
 }
 
-fn addRocFile(gpa: Allocator, std_io: std.Io, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
+fn addRocFile(gpa: Allocator, std_io: std.Io, file_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) Allocator.Error!void {
     const content = std.Io.Dir.cwd().readFileAlloc(std_io, file_path, gpa, .limited(0xffff_ffff)) catch |err| {
         std.debug.print("Warning: Failed to read file '{s}': {}\n", .{ file_path, err });
         return;
@@ -185,7 +185,7 @@ fn addRocFile(gpa: Allocator, std_io: std.Io, file_path: []const u8, roc_files: 
     });
 }
 
-fn findRocFiles(gpa: Allocator, std_io: std.Io, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) !void {
+fn findRocFiles(gpa: Allocator, std_io: std.Io, dir_path: []const u8, roc_files: *std.array_list.Managed(RocFile)) anyerror!void {
     var dir = std.Io.Dir.cwd().openDir(std_io, dir_path, .{ .iterate = true }) catch |err| {
         fatal("Failed to open directory '{s}': {}", .{ dir_path, err });
     };
@@ -283,7 +283,7 @@ fn printBenchmarkResults(benchmark_name: []const u8, results: BenchmarkResults) 
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     stderrWriter().print(format, args) catch unreachable;
     if (tracy.enable) {
-        tracy.waitForShutdown(stderr_file_writer.io) catch unreachable;
+        tracy.waitForShutdown(stderr_file_writer.io);
     }
     std.process.exit(1);
 }

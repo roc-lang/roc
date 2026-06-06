@@ -1,13 +1,14 @@
 //! Handler for the LSP `initialize` request that sets up the server-client connection.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const capabilities = @import("../capabilities.zig");
 
 /// Returns the `initialize` method handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{ InvalidParams, WriteFailed })!void {
             if (self.state != .waiting_for_initialize) {
                 try ServerType.sendError(self, id, .invalid_request, "server was already initialized");
                 return;

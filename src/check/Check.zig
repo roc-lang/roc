@@ -628,7 +628,7 @@ const Env = struct {
     }
 
     /// Resets internal state of env and set rank to generalized
-    fn reset(self: *Env, to: Rank) !void {
+    fn reset(self: *Env, to: Rank) Allocator.Error!void {
         self.var_pool.current_rank = to;
         self.var_pool.clearRetainingCapacity();
         try self.var_pool.ensureRanksThrough(to);
@@ -1531,7 +1531,7 @@ fn mkFlexWithFromNumeralConstraint(
     source_node: ?CIR.Node.Idx,
     num_literal_info: types_mod.NumeralInfo,
     env: *Env,
-) !Var {
+) Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1905,7 +1905,7 @@ fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!v
 /// This is necessary because type variables are module-specific - we can't use Vars from
 /// other modules directly. The Bool and Try types are used in language constructs like
 /// `if` conditions and need to be available in every module's type store.
-fn copyBuiltinTypes(self: *Self) !void {
+fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6364,7 +6364,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .{ .fn_unbound = published_constraint_func };
                         const published_constraint_fn_var = try self.freshFromContent(.{ .structure = published_constraint_flat }, env, expr_region);
 
-                        self.cir.store.replaceExprWithCallConstraint(
+                        try self.cir.store.replaceExprWithCallConstraint(
                             expr_idx,
                             call.func,
                             call.args,
@@ -6448,7 +6448,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.method_name_region,
                     expr_idx,
                 );
-                self.cir.store.replaceExprWithDispatchCall(
+                try self.cir.store.replaceExprWithDispatchCall(
                     expr_idx,
                     method_call.receiver,
                     method_call.method_name,
@@ -6547,7 +6547,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.method_name_region,
                     expr_idx,
                 );
-                self.cir.store.replaceExprWithTypeDispatchCall(
+                try self.cir.store.replaceExprWithTypeDispatchCall(
                     expr_idx,
                     method_call.type_var_alias_stmt,
                     method_call.method_name,
@@ -6656,7 +6656,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // This is similar to e_anno_only - the implementation is provided by the host.
             if (expected.annotation) |annotation_idx| {
                 const annotation_var = ModuleEnv.varFrom(annotation_idx);
-                if (self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
+                if (try self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
                     const region = self.cir.store.getAnnotationRegion(annotation_idx);
                     _ = try self.problems.appendProblem(self.gpa, .{ .hosted_unboxed_function = .{
                         .region = region,
@@ -8341,7 +8341,7 @@ fn reportMissingNominalMethodForBinop(
     }
 
     const nominal_type = resolved_lhs.desc.content.structure.nominal_type;
-    if (method_name.eql(self.cir.idents.is_eq) and self.nominalSupportsImplicitIsEq(nominal_type)) {
+    if (method_name.eql(self.cir.idents.is_eq) and try self.nominalSupportsImplicitIsEq(nominal_type)) {
         return false;
     }
     const original_env = self.getNominalOriginEnv(nominal_type);
@@ -8462,7 +8462,7 @@ fn publishBinopDispatchExpr(
             .@"and", .@"or" => {},
             else => {
                 const args = try self.cir.store.appendExprSpan(&.{binop.rhs});
-                self.cir.store.replaceExprWithDispatchCall(
+                try self.cir.store.replaceExprWithDispatchCall(
                     expr_idx,
                     binop.lhs,
                     method_name,
@@ -8509,7 +8509,7 @@ fn mkUnaryOp(
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (unary_expr_idx) |expr_idx| {
         try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
-        self.publishUnaryDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
+        try self.publishUnaryDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
     }
 
     // Create a constrained flex and unify it with the arg
@@ -8528,13 +8528,13 @@ fn publishUnaryDispatchExpr(
     method_name: Ident.Idx,
     region: Region,
     constraint_fn_var: Var,
-) void {
+) Allocator.Error!void {
     const receiver = switch (self.cir.store.getExpr(expr_idx)) {
         .e_unary_minus => |unary| unary.expr,
         .e_unary_not => |unary| unary.expr,
         else => return,
     };
-    self.cir.store.replaceExprWithDispatchCall(
+    try self.cir.store.replaceExprWithDispatchCall(
         expr_idx,
         receiver,
         method_name,
@@ -9624,14 +9624,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
-                        self.nominalSupportsImplicitIsEq(nominal_type))
+                        try self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
                         const exact_method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
                             self.cir,
                             nominal_type.sourceDeclOptional(),
                             constraint.fn_name,
                         );
-                        if (exact_method_binding == null and self.nominalSupportsImplicitIsEq(nominal_type)) {
+                        if (exact_method_binding == null and try self.nominalSupportsImplicitIsEq(nominal_type)) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -9836,7 +9836,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         if (method_binding == null) {
                             const backing_var = self.types.getAliasBackingVar(alias);
-                            if (self.varSupportsIsEq(backing_var)) {
+                            if (try self.varSupportsIsEq(backing_var)) {
                                 try self.satisfyImplicitEqualityConstraint(
                                     deferred_constraint.var_,
                                     constraint,
@@ -9987,7 +9987,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // Check if this is a call to is_eq (anonymous types have implicit structural equality)
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                         // Check if all components of this anonymous type support is_eq
-                        if (self.typeSupportsIsEq(dispatcher_content.structure)) {
+                        if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
                             try self.satisfyImplicitEqualityConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -10085,9 +10085,9 @@ fn reportEffectfulDispatchInExpect(
 /// - It's not a function type
 /// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
 /// - For nominal types, check if their backing type supports is_eq
-fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
+fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return self.typeSupportsIsEqInternal(flat_type, &self.var_set) catch false;
+    return try self.typeSupportsIsEqInternal(flat_type, &self.var_set);
 }
 
 fn typeSupportsIsEqInternal(
@@ -10159,9 +10159,9 @@ fn nominalIsBoxType(self: *Self, nominal_type: types_mod.NominalType) bool {
     };
 }
 
-fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) bool {
+fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set) catch false;
+    return try self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set);
 }
 
 fn varContainsUnboxedFunctionInHostedSignatureInternal(
@@ -10258,11 +10258,11 @@ fn flatTypeContainsUnboxedFunction(
     };
 }
 
-fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) bool {
+fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType) std.mem.Allocator.Error!bool {
     if (self.nominalIsBuiltinNumberType(nominal_type)) return true;
     if (self.nominalIsBoxType(nominal_type)) return false;
     self.var_set.clearRetainingCapacity();
-    return self.varSupportsIsEqInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set) catch false;
+    return try self.varSupportsIsEqInternal(self.types.getNominalBackingVar(nominal_type), &self.var_set);
 }
 
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
@@ -10476,9 +10476,9 @@ fn satisfyImplicitEqualityConstraint(
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content
-fn varSupportsIsEq(self: *Self, var_: Var) bool {
+fn varSupportsIsEq(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return self.varSupportsIsEqInternal(var_, &self.var_set) catch false;
+    return try self.varSupportsIsEqInternal(var_, &self.var_set);
 }
 
 fn varSupportsIsEqInternal(
@@ -10797,7 +10797,7 @@ fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Va
 }
 
 /// Mark a constraint function's return type as error
-fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) !void {
+fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!void {
     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.unifyWith(constraint.fn_var, .err, env);
@@ -10821,7 +10821,7 @@ fn reportConstraintError(
     },
     env: *Env,
     is_numeric_default_pass: bool,
-) !void {
+) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{
@@ -10856,7 +10856,7 @@ fn reportEqualityError(
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
-) !void {
+) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{

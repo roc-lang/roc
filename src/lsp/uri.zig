@@ -1,9 +1,10 @@
 //! URI utilities for converting between file:// URIs and filesystem paths.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
-fn percentDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+fn percentDecode(allocator: std.mem.Allocator, input: []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
@@ -28,7 +29,7 @@ fn percentDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn percentEncode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+fn percentEncode(allocator: std.mem.Allocator, input: []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
@@ -52,7 +53,7 @@ fn percentEncode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 /// Convert a `file://` URI into a local filesystem path.
-pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
+pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) Allocator.Error![]u8 {
     if (!std.mem.startsWith(u8, uri, "file://")) {
         return allocator.dupe(u8, uri);
     }
@@ -79,7 +80,7 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
 }
 
 /// Convert a filesystem path into a `file://` URI (best-effort encoding).
-pub fn pathToUri(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+pub fn pathToUri(allocator: std.mem.Allocator, path: []const u8) Allocator.Error![]u8 {
     const encoded_path = try percentEncode(allocator, path);
     defer allocator.free(encoded_path);
 

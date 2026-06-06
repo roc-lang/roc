@@ -30,6 +30,7 @@
 //! low-level platform operations are abstracted in `src/ipc/platform.zig`.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const platform = @import("platform.zig");
 const coordination = @import("coordination.zig");
 
@@ -61,12 +62,12 @@ page_size: usize,
 const Handle = platform.Handle;
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() !usize {
+pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
     return platform.getSystemPageSize();
 }
 
 /// Creates a new anonymous shared memory region with the given size
-pub fn create(io: std.Io, size: usize, page_size: usize) !SharedMemoryAllocator {
+pub fn create(io: std.Io, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Create the shared memory mapping
@@ -130,7 +131,7 @@ pub fn createWithMinSize(
     preferred_size: usize,
     min_size: usize,
     page_size: usize,
-) !SharedMemoryAllocator {
+) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_preferred = std.mem.alignForward(usize, preferred_size, page_size);
     const aligned_min = std.mem.alignForward(usize, @min(min_size, preferred_size), page_size);
 
@@ -159,7 +160,7 @@ pub fn createWithMinSize(
 
 /// Opens an existing shared memory region by reading its header first.
 /// This function will map only the required amount of memory as specified in the header.
-pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize) !SharedMemoryAllocator {
+pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize) (platform.SharedMemoryError || error{InvalidSharedMemory})!SharedMemoryAllocator {
     // Open the named shared memory
     const handle = try platform.openMapping(gpa, name);
     errdefer platform.closeHandle(handle, false);
@@ -194,7 +195,7 @@ pub fn openWithHeader(gpa: std.mem.Allocator, name: []const u8, page_size: usize
 /// process (obtained via getRecommendedMapSize()), NOT the original allocated size.
 /// This is especially important on macOS where the shared memory object remains at
 /// its original size and cannot be truncated.
-pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: usize) !SharedMemoryAllocator {
+pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Open the named shared memory
@@ -218,7 +219,7 @@ pub fn open(gpa: std.mem.Allocator, name: []const u8, size: usize, page_size: us
 /// Creates a SharedMemoryAllocator from coordination info.
 /// This is a convenience method for child processes that reads coordination info
 /// and creates the allocator in one step.
-pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) !SharedMemoryAllocator {
+pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) (coordination.CoordinationError || platform.SharedMemoryError)!SharedMemoryAllocator {
     // Read coordination info
     var fd_info = try coordination.readFdInfo(gpa, io);
     defer fd_info.deinit(gpa);
@@ -230,7 +231,7 @@ pub fn fromCoordination(gpa: std.mem.Allocator, io: std.Io, page_size: usize) !S
 
 /// Creates a SharedMemoryAllocator from an existing file descriptor.
 /// This is used by child processes to access shared memory created by the parent.
-pub fn fromFd(fd: Handle, size: usize, page_size: usize) !SharedMemoryAllocator {
+pub fn fromFd(fd: Handle, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Map the memory using the provided handle
@@ -532,7 +533,7 @@ test "shared memory allocator thread safety" {
     };
 
     const thread_fn = struct {
-        fn run(ctx: ThreadContext) !void {
+        fn run(ctx: ThreadContext) anyerror!void {
             var i: usize = 0;
             while (i < ctx.allocations_per_thread) : (i += 1) {
                 // Allocate various sizes

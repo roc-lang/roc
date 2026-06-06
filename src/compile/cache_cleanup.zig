@@ -92,7 +92,7 @@ const Bases = struct {
 ///
 /// The thread is fire-and-forget: if the main process exits before cleanup
 /// completes, the OS terminates it. You do not need to join the returned handle.
-pub fn startBackgroundCleanup(temp_base: []const u8, cache_base: []const u8, std_io: Io) !?CleanupThread {
+pub fn startBackgroundCleanup(temp_base: []const u8, cache_base: []const u8, std_io: Io) std.Thread.SpawnError!?CleanupThread {
     if (comptime is_freestanding) return null;
 
     var bases = Bases{};

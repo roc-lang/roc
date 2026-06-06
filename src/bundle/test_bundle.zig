@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const collections = @import("collections");
+const Allocator = std.mem.Allocator;
 const bundle = @import("bundle.zig");
 const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
@@ -530,7 +531,7 @@ test "bundle and unbundle over socket stream" {
         ready: std.Io.Semaphore = .{},
         done: std.Io.Semaphore = .{},
 
-        fn run(ctx: *@This()) !void {
+        fn run(ctx: *@This()) anyerror!void {
             const thread_io = std.testing.io;
             const unix_addr = try std.Io.net.UnixAddress.init(ctx.socket_path);
             var listener = try unix_addr.listen(thread_io, .{});
@@ -1489,7 +1490,7 @@ test "download from local server" {
             };
         }
 
-        fn runImpl(ctx: *@This()) !void {
+        fn runImpl(ctx: *@This()) anyerror!void {
             const thread_io = std.testing.io;
             const stream = try ctx.server.accept(thread_io);
             defer stream.close(thread_io);

@@ -12,6 +12,7 @@
 //! order, and whether execution returned or terminated via crash.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const eval = @import("eval");
 const base = @import("base");
@@ -158,7 +159,7 @@ fn appendEncodedRun(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged(u8),
     run: RuntimeHostEnv.RecordedRun,
-) !void {
+) Allocator.Error!void {
     const header: BackendRunHeader = .{
         .termination = @intFromEnum(run.termination),
         .event_count = @intCast(run.events.len),
@@ -316,7 +317,7 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
     return .{ .success = decoded };
 }
 
-fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
+fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -345,7 +346,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     return runtime_env.snapshot(allocator);
 }
 
-fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
+fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun {
     if (comptime !DEV_BACKEND_IMPLEMENTED) {
         return error.DevBackendUnavailable;
     } else {
@@ -844,7 +845,7 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
 }
 
 /// Public function `main`.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

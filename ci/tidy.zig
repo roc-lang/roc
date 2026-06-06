@@ -225,6 +225,14 @@ const Errors = struct {
         errors.emit("{s}: error: '{s}' is dead code\n", .{ file.path, declaration });
     }
 
+    pub fn addInferredErrorUnion(errors: *Errors, file: SourceFile, line_index: usize) void {
+        const line_number = line_index + 1;
+        errors.emit(
+            "{s}:{d}: error: inferred error set '!T' return type; write the error set explicitly (e.g. 'Allocator.Error!T')\n",
+            .{ file.path, line_number },
+        );
+    }
+
     pub fn addInvalidMarkdownTitle(errors: *Errors, file: SourceFile) void {
         errors.emit(
             "{s}: error: document should have exactly one top-level '# Title'\n",
@@ -290,6 +298,7 @@ fn tidyFile(
 
         tidyDeadDeclarations(file, &tree, counter, errors);
         tidyAst(file, &tree, errors);
+        tidyInferredErrorUnion(file, &tree, errors);
     }
     if (file.hasExtension(".md")) {
         tidyMarkdownTitle(file, errors);
@@ -676,6 +685,50 @@ fn tidyAst(
                     errors.addAmbiguousPrecedence(file, line_opening);
                 }
             }
+        }
+    }
+}
+
+/// Forbid inferred error set return types (`fn foo() !T`). Every fallible
+/// compiler function must spell out its error set explicitly (e.g.
+/// `Allocator.Error!T`), so the error cases are visible at the signature.
+///
+/// Build scripts and CI/dev tooling (`build.zig`, `src/build/`, `ci/`) are
+/// exempt: they legitimately surface many non-OOM errors (file IO, process
+/// spawn) and are not compilation stages.
+///
+/// Detection is operand-order robust: a function's return type node is examined,
+/// and if the token immediately preceding it is `!`, the return type is a bare
+/// inferred error union. An explicit `E!T` instead parses as an `error_union`
+/// node whose first token is `E` (not `!`), so it is never flagged.
+fn tidyInferredErrorUnion(file: SourceFile, tree: *const Ast, errors: *Errors) void {
+    if (std.mem.eql(u8, file.path, "build.zig")) return;
+    if (std.mem.endsWith(u8, file.path, "/build.zig")) return;
+    if (std.mem.startsWith(u8, file.path, "src/build/")) return;
+    if (std.mem.startsWith(u8, file.path, "ci/")) return;
+
+    const token_tags = tree.tokens.items(.tag);
+    const node_tags = tree.nodes.items(.tag);
+
+    var buffer: [1]Ast.Node.Index = undefined;
+    for (node_tags, 0..) |tag, node_usize| {
+        switch (tag) {
+            // Each function is reached exactly once via its prototype node; a
+            // `fn_decl` always wraps one of these, so we don't match `fn_decl`
+            // here (that would double-count).
+            .fn_proto, .fn_proto_multi, .fn_proto_one, .fn_proto_simple => {},
+            else => continue,
+        }
+
+        const node: Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
+        const fn_proto = tree.fullFnProto(&buffer, node) orelse continue;
+        const return_type = fn_proto.ast.return_type.unwrap() orelse continue;
+
+        const first_token = tree.firstToken(return_type);
+        if (first_token == 0) continue;
+        if (token_tags[first_token - 1] == .bang) {
+            const line = tree.tokenLocation(0, first_token - 1).line;
+            errors.addInferredErrorUnion(file, line);
         }
     }
 }

@@ -5,6 +5,7 @@
 //! and returns them in the LSP delta-encoded format.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const semantic_tokens = @import("../semantic_tokens.zig");
 const line_info = @import("../line_info.zig");
@@ -13,7 +14,7 @@ const uri_util = @import("../uri.zig");
 /// Returns the semantic tokens handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             if (self.state != .running) {
                 try ServerType.sendError(self, id, .server_not_initialized, "server not initialized");
                 return;

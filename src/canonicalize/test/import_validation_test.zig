@@ -6,6 +6,7 @@
 //! the canonicalization process.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 
@@ -23,7 +24,7 @@ fn parseAndCanonicalizeSource(
     allocator: std.mem.Allocator,
     source: []const u8,
     module_envs: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
-) !struct {
+) (Allocator.Error || error{TooNested})!struct {
     parse_env: *ModuleEnv,
     ast: *parse.AST,
     can: *Can,

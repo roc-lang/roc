@@ -490,7 +490,7 @@ pub fn deinit(self: *Self) void {
 
 /// Add an imported function. Returns the function index (imports come before regular functions).
 /// Important: all imports must be added BEFORE any regular functions via addFunction().
-pub fn addImport(self: *Self, module_name: []const u8, field_name: []const u8, type_idx: u32) !u32 {
+pub fn addImport(self: *Self, module_name: []const u8, field_name: []const u8, type_idx: u32) Allocator.Error!u32 {
     const func_idx: u32 = @intCast(self.imports.items.len);
     try self.imports.append(self.allocator, .{
         .module_name = module_name,
@@ -508,7 +508,7 @@ pub fn addFunctionImportWithSymbol(
     module_name: []const u8,
     field_name: []const u8,
     type_idx: u32,
-) !struct { function: FunctionIndex, symbol: SymbolIndex } {
+) Allocator.Error!struct { function: FunctionIndex, symbol: SymbolIndex } {
     const raw_function = try self.addImport(module_name, field_name, type_idx);
     const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
     try self.linking.symbol_table.append(self.allocator, .{
@@ -534,7 +534,7 @@ pub fn liveFunctionCount(self: *const Self) u32 {
 }
 
 /// Add a function type (signature) and return its index.
-pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValType) !u32 {
+pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValType) Allocator.Error!u32 {
     const idx: u32 = @intCast(self.func_types.items.len);
     const params_copy = try self.allocator.dupe(ValType, params);
     try self.func_types.append(self.allocator, .{
@@ -547,13 +547,13 @@ pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValTyp
 /// Add a function (maps to a type index) and return the global function index.
 /// Global indices account for imports: imports occupy indices 0..import_count-1,
 /// and locally-defined functions start at import_count.
-pub fn addFunction(self: *Self, type_idx: u32) !u32 {
+pub fn addFunction(self: *Self, type_idx: u32) Allocator.Error!u32 {
     return (try self.addDefinedFunction(type_idx)).function.raw();
 }
 
 /// Add a defined function and return both its defined local index and global
 /// function index.
-pub fn addDefinedFunction(self: *Self, type_idx: u32) !DefinedFunction {
+pub fn addDefinedFunction(self: *Self, type_idx: u32) Allocator.Error!DefinedFunction {
     const local = LocalFunctionIndex.fromRaw(@intCast(self.func_type_indices.items.len));
     try self.func_type_indices.append(self.allocator, type_idx);
     return .{
@@ -568,7 +568,7 @@ pub fn addDefinedFunctionSymbol(
     local: LocalFunctionIndex,
     name: []const u8,
     flags: u32,
-) !SymbolIndex {
+) Allocator.Error!SymbolIndex {
     const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
     try self.linking.symbol_table.append(self.allocator, .{
         .kind = .function,
@@ -625,7 +625,7 @@ pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_t
 }
 
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
-pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) !void {
+pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) Allocator.Error!void {
     const local_idx = global_func_idx - self.importCount();
     const body_copy = try self.allocator.dupe(u8, body);
     // Ensure we have enough slots
@@ -640,7 +640,7 @@ pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) !voi
 }
 
 /// Add an export.
-pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) !void {
+pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allocator.Error!void {
     try self.exports.append(self.allocator, .{
         .name = name,
         .kind = kind,
@@ -667,7 +667,7 @@ pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
 
 /// Add a data segment to linear memory. Returns the offset where the data
 /// will be placed. The data is copied and aligned to `align_bytes`.
-pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) !u32 {
+pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) Allocator.Error!u32 {
     // Align the offset
     const alignment = if (align_bytes > 0) align_bytes else 1;
     self.data_offset = (self.data_offset + alignment - 1) & ~(alignment - 1);
@@ -691,7 +691,7 @@ pub fn enableStackPointer(self: *Self, initial_value: u32) void {
 
 /// Add a defined global and return its index (accounting for __stack_pointer at 0).
 /// Used to define PIC globals like __memory_base and __table_base with value 0.
-pub fn addDefinedGlobal(self: *Self, val_type: u8, mutable: bool, init_value: i32) !u32 {
+pub fn addDefinedGlobal(self: *Self, val_type: u8, mutable: bool, init_value: i32) Allocator.Error!u32 {
     // Global 0 is __stack_pointer (when has_stack_pointer is true).
     // Extra globals start at index 1.
     const idx: u32 = 1 + @as(u32, @intCast(self.extra_globals.items.len));
@@ -709,7 +709,7 @@ pub fn enableTable(self: *Self) void {
 }
 
 /// Add a function to the table and return its table index.
-pub fn addTableElement(self: *Self, func_idx: u32) !u32 {
+pub fn addTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
     const table_idx: u32 = @intCast(self.table_func_indices.items.len);
     try self.table_func_indices.append(self.allocator, func_idx);
     return table_idx;
@@ -722,7 +722,7 @@ pub fn addTableElement(self: *Self, func_idx: u32) !u32 {
 /// from the 2-arg RocOps callback type).
 ///
 /// Returns the table index that can be used with `call_indirect` to invoke the function.
-pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: []const u8, roc_call_type_idx: u32) !u32 {
+pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: []const u8, roc_call_type_idx: u32) Allocator.Error!u32 {
     const func_idx = try self.addImport(module_name, fn_name, roc_call_type_idx);
     return try self.addTableElement(func_idx);
 }
@@ -765,7 +765,7 @@ pub fn findFunctionIdxBySuffix(self: *const Self, suffix: []const u8) ?u32 {
 }
 
 /// Find or append a function in the element section.
-pub fn ensureTableElement(self: *Self, func_idx: u32) !u32 {
+pub fn ensureTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
     return self.findTableIndex(func_idx) orelse try self.addTableElement(func_idx);
 }
 
@@ -793,7 +793,7 @@ pub const HostToAppEntry = struct {
 /// The last function import is swapped into the vacated slot so that only
 /// two symbols need relocation updates. A dummy function is prepended to
 /// func_type_indices to keep the total function count stable.
-pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) !void {
+pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) Allocator.Error!void {
     for (host_to_app_map) |entry| {
         const app_fn_name = entry.name;
         const app_fn_index = entry.fn_index;
@@ -1025,7 +1025,7 @@ pub const BuiltinSymbols = struct {
 ///
 /// Returns a MergeResult with the symbol index mapping, which callers
 /// use to look up merged builtins by their original symbol indices.
-pub fn mergeModule(self: *Self, source: *const Self) !MergeResult {
+pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult {
     const gpa = self.allocator;
 
     // --- 1. Merge type section (with deduplication) ---
@@ -1527,7 +1527,7 @@ pub fn resolveRelocations(self: *Self) Allocator.Error!void {
 ///
 /// Must be called after all addFunction/setFunctionBody calls are complete
 /// and before linkHostToAppCalls.
-pub fn transferAppFunctions(self: *Self) !void {
+pub fn transferAppFunctions(self: *Self) Allocator.Error!void {
     const host_defined_count = self.function_offsets.items.len;
     const total_defined_count = self.func_type_indices.items.len;
 
@@ -1553,7 +1553,7 @@ pub fn transferAppFunctions(self: *Self) !void {
 /// splits the contiguous code_bytes buffer into individual function bodies
 /// (skipping dummy functions from dead_import_dummy_count) and populates
 /// func_bodies so that `encode()` can emit them.
-pub fn materializeFuncBodies(self: *Self) !void {
+pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
     const gpa = self.allocator;
     const defined_count = self.func_type_indices.items.len;
 
@@ -1590,7 +1590,7 @@ pub fn materializeFuncBodies(self: *Self) !void {
 /// Verify that no stale builtin roc_* imports remain in the final module.
 /// `roc_panic` is also tolerated because current host platforms still import it
 /// behind the `roc_crashed` wrapper, and verification runs before DCE.
-pub fn verifyNoBuiltinImports(self: *const Self) !void {
+pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!void {
     const allowed = [_][]const u8{
         "roc_alloc",
         "roc_dealloc",
@@ -1627,7 +1627,7 @@ pub fn verifyNoBuiltinImports(self: *const Self) !void {
 /// `called_fns` is a bitset of function indices that are directly called
 /// by the app (e.g. from codegen). It is combined with exports, init funcs,
 /// and element section entries to seed the live set.
-pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) !void {
+pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!void {
     const gpa = self.allocator;
 
     const import_count = self.import_fn_count;
@@ -1730,7 +1730,7 @@ fn traceLiveFunctions(
     called_fns: []const bool,
     fn_index_min: u32,
     fn_count: u32,
-) ![]bool {
+) Allocator.Error![]bool {
     const gpa = self.allocator;
 
     // --- Categorize relocation entries ---
@@ -1909,7 +1909,7 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
 /// 2. Define __stack_pointer global at top of memory
 /// 3. Configure table size based on actual element count
 /// 4. Export memory as "memory" for host/runtime access
-pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) !void {
+pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!void {
     // Calculate the highest data segment end address.
     var data_end: u32 = self.data_offset;
     for (self.data_segments.items) |ds| {
@@ -2390,7 +2390,7 @@ fn parseCustomSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
 }
 
 /// Encode the module to a valid wasm binary.
-pub fn encode(self: *Self, allocator: Allocator) ![]u8 {
+pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
@@ -2451,7 +2451,7 @@ pub fn encode(self: *Self, allocator: Allocator) ![]u8 {
     return output.toOwnedSlice(allocator);
 }
 
-fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2476,7 +2476,7 @@ fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2499,7 +2499,7 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeFunctionSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeFunctionSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2513,7 +2513,7 @@ fn encodeFunctionSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2526,7 +2526,7 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2554,7 +2554,7 @@ fn encodeGlobalSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeExportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeExportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2571,7 +2571,7 @@ fn encodeExportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2586,7 +2586,7 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2608,7 +2608,7 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !v
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2626,7 +2626,7 @@ fn encodeTableSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !
     try output.appendSlice(gpa, section_data.items);
 }
 
-fn encodeElementSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) !void {
+fn encodeElementSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
@@ -2720,7 +2720,7 @@ fn skipBytes(bytes: []const u8, cursor: *usize, count: u32) ParseError!void {
 // --- LEB128 encoding utilities ---
 
 /// Encode a u32 as unsigned LEB128 and append to the list.
-pub fn leb128WriteU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) !void {
+pub fn leb128WriteU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) Allocator.Error!void {
     var val = value;
     while (true) {
         const byte: u8 = @truncate(val & 0x7F);
@@ -2735,7 +2735,7 @@ pub fn leb128WriteU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) !v
 }
 
 /// Encode an i32 as signed LEB128 and append to the list.
-pub fn leb128WriteI32(gpa: Allocator, output: *std.ArrayList(u8), value: i32) !void {
+pub fn leb128WriteI32(gpa: Allocator, output: *std.ArrayList(u8), value: i32) Allocator.Error!void {
     var val = value;
     while (true) {
         const byte: u8 = @truncate(@as(u32, @bitCast(val)) & 0x7F);
@@ -2750,7 +2750,7 @@ pub fn leb128WriteI32(gpa: Allocator, output: *std.ArrayList(u8), value: i32) !v
 }
 
 /// Encode an i64 as signed LEB128 and append to the list.
-pub fn leb128WriteI64(gpa: Allocator, output: *std.ArrayList(u8), value: i64) !void {
+pub fn leb128WriteI64(gpa: Allocator, output: *std.ArrayList(u8), value: i64) Allocator.Error!void {
     var val = value;
     while (true) {
         const byte: u8 = @truncate(@as(u64, @bitCast(val)) & 0x7F);
@@ -2816,7 +2816,7 @@ pub fn overwritePaddedI32(buffer: []u8, offset: u32, value: i32) void {
 
 /// Append a u32 as exactly 5 bytes of padded LEB128 to an output buffer.
 /// Used when emitting new relocatable instructions (call, global.get/set).
-pub fn appendPaddedU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) !void {
+pub fn appendPaddedU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) Allocator.Error!void {
     var x = value;
     for (0..padded_leb128_size - 1) |_| {
         try output.append(gpa, @as(u8, @truncate(x & 0x7f)) | 0x80);
@@ -2964,7 +2964,7 @@ test "readString — reads length-prefixed string" {
 
 /// Build a minimal relocatable WASM binary for testing.
 /// Contains: 1 function import, 1 defined function, 1 export, linking + reloc sections.
-fn buildTestRelocatableModule(allocator: Allocator) ![]u8 {
+fn buildTestRelocatableModule(allocator: Allocator) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
@@ -3123,7 +3123,7 @@ fn buildTestRelocatableModule(allocator: Allocator) ![]u8 {
 }
 
 /// Helper: write a section body with known bytes.
-fn writeSectionBody(allocator: Allocator, out: *std.ArrayList(u8), body: []const u8) !void {
+fn writeSectionBody(allocator: Allocator, out: *std.ArrayList(u8), body: []const u8) Allocator.Error!void {
     try leb128WriteU32(allocator, out, @intCast(body.len));
     try out.appendSlice(allocator, body);
 }
@@ -3333,7 +3333,7 @@ test "preload — symbol name resolution from imports" {
 /// Relocation entries (offsets into code_bytes):
 ///   fn3 call operand at offset 3  → symbol 1 (roc__main_exposed)
 ///   fn4 call operand at offset 12 → symbol 2 (js_bar)
-fn buildLinkingTestModule(allocator: Allocator) !Self {
+fn buildLinkingTestModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
 
@@ -3648,7 +3648,7 @@ test "preload — parses real Zig-compiled wasm host object" {
 
 /// Build a test module simulating a parsed relocatable host with memory, table,
 /// and __stack_pointer global imports (as produced by clang/zig for wasm32).
-fn buildPhase5TestModule(allocator: Allocator) !Self {
+fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
 
@@ -4144,7 +4144,7 @@ test "ensureTableElement — reuses existing table entry" {
 ///   sym 0: undefined function index 0 (roc_alloc) — implicitly named
 ///   sym 1: undefined function index 1 (roc_dealloc) — implicitly named
 ///   sym 2: defined function index 2 (host_fn_0)
-fn buildMergeHostModule(allocator: Allocator) !Self {
+fn buildMergeHostModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
 
@@ -4211,7 +4211,7 @@ fn buildMergeHostModule(allocator: Allocator) !Self {
 ///   sym 1: defined function index 1 (roc_builtins_str_trim)
 ///   sym 2: defined function index 2 (roc_builtins_str_concat)
 ///   sym 3: defined data segment 0, offset 0, size 4
-fn buildMergeBuiltinsModule(allocator: Allocator) !Self {
+fn buildMergeBuiltinsModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
     module.data_offset = 0; // builtins start data at 0
@@ -4273,7 +4273,7 @@ fn buildMergeBuiltinsModule(allocator: Allocator) !Self {
     return module;
 }
 
-fn buildMergeDataRelocModule(allocator: Allocator) !Self {
+fn buildMergeDataRelocModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
     module.data_offset = 0;
@@ -4764,7 +4764,7 @@ test "verifyNoBuiltinImports — allows roc_panic platform import" {
 ///   fn3 body: call sym 0 (js_log) at offset 3, call sym 4 (helper_fn) at offset 10
 ///   fn4 body: call sym 2 (js_helper) at offset 21
 ///   fn5 body: call sym 1 (js_unused) at offset 30
-fn buildDCETestModule(allocator: Allocator) !Self {
+fn buildDCETestModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
 
@@ -5097,7 +5097,7 @@ test "eliminateDeadCode — function indices unchanged after elimination" {
 /// - Has dead_import_dummy_count > 0 (from linkHostToAppCalls)
 /// - Has linking and reloc sections (from preload, should NOT appear in output)
 /// - Has memory, exports, and data segments
-fn buildEncodeTestModule(allocator: Allocator) !Self {
+fn buildEncodeTestModule(allocator: Allocator) Allocator.Error!Self {
     var module = Self.init(allocator);
     errdefer module.deinit();
 

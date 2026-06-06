@@ -1,12 +1,13 @@
 //! Handler for LSP `textDocument/didChange` notifications.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const DocumentStore = @import("../document_store.zig").DocumentStore;
 
 /// Handler for `textDocument/didChange` notifications (supports incremental edits).
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, params_value: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, params_value: ?std.json.Value) Allocator.Error!void {
             const params = params_value orelse return;
             const obj = switch (params) {
                 .object => |o| o,
@@ -90,7 +91,7 @@ pub fn handler(comptime ServerType: type) type {
             self.onDocumentChanged(uri);
         }
 
-        fn parseRange(value: std.json.Value) !DocumentStore.Range {
+        fn parseRange(value: std.json.Value) error{InvalidRange}!DocumentStore.Range {
             const range_obj = switch (value) {
                 .object => |o| o,
                 else => return error.InvalidRange,
@@ -111,7 +112,7 @@ pub fn handler(comptime ServerType: type) type {
             };
         }
 
-        fn parseIndex(obj: std.json.ObjectMap, field: []const u8) !usize {
+        fn parseIndex(obj: std.json.ObjectMap, field: []const u8) error{ MissingField, InvalidField }!usize {
             const value = obj.get(field) orelse return error.MissingField;
             return switch (value) {
                 .integer => |v| if (v < 0) error.InvalidField else @intCast(v),

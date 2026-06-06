@@ -3,12 +3,13 @@
 //! Provides document outline/symbols for the editor sidebar.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 
 /// Handler for `textDocument/documentSymbol` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "documentSymbol requires params");
                 return;
@@ -103,7 +104,7 @@ pub const SymbolKind = enum(u32) {
     type_parameter = 26,
 
     /// Custom JSON serialization to output as integer (LSP spec requirement)
-    pub fn jsonStringify(self: SymbolKind, jw: anytype) !void {
+    pub fn jsonStringify(self: SymbolKind, jw: anytype) error{WriteFailed}!void {
         try jw.write(@intFromEnum(self));
     }
 };

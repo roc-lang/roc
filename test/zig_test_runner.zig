@@ -173,7 +173,7 @@ fn timingPath(
     partition_count: usize,
     generation_ns: i128,
     partition_index: usize,
-) ![]const u8 {
+) std.mem.Allocator.Error![]const u8 {
     validateTimingName(name);
     return std.fmt.allocPrint(
         allocator,
@@ -182,7 +182,7 @@ fn timingPath(
     );
 }
 
-fn timingPrefix(allocator: std.mem.Allocator, name: []const u8, partition_count: usize) ![]const u8 {
+fn timingPrefix(allocator: std.mem.Allocator, name: []const u8, partition_count: usize) std.mem.Allocator.Error![]const u8 {
     validateTimingName(name);
     return std.fmt.allocPrint(allocator, "zig-{s}.{d}.", .{ name, partition_count });
 }
@@ -192,7 +192,7 @@ fn timingGenerationPrefix(
     name: []const u8,
     partition_count: usize,
     generation_ns: i128,
-) ![]const u8 {
+) std.mem.Allocator.Error![]const u8 {
     validateTimingName(name);
     return std.fmt.allocPrint(allocator, "zig-{s}.{d}.{d}.", .{ name, partition_count, generation_ns });
 }
@@ -247,7 +247,7 @@ fn leastLoadedPartition(loads: []const u64) usize {
     return min_i;
 }
 
-fn buildSelectedIndices(allocator: std.mem.Allocator, config: RunnerConfig) ![]u32 {
+fn buildSelectedIndices(allocator: std.mem.Allocator, config: RunnerConfig) std.mem.Allocator.Error![]u32 {
     var weights = loadTimingWeights(allocator, config);
     defer weights.deinit();
 
@@ -324,7 +324,7 @@ fn writeTimingRecords(
     }) catch {};
 }
 
-fn mainServer(init: std.process.Init.Minimal, config: RunnerConfig) !void {
+fn mainServer(init: std.process.Init.Minimal, config: RunnerConfig) anyerror!void {
     @disableInstrumentation();
 
     const allocator = std.heap.page_allocator;

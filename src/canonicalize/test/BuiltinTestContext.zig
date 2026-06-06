@@ -1,5 +1,6 @@
 //! Helpers for loading the compiled Builtin module in canonicalize tests.
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
@@ -20,7 +21,7 @@ const LoadedModule = struct {
     }
 };
 
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
     const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
@@ -29,7 +30,7 @@ fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.
     return indices_ptr.*;
 }
 
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
     const CompactWriter = collections.CompactWriter;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
     @memcpy(buffer, bin_data);
@@ -92,7 +93,7 @@ pub const BuiltinTestContext = struct {
     builtin_indices: CIR.BuiltinIndices,
     builtin_module: LoadedModule,
 
-    pub fn init(gpa: std.mem.Allocator) !BuiltinTestContext {
+    pub fn init(gpa: std.mem.Allocator) Allocator.Error!BuiltinTestContext {
         return .{
             .builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin),
             .builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source),

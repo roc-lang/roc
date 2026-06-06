@@ -5,6 +5,7 @@
 //! for stack allocations in the interpreter.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// The highest alignment any Roc type can have.
 /// This is used as the base alignment for the allocation used
@@ -76,7 +77,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 
         entries: []V,
 
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) Allocator.Error!Self {
             const entries = try allocator.alloc(V, capacity);
             @memset(entries, V.none);
 
@@ -106,7 +107,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             return minimum +| (minimum / 2 + init_capacity);
         }
 
-        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
+        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) Allocator.Error!void {
             const idx = @intFromEnum(key);
 
             // Grow if necessary

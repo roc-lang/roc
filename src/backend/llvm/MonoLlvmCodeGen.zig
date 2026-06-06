@@ -529,77 +529,171 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
+    /// Heap-backed glue carried across the children of one `switch_stmt` while
+    /// the explicit work stack drives statement emission. The branch case blocks
+    /// were already allocated and the LLVM switch instruction already finished;
+    /// these continuations only set the cursor and queue each branch body.
+    const SwitchState = struct {
+        branches: []const lir.CFSwitchBranch,
+        branch_blocks: []LlvmBuilder.Function.Block.Index,
+        default_block: LlvmBuilder.Function.Block.Index,
+        default_branch: CFStmtId,
+    };
+
+    /// Heap-backed glue carried across the children of one `join` statement: the
+    /// remainder subtree and (the first time the join is seen) the join body.
+    const JoinState = struct {
+        key: u32,
+        join_block: LlvmBuilder.Function.Block.Index,
+        after_block: LlvmBuilder.Function.Block.Index,
+        body: CFStmtId,
+    };
+
+    /// Drives statement-LIR emission with an explicit heap-backed work stack so
+    /// arbitrarily deep statement graphs cannot overflow the native stack. A
+    /// `.node` item processes one statement; the other variants reproduce the
+    /// exact post-children glue of `switch_stmt` and `join` that recursion
+    /// previously interleaved. Continuations are pushed before their child so
+    /// the child's whole subtree is emitted first, preserving emission order.
+    const StmtWork = union(enum) {
+        node: CFStmtId,
+        switch_branch: struct { state: *SwitchState, index: u32 },
+        switch_default: *SwitchState,
+        switch_free: *SwitchState,
+        join_after_remainder: *JoinState,
+        join_after_body: *JoinState,
+    };
+
     fn compileStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
+        var sfa = std.heap.stackFallback(64 * @sizeOf(StmtWork), self.allocator);
+        const wa = sfa.get();
+        var work = std.ArrayList(StmtWork).empty;
+        defer work.deinit(wa);
+        try work.append(wa, .{ .node = stmt_id });
+        while (work.pop()) |item| {
+            switch (item) {
+                .node => |node_id| try self.compileStmtNode(node_id, wa, &work),
+                .switch_branch => |sb| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    wip.cursor = .{ .block = sb.state.branch_blocks[sb.index] };
+                    if (sb.index + 1 < sb.state.branch_blocks.len) {
+                        try work.append(wa, .{ .switch_branch = .{ .state = sb.state, .index = sb.index + 1 } });
+                    } else {
+                        try work.append(wa, .{ .switch_default = sb.state });
+                    }
+                    try work.append(wa, .{ .node = sb.state.branches[sb.index].body });
+                },
+                .switch_default => |state| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    wip.cursor = .{ .block = state.default_block };
+                    try work.append(wa, .{ .switch_free = state });
+                    try work.append(wa, .{ .node = state.default_branch });
+                },
+                .switch_free => |state| {
+                    self.allocator.free(state.branch_blocks);
+                    self.allocator.destroy(state);
+                },
+                .join_after_remainder => |state| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    if (!self.currentBlockHasTerminator()) _ = wip.br(state.after_block) catch return error.CompilationFailed;
+                    if (!self.compiled_joins.contains(state.key)) {
+                        try self.compiled_joins.put(state.key, {});
+                        wip.cursor = .{ .block = state.join_block };
+                        try work.append(wa, .{ .join_after_body = state });
+                        try work.append(wa, .{ .node = state.body });
+                    } else {
+                        wip.cursor = .{ .block = state.after_block };
+                        self.allocator.destroy(state);
+                    }
+                },
+                .join_after_body => |state| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    if (!self.currentBlockHasTerminator()) _ = wip.br(state.after_block) catch return error.CompilationFailed;
+                    wip.cursor = .{ .block = state.after_block };
+                    self.allocator.destroy(state);
+                },
+            }
+        }
+    }
+
+    /// Processes a single statement node, queueing successors and nested-body
+    /// continuations onto `work` rather than recursing.
+    fn compileStmtNode(
+        self: *MonoLlvmCodeGen,
+        stmt_id: CFStmtId,
+        wa: Allocator,
+        work: *std.ArrayList(StmtWork),
+    ) Error!void {
         if (self.currentBlockHasTerminator()) return;
         const stmt = self.store.getCFStmt(stmt_id);
         switch (stmt) {
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_literal => |assign| {
                 try self.emitLiteral(assign.target, assign.value);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_call => |assign| {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_call_erased => |assign| {
                 try self.emitErasedCall(assign.target, assign.closure, assign.args);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_packed_erased_fn => |assign| {
                 try self.emitPackedErasedFn(assign.target, assign.proc, assign.capture, assign.capture_layout, assign.on_drop);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
                 try self.emitLowLevel(assign.target, assign.op, assign.args);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
                 try self.emitListLiteral(assign.target, assign.elems);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_struct => |assign| {
                 try self.emitStructLiteral(assign.target, assign.fields);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .assign_tag => |assign| {
                 try self.emitTagLiteral(assign.target, assign.discriminant, assign.payload);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .set_local => |assign| {
                 try self.copyLocal(assign.target, assign.value);
-                try self.compileStmt(assign.next);
+                try work.append(wa, .{ .node = assign.next });
             },
             .debug => |debug_stmt| {
                 try self.callBuiltinVoid("roc_builtins_dbg_str", &.{ try self.ptrType(), try self.ptrType() }, &.{ self.slot(debug_stmt.message).ptr, self.rocOps() });
-                try self.compileStmt(debug_stmt.next);
+                try work.append(wa, .{ .node = debug_stmt.next });
             },
             .expect => |expect_stmt| {
                 try self.emitExpect(expect_stmt.condition);
-                try self.compileStmt(expect_stmt.next);
+                try work.append(wa, .{ .node = expect_stmt.next });
             },
             .runtime_error => {
                 try self.emitCrashBytes("hit a runtime error");
             },
             .incref => |inc| {
                 try self.emitRcForLocal(.incref, inc.value, inc.count);
-                try self.compileStmt(inc.next);
+                try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
                 try self.emitRcForLocal(.decref, dec.value, 1);
-                try self.compileStmt(dec.next);
+                try work.append(wa, .{ .node = dec.next });
             },
             .free => |free_stmt| {
                 try self.emitRcForLocal(.free, free_stmt.value, 1);
-                try self.compileStmt(free_stmt.next);
+                try work.append(wa, .{ .node = free_stmt.next });
             },
-            .switch_stmt => |sw| try self.emitSwitch(sw),
+            .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
             .loop_continue => try self.emitLoopContinue(),
             .loop_break => try self.emitLoopBreak(),
-            .join => |join_stmt| try self.emitJoin(join_stmt),
+            .join => |join_stmt| try self.emitJoin(join_stmt, wa, work),
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| try self.emitCrashBytes(self.store.getString(crash_stmt.msg)),
@@ -1254,13 +1348,15 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitSwitch(self: *MonoLlvmCodeGen, sw: anytype) Error!void {
+    /// Emits the LLVM switch instruction and queues each branch body (and the
+    /// default body) as work items. The case blocks and branch slice are carried
+    /// to the continuations via a heap `SwitchState` freed by `.switch_free`.
+    fn emitSwitch(self: *MonoLlvmCodeGen, sw: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const branches = self.store.getCFSwitchBranches(sw.branches);
         const default_block = wip.block(0, "switch_default") catch return error.OutOfMemory;
         const branch_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, branches.len);
-        defer self.allocator.free(branch_blocks);
         for (branch_blocks) |*block| block.* = wip.block(0, "switch_case") catch return error.OutOfMemory;
         const cond = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
         var switch_inst = wip.@"switch"(cond, default_block, @intCast(branches.len), .none) catch return error.OutOfMemory;
@@ -1268,32 +1364,40 @@ pub const MonoLlvmCodeGen = struct {
             switch_inst.addCase(builder.intConst(cond.typeOfWip(wip), branch.value) catch return error.OutOfMemory, block, wip) catch return error.OutOfMemory;
         }
         switch_inst.finish(wip);
-        for (branches, branch_blocks) |branch, block| {
-            wip.cursor = .{ .block = block };
-            try self.compileStmt(branch.body);
+
+        const state = try self.allocator.create(SwitchState);
+        state.* = .{
+            .branches = branches,
+            .branch_blocks = branch_blocks,
+            .default_block = default_block,
+            .default_branch = sw.default_branch,
+        };
+        if (branches.len == 0) {
+            try work.append(wa, .{ .switch_default = state });
+        } else {
+            try work.append(wa, .{ .switch_branch = .{ .state = state, .index = 0 } });
         }
-        wip.cursor = .{ .block = default_block };
-        try self.compileStmt(sw.default_branch);
     }
 
-    fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype) Error!void {
+    /// Registers the join point, queues the remainder subtree, and lets
+    /// `.join_after_remainder`/`.join_after_body` emit the branch-back glue and
+    /// the join body. Heap `JoinState` is freed by the final continuation.
+    fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key = @intFromEnum(join_stmt.id);
         const join_block = wip.block(0, "join_body") catch return error.OutOfMemory;
         const after_block = wip.block(0, "join_after") catch return error.OutOfMemory;
         try self.join_points.put(key, .{ .block = join_block, .params = join_stmt.params, .body = join_stmt.body });
 
-        try self.compileStmt(join_stmt.remainder);
-        if (!self.currentBlockHasTerminator()) _ = wip.br(after_block) catch return error.OutOfMemory;
-
-        if (!self.compiled_joins.contains(key)) {
-            try self.compiled_joins.put(key, {});
-            wip.cursor = .{ .block = join_block };
-            try self.compileStmt(join_stmt.body);
-            if (!self.currentBlockHasTerminator()) _ = wip.br(after_block) catch return error.OutOfMemory;
-        }
-
-        wip.cursor = .{ .block = after_block };
+        const state = try self.allocator.create(JoinState);
+        state.* = .{
+            .key = key,
+            .join_block = join_block,
+            .after_block = after_block,
+            .body = join_stmt.body,
+        };
+        try work.append(wa, .{ .join_after_remainder = state });
+        try work.append(wa, .{ .node = join_stmt.remainder });
     }
 
     fn emitJump(self: *MonoLlvmCodeGen, jump_stmt: anytype) Error!void {
@@ -1651,12 +1755,12 @@ pub const MonoLlvmCodeGen = struct {
             self.values.deinit(allocator);
         }
 
-        fn append(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) !void {
+        fn append(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) Allocator.Error!void {
             try self.types.append(allocator, ty);
             try self.values.append(allocator, value);
         }
 
-        fn prepend(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) !void {
+        fn prepend(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) Allocator.Error!void {
             try self.types.insert(allocator, 0, ty);
             try self.values.insert(allocator, 0, value);
         }
@@ -2000,22 +2104,147 @@ pub const MonoLlvmCodeGen = struct {
         if (self.slot(target).size > 0) try self.copyBytes(self.slot(target).ptr, capture_ptr, self.slot(target).size, self.slot(target).alignment);
     }
 
+    /// Heap-backed glue carried across the per-field children of one struct
+    /// equality. `acc` is the running AND of the field comparisons; `field_out`
+    /// receives each child's result before it is folded into `acc`.
+    const StructEqState = struct {
+        lhs_ptr: LlvmBuilder.Value,
+        rhs_ptr: LlvmBuilder.Value,
+        layout_idx: layout.Idx,
+        field_count: usize,
+        index: usize,
+        acc: LlvmBuilder.Value,
+        field_out: LlvmBuilder.Value,
+        out: *LlvmBuilder.Value,
+    };
+
+    /// Heap-backed glue carried across the element child of one list equality.
+    /// The loop scaffolding is already emitted and the cursor sits in the body
+    /// block; `elem_out` receives the element comparison before the loop tail
+    /// and the post-loop result load are emitted.
+    const ListEqState = struct {
+        result_ptr: LlvmBuilder.Value,
+        idx_ptr: LlvmBuilder.Value,
+        idx: LlvmBuilder.Value,
+        header: LlvmBuilder.Function.Block.Index,
+        after: LlvmBuilder.Function.Block.Index,
+        elem_out: LlvmBuilder.Value,
+        out: *LlvmBuilder.Value,
+    };
+
+    /// Heap-backed glue carried across the payload children of one tag-union
+    /// equality. One frame per variant case block emits the discriminant guard,
+    /// queues the payload comparison, stores it, and branches to `after`.
+    const TagEqState = struct {
+        lhs_ptr: LlvmBuilder.Value,
+        rhs_ptr: LlvmBuilder.Value,
+        layout_idx: layout.Idx,
+        lhs_disc: LlvmBuilder.Value,
+        result_ptr: LlvmBuilder.Value,
+        after: LlvmBuilder.Function.Block.Index,
+        case_blocks: []LlvmBuilder.Function.Block.Index,
+        index: usize,
+        payload_out: LlvmBuilder.Value,
+        out: *LlvmBuilder.Value,
+    };
+
+    /// Work item for the explicit equality-emission stack. `.eval` computes the
+    /// structural equality of a value at `lhs_ptr`/`rhs_ptr` of layout
+    /// `layout_idx`, writing the resulting `i1` into `out`. The remaining
+    /// variants reproduce the post-children glue that recursion previously
+    /// interleaved for struct fields, list elements, and tag-union payloads.
+    const EqWork = union(enum) {
+        eval: struct {
+            lhs_ptr: LlvmBuilder.Value,
+            rhs_ptr: LlvmBuilder.Value,
+            layout_idx: layout.Idx,
+            out: *LlvmBuilder.Value,
+        },
+        struct_step: *StructEqState,
+        struct_combine: *StructEqState,
+        list_finish: *ListEqState,
+        tag_case: *TagEqState,
+        tag_case_after: *TagEqState,
+    };
+
+    /// Drives structural equality emission with an explicit heap-backed work
+    /// stack so deeply nested layouts cannot overflow the native stack. The
+    /// emission order matches the former recursion exactly: continuations are
+    /// pushed before their child so the child's whole subtree is emitted first,
+    /// and each value-returning child writes into a stable heap result slot the
+    /// parent reads in its continuation.
     fn emitValueEqual(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        var result: LlvmBuilder.Value = undefined;
+        var sfa = std.heap.stackFallback(64 * @sizeOf(EqWork), self.allocator);
+        const wa = sfa.get();
+        var work = std.ArrayList(EqWork).empty;
+        defer work.deinit(wa);
+        try work.append(wa, .{ .eval = .{ .lhs_ptr = lhs_ptr, .rhs_ptr = rhs_ptr, .layout_idx = layout_idx, .out = &result } });
+        while (work.pop()) |item| {
+            switch (item) {
+                .eval => |e| try self.emitValueEqualNode(e.lhs_ptr, e.rhs_ptr, e.layout_idx, e.out, wa, &work),
+                .struct_step => |state| {
+                    if (state.index == state.field_count) {
+                        state.out.* = state.acc;
+                        self.allocator.destroy(state);
+                    } else {
+                        const layout_val = self.layoutValue(state.layout_idx);
+                        const info = self.layouts().getStructInfo(layout_val);
+                        const field = info.fields.get(@intCast(state.index));
+                        const offset = self.layouts().getStructFieldOffset(layout_val.getStruct().idx, @intCast(state.index));
+                        try work.append(wa, .{ .struct_combine = state });
+                        try work.append(wa, .{ .eval = .{
+                            .lhs_ptr = try self.offsetPtr(state.lhs_ptr, offset),
+                            .rhs_ptr = try self.offsetPtr(state.rhs_ptr, offset),
+                            .layout_idx = field.layout,
+                            .out = &state.field_out,
+                        } });
+                    }
+                },
+                .struct_combine => |state| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    state.acc = wip.bin(.@"and", state.acc, state.field_out, "") catch return error.CompilationFailed;
+                    state.index += 1;
+                    try work.append(wa, .{ .struct_step = state });
+                },
+                .list_finish => |state| try self.emitListEqualFinish(state),
+                .tag_case => |state| try self.emitTagEqualCase(state, wa, &work),
+                .tag_case_after => |state| try self.emitTagEqualCaseAfter(state, wa, &work),
+            }
+        }
+        return result;
+    }
+
+    /// Handles one `.eval` work item: emits the leaf comparison directly, or, for
+    /// composite layouts, emits the per-layout scaffolding and queues child
+    /// comparisons plus the continuation that consumes them.
+    fn emitValueEqualNode(
+        self: *MonoLlvmCodeGen,
+        lhs_ptr: LlvmBuilder.Value,
+        rhs_ptr: LlvmBuilder.Value,
+        layout_idx: layout.Idx,
+        out: *LlvmBuilder.Value,
+        wa: Allocator,
+        work: *std.ArrayList(EqWork),
+    ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_val = self.layoutValue(layout_idx);
-        if (self.layoutByteSize(layout_idx) == 0) return builder.intValue(.i1, 1) catch return error.OutOfMemory;
+        if (self.layoutByteSize(layout_idx) == 0) {
+            out.* = builder.intValue(.i1, 1) catch return error.OutOfMemory;
+            return;
+        }
         switch (layout_val.tag) {
             .scalar => switch (layout_val.getScalar().tag) {
                 .str => {
                     const lhs_fields = try self.rocStrArgFields(lhs_ptr);
                     const rhs_fields = try self.rocStrArgFields(rhs_ptr);
-                    return self.callBuiltin("roc_builtins_str_equal", .i1, &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{ lhs_fields[0], lhs_fields[1], lhs_fields[2], rhs_fields[0], rhs_fields[1], rhs_fields[2] });
+                    out.* = try self.callBuiltin("roc_builtins_str_equal", .i1, &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{ lhs_fields[0], lhs_fields[1], lhs_fields[2], rhs_fields[0], rhs_fields[1], rhs_fields[2] });
                 },
                 else => {
                     const lhs = try self.loadScalar(lhs_ptr, layout_idx);
                     const rhs = try self.loadScalar(rhs_ptr, layout_idx);
-                    return if (isFloatLayout(layout_idx))
+                    out.* = if (isFloatLayout(layout_idx))
                         wip.fcmp(.normal, .oeq, lhs, rhs, "") catch return error.OutOfMemory
                     else
                         wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
@@ -2024,22 +2253,26 @@ pub const MonoLlvmCodeGen = struct {
             .box, .erased_callable => {
                 const lhs = try self.loadPointer(lhs_ptr);
                 const rhs = try self.loadPointer(rhs_ptr);
-                return wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
+                out.* = wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
             },
-            .list, .list_of_zst => return self.emitListEqual(lhs_ptr, rhs_ptr, layout_idx),
+            .list, .list_of_zst => try self.emitListEqual(lhs_ptr, rhs_ptr, layout_idx, out, wa, work),
             .struct_ => {
                 const info = self.layouts().getStructInfo(layout_val);
-                var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    const offset = self.layouts().getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
-                    const field_eq = try self.emitValueEqual(try self.offsetPtr(lhs_ptr, offset), try self.offsetPtr(rhs_ptr, offset), field.layout);
-                    result = wip.bin(.@"and", result, field_eq, "") catch return error.OutOfMemory;
-                }
-                return result;
+                const state = try self.allocator.create(StructEqState);
+                state.* = .{
+                    .lhs_ptr = lhs_ptr,
+                    .rhs_ptr = rhs_ptr,
+                    .layout_idx = layout_idx,
+                    .field_count = info.fields.len,
+                    .index = 0,
+                    .acc = builder.intValue(.i1, 1) catch return error.OutOfMemory,
+                    .field_out = undefined,
+                    .out = out,
+                };
+                try work.append(wa, .{ .struct_step = state });
             },
-            .tag_union => return self.emitTagEqual(lhs_ptr, rhs_ptr, layout_idx),
-            else => return self.emitMemoryEqual(lhs_ptr, rhs_ptr, self.layoutByteSize(layout_idx)),
+            .tag_union => try self.emitTagEqual(lhs_ptr, rhs_ptr, layout_idx, out, wa, work),
+            else => out.* = try self.emitMemoryEqual(lhs_ptr, rhs_ptr, self.layoutByteSize(layout_idx)),
         }
     }
 
@@ -2057,14 +2290,28 @@ pub const MonoLlvmCodeGen = struct {
         return result;
     }
 
-    fn emitListEqual(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, list_layout: layout.Idx) Error!LlvmBuilder.Value {
+    /// Emits the list-equality length check and loop scaffolding, then queues the
+    /// element comparison and the `.list_finish` continuation. For empty/ZST
+    /// element layouts the length comparison is the whole result.
+    fn emitListEqual(
+        self: *MonoLlvmCodeGen,
+        lhs_ptr: LlvmBuilder.Value,
+        rhs_ptr: LlvmBuilder.Value,
+        list_layout: layout.Idx,
+        out: *LlvmBuilder.Value,
+        wa: Allocator,
+        work: *std.ArrayList(EqWork),
+    ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(list_layout);
         const lhs_len = try self.loadUsize(try self.offsetPtr(lhs_ptr, @sizeOf(usize)));
         const rhs_len = try self.loadUsize(try self.offsetPtr(rhs_ptr, @sizeOf(usize)));
         const len_eq = wip.icmp(.eq, lhs_len, rhs_len, "") catch return error.OutOfMemory;
-        if (abi.elem_size == 0) return len_eq;
+        if (abi.elem_size == 0) {
+            out.* = len_eq;
+            return;
+        }
 
         const result_ptr = wip.alloca(.normal, .i8, .@"1", LlvmBuilder.Alignment.fromByteUnits(1), .default, "list_eq") catch return error.OutOfMemory;
         try self.storeBool(result_ptr, len_eq);
@@ -2085,20 +2332,51 @@ pub const MonoLlvmCodeGen = struct {
         const lhs_bytes = try self.loadPointer(lhs_ptr);
         const rhs_bytes = try self.loadPointer(rhs_ptr);
         const offset = wip.bin(.mul, idx_usize, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const elem_eq = try self.emitValueEqual(
-            wip.gep(.inbounds, .i8, lhs_bytes, &.{offset}, "") catch return error.OutOfMemory,
-            wip.gep(.inbounds, .i8, rhs_bytes, &.{offset}, "") catch return error.OutOfMemory,
-            abi.elem_layout_idx orelse .zst,
-        );
-        try self.storeBool(result_ptr, elem_eq);
-        const next = wip.bin(.add, idx, builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        _ = wip.store(.normal, next, idx_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
-        _ = wip.br(header) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = after };
-        return self.loadBool(result_ptr);
+
+        const state = try self.allocator.create(ListEqState);
+        state.* = .{
+            .result_ptr = result_ptr,
+            .idx_ptr = idx_ptr,
+            .idx = idx,
+            .header = header,
+            .after = after,
+            .elem_out = undefined,
+            .out = out,
+        };
+        try work.append(wa, .{ .list_finish = state });
+        try work.append(wa, .{ .eval = .{
+            .lhs_ptr = wip.gep(.inbounds, .i8, lhs_bytes, &.{offset}, "") catch return error.OutOfMemory,
+            .rhs_ptr = wip.gep(.inbounds, .i8, rhs_bytes, &.{offset}, "") catch return error.OutOfMemory,
+            .layout_idx = abi.elem_layout_idx orelse .zst,
+            .out = &state.elem_out,
+        } });
     }
 
-    fn emitTagEqual(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, tag_layout: layout.Idx) Error!LlvmBuilder.Value {
+    /// Stores the element comparison, emits the loop-tail increment, and loads
+    /// the final list-equality result after the loop.
+    fn emitListEqualFinish(self: *MonoLlvmCodeGen, state: *ListEqState) Error!void {
+        defer self.allocator.destroy(state);
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        try self.storeBool(state.result_ptr, state.elem_out);
+        const next = wip.bin(.add, state.idx, builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
+        _ = wip.store(.normal, next, state.idx_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
+        _ = wip.br(state.header) catch return error.CompilationFailed;
+        wip.cursor = .{ .block = state.after };
+        state.out.* = try self.loadBool(state.result_ptr);
+    }
+
+    /// Emits the tag-equality discriminant check and case-block scaffolding, then
+    /// queues processing of the first variant case.
+    fn emitTagEqual(
+        self: *MonoLlvmCodeGen,
+        lhs_ptr: LlvmBuilder.Value,
+        rhs_ptr: LlvmBuilder.Value,
+        tag_layout: layout.Idx,
+        out: *LlvmBuilder.Value,
+        wa: Allocator,
+        work: *std.ArrayList(EqWork),
+    ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const lhs_disc = try self.readTagDiscriminant(lhs_ptr, tag_layout);
@@ -2111,28 +2389,70 @@ pub const MonoLlvmCodeGen = struct {
         const after = wip.block(0, "tag_eq_after") catch return error.OutOfMemory;
         const mismatch = wip.block(0, "tag_eq_mismatch") catch return error.OutOfMemory;
         const case_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, variants.len);
-        defer self.allocator.free(case_blocks);
         for (case_blocks) |*block| block.* = wip.block(0, "tag_eq_case") catch return error.OutOfMemory;
         _ = wip.brCond(disc_eq, case_blocks[0], mismatch, .then_likely) catch return error.OutOfMemory;
         wip.cursor = .{ .block = mismatch };
         try self.storeBool(result_ptr, builder.intValue(.i1, 0) catch return error.OutOfMemory);
         _ = wip.br(after) catch return error.OutOfMemory;
-        for (case_blocks, 0..) |block, i| {
-            wip.cursor = .{ .block = block };
-            if (i + 1 < case_blocks.len) {
-                const is_case = wip.icmp(.eq, lhs_disc, builder.intValue(lhs_disc.typeOfWip(wip), i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-                const next_case = case_blocks[i + 1];
-                const do_case = wip.block(0, "tag_eq_do_case") catch return error.OutOfMemory;
-                _ = wip.brCond(is_case, do_case, next_case, .none) catch return error.OutOfMemory;
-                wip.cursor = .{ .block = do_case };
-            }
-            const payload_layout = variants.get(@intCast(i)).payload_layout;
-            const eq = try self.emitValueEqual(lhs_ptr, rhs_ptr, payload_layout);
-            try self.storeBool(result_ptr, eq);
-            _ = wip.br(after) catch return error.OutOfMemory;
+
+        const state = try self.allocator.create(TagEqState);
+        state.* = .{
+            .lhs_ptr = lhs_ptr,
+            .rhs_ptr = rhs_ptr,
+            .layout_idx = tag_layout,
+            .lhs_disc = lhs_disc,
+            .result_ptr = result_ptr,
+            .after = after,
+            .case_blocks = case_blocks,
+            .index = 0,
+            .payload_out = undefined,
+            .out = out,
+        };
+        try work.append(wa, .{ .tag_case = state });
+    }
+
+    /// Emits the discriminant guard for one variant case block and queues the
+    /// payload comparison plus the `.tag_case_after` continuation.
+    fn emitTagEqualCase(self: *MonoLlvmCodeGen, state: *TagEqState, wa: Allocator, work: *std.ArrayList(EqWork)) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const i = state.index;
+        wip.cursor = .{ .block = state.case_blocks[i] };
+        if (i + 1 < state.case_blocks.len) {
+            const is_case = wip.icmp(.eq, state.lhs_disc, builder.intValue(state.lhs_disc.typeOfWip(wip), i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const next_case = state.case_blocks[i + 1];
+            const do_case = wip.block(0, "tag_eq_do_case") catch return error.OutOfMemory;
+            _ = wip.brCond(is_case, do_case, next_case, .none) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = do_case };
         }
-        wip.cursor = .{ .block = after };
-        return self.loadBool(result_ptr);
+        const data = self.layouts().getTagUnionData(self.layoutValue(state.layout_idx).getTagUnion().idx);
+        const variants = self.layouts().getTagUnionVariants(data);
+        const payload_layout = variants.get(@intCast(i)).payload_layout;
+        try work.append(wa, .{ .tag_case_after = state });
+        try work.append(wa, .{ .eval = .{
+            .lhs_ptr = state.lhs_ptr,
+            .rhs_ptr = state.rhs_ptr,
+            .layout_idx = payload_layout,
+            .out = &state.payload_out,
+        } });
+    }
+
+    /// Stores one variant's payload comparison and branches to `after`, then
+    /// either queues the next case or finishes the tag equality by loading the
+    /// accumulated result.
+    fn emitTagEqualCaseAfter(self: *MonoLlvmCodeGen, state: *TagEqState, wa: Allocator, work: *std.ArrayList(EqWork)) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        try self.storeBool(state.result_ptr, state.payload_out);
+        _ = wip.br(state.after) catch return error.OutOfMemory;
+        if (state.index + 1 < state.case_blocks.len) {
+            state.index += 1;
+            try work.append(wa, .{ .tag_case = state });
+        } else {
+            wip.cursor = .{ .block = state.after };
+            state.out.* = try self.loadBool(state.result_ptr);
+            self.allocator.free(state.case_blocks);
+            self.allocator.destroy(state);
+        }
     }
 
     fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16) Error!void {

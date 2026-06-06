@@ -2,6 +2,7 @@
 //! Provides a unified interface for Windows and POSIX shared memory operations
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 /// Platform detection
@@ -142,7 +143,7 @@ pub const SharedMemoryError = error{
 };
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() !usize {
+pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
     const page_size: usize = switch (builtin.os.tag) {
         .windows => blk: {
             var system_info: windows.SYSTEM_INFO = undefined;

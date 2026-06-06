@@ -1206,7 +1206,7 @@ test "SafeList edge cases serialization" {
                 list_u32: SafeList(u32).Serialized,
                 list_u8: SafeList(u8).Serialized,
 
-                pub fn serialize(self: *Serialized, container: *const Self, allocator: std.mem.Allocator, writer: *CompactWriter) !void {
+                pub fn serialize(self: *Serialized, container: *const Self, allocator: std.mem.Allocator, writer: *CompactWriter) Allocator.Error!void {
                     try self.list_u32.serialize(&container.list_u32, allocator, writer);
                     try self.list_u8.serialize(&container.list_u8, allocator, writer);
                 }

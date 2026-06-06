@@ -104,7 +104,7 @@ pub fn process(
     allocator: Allocator,
     work_item_count: usize,
     options: ProcessOptions,
-) !void {
+) (Allocator.Error || std.Thread.SpawnError)!void {
     if (work_item_count == 0) return;
 
     if (comptime is_freestanding) {

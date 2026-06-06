@@ -2,6 +2,7 @@
 //! These tests cover various scenarios including boundary conditions, error cases, and complex type layouts.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const types = @import("types");
 const layout = @import("layout.zig");
@@ -24,7 +25,7 @@ const LayoutTest = struct {
     layout_store: Store,
     type_scope: TypeScope,
 
-    fn init(gpa: std.mem.Allocator) !LayoutTest {
+    fn init(gpa: std.mem.Allocator) Allocator.Error!LayoutTest {
         var result: LayoutTest = undefined;
         result.gpa = gpa;
         result.module_env = try ModuleEnv.init(gpa, "");
@@ -36,7 +37,7 @@ const LayoutTest = struct {
         return result;
     }
 
-    fn initWithIdents(gpa: std.mem.Allocator) !LayoutTest {
+    fn initWithIdents(gpa: std.mem.Allocator) Allocator.Error!LayoutTest {
         var result: LayoutTest = undefined;
         result.gpa = gpa;
         result.module_env = try ModuleEnv.init(gpa, "");
@@ -47,7 +48,7 @@ const LayoutTest = struct {
         return result;
     }
 
-    fn initLayoutStore(self: *LayoutTest) !void {
+    fn initLayoutStore(self: *LayoutTest) Allocator.Error!void {
         // Set module_env_ptr HERE, after the struct is in its final memory location.
         // Setting it in init/initWithIdents causes stale pointer bugs since the
         // struct is moved when returned.
@@ -68,7 +69,7 @@ const LayoutTest = struct {
 
     /// Helper to create a nominal Box type with the given element type
     /// Note: Caller must have already inserted "Box" and "Builtin" idents and set builtin_module_ident
-    fn mkBoxType(self: *LayoutTest, elem_var: types.Var, box_ident_idx: base.Ident.Idx, builtin_module_idx: base.Ident.Idx) !types.Var {
+    fn mkBoxType(self: *LayoutTest, elem_var: types.Var, box_ident_idx: base.Ident.Idx, builtin_module_idx: base.Ident.Idx) Allocator.Error!types.Var {
         const box_content = try self.type_store.mkNominal(
             .{ .ident_idx = box_ident_idx },
             elem_var,

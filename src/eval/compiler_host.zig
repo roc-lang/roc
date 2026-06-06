@@ -58,11 +58,18 @@ pub fn ops(self: *CompilerHost) *RocOps {
 
 fn rocAlloc(args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const self: *CompilerHost = @ptrCast(@alignCast(env));
-    const ptr = allocateBytes(self.allocator, args.length, args.alignment);
-    self.allocations.put(@intFromPtr(ptr), .{
-        .size = args.length,
-        .alignment = args.alignment,
-    }) catch @panic("OOM");
+    const allocation: Allocation = .{ .size = args.length, .alignment = args.alignment };
+    const ptr = allocateBytes(self.allocator, args.length, args.alignment) orelse {
+        // OOM: signal failure to the caller (the interpreter turns this into a
+        // Roc crash) instead of aborting the whole compiler.
+        args.answer = null;
+        return;
+    };
+    self.allocations.put(@intFromPtr(ptr), allocation) catch {
+        freeBytes(self.allocator, ptr, allocation);
+        args.answer = null;
+        return;
+    };
     args.answer = @ptrCast(ptr);
 }
 
@@ -75,19 +82,26 @@ fn rocDealloc(args: *RocDealloc, env: *anyopaque) callconv(.c) void {
 
 fn rocRealloc(args: *RocRealloc, env: *anyopaque) callconv(.c) void {
     const self: *CompilerHost = @ptrCast(@alignCast(env));
-    const old_ptr = args.answer;
+    const old_ptr = args.answer orelse @panic("compiler RocOps reallocated a null pointer");
+    const allocation: Allocation = .{ .size = args.new_length, .alignment = args.alignment };
+
+    // Allocate the new block before touching the tracking map, so a failure
+    // leaves the old allocation intact and tracked.
+    const new_ptr = allocateBytes(self.allocator, args.new_length, args.alignment) orelse {
+        args.answer = null;
+        return;
+    };
     const removed = self.allocations.fetchRemove(@intFromPtr(old_ptr)) orelse
         @panic("compiler RocOps reallocated unknown pointer");
-
-    const new_ptr = allocateBytes(self.allocator, args.new_length, args.alignment);
     const old_bytes: [*]u8 = @ptrCast(@alignCast(old_ptr));
     @memcpy(new_ptr[0..@min(removed.value.size, args.new_length)], old_bytes[0..@min(removed.value.size, args.new_length)]);
     freeBytes(self.allocator, old_ptr, removed.value);
 
-    self.allocations.put(@intFromPtr(new_ptr), .{
-        .size = args.new_length,
-        .alignment = args.alignment,
-    }) catch @panic("OOM");
+    self.allocations.put(@intFromPtr(new_ptr), allocation) catch {
+        freeBytes(self.allocator, new_ptr, allocation);
+        args.answer = null;
+        return;
+    };
     args.answer = @ptrCast(new_ptr);
 }
 
@@ -105,13 +119,15 @@ fn rocCrashed(args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
     self.crash_message = self.allocator.dupe(u8, args.utf8_bytes[0..args.len]) catch null;
 }
 
-fn allocateBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) [*]u8 {
+/// Returns null on allocation failure (OOM); the caller signals that to the
+/// evaluator rather than aborting the compiler.
+fn allocateBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) ?[*]u8 {
     return switch (alignment) {
-        1 => (allocator.alignedAlloc(u8, .@"1", len) catch @panic("OOM")).ptr,
-        2 => (allocator.alignedAlloc(u8, .@"2", len) catch @panic("OOM")).ptr,
-        4 => (allocator.alignedAlloc(u8, .@"4", len) catch @panic("OOM")).ptr,
-        8 => (allocator.alignedAlloc(u8, .@"8", len) catch @panic("OOM")).ptr,
-        16 => (allocator.alignedAlloc(u8, .@"16", len) catch @panic("OOM")).ptr,
+        1 => (allocator.alignedAlloc(u8, .@"1", len) catch return null).ptr,
+        2 => (allocator.alignedAlloc(u8, .@"2", len) catch return null).ptr,
+        4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
+        8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
+        16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
         else => @panic("unsupported compiler RocOps allocation alignment"),
     };
 }

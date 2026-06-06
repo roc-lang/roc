@@ -1,6 +1,7 @@
 //! A S-expression tree representation
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const RegionInfo = @import("RegionInfo.zig");
 
 const SExprTree = @This();
@@ -26,7 +27,7 @@ pub const LineColMode = enum {
 };
 
 /// Helper function to escape HTML characters
-fn escapeHtmlChar(writer: anytype, char: u8) !void {
+fn escapeHtmlChar(writer: anytype, char: u8) error{WriteFailed}!void {
     switch (char) {
         '<' => try writer.writeAll("&lt;"),
         '>' => try writer.writeAll("&gt;"),
@@ -42,23 +43,23 @@ fn PlainTextSExprWriter(comptime WriterType: type) type {
     return struct {
         writer: WriterType,
 
-        pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+        pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) error{WriteFailed}!void {
             try self.writer.print(fmt, args);
         }
 
-        pub fn setColor(_: *@This(), _: Color) !void {
+        pub fn setColor(_: *@This(), _: Color) Allocator.Error!void {
             // No-op for plain text
         }
 
-        pub fn beginSourceRange(_: *@This(), _: u32, _: u32) !void {
+        pub fn beginSourceRange(_: *@This(), _: u32, _: u32) Allocator.Error!void {
             // No-op for plain text
         }
 
-        pub fn endSourceRange(_: *@This()) !void {
+        pub fn endSourceRange(_: *@This()) Allocator.Error!void {
             // No-op for plain text
         }
 
-        pub fn writeIndent(self: *@This(), tabs: usize) !void {
+        pub fn writeIndent(self: *@This(), tabs: usize) error{WriteFailed}!void {
             for (0..tabs) |_| {
                 try self.writer.writeAll("\t");
             }
@@ -82,7 +83,7 @@ const HtmlSExprWriter = struct {
         };
     }
 
-    pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+    pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) (Allocator.Error || error{WriteFailed})!void {
         self.scratch_buffer.clearRetainingCapacity();
         try self.scratch_buffer.print(fmt, args);
 
@@ -91,7 +92,7 @@ const HtmlSExprWriter = struct {
         }
     }
 
-    pub fn setColor(self: *@This(), color: Color) !void {
+    pub fn setColor(self: *@This(), color: Color) error{WriteFailed}!void {
         if (self.color_active and self.current_color != color) {
             try self.writer.writeAll("</span>");
             self.color_active = false;
@@ -112,21 +113,21 @@ const HtmlSExprWriter = struct {
         self.current_color = color;
     }
 
-    pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
+    pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) error{WriteFailed}!void {
         try self.writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\" >", .{ start_byte, end_byte });
     }
 
-    pub fn endSourceRange(self: *@This()) !void {
+    pub fn endSourceRange(self: *@This()) error{WriteFailed}!void {
         try self.writer.writeAll("</span>");
     }
 
-    pub fn writeIndent(self: *@This(), tabs: usize) !void {
+    pub fn writeIndent(self: *@This(), tabs: usize) error{WriteFailed}!void {
         for (0..tabs) |_| {
             try self.writer.writeAll("  ");
         }
     }
 
-    pub fn deinit(self: *@This()) !void {
+    pub fn deinit(self: *@This()) error{WriteFailed}!void {
         if (self.color_active) {
             try self.writer.writeAll("</span>");
             self.color_active = false;
@@ -325,7 +326,7 @@ pub fn endNode(self: *SExprTree, begin: NodeBegin, attrsMarker: NodeBegin) std.m
 }
 
 /// Internal method that writes the node using a writer implementation
-fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent: usize, linecol_mode: LineColMode) !void {
+fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent: usize, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
     switch (node) {
         .StaticAtom => |s| {
             try writer_impl.setColor(.node_name);
@@ -421,21 +422,21 @@ fn toStringImpl(self: *const SExprTree, node: Node, writer_impl: anytype, indent
 }
 
 /// Pretty-print the root node (top of stack) to the writer
-pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) !void {
+pub fn printTree(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter(@TypeOf(writer.any())){ .writer = writer.any() };
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to a writer with pleasing indentation.
-pub fn toStringPretty(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) !void {
+pub fn toStringPretty(self: *const SExprTree, writer: anytype, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
     if (self.stack.items.len == 0) return;
     var plain_writer = PlainTextSExprWriter(@TypeOf(writer)){ .writer = writer };
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &plain_writer, 0, linecol_mode);
 }
 
 /// Render this SExprTree to HTML with syntax highlighting.
-pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer, linecol_mode: LineColMode) !void {
+pub fn toHtml(self: *const SExprTree, writer: *std.Io.Writer, linecol_mode: LineColMode) (Allocator.Error || error{ WriteFailed, ErrFinalizingHTMLWriter })!void {
     if (self.stack.items.len == 0) return;
     var html_writer = HtmlSExprWriter.init(writer, self.allocator);
     try self.toStringImpl(self.stack.items[self.stack.items.len - 1], &html_writer, 0, linecol_mode);

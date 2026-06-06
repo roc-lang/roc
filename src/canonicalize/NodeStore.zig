@@ -1129,7 +1129,7 @@ pub fn replaceExprWithZeroArgumentTag(
     variant_var: types.Var,
     ext_var: types.Var,
     name: Ident.Idx,
-) !void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
@@ -1156,7 +1156,7 @@ pub fn replaceExprWithTuple(
     store: *NodeStore,
     expr_idx: CIR.Expr.Idx,
     elem_indices: []const CIR.Expr.Idx,
-) !void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     // Store element indices in index_data
@@ -1201,13 +1201,13 @@ pub fn replaceExprWithCallConstraint(
     args: CIR.Expr.Span,
     called_via: base.CalledVia,
     constraint_fn_var: types.Var,
-) void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     const args_span2_idx: u32 = @intCast(store.span2_data.len());
-    _ = store.span2_data.append(store.gpa, .{
+    _ = try store.span2_data.append(store.gpa, .{
         .start = args.span.start,
         .len = args.span.len,
-    }) catch unreachable;
+    });
     var node = Node.init(.expr_call);
     node.setPayload(.{ .expr_call = .{
         .func = @intFromEnum(func),
@@ -1247,9 +1247,9 @@ pub fn replaceExprWithDispatchCall(
     method_name_region: Region,
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
-) void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const method_call_data_idx = store.addMethodCallData(args, method_name_region) catch unreachable;
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region);
     var node = Node.init(.expr_dispatch_call);
     node.setPayload(.{ .expr_dispatch_call = .{
         .receiver = @intFromEnum(receiver),
@@ -1269,9 +1269,9 @@ pub fn replaceExprWithTypeDispatchCall(
     method_name_region: Region,
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
-) void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const method_call_data_idx = store.addMethodCallData(args, method_name_region) catch unreachable;
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region);
     var node = Node.init(.expr_type_dispatch_call);
     node.setPayload(.{ .expr_type_dispatch_call = .{
         .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
@@ -1293,7 +1293,7 @@ pub fn replaceExprWithTag(
     expr_idx: CIR.Expr.Idx,
     name: Ident.Idx,
     arg_indices: []const CIR.Expr.Idx,
-) !void {
+) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
     // Store argument indices in index_data

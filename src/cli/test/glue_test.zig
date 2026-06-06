@@ -20,7 +20,7 @@ fn runGlueCommand(
     opt: []const u8,
     glue_spec: []const u8,
     tmp_path: []const u8,
-) !util.RocResult {
+) anyerror!util.RocResult {
     const result = try util.runRocCommand(allocator, &.{
         "glue",
         opt,
@@ -37,7 +37,7 @@ fn runGlueInProcess(
     allocator: std.mem.Allocator,
     glue_spec: []const u8,
     tmp_path: []const u8,
-) !InProcessGlueResult {
+) anyerror!InProcessGlueResult {
     var stdout_buffer = std.Io.Writer.Allocating.init(allocator);
     defer stdout_buffer.deinit();
     var stderr_buffer = std.Io.Writer.Allocating.init(allocator);
@@ -63,7 +63,7 @@ fn runGlueInProcess(
     };
 }
 
-fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
+fn checkGlueSuccess(result: util.RocResult, label: []const u8) anyerror!void {
     if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("\n{s} command failed!\nstderr:\n{s}\nstdout:\n{s}\nExit term: {}\n", .{
             label, result.stderr, result.stdout, result.term,
@@ -72,7 +72,7 @@ fn checkGlueSuccess(result: util.RocResult, label: []const u8) !void {
     }
 }
 
-fn checkGlueInProcessSuccess(result: InProcessGlueResult, label: []const u8) !void {
+fn checkGlueInProcessSuccess(result: InProcessGlueResult, label: []const u8) anyerror!void {
     if (!result.success) {
         std.debug.print("\n{s} command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{
             label, result.stderr, result.stdout,
@@ -81,7 +81,7 @@ fn checkGlueInProcessSuccess(result: InProcessGlueResult, label: []const u8) !vo
     }
 }
 
-fn expectGeneratedCHeaderCompiles(allocator: std.mem.Allocator, tmp_path: []const u8) !void {
+fn expectGeneratedCHeaderCompiles(allocator: std.mem.Allocator, tmp_path: []const u8) anyerror!void {
     const test_c_content =
         \\#include "roc_platform_abi.h"
         \\

@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
@@ -1805,19 +1806,19 @@ pub const Store = struct {
     }
 
     /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
-    fn getEmptyStructLayout(self: *Self) !Idx {
+    fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
         return self.ensureZstLayout();
     }
 
     /// Backwards-compat alias
     pub const getEmptyRecordLayout = getEmptyStructLayout;
 
-    pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
+    pub fn ensureEmptyRecordLayout(self: *Self) Allocator.Error!Idx {
         return self.getEmptyStructLayout();
     }
 
     /// Get or create a zero-sized type layout
-    pub fn ensureZstLayout(self: *Self) !Idx {
+    pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
         // Check if we already have a ZST layout
         const len: u32 = @intCast(self.layouts.len());
         for (0..len) |i| {
@@ -2304,7 +2305,7 @@ test "erased callable layouts use explicit erased-callable RC helper plans" {
     );
 }
 
-fn expectBoolOrdinaryTagUnion() !void {
+fn expectBoolOrdinaryTagUnion() anyerror!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2320,7 +2321,7 @@ fn expectBoolOrdinaryTagUnion() !void {
     }
 }
 
-fn expectZstContainerAbi() !void {
+fn expectZstContainerAbi() anyerror!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2336,7 +2337,7 @@ fn expectZstContainerAbi() !void {
     try testing.expectEqual(@as(u32, 0), list_abi.elem_size);
 }
 
-fn expectCanonicalStructOrdering() !void {
+fn expectCanonicalStructOrdering() anyerror!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2359,7 +2360,7 @@ fn expectCanonicalStructOrdering() !void {
     try testing.expectEqual(@as(u16, 3), fields.get(3).index);
 }
 
-fn expectTagUnionShapeInterning() !void {
+fn expectTagUnionShapeInterning() anyerror!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2371,7 +2372,7 @@ fn expectTagUnionShapeInterning() !void {
     try testing.expectEqual(LayoutTag.tag_union, store.getLayout(a).tag);
 }
 
-fn expectRecursiveGraphInterning() !void {
+fn expectRecursiveGraphInterning() anyerror!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
@@ -2411,7 +2412,7 @@ fn expectRecursiveGraphInterning() !void {
     }
 }
 
-fn expectNestedOrdinaryDataGraph() !void {
+fn expectNestedOrdinaryDataGraph() anyerror!void {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
