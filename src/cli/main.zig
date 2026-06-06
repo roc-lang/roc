@@ -1401,7 +1401,12 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
 /// Returns null if the file is not a default_app.
 fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.Error!?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch return null;
+    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // Any other read failure (e.g. file not found) means this isn't a
+        // default app to handle here; fall through to the normal path.
+        else => return null,
+    };
 
     const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch |err| switch (err) {
         error.OutOfMemory => {
@@ -3058,7 +3063,7 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     // Headerless apps use a simple builtin platform and cannot be compiled
     if (try readDefaultAppSource(ctx, args.path)) |source| {
         ctx.gpa.free(source);
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .build_not_supported_for_headerless = .{ .app_path = args.path },
         });
         return error.UnsupportedTarget;
@@ -3407,7 +3412,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3441,7 +3446,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         return error.UnsupportedTarget;
     } else blk: {
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            try renderProblem(ctx.gpa, ctx.io.stderr(), .{
                 .platform_validation_failed = .{
                     .message = "No compatible target found. The platform does not support any target compatible with this system.",
                 },
@@ -3777,7 +3782,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3811,7 +3816,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         return error.UnsupportedTarget;
     } else blk: {
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            try renderProblem(ctx.gpa, ctx.io.stderr(), .{
                 .platform_validation_failed = .{
                     .message = "No compatible target found. The platform does not support any target compatible with this system.",
                 },

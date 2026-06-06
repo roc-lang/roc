@@ -485,7 +485,7 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = check.ReportBuilder.init(
+        var report_builder = try check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,
@@ -495,7 +495,7 @@ fn generateAllReports(
             empty_modules,
             &solver.import_mapping,
             &solver.regions,
-        ) catch continue;
+        );
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {
@@ -4397,12 +4397,12 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) Allocator
     errdefer module_env.deinit();
     module_env.common.source = line;
 
-    const ast = single_module.parseSingleModule(
+    const ast = try single_module.parseSingleModule(
         allocator,
         module_env,
         .file,
         .{ .module_name = "repl" },
-    ) catch return null;
+    );
     errdefer ast.deinit();
     if (ast.hasErrors()) {
         ast.deinit();
@@ -4434,7 +4434,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allo
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 

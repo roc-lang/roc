@@ -635,40 +635,68 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
             for (0..self.reg_arg_count) |i| {
                 if (statuses[i] == .to_move) {
-                    try self.moveOne(i, &statuses, &sources);
+                    try self.moveTree(i, &statuses, &sources);
                 }
             }
         }
 
-        /// Process a single deferred register arg, recursing to resolve dependencies first.
-        fn moveOne(self: *Self, i: usize, statuses: *[CC_EMIT.PARAM_REGS.len]MoveStatus, sources: *[CC_EMIT.PARAM_REGS.len]ArgSource) Allocator.Error!void {
-            statuses[i] = .being_moved;
-            const dst = CC_EMIT.PARAM_REGS[self.reg_args[i].dst_index];
+        /// Process one deferred register arg and everything it depends on, emitting
+        /// each move only after the moves that read its destination. Uses an explicit
+        /// fixed-size DFS stack (bounded by the param-register count) rather than
+        /// recursion, so it never grows the native call stack. Cycles are broken by
+        /// saving the conflicting source to SCRATCH_REG, exactly as before.
+        fn moveTree(self: *Self, start: usize, statuses: *[CC_EMIT.PARAM_REGS.len]MoveStatus, sources: *[CC_EMIT.PARAM_REGS.len]ArgSource) Allocator.Error!void {
+            const Frame = struct { i: usize, scan: usize };
+            var stack: [CC_EMIT.PARAM_REGS.len]Frame = undefined;
+            var depth: usize = 0;
 
-            // Check if any other arg j reads from our destination register
-            for (0..self.reg_arg_count) |j| {
-                if (j == i) continue;
-                const src_reg = switch (sources[j]) {
-                    .from_reg => |reg| reg,
-                    else => continue, // only reg sources can form conflicts
-                };
-                if (src_reg != dst) continue;
+            statuses[start] = .being_moved;
+            stack[0] = .{ .i = start, .scan = 0 };
+            depth = 1;
 
-                // Arg j reads from dst — we'd clobber it
-                switch (statuses[j]) {
-                    .to_move => try self.moveOne(j, statuses, sources),
-                    .being_moved => {
-                        // CYCLE: save j's source to SCRATCH_REG
-                        try self.emit.movRegReg(.w64, CC_EMIT.SCRATCH_REG, src_reg);
-                        sources[j] = .{ .from_reg = CC_EMIT.SCRATCH_REG };
-                    },
-                    .moved => {}, // already handled
+            while (depth > 0) {
+                const frame = &stack[depth - 1];
+                const dst = CC_EMIT.PARAM_REGS[self.reg_args[frame.i].dst_index];
+
+                // Resume scanning args that read from our destination register.
+                var dependency: ?usize = null;
+                while (frame.scan < self.reg_arg_count) {
+                    const j = frame.scan;
+                    frame.scan += 1;
+                    if (j == frame.i) continue;
+                    const src_reg = switch (sources[j]) {
+                        .from_reg => |reg| reg,
+                        else => continue, // only reg sources can form conflicts
+                    };
+                    if (src_reg != dst) continue;
+
+                    // Arg j reads from dst — we'd clobber it.
+                    switch (statuses[j]) {
+                        .to_move => {
+                            dependency = j;
+                            break;
+                        },
+                        .being_moved => {
+                            // CYCLE: save j's source to SCRATCH_REG.
+                            try self.emit.movRegReg(.w64, CC_EMIT.SCRATCH_REG, src_reg);
+                            sources[j] = .{ .from_reg = CC_EMIT.SCRATCH_REG };
+                        },
+                        .moved => {}, // already handled
+                    }
+                }
+
+                if (dependency) |j| {
+                    // Resolve the dependency first, then resume this frame's scan.
+                    statuses[j] = .being_moved;
+                    stack[depth] = .{ .i = j, .scan = 0 };
+                    depth += 1;
+                } else {
+                    // All conflicting args moved — now safe to emit our instruction.
+                    try self.emitArgInst(dst, sources[frame.i]);
+                    statuses[frame.i] = .moved;
+                    depth -= 1;
                 }
             }
-
-            // Now safe to emit our instruction
-            try self.emitArgInst(dst, sources[i]);
-            statuses[i] = .moved;
         }
 
         /// Emit call instruction and handle cleanup.
