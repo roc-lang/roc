@@ -25,22 +25,81 @@ pub const Error = error{
     OutOfMemory,
 };
 
-/// Converts a Roc Layout to an LLVM Builder.Type
+/// Converts a Roc Layout to an LLVM Builder.Type.
+///
+/// Records and tuples nest other layouts, so this walks them with an explicit
+/// post-order work stack (never recursion): field/element layouts are converted
+/// first, then assembled into the aggregate struct type. Tag unions are leaves
+/// here (their payload is a flat byte array), as are scalars/boxes/lists/closures.
 pub fn layoutToLlvmType(
     builder: *Builder,
     store: *const Store,
     layout_val: Layout,
 ) Error!Builder.Type {
-    return switch (layout_val.tag) {
-        .scalar => try scalarToLlvmType(builder, layout_val),
-        .box, .box_of_zst => .ptr, // Boxes are just pointers
-        .list, .list_of_zst => listLlvmType(builder),
-        .record => try recordToLlvmType(builder, store, layout_val),
-        .tuple => try tupleToLlvmType(builder, store, layout_val),
-        .tag_union => try tagUnionToLlvmType(builder, store, layout_val),
-        .closure => .ptr, // Closures are passed as pointers to their environment
-        .zst => .i1, // ZST needs some representation; use i1 as minimal placeholder
+    const Item = union(enum) {
+        /// Convert this layout, pushing children first for aggregates.
+        enter: Layout,
+        /// Pop `field_count` already-converted field types and assemble a struct.
+        combine: u32,
     };
+
+    var work = std.ArrayList(Item).init(builder.gpa);
+    defer work.deinit();
+    var results = std.ArrayList(Builder.Type).init(builder.gpa);
+    defer results.deinit();
+
+    work.append(.{ .enter = layout_val }) catch return error.OutOfMemory;
+    while (work.pop()) |item| switch (item) {
+        .enter => |lv| switch (lv.tag) {
+            .scalar => results.append(try scalarToLlvmType(builder, lv)) catch return error.OutOfMemory,
+            .box, .box_of_zst => results.append(.ptr) catch return error.OutOfMemory,
+            .list, .list_of_zst => results.append(try listLlvmType(builder)) catch return error.OutOfMemory,
+            .closure => results.append(.ptr) catch return error.OutOfMemory,
+            .zst => results.append(.i1) catch return error.OutOfMemory,
+            .tag_union => results.append(try tagUnionToLlvmType(builder, store, lv)) catch return error.OutOfMemory,
+            .record => {
+                const record_data = store.getRecord(lv.data.record.idx);
+                const fields_range = record_data.getFields();
+                work.append(.{ .combine = fields_range.count }) catch return error.OutOfMemory;
+                // Push fields in reverse so popped results keep field order.
+                var stack_fields = std.ArrayList(Layout).init(builder.gpa);
+                defer stack_fields.deinit();
+                var iter = store.record_fields.iterate(fields_range);
+                while (iter.next()) |field| {
+                    stack_fields.append(store.get(field.layout)) catch return error.OutOfMemory;
+                }
+                var i: usize = stack_fields.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    work.append(.{ .enter = stack_fields.items[i] }) catch return error.OutOfMemory;
+                }
+            },
+            .tuple => {
+                const tuple_data = store.getTuple(lv.data.tuple.idx);
+                const fields_range = tuple_data.getFields();
+                work.append(.{ .combine = fields_range.count }) catch return error.OutOfMemory;
+                var stack_fields = std.ArrayList(Layout).init(builder.gpa);
+                defer stack_fields.deinit();
+                var iter = store.tuple_fields.iterate(fields_range);
+                while (iter.next()) |field| {
+                    stack_fields.append(store.get(field.layout)) catch return error.OutOfMemory;
+                }
+                var i: usize = stack_fields.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    work.append(.{ .enter = stack_fields.items[i] }) catch return error.OutOfMemory;
+                }
+            },
+        },
+        .combine => |field_count| {
+            const base = results.items.len - field_count;
+            const struct_type = builder.structType(.normal, results.items[base..]) catch return error.OutOfMemory;
+            results.shrinkRetainingCapacity(base);
+            results.append(struct_type) catch return error.OutOfMemory;
+        },
+    };
+
+    return results.items[0];
 }
 
 /// Convert a scalar layout to LLVM type
@@ -86,64 +145,6 @@ fn listLlvmType(builder: *Builder) Error!Builder.Type {
 pub fn strLlvmType(builder: *Builder) Error!Builder.Type {
     const fields = [_]Builder.Type{ .ptr, .i64, .i64 };
     return builder.structType(.normal, &fields) catch return error.OutOfMemory;
-}
-
-/// Convert a record layout to LLVM struct type
-fn recordToLlvmType(
-    builder: *Builder,
-    store: *const Store,
-    layout_val: Layout,
-) Error!Builder.Type {
-    const record_layout = layout_val.data.record;
-    const record_data = store.getRecord(record_layout.idx);
-
-    const fields_range = record_data.getFields();
-    if (fields_range.count == 0) {
-        // Empty record - return a placeholder struct
-        return builder.structType(.normal, &.{}) catch return error.OutOfMemory;
-    }
-
-    // Build LLVM types for each field
-    var field_types = std.ArrayList(Builder.Type).init(builder.gpa);
-    defer field_types.deinit();
-
-    var iter = store.record_fields.iterate(fields_range);
-    while (iter.next()) |field| {
-        const field_layout = store.get(field.layout);
-        const field_llvm_type = try layoutToLlvmType(builder, store, field_layout);
-        field_types.append(field_llvm_type) catch return error.OutOfMemory;
-    }
-
-    return builder.structType(.normal, field_types.items) catch return error.OutOfMemory;
-}
-
-/// Convert a tuple layout to LLVM struct type
-fn tupleToLlvmType(
-    builder: *Builder,
-    store: *const Store,
-    layout_val: Layout,
-) Error!Builder.Type {
-    const tuple_layout = layout_val.data.tuple;
-    const tuple_data = store.getTuple(tuple_layout.idx);
-
-    const fields_range = tuple_data.getFields();
-    if (fields_range.count == 0) {
-        // Empty tuple - return a placeholder struct
-        return builder.structType(.normal, &.{}) catch return error.OutOfMemory;
-    }
-
-    // Build LLVM types for each element
-    var field_types = std.ArrayList(Builder.Type).init(builder.gpa);
-    defer field_types.deinit();
-
-    var iter = store.tuple_fields.iterate(fields_range);
-    while (iter.next()) |field| {
-        const field_layout = store.get(field.layout);
-        const field_llvm_type = try layoutToLlvmType(builder, store, field_layout);
-        field_types.append(field_llvm_type) catch return error.OutOfMemory;
-    }
-
-    return builder.structType(.normal, field_types.items) catch return error.OutOfMemory;
 }
 
 /// Convert a tag union layout to LLVM struct type
