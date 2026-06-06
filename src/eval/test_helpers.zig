@@ -943,7 +943,7 @@ pub fn parseCheckModule(
 
     var parse_elapsed: u64 = 0;
     var parse_timer = try StageTimer.start();
-    const parse_ast = try parse.parse(allocator, &module_env.common);
+    const parse_ast = try parse.file(allocator, &module_env.common);
     parse_elapsed = parse_timer.read();
     errdefer {
         parse_ast.deinit();

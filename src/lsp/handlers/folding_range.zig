@@ -94,7 +94,7 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) ![]Fol
     };
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch {
+    const ast = parse.file(allocator, &module_env.common) catch {
         return &[_]FoldingRange{};
     };
     defer ast.deinit();

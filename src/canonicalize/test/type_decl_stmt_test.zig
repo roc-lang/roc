@@ -26,7 +26,7 @@ fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) !void {
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     const roc_ctx = CoreCtx.testing(allocator, allocator);
@@ -209,7 +209,7 @@ test "canonicalization records explicit type declaration tables" {
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     const roc_ctx = CoreCtx.testing(allocator, allocator);
@@ -252,7 +252,7 @@ test "nested type redeclarations are detected after previous associated scope ex
     defer env.deinit();
     try env.initCIRFields("Test");
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     const roc_ctx = CoreCtx.testing(allocator, allocator);
@@ -835,7 +835,7 @@ test "scopeLookupTypeDecl API is accessible" {
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(gpa, &env.common);
+    const ast = try parse.expr(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -864,7 +864,7 @@ test "introduceType API is accessible" {
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(gpa, &env.common);
+    const ast = try parse.expr(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -939,7 +939,7 @@ test "local type scoping - not visible after exiting block" {
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(gpa, &env.common);
+    const ast = try parse.expr(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());

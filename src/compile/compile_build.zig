@@ -1041,7 +1041,7 @@ pub const BuildEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        const ast = try parse.parse(self.gpa, &env.common);
+        const ast = try parse.file(self.gpa, &env.common);
         defer ast.deinit();
 
         // Check for parse errors - if any exist, we cannot proceed

@@ -171,7 +171,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
@@ -220,7 +220,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
@@ -3197,7 +3197,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.

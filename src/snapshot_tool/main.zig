@@ -2913,7 +2913,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Parse the MONO output as a headerless type module
-    const validation_ast = parse.parse(allocator, &validation_env.common) catch |err| {
+    const validation_ast = parse.file(allocator, &validation_env.common) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
         return false;
     };
@@ -3092,7 +3092,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Check for parse errors - if there are any, we can't format
@@ -4429,7 +4429,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) !?AS
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = parse.statement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 

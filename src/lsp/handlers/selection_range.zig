@@ -155,7 +155,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     };
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch {
+    const ast = parse.file(allocator, &module_env.common) catch {
         return error.ParseFailed;
     };
     defer ast.deinit();

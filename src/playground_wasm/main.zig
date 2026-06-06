@@ -816,7 +816,7 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = parse.statement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -848,7 +848,7 @@ fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = parse.statement(allocator, &env.common) catch return null;
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -1236,7 +1236,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
     // Stage 1: Parse (includes tokenization)
     logDebug("compileSource: Starting parse stage\n", .{});
-    const parse_ast = try parse.parse(allocator, &module_env.common);
+    const parse_ast = try parse.file(allocator, &module_env.common);
     result.parse_ast = parse_ast;
     logDebug("compileSource: Parse complete\n", .{});
 

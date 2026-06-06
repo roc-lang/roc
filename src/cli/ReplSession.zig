@@ -324,7 +324,7 @@ fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_c
     env.common.source = source;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = try parse.parse(self.allocator, &env.common);
+    const ast = try parse.file(self.allocator, &env.common);
     defer ast.deinit();
 
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
@@ -336,7 +336,7 @@ fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, repor
     env.common.source = source;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = try parse.parseStatement(self.allocator, &env.common);
+    const ast = try parse.statement(self.allocator, &env.common);
     defer ast.deinit();
 
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
@@ -438,7 +438,7 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) !InputSt
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = try parse.parseStatement(allocator, &env.common);
+    const ast = try parse.statement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
         return if (inputDiagnosticsAreIncomplete(ast)) .incomplete else .invalid;

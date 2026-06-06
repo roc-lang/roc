@@ -117,7 +117,7 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     defer module_env.deinit();
 
     // Parse the source
-    const ast = try parse.parse(allocator, &module_env.common);
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     // Check for parse errors - if there are errors, return the original source

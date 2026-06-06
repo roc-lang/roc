@@ -1413,7 +1413,7 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) ?[]const u8 {
     env.common.source = source;
     env.module_name = module_name;
 
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
+    const ast = parse.file(ctx.gpa, &env.common) catch {
         ctx.gpa.free(source);
         return null;
     };
@@ -2216,7 +2216,7 @@ fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) ![]const 
     };
 
     // Parse the source
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
+    const ast = parse.file(ctx.gpa, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,

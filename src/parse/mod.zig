@@ -32,7 +32,7 @@ pub const NumericLiteral = @import("NumericLiteral.zig");
 pub const AST = @import("AST.zig");
 
 /// Internal parsing implementation.
-fn runParse(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
+fn runTokenVm(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -75,17 +75,17 @@ fn runParse(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Par
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parse(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(gpa, env, parseFileAndReturnIdx);
+pub fn file(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runTokenVm(gpa, env, fileRootNode);
 }
 
-fn parseFileAndReturnIdx(parser: *Parser) Parser.Error!u32 {
-    try parser.parseFile();
+fn fileRootNode(parser: *Parser) Parser.Error!u32 {
+    try parser.runFile();
     return 0;
 }
 
-fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
-    const id = try parser.parseExpr();
+fn exprRootNode(parser: *Parser) Parser.Error!u32 {
+    const id = try parser.runExpr();
     return @intFromEnum(id);
 }
 
@@ -93,12 +93,12 @@ fn parseExprAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parseExpr(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(gpa, env, parseExprAndReturnIdx);
+pub fn expr(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runTokenVm(gpa, env, exprRootNode);
 }
 
-fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
-    const id = try parser.parseHeader();
+fn headerRootNode(parser: *Parser) Parser.Error!u32 {
+    const id = try parser.runHeader();
     return @intFromEnum(id);
 }
 
@@ -106,12 +106,12 @@ fn parseHeaderAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parseHeader(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(gpa, env, parseHeaderAndReturnIdx);
+pub fn header(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runTokenVm(gpa, env, headerRootNode);
 }
 
-fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
-    const idx = try parser.parseStmt();
+fn statementRootNode(parser: *Parser) Parser.Error!u32 {
+    const idx = try parser.runStatement();
     return @intFromEnum(idx);
 }
 
@@ -119,8 +119,8 @@ fn parseStatementAndReturnIdx(parser: *Parser) Parser.Error!u32 {
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
-pub fn parseStatement(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runParse(gpa, env, parseStatementAndReturnIdx);
+pub fn statement(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
+    return try runTokenVm(gpa, env, statementRootNode);
 }
 
 test "parser tests" {
@@ -150,21 +150,21 @@ test "deeply nested parentheses parse stack-safely" {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parseExpr(gpa, &env);
+    const ast = try expr(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
-fn parserExprAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+fn vmExprAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();
     defer parser.decl_index.deinit();
     defer parser.diagnostics.deinit(allocator);
     defer parser.deinit();
 
-    _ = try parser.parseExpr();
+    _ = try parser.runExpr();
 }
 
 test "parse error triggers errdefer cleanup" {
@@ -187,7 +187,7 @@ test "parse error triggers errdefer cleanup" {
     tokenizer_finished = true;
     defer output.tokens.deinit(gpa);
 
-    try std.testing.checkAllAllocationFailures(gpa, parserExprAllocationFailureImpl, .{output.tokens});
+    try std.testing.checkAllAllocationFailures(gpa, vmExprAllocationFailureImpl, .{output.tokens});
 }
 
 fn expectStatementParsesWithoutDiagnostics(source: []const u8) !void {
@@ -196,7 +196,7 @@ fn expectStatementParsesWithoutDiagnostics(source: []const u8) !void {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parseStatement(gpa, &env);
+    const ast = try statement(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -209,7 +209,7 @@ fn expectFileParsesWithoutDiagnostics(source: []const u8) !void {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(gpa, &env);
+    const ast = try file(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -233,7 +233,7 @@ test "where clause method function types parse stack-safely" {
     );
 }
 
-fn parserInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+fn vmInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();
     defer parser.decl_index.deinit();
@@ -261,7 +261,7 @@ test "Parser.init cleans up partial allocations on OOM" {
     tokenizer_finished = true;
     defer output.tokens.deinit(gpa);
 
-    try std.testing.checkAllAllocationFailures(gpa, parserInitAllocationFailureImpl, .{output.tokens});
+    try std.testing.checkAllAllocationFailures(gpa, vmInitAllocationFailureImpl, .{output.tokens});
 }
 
 test "parse diagnostic report handles invalid mutable identifier spelling" {
@@ -283,7 +283,7 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parseExpr(gpa, &env);
+    const ast = try expr(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expect(ast.parse_diagnostics.items.len > 0);
@@ -310,7 +310,7 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(gpa, &env);
+    const ast = try file(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -330,14 +330,14 @@ test "parser records top-level type declaration dependencies" {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(gpa, &env);
+    const ast = try file(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    const file = ast.store.getFile();
-    const decls = ast.decl_index.scopeDecls(file.scope);
+    const parsed_file = ast.store.getFile();
+    const decls = ast.decl_index.scopeDecls(parsed_file.scope);
     for (decls) |decl_idx| {
         const decl = ast.decl_index.decls.items[@intFromEnum(decl_idx)];
         if (decl.kind != .type_alias) continue;
@@ -380,7 +380,7 @@ test "parser records nested associated owner paths" {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(gpa, &env);
+    const ast = try file(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -430,7 +430,7 @@ test "parser keeps block-local type paths lexically distinct" {
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(gpa, &env);
+    const ast = try file(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
@@ -482,7 +482,7 @@ test "parser does not create a type path for malformed associated type headers" 
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    const ast = try parse(gpa, &env);
+    const ast = try file(gpa, &env);
     defer ast.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);

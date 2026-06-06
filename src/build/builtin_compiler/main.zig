@@ -328,7 +328,7 @@ fn compileModule(
     };
 
     // 3. Parse
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 

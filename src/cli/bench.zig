@@ -104,7 +104,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io,
 
                 var parse_env = try ModuleEnv.init(gpa, source_copy);
 
-                const ir = try parse.parse(gpa, &parse_env.common);
+                const ir = try parse.file(gpa, &parse_env.common);
                 iteration_tokens += ir.tokens.tokens.len;
                 ir.deinit();
                 parse_env.deinit();

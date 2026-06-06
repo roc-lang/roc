@@ -126,7 +126,7 @@ test "module discovery consumes parser import inventory" {
     );
     defer env.deinit(gpa);
 
-    const ast = try parse.parse(gpa, &env);
+    const ast = try parse.file(gpa, &env);
     defer ast.deinit();
 
     const local_imports = try extractImportsFromDeclIndex(ast, gpa);

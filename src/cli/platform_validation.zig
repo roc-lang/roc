@@ -86,7 +86,7 @@ pub fn validatePlatformHeader(
         return error.ParseError;
     };
 
-    const ast = parse.parse(allocator, &env) catch {
+    const ast = parse.file(allocator, &env) catch {
         renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };

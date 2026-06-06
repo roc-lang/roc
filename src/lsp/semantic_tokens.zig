@@ -288,7 +288,7 @@ pub fn extractSemanticTokensWithImports(
     defer module_env.deinit();
 
     // Parse the source
-    const parse_ast = parse.parse(allocator, &module_env.common) catch {
+    const parse_ast = parse.file(allocator, &module_env.common) catch {
         // Fall back to token-only extraction on parse error
         return extractSemanticTokens(allocator, source, info);
     };

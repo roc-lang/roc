@@ -36,7 +36,7 @@ fn parseAndCanonicalizeSource(
     // will be cleaned up by the caller
     parse_env.* = try ModuleEnv.init(allocator, source);
 
-    const ast = try parse.parse(allocator, &parse_env.common);
+    const ast = try parse.file(allocator, &parse_env.common);
 
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -126,7 +126,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    const ast = try parse.parse(allocator, &parse_env.common);
+    const ast = try parse.file(allocator, &parse_env.common);
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -222,7 +222,7 @@ test "import validation - no module_envs provided" {
         parse_env.deinit();
         allocator.destroy(parse_env);
     }
-    const ast = try parse.parse(allocator, &parse_env.common);
+    const ast = try parse.file(allocator, &parse_env.common);
     defer ast.deinit();
     // Initialize CIR fields
     try parse_env.initCIRFields("Test");
@@ -583,7 +583,7 @@ test "imported multi-qualified tag rejects exposed alias target" {
     defer imported_env.deinit();
     try imported_env.initCIRFields("Other");
 
-    const imported_ast = try parse.parse(allocator, &imported_env.common);
+    const imported_ast = try parse.file(allocator, &imported_env.common);
     defer imported_ast.deinit();
 
     var imported_can = try Can.initModule(roc_ctx, &imported_env, imported_ast, builtin_ctx.canInitContext());
@@ -612,7 +612,7 @@ test "imported multi-qualified tag rejects exposed alias target" {
         .qualified_type_ident = other_qualified_ident,
     });
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, .{
@@ -669,7 +669,7 @@ test "imported nested associated types resolve by qualified export key" {
     defer imported_env.deinit();
     try imported_env.initCIRFields("Types");
 
-    const imported_ast = try parse.parse(allocator, &imported_env.common);
+    const imported_ast = try parse.file(allocator, &imported_env.common);
     defer imported_ast.deinit();
 
     var imported_can = try Can.initModule(roc_ctx, &imported_env, imported_ast, builtin_ctx.canInitContext());
@@ -702,7 +702,7 @@ test "imported nested associated types resolve by qualified export key" {
         .qualified_type_ident = types_qualified_ident,
     });
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, .{
