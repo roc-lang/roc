@@ -1304,7 +1304,7 @@ pub const BuildEnv = struct {
                 }
 
                 // Extract targets config from the platform AST
-                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast) catch null;
+                info.targets_config = try targets_config_mod.TargetsConfig.fromAST(self.gpa, ast);
             },
             .module => {
                 info.kind = .module;
@@ -1379,8 +1379,11 @@ pub const BuildEnv = struct {
     /// Cross-platform environment variable lookup.
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
-    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) ?[]const u8 {
-        return self.filesystem.getEnvVar(key, allocator) catch null;
+    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) Allocator.Error!?[]const u8 {
+        return self.filesystem.getEnvVar(key, allocator) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.EnvironmentVariableMissing => null,
+        };
     }
 
     /// Get the roc cache directory for downloaded packages.
@@ -1389,21 +1392,21 @@ pub const BuildEnv = struct {
     /// - Windows: %LOCALAPPDATA%\roc\packages\
     fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) ![]const u8 {
         // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        if (try self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
         }
 
         // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
         if (comptime builtin.os.tag == .windows) {
-            if (self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+            if (try self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
                 defer allocator.free(local_app_data);
                 return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
             }
         }
 
         // Fall back to ~/.cache/roc/packages (Unix)
-        if (self.getEnvVar(allocator, "HOME")) |home| {
+        if (try self.getEnvVar(allocator, "HOME")) |home| {
             defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
         }
@@ -1419,19 +1422,25 @@ pub const BuildEnv = struct {
         const download = unbundle.download;
 
         // Validate URL and extract hash
-        const base58_hash = download.validateUrl(url) catch |err| {
-            if (comptime !is_freestanding) {
-                std.log.err("Invalid package URL: {s} ({})", .{ url, err });
-            }
-            return error.InvalidUrl;
+        const base58_hash = download.validateUrl(url) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                if (comptime !is_freestanding) {
+                    std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+                }
+                return error.InvalidUrl;
+            },
         };
 
         // Get cache directory
-        const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
-            if (comptime !is_freestanding) {
-                std.log.err("Could not determine cache directory", .{});
-            }
-            return error.NoCacheDir;
+        const cache_dir_path = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                if (comptime !is_freestanding) {
+                    std.log.err("Could not determine cache directory", .{});
+                }
+                return error.NoCacheDir;
+            },
         };
         defer self.gpa.free(cache_dir_path);
 
@@ -1448,14 +1457,18 @@ pub const BuildEnv = struct {
             }
 
             // Create cache directory structure
-            self.filesystem.makePath(cache_dir_path) catch |make_err| {
-                std.log.err("Failed to create cache directory: {}", .{make_err});
-                return error.FileError;
+            self.filesystem.makePath(cache_dir_path) catch |make_err| switch (make_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                    return error.FileError;
+                },
             };
 
             // Create package directory
             self.filesystem.createDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.IoError => {}, // May be PathAlreadyExists from race condition
+                error.OutOfMemory => return error.OutOfMemory,
                 else => {
                     if (comptime !is_freestanding) {
                         std.log.err("Failed to create package directory: {}", .{make_err});
@@ -1467,8 +1480,13 @@ pub const BuildEnv = struct {
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
                 self.filesystem.deleteTree(package_dir_path) catch {};
-                std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
-                return error.DownloadFailed;
+                switch (fetch_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                        return error.DownloadFailed;
+                    },
+                }
             };
 
             if (comptime !is_freestanding) {

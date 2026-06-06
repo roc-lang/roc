@@ -170,15 +170,20 @@ fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
 /// Looks for 'macos-sysroot' directory in the platform's files directory.
 /// For example, if platform_files_dir is "/path/to/platform/targets",
 /// this looks for "/path/to/platform/targets/macos-sysroot/".
-fn findPlatformSysroot(allocator: std.mem.Allocator, std_io: std.Io, platform_files_dir: ?[]const u8) ?[]const u8 {
+fn findPlatformSysroot(allocator: std.mem.Allocator, std_io: std.Io, platform_files_dir: ?[]const u8) std.mem.Allocator.Error!?[]const u8 {
     const files_dir = platform_files_dir orelse return null;
 
     // Look for macos-sysroot in the platform files directory
-    const sysroot_path = std.fs.path.join(allocator, &.{ files_dir, "macos-sysroot" }) catch return null;
+    const sysroot_path = try std.fs.path.join(allocator, &.{ files_dir, "macos-sysroot" });
+    errdefer allocator.free(sysroot_path);
 
     // Verify it exists and has the expected structure (usr/lib/libSystem.tbd)
-    const lib_path = std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" }) catch return null;
-    std.Io.Dir.cwd().access(std_io, lib_path, .{}) catch return null;
+    const lib_path = try std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" });
+    defer allocator.free(lib_path);
+    std.Io.Dir.cwd().access(std_io, lib_path, .{}) catch {
+        allocator.free(sysroot_path);
+        return null;
+    };
 
     std.log.info("Using platform-provided macOS sysroot: {s}", .{sysroot_path});
     return sysroot_path;
@@ -291,7 +296,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
             // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
             try args.append("-syslibroot");
-            if (findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
+            if (try findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
                 try args.append(platform_sysroot);
 
                 // Add framework search path to help linker resolve framework dependencies

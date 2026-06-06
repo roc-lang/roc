@@ -56,10 +56,13 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Format the document
-            const formatted = formatSource(self.allocator, text) catch |err| {
-                std.log.err("formatting failed: {s}", .{@errorName(err)});
-                try self.sendNullResponse(id);
-                return;
+            const formatted = formatSource(self.allocator, text) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("formatting failed: {s}", .{@errorName(err)});
+                    try self.sendNullResponse(id);
+                    return;
+                },
             };
             defer self.allocator.free(formatted);
 

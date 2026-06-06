@@ -72,7 +72,7 @@ pub fn validatePlatformHeader(
 ) ValidationError!PlatformValidation {
     // Read platform source
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_source_path, allocator, .unlimited) catch {
-        renderFileReadError(allocator, platform_source_path);
+        try renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
     source = base.source_utils.normalizeLineEndingsRealloc(allocator, source) catch {
@@ -87,7 +87,7 @@ pub fn validatePlatformHeader(
     };
 
     const ast = parse.parse(allocator, &env) catch {
-        renderParseError(allocator, platform_source_path);
+        try renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };
     defer ast.deinit();
@@ -96,7 +96,7 @@ pub fn validatePlatformHeader(
     const config = TargetsConfig.fromAST(allocator, ast) catch {
         return error.ParseError;
     } orelse {
-        renderMissingTargetsError(allocator, platform_source_path);
+        try renderMissingTargetsError(allocator, platform_source_path);
         return error.MissingTargetsSection;
     };
 
@@ -107,19 +107,19 @@ pub fn validatePlatformHeader(
 }
 
 /// Render a file read error report to stderr.
-fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) void {
+fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     var report = reporting.Report.init(allocator, "FILE READ ERROR", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to read platform source file:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Check that the file exists and you have read permissions.") catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Failed to read platform source file:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Check that the file exists and you have read permissions.");
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -130,19 +130,19 @@ fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) void {
 }
 
 /// Render a parse error report to stderr.
-fn renderParseError(allocator: std.mem.Allocator, path: []const u8) void {
+fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     var report = reporting.Report.init(allocator, "PARSE ERROR", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to parse platform header:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Check that the file contains valid Roc syntax.") catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Failed to parse platform header:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Check that the file contains valid Roc syntax.");
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -153,19 +153,19 @@ fn renderParseError(allocator: std.mem.Allocator, path: []const u8) void {
 }
 
 /// Render a missing targets section error report to stderr.
-fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) void {
+fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
     var report = reporting.Report.init(allocator, "MISSING TARGETS SECTION", .fatal);
     defer report.deinit();
 
-    report.document.addText("Platform at ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addText(" does not have a 'targets:' section.") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Platform headers must declare supported targets. Example:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addCodeBlock(
+    try report.document.addText("Platform at ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addText(" does not have a 'targets:' section.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Platform headers must declare supported targets. Example:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
         \\    targets: {
         \\        files: "targets/",
         \\        exe: {
@@ -173,8 +173,8 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) voi
         \\            arm64linux: ["host.o", app],
         \\        }
         \\    }
-    ) catch return;
-    report.document.addLineBreak() catch return;
+    );
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,

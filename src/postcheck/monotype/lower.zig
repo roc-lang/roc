@@ -1585,7 +1585,9 @@ const Builder = struct {
             while (initialized > 0) {
                 initialized -= 1;
                 if (captures[initialized].previous) |previous| {
-                    fn_ctx.binders.put(captures[initialized].binder, previous) catch {};
+                    fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
+                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                    };
                 } else {
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
                 }
@@ -1615,7 +1617,9 @@ const Builder = struct {
             while (index > 0) {
                 index -= 1;
                 if (captures[index].previous) |previous| {
-                    fn_ctx.binders.put(captures[index].binder, previous) catch {};
+                    fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
+                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                    };
                 } else {
                     _ = fn_ctx.binders.remove(captures[index].binder);
                 }
@@ -7725,7 +7729,9 @@ const BodyContext = struct {
         while (index > 0) {
             index -= 1;
             if (saved[index].previous) |previous| {
-                self.binders.put(saved[index].binder, previous) catch {};
+                self.binders.put(saved[index].binder, previous) catch |err| switch (err) {
+                    error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                };
             } else {
                 _ = self.binders.remove(saved[index].binder);
             }
