@@ -142,54 +142,7 @@ pub const Def = struct {
     };
 
     pub fn pushToSExprTree(self: *const Def, cir: anytype, tree: anytype) !void {
-        const begin = tree.beginNode();
-        const name: []const u8 = switch (self.kind) {
-            .let => "d-let",
-            .stmt => "d-stmt",
-            .ignored => "d-ignored",
-        };
-        try tree.pushStaticAtom(name);
-
-        const attrs = tree.beginNode();
-
-        // Safety check: verify pattern index points to actual pattern node
-        // This prevents crashes from cross-module node index issues
-        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
-        const pattern_node = cir.store.nodes.get(pattern_node_idx);
-        const is_valid_pattern = switch (pattern_node.tag) {
-            .pattern_identifier,
-            .pattern_as,
-            .pattern_applied_tag,
-            .pattern_nominal,
-            .pattern_nominal_external,
-            .pattern_record_destructure,
-            .pattern_list,
-            .pattern_tuple,
-            .pattern_num_literal,
-            .pattern_dec_literal,
-            .pattern_f32_literal,
-            .pattern_f64_literal,
-            .pattern_small_dec_literal,
-            .pattern_str_literal,
-            .pattern_underscore,
-            => true,
-            else => false,
-        };
-
-        if (is_valid_pattern) {
-            try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
-        } else {
-            // Pattern index is invalid - output placeholder to avoid crash
-            try tree.pushStaticAtom("invalid-pattern");
-        }
-
-        try cir.store.getExpr(self.expr).pushToSExprTree(cir, tree, self.expr);
-
-        if (self.annotation) |annotation_idx| {
-            try cir.store.getAnnotation(annotation_idx).pushToSExprTree(cir, tree, annotation_idx);
-        }
-
-        try tree.endNode(begin, attrs);
+        try cir.pushDefValueToSExprTree(tree, self.*);
     }
 };
 
@@ -205,31 +158,8 @@ pub const TypeHeader = struct {
     relative_name: base.Ident.Idx,
     args: TypeAnno.Span,
 
-    pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) !void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("ty-header");
-
-        // Get the region for this TypeHeader
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-        const region = cir.store.getRegionAt(node_idx);
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-        const name_str = cir.getIdent(self.name);
-        try tree.pushStringPair("name", name_str);
-
-        const attrs = tree.beginNode();
-
-        if (self.args.span.len > 0) {
-            const args_begin = tree.beginNode();
-            try tree.pushStaticAtom("ty-args");
-            const args_attrs = tree.beginNode();
-            for (cir.store.sliceTypeAnnos(self.args)) |anno_idx| {
-                try cir.store.getTypeAnno(anno_idx).pushToSExprTree(cir, tree, anno_idx);
-            }
-            try tree.endNode(args_begin, args_attrs);
-        }
-
-        try tree.endNode(begin, attrs);
+    pub fn pushToSExprTree(_: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) !void {
+        try cir.pushTypeHeaderToSExprTree(tree, idx);
     }
 };
 
@@ -252,68 +182,8 @@ pub const WhereClause = union(enum) {
         diagnostic: Diagnostic.Idx,
     },
 
-    pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
-        switch (self.*) {
-            .w_method => |method| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("method");
-
-                // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-                const region = cir.store.getRegionAt(node_idx);
-                try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                // Add module-of and ident information
-                try cir.store.getTypeAnno(method.var_).pushToSExprTree(cir, tree, method.var_);
-
-                const method_name_str = cir.getIdent(method.method_name);
-                try tree.pushStringPair("name", method_name_str);
-
-                const attrs = tree.beginNode();
-
-                // Add actual argument types
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
-                const args_attrs = tree.beginNode();
-                for (cir.store.sliceTypeAnnos(method.args)) |arg_idx| {
-                    try cir.store.getTypeAnno(arg_idx).pushToSExprTree(cir, tree, arg_idx);
-                }
-                try tree.endNode(args_begin, args_attrs);
-
-                // Add actual return type
-                try cir.store.getTypeAnno(method.ret).pushToSExprTree(cir, tree, method.ret);
-                try tree.endNode(begin, attrs);
-            },
-            .w_alias => |alias| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("alias");
-
-                // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-                const region = cir.store.getRegionAt(node_idx);
-                try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
-
-                const alias_name_str = cir.getIdent(alias.alias_name);
-                try tree.pushStringPair("name", alias_name_str);
-
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
-            },
-            .w_malformed => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("malformed");
-
-                // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
-                const region = cir.store.getRegionAt(node_idx);
-                try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
-            },
-        }
+    pub fn pushToSExprTree(_: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) !void {
+        try cir.pushWhereClauseToSExprTree(tree, idx);
     }
 };
 
@@ -324,34 +194,8 @@ pub const Annotation = struct {
     anno: TypeAnno.Idx,
     where: ?WhereClause.Span,
 
-    pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) !void {
-        const annotation = self.*;
-
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("annotation");
-        const attrs = tree.beginNode();
-
-        // Get the region for this Annotation
-        const region = env.store.getAnnotationRegion(idx);
-        try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-        // Append annotation
-        try env.store.getTypeAnno(annotation.anno).pushToSExprTree(env, tree, self.anno);
-
-        // Append where clause
-        if (annotation.where) |where_span| {
-            const where_begin = tree.beginNode();
-            try tree.pushStaticAtom("where");
-            const where_attrs = tree.beginNode();
-            const where_clauses = env.store.sliceWhereClauses(where_span);
-            for (where_clauses) |clause_idx| {
-                const clause = env.store.getWhereClause(clause_idx);
-                try clause.pushToSExprTree(env, tree, clause_idx);
-            }
-            try tree.endNode(where_begin, where_attrs);
-        }
-
-        try tree.endNode(begin, attrs);
+    pub fn pushToSExprTree(_: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) !void {
+        try env.pushAnnotationToSExprTree(tree, idx);
     }
 };
 
@@ -1019,12 +863,7 @@ pub const RecordField = struct {
     value: Expr.Idx,
 
     pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) !void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("field");
-        try tree.pushStringPair("name", cir.getIdent(self.name));
-        const attrs = tree.beginNode();
-        try cir.store.getExpr(self.value).pushToSExprTree(cir, tree, self.value);
-        try tree.endNode(begin, attrs);
+        try cir.pushRecordFieldValueToSExprTree(tree, self.*);
     }
 };
 

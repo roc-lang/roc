@@ -10,6 +10,7 @@ const builtin = @import("builtin");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
+const builtins = @import("builtins");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
@@ -3617,7 +3618,7 @@ pub fn buildPlatformToAppIdentMap(
 pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
     if (maybe_expr_idx) |expr_idx| {
         // Only output the given expression
-        try self.store.getExpr(expr_idx).pushToSExprTree(self, tree, expr_idx);
+        try self.pushExprToSExprTree(tree, expr_idx);
     } else {
         const root_begin = tree.beginNode();
         try tree.pushStaticAtom("can-ir");
@@ -3632,11 +3633,11 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
         const attrs = tree.beginNode();
 
         for (defs_slice) |def_idx| {
-            try self.store.getDef(def_idx).pushToSExprTree(self, tree);
+            try self.pushDefToSExprTree(tree, def_idx);
         }
 
         for (statements_slice) |stmt_idx| {
-            try self.store.getStatement(stmt_idx).pushToSExprTree(self, tree, stmt_idx);
+            try self.pushStatementToSExprTree(tree, stmt_idx);
         }
 
         for (0..@intCast(self.external_decls.len())) |i| {
@@ -3645,6 +3646,1531 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
         }
 
         try tree.endNode(root_begin, attrs);
+    }
+}
+
+const SExprRoot = union(enum) {
+    expr: CIR.Expr.Idx,
+    pattern: CIR.Pattern.Idx,
+    statement: CIR.Statement.Idx,
+    type_anno: CIR.TypeAnno.Idx,
+    type_header: CIR.TypeHeader.Idx,
+    where_clause: CIR.WhereClause.Idx,
+    annotation: CIR.Annotation.Idx,
+    def: CIR.Def.Idx,
+    def_value: CIR.Def,
+    record_field: CIR.RecordField.Idx,
+    record_field_value: CIR.RecordField,
+    record_destruct: CIR.Pattern.RecordDestruct.Idx,
+    record_destruct_kind: CIR.Pattern.RecordDestruct.Kind,
+    match_branch: CIR.Expr.Match.Branch.Idx,
+};
+
+/// Append an expression and its children to an S-expression tree without recursive calls.
+pub fn pushExprToSExprTree(self: *const Self, tree: *SExprTree, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .expr = expr_idx });
+}
+
+/// Append a pattern and its children to an S-expression tree without recursive calls.
+pub fn pushPatternToSExprTree(self: *const Self, tree: *SExprTree, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .pattern = pattern_idx });
+}
+
+/// Append a statement and its children to an S-expression tree without recursive calls.
+pub fn pushStatementToSExprTree(self: *const Self, tree: *SExprTree, stmt_idx: CIR.Statement.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .statement = stmt_idx });
+}
+
+/// Append a type annotation and its children to an S-expression tree without recursive calls.
+pub fn pushTypeAnnoToSExprTree(self: *const Self, tree: *SExprTree, type_anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .type_anno = type_anno_idx });
+}
+
+/// Append a type header and its arguments to an S-expression tree without recursive calls.
+pub fn pushTypeHeaderToSExprTree(self: *const Self, tree: *SExprTree, header_idx: CIR.TypeHeader.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .type_header = header_idx });
+}
+
+/// Append a where clause and its child annotations to an S-expression tree without recursive calls.
+pub fn pushWhereClauseToSExprTree(self: *const Self, tree: *SExprTree, where_idx: CIR.WhereClause.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .where_clause = where_idx });
+}
+
+/// Append a definition annotation and its where clauses to an S-expression tree without recursive calls.
+pub fn pushAnnotationToSExprTree(self: *const Self, tree: *SExprTree, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .annotation = annotation_idx });
+}
+
+/// Append a definition by index to an S-expression tree without recursive calls.
+pub fn pushDefToSExprTree(self: *const Self, tree: *SExprTree, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .def = def_idx });
+}
+
+/// Append a definition value to an S-expression tree without recursive calls.
+pub fn pushDefValueToSExprTree(self: *const Self, tree: *SExprTree, def: CIR.Def) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .def_value = def });
+}
+
+/// Append a record field by index to an S-expression tree without recursive calls.
+pub fn pushRecordFieldToSExprTree(self: *const Self, tree: *SExprTree, field_idx: CIR.RecordField.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .record_field = field_idx });
+}
+
+/// Append a record field value to an S-expression tree without recursive calls.
+pub fn pushRecordFieldValueToSExprTree(self: *const Self, tree: *SExprTree, field: CIR.RecordField) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .record_field_value = field });
+}
+
+/// Append a record destructure by index to an S-expression tree without recursive calls.
+pub fn pushRecordDestructToSExprTree(self: *const Self, tree: *SExprTree, destruct_idx: CIR.Pattern.RecordDestruct.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .record_destruct = destruct_idx });
+}
+
+/// Append a record destructure kind to an S-expression tree without recursive calls.
+pub fn pushRecordDestructKindToSExprTree(self: *const Self, tree: *SExprTree, kind: CIR.Pattern.RecordDestruct.Kind) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .record_destruct_kind = kind });
+}
+
+/// Append a match branch and its children to an S-expression tree without recursive calls.
+pub fn pushMatchBranchToSExprTree(self: *const Self, tree: *SExprTree, branch_idx: CIR.Expr.Match.Branch.Idx) std.mem.Allocator.Error!void {
+    try self.pushSExprRoot(tree, .{ .match_branch = branch_idx });
+}
+
+fn pushImportModuleRefToSExprTree(self: *const Self, tree: *SExprTree, module_idx: CIR.Import.Idx, key: []const u8) std.mem.Allocator.Error!void {
+    const module_idx_int = @intFromEnum(module_idx);
+    std.debug.assert(module_idx_int < self.imports.imports.items.items.len);
+    const string_lit_idx = self.imports.imports.items.items[module_idx_int];
+    const module_name = self.common.strings.get(string_lit_idx);
+    if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
+        const field_begin = tree.beginNode();
+        try tree.pushStaticAtom("builtin");
+        const field_attrs = tree.beginNode();
+        try tree.endNode(field_begin, field_attrs);
+    } else {
+        try tree.pushStringPair(key, module_name);
+    }
+}
+
+fn pushTypeAnnoBaseToSExprTree(self: *const Self, tree: *SExprTree, anno_base: CIR.TypeAnno.LocalOrExternal) std.mem.Allocator.Error!void {
+    switch (anno_base) {
+        .builtin => {
+            const field_begin = tree.beginNode();
+            try tree.pushStaticAtom("builtin");
+            const field_attrs = tree.beginNode();
+            try tree.endNode(field_begin, field_attrs);
+        },
+        .local => {
+            const field_begin = tree.beginNode();
+            try tree.pushStaticAtom("local");
+            const field_attrs = tree.beginNode();
+            try tree.endNode(field_begin, field_attrs);
+        },
+        .external => |external| try self.pushImportModuleRefToSExprTree(tree, external.module_idx, "external-module"),
+        .pending => |pending| {
+            const module_idx_int = @intFromEnum(pending.module_idx);
+            std.debug.assert(module_idx_int < self.imports.imports.items.items.len);
+            const string_lit_idx = self.imports.imports.items.items[module_idx_int];
+            const module_name = self.common.strings.get(string_lit_idx);
+            try tree.pushStringPair("pending-module", module_name);
+        },
+    }
+}
+
+fn pushSExprRoot(self: *const Self, tree: *SExprTree, root: SExprRoot) std.mem.Allocator.Error!void {
+    const NodeHandle = @TypeOf(tree.beginNode());
+    const EndFrame = struct {
+        begin: NodeHandle,
+        attrs: NodeHandle,
+    };
+    const Frame = union(enum) {
+        end: EndFrame,
+        attrs_then_end: NodeHandle,
+        expr: CIR.Expr.Idx,
+        pattern: CIR.Pattern.Idx,
+        statement: CIR.Statement.Idx,
+        type_anno: CIR.TypeAnno.Idx,
+        type_header: CIR.TypeHeader.Idx,
+        where_clause: CIR.WhereClause.Idx,
+        annotation: CIR.Annotation.Idx,
+        def: CIR.Def.Idx,
+        def_value: CIR.Def,
+        record_field: CIR.RecordField.Idx,
+        record_field_value: CIR.RecordField,
+        record_destruct: CIR.Pattern.RecordDestruct.Idx,
+        record_destruct_kind: CIR.Pattern.RecordDestruct.Kind,
+        match_node: struct {
+            value: CIR.Expr.Match,
+            region: Region,
+        },
+        match_branch: CIR.Expr.Match.Branch.Idx,
+        match_branch_pattern: CIR.Expr.Match.BranchPattern.Idx,
+        if_branch: CIR.Expr.IfBranch.Idx,
+        capture: CIR.Expr.Capture.Idx,
+        anno_record_field: CIR.TypeAnno.RecordField.Idx,
+        expr_span_node: struct {
+            name: []const u8,
+            span: CIR.Expr.Span,
+        },
+        pattern_span_node: struct {
+            name: []const u8,
+            span: CIR.Pattern.Span,
+        },
+        type_anno_span_node: struct {
+            name: []const u8,
+            span: CIR.TypeAnno.Span,
+        },
+        single_expr_node: struct {
+            name: []const u8,
+            expr: CIR.Expr.Idx,
+        },
+        if_branches_node: CIR.Expr.IfBranch.Span,
+        match_branches_node: CIR.Expr.Match.Branch.Span,
+        match_branch_patterns_node: CIR.Expr.Match.BranchPattern.Span,
+        record_fields_node: CIR.RecordField.Span,
+        record_destructs_node: CIR.Pattern.RecordDestruct.Span,
+        where_node: CIR.WhereClause.Span,
+        exposes_node: CIR.ExposedItem.Span,
+        captures_node: CIR.Expr.Capture.Span,
+        pattern_rest_node: struct {
+            index: u32,
+            pattern: ?CIR.Pattern.Idx,
+        },
+        where_method_after_var: struct {
+            begin: NodeHandle,
+            method_name: Ident.Idx,
+            args: CIR.TypeAnno.Span,
+            ret: CIR.TypeAnno.Idx,
+        },
+        where_alias_after_var: struct {
+            begin: NodeHandle,
+            alias_name: Ident.Idx,
+        },
+    };
+
+    var stack_fallback = std.heap.stackFallback(16 * 1024, self.gpa);
+    const frame_allocator = stack_fallback.get();
+    var frames: std.ArrayList(Frame) = .empty;
+    defer frames.deinit(frame_allocator);
+
+    switch (root) {
+        .expr => |idx| try frames.append(frame_allocator, .{ .expr = idx }),
+        .pattern => |idx| try frames.append(frame_allocator, .{ .pattern = idx }),
+        .statement => |idx| try frames.append(frame_allocator, .{ .statement = idx }),
+        .type_anno => |idx| try frames.append(frame_allocator, .{ .type_anno = idx }),
+        .type_header => |idx| try frames.append(frame_allocator, .{ .type_header = idx }),
+        .where_clause => |idx| try frames.append(frame_allocator, .{ .where_clause = idx }),
+        .annotation => |idx| try frames.append(frame_allocator, .{ .annotation = idx }),
+        .def => |idx| try frames.append(frame_allocator, .{ .def = idx }),
+        .def_value => |def| try frames.append(frame_allocator, .{ .def_value = def }),
+        .record_field => |idx| try frames.append(frame_allocator, .{ .record_field = idx }),
+        .record_field_value => |field| try frames.append(frame_allocator, .{ .record_field_value = field }),
+        .record_destruct => |idx| try frames.append(frame_allocator, .{ .record_destruct = idx }),
+        .record_destruct_kind => |kind| try frames.append(frame_allocator, .{ .record_destruct_kind = kind }),
+        .match_branch => |idx| try frames.append(frame_allocator, .{ .match_branch = idx }),
+    }
+
+    while (frames.pop()) |frame| {
+        switch (frame) {
+            .end => |data| try tree.endNode(data.begin, data.attrs),
+            .attrs_then_end => |begin| {
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .def => |def_idx| try frames.append(frame_allocator, .{ .def_value = self.store.getDef(def_idx) }),
+            .def_value => |def| {
+                const begin = tree.beginNode();
+                const name: []const u8 = switch (def.kind) {
+                    .let => "d-let",
+                    .stmt => "d-stmt",
+                    .ignored => "d-ignored",
+                };
+                try tree.pushStaticAtom(name);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                if (def.annotation) |annotation_idx| {
+                    try frames.append(frame_allocator, .{ .annotation = annotation_idx });
+                }
+                try frames.append(frame_allocator, .{ .expr = def.expr });
+
+                const pattern_node_idx: @TypeOf(self.store.nodes).Idx = @enumFromInt(@intFromEnum(def.pattern));
+                const pattern_node = self.store.nodes.get(pattern_node_idx);
+                const is_valid_pattern = switch (pattern_node.tag) {
+                    .pattern_identifier,
+                    .pattern_as,
+                    .pattern_applied_tag,
+                    .pattern_nominal,
+                    .pattern_nominal_external,
+                    .pattern_record_destructure,
+                    .pattern_list,
+                    .pattern_tuple,
+                    .pattern_num_literal,
+                    .pattern_dec_literal,
+                    .pattern_f32_literal,
+                    .pattern_f64_literal,
+                    .pattern_small_dec_literal,
+                    .pattern_str_literal,
+                    .pattern_underscore,
+                    => true,
+                    else => false,
+                };
+                if (is_valid_pattern) {
+                    try frames.append(frame_allocator, .{ .pattern = def.pattern });
+                } else {
+                    try tree.pushStaticAtom("invalid-pattern");
+                }
+            },
+            .expr => |expr_idx| {
+                const expr = self.store.getExpr(expr_idx);
+                switch (expr) {
+                    .e_num => |int_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-num");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try int_expr.value.pushStringPair(tree, "value");
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_frac_f32 => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-frac-f32");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const value_begin = try tree.reserveStringBuffer(400);
+                        errdefer tree.discardReservedStringBuffer(value_begin);
+                        const value_str = builtins.compiler_rt_128.f32_to_str(tree.reservedStringBuffer(value_begin)[0..400], e.value);
+                        try tree.pushReservedStringPair("value", value_begin, value_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_frac_f64 => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-frac-f64");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const value_begin = try tree.reserveStringBuffer(400);
+                        errdefer tree.discardReservedStringBuffer(value_begin);
+                        const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], e.value);
+                        try tree.pushReservedStringPair("value", value_begin, value_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_dec => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-frac-dec");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, 18);
+                        const value_begin = try tree.reserveStringBuffer(400);
+                        errdefer tree.discardReservedStringBuffer(value_begin);
+                        const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], dec_value_f64);
+                        try tree.pushReservedStringPair("value", value_begin, value_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_dec_small => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-dec-small");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPairFmt("numerator", "{}", .{e.value.numerator});
+                        try tree.pushStringPairFmt("denominator-power-of-ten", "{}", .{e.value.denominator_power_of_ten});
+                        const numerator_f64: f64 = @floatFromInt(e.value.numerator);
+                        const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.value.denominator_power_of_ten));
+                        const value_begin = try tree.reserveStringBuffer(400);
+                        errdefer tree.discardReservedStringBuffer(value_begin);
+                        const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], numerator_f64 / denominator_f64);
+                        try tree.pushReservedStringPair("value", value_begin, value_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_num_from_numeral => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-num-from-numeral");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_typed_int => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-typed-int");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try e.value.pushStringPair(tree, "value");
+                        try tree.pushStringPair("type", self.getIdent(e.type_name));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_typed_num_from_numeral => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-typed-num-from-numeral");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("type", self.getIdent(e.type_name));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_typed_frac => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-typed-frac");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try e.value.pushStringPair(tree, "value");
+                        try tree.pushStringPair("type", self.getIdent(e.type_name));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_str_segment => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-literal");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("string", self.getString(e.literal));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_bytes_literal => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-bytes-literal");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const value = self.getString(e.literal);
+                        const len_str = try std.fmt.allocPrint(self.gpa, "{d}", .{value.len});
+                        defer self.gpa.free(len_str);
+                        try tree.pushStringPair("len", len_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_str => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-string");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        const segments = self.store.sliceExpr(e.span);
+                        var i = segments.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .expr = segments[i] });
+                        }
+                    },
+                    .e_list => |l| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-list");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "elems", .span = l.elems } });
+                    },
+                    .e_empty_list => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-empty_list");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_tuple => |t| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-tuple");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "elems", .span = t.elems } });
+                    },
+                    .e_lookup_local => |local| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-lookup-local");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .pattern = local.pattern_idx });
+                    },
+                    .e_lookup_external => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-lookup-external");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                        const attrs = tree.beginNode();
+                        try self.pushImportModuleRefToSExprTree(tree, e.module_idx, "external-module");
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_lookup_required => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-lookup-required");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        const requires_items = self.requires_types.items.items;
+                        const idx = e.requires_idx.toU32();
+                        if (idx < requires_items.len) {
+                            try tree.pushStringPair("required-ident", self.getIdent(requires_items[idx].ident));
+                        }
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_match => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-match");
+                        const region = self.store.getExprRegion(expr_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .match_node = .{ .value = e, .region = region } });
+                    },
+                    .e_if => |if_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-if");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "if-else", .expr = if_expr.final_else } });
+                        try frames.append(frame_allocator, .{ .if_branches_node = if_expr.branches });
+                    },
+                    .e_call => |c| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-call");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        if (c.constraint_fn_var) |constraint_fn_var| {
+                            try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                        }
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        const args = self.store.exprSlice(c.args);
+                        var i = args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .expr = args[i] });
+                        }
+                        try frames.append(frame_allocator, .{ .expr = c.func });
+                    },
+                    .e_record => |record_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-record");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .record_fields_node = record_expr.fields });
+                        if (record_expr.ext) |ext_idx| {
+                            try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "ext", .expr = ext_idx } });
+                        }
+                    },
+                    .e_empty_record => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-empty_record");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_block => |block_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-block");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = block_expr.final_expr });
+                        const stmts = self.store.sliceStatements(block_expr.stmts);
+                        var i = stmts.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .statement = stmts[i] });
+                        }
+                    },
+                    .e_tag => |tag_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-tag");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("name", self.getIdent(tag_expr.name));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        if (tag_expr.args.span.len > 0) {
+                            try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "args", .span = tag_expr.args } });
+                        }
+                    },
+                    .e_nominal => |nominal_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-nominal");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const stmt = self.store.getStatement(nominal_expr.nominal_type_decl);
+                        switch (stmt) {
+                            .s_nominal_decl => |decl| {
+                                const header = self.store.getTypeHeader(decl.header);
+                                try tree.pushStringPair("nominal", self.getIdent(header.name));
+                            },
+                            else => try tree.pushStringPair("nominal", "<malformed>"),
+                        }
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = nominal_expr.backing_expr });
+                    },
+                    .e_nominal_external => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-nominal-external");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try self.pushImportModuleRefToSExprTree(tree, e.module_idx, "external-module");
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = e.backing_expr });
+                    },
+                    .e_zero_argument_tag => |zero_arg_tag_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-zero-argument-tag");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("closure", self.getIdentText(zero_arg_tag_expr.closure_name));
+                        try tree.pushStringPair("name", self.getIdentText(zero_arg_tag_expr.name));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_closure => |closure_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-closure");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = closure_expr.lambda_idx });
+                        if (closure_expr.captures.span.len > 0) {
+                            try frames.append(frame_allocator, .{ .captures_node = closure_expr.captures });
+                        }
+                    },
+                    .e_lambda => |lambda_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-lambda");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = lambda_expr.body });
+                        try frames.append(frame_allocator, .{ .pattern_span_node = .{ .name = "args", .span = lambda_expr.args } });
+                    },
+                    .e_binop => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-binop");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("op", @tagName(e.op));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = e.rhs });
+                        try frames.append(frame_allocator, .{ .expr = e.lhs });
+                    },
+                    .e_unary_minus => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-unary-minus");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = e.expr });
+                    },
+                    .e_unary_not => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-unary-not");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = e.expr });
+                    },
+                    .e_field_access => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-field-access");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("field", self.getIdentText(e.field_name));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "receiver", .expr = e.receiver } });
+                    },
+                    .e_method_call => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-method-call");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("method", self.getIdentText(e.method_name));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "args", .span = e.args } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "receiver", .expr = e.receiver } });
+                    },
+                    .e_dispatch_call => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-dispatch-call");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("method", self.getIdentText(e.method_name));
+                        try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "args", .span = e.args } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "receiver", .expr = e.receiver } });
+                    },
+                    .e_structural_eq => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-structural-eq");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "rhs", .expr = e.rhs } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "lhs", .expr = e.lhs } });
+                    },
+                    .e_method_eq => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-method-eq");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("negated", if (e.negated) "true" else "false");
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "rhs", .expr = e.rhs } });
+                        try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "lhs", .expr = e.lhs } });
+                    },
+                    .e_type_method_call => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-type-method-call");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("method", self.getIdentText(e.method_name));
+                        const attrs = tree.beginNode();
+                        try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "args", .span = e.args } });
+                    },
+                    .e_type_dispatch_call => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-type-dispatch-call");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("method", self.getIdentText(e.method_name));
+                        try tree.pushU64Pair("type-var-alias-stmt", @intFromEnum(e.type_var_alias_stmt));
+                        try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "args", .span = e.args } });
+                    },
+                    .e_tuple_access => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-tuple-access");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPairFmt("index", "{d}", .{e.elem_index});
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = e.tuple });
+                    },
+                    .e_runtime_error => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-runtime-error");
+                        const diagnostic = self.store.getDiagnostic(e.diagnostic);
+                        const msg = try std.fmt.allocPrint(self.gpa, "{s}", .{@tagName(diagnostic)});
+                        defer self.gpa.free(msg);
+                        try tree.pushStringPair("tag", msg);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_ellipsis => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-not-implemented");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_anno_only => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-anno-only");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_hosted_lambda => |hosted| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-hosted-lambda");
+                        try tree.pushStringPair("symbol", self.common.getIdent(hosted.symbol_name));
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .pattern_span_node = .{ .name = "args", .span = hosted.args } });
+                    },
+                    .e_run_low_level => |run_ll| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-run-low-level");
+                        const op_name = try std.fmt.allocPrint(self.gpa, "{s}", .{@tagName(run_ll.op)});
+                        defer self.gpa.free(op_name);
+                        try tree.pushStringPair("op", op_name);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr_span_node = .{ .name = "args", .span = run_ll.args } });
+                    },
+                    .e_crash => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-crash");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        try tree.pushStringPair("msg", self.getString(e.msg));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .e_dbg => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-dbg");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = e.expr });
+                    },
+                    .e_expect => |expect_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-expect");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = expect_expr.body });
+                    },
+                    .e_return => |ret| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-return");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = ret.expr });
+                    },
+                    .e_for => |for_expr| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("e-for");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getExprRegion(expr_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = for_expr.body });
+                        try frames.append(frame_allocator, .{ .expr = for_expr.expr });
+                        try frames.append(frame_allocator, .{ .pattern = for_expr.patt });
+                    },
+                }
+            },
+            .pattern => |pattern_idx| {
+                const pattern = self.store.getPattern(pattern_idx);
+                switch (pattern) {
+                    .assign => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-assign");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        try tree.pushStringPair("ident", self.getIdentText(p.ident));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .as => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-as");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        try tree.pushStringPair("as", self.getIdentText(p.ident));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .pattern = p.pattern });
+                    },
+                    .applied_tag => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-applied-tag");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .nominal => |n| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-nominal");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .pattern = n.backing_pattern });
+                    },
+                    .nominal_external => |n| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-nominal-external");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        try self.pushImportModuleRefToSExprTree(tree, n.module_idx, "external-module");
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .pattern = n.backing_pattern });
+                    },
+                    .record_destructure => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-record-destructure");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .record_destructs_node = p.destructs });
+                    },
+                    .list => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-list");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        if (p.rest_info) |rest| {
+                            try frames.append(frame_allocator, .{ .pattern_rest_node = .{ .index = rest.index, .pattern = rest.pattern } });
+                        }
+                        try frames.append(frame_allocator, .{ .pattern_span_node = .{ .name = "patterns", .span = p.patterns } });
+                    },
+                    .tuple => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-tuple");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .pattern_span_node = .{ .name = "patterns", .span = p.patterns } });
+                    },
+                    .num_literal => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-num");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        try p.value.pushStringPair(tree, "value");
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .small_dec_literal => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-small-dec");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .dec_literal => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-dec");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .frac_f32_literal => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-frac-f32");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const value_begin = try tree.reserveStringBuffer(400);
+                        errdefer tree.discardReservedStringBuffer(value_begin);
+                        const value_str = builtins.compiler_rt_128.f32_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
+                        try tree.pushReservedStringPair("value", value_begin, value_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .frac_f64_literal => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-frac-f64");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const value_begin = try tree.reserveStringBuffer(400);
+                        errdefer tree.discardReservedStringBuffer(value_begin);
+                        const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
+                        try tree.pushReservedStringPair("value", value_begin, value_str);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .str_literal => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-str");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        try tree.pushStringPair("text", self.getString(p.literal));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .underscore => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-underscore");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .runtime_error => |e| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("p-runtime-error");
+                        try self.appendRegionInfoToSExprTree(tree, pattern_idx);
+                        const diagnostic = self.store.getDiagnostic(e.diagnostic);
+                        try tree.pushStringPair("tag", @tagName(diagnostic));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                }
+            },
+            .statement => |stmt_idx| {
+                const stmt = self.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_decl => |d| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-let");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = d.expr });
+                        try frames.append(frame_allocator, .{ .pattern = d.pattern });
+                    },
+                    .s_var => |v| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-var");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = v.expr });
+                        try frames.append(frame_allocator, .{ .pattern = v.pattern_idx });
+                    },
+                    .s_reassign => |r| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-reassign");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = r.expr });
+                        try frames.append(frame_allocator, .{ .pattern = r.pattern_idx });
+                    },
+                    .s_crash => |c| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-crash");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        try tree.pushStringPair("msg", self.getString(c.msg));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .s_dbg => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-dbg");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = s.expr });
+                    },
+                    .s_expr => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-expr");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = s.expr });
+                    },
+                    .s_expect => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-expect");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = s.body });
+                    },
+                    .s_for => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-for");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = s.body });
+                        try frames.append(frame_allocator, .{ .expr = s.expr });
+                        try frames.append(frame_allocator, .{ .pattern = s.patt });
+                    },
+                    .s_while => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-while");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = s.body });
+                        try frames.append(frame_allocator, .{ .expr = s.cond });
+                    },
+                    .s_break => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-break");
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .s_return => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-return");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .expr = s.expr });
+                    },
+                    .s_import => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-import");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        try tree.pushStringPair("module", self.getIdent(s.module_name_tok));
+                        if (s.qualifier_tok) |qualifier| {
+                            try tree.pushStringPair("qualifier", self.getIdentText(qualifier));
+                        }
+                        if (s.alias_tok) |alias| {
+                            try tree.pushStringPair("alias", self.getIdentText(alias));
+                        }
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .exposes_node = s.exposes });
+                    },
+                    .s_alias_decl => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-alias-decl");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .type_anno = s.anno });
+                        try frames.append(frame_allocator, .{ .type_header = s.header });
+                    },
+                    .s_nominal_decl => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-nominal-decl");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .type_anno = s.anno });
+                        try frames.append(frame_allocator, .{ .type_header = s.header });
+                    },
+                    .s_type_anno => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-type-anno");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        try tree.pushStringPair("name", self.getIdentText(s.name));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        if (s.where) |where_span| {
+                            try frames.append(frame_allocator, .{ .where_node = where_span });
+                        }
+                        try frames.append(frame_allocator, .{ .type_anno = s.anno });
+                    },
+                    .s_type_var_alias => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-type-var-alias");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getStatementRegion(stmt_idx));
+                        try tree.pushStringPair("alias", self.getIdentText(s.alias_name));
+                        try tree.pushStringPair("type-var", self.getIdentText(s.type_var_name));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .type_anno = s.type_var_anno });
+                    },
+                    .s_runtime_error => |s| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("s-runtime-error");
+                        const diagnostic = self.store.getDiagnostic(s.diagnostic);
+                        const msg = try std.fmt.allocPrint(self.gpa, "{s}", .{@tagName(diagnostic)});
+                        defer self.gpa.free(msg);
+                        try tree.pushStringPair("tag", msg);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                }
+            },
+            .type_anno => |type_anno_idx| {
+                const type_anno = self.store.getTypeAnno(type_anno_idx);
+                switch (type_anno) {
+                    .apply => |a| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-apply");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        try tree.pushStringPair("name", self.getIdentText(a.name));
+                        try self.pushTypeAnnoBaseToSExprTree(tree, a.base);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        const args = self.store.sliceTypeAnnos(a.args);
+                        var i = args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .type_anno = args[i] });
+                        }
+                    },
+                    .rigid_var => |tv| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-rigid-var");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        try tree.pushStringPair("name", self.getIdentText(tv.name));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .rigid_var_lookup => |rv_lookup| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-rigid-var-lookup");
+                        try frames.append(frame_allocator, .{ .attrs_then_end = begin });
+                        try frames.append(frame_allocator, .{ .type_anno = rv_lookup.ref });
+                    },
+                    .underscore => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-underscore");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .lookup => |t| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-lookup");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        try tree.pushStringPair("name", self.getIdentText(t.name));
+                        try self.pushTypeAnnoBaseToSExprTree(tree, t.base);
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                    .tag_union => |tu| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-tag-union");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        if (tu.ext) |open_idx| {
+                            try frames.append(frame_allocator, .{ .type_anno = open_idx });
+                        }
+                        const tags = self.store.sliceTypeAnnos(tu.tags);
+                        var i = tags.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .type_anno = tags[i] });
+                        }
+                    },
+                    .tag => |t| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-tag-name");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        try tree.pushStringPair("name", self.getIdentText(t.name));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        const args = self.store.sliceTypeAnnos(t.args);
+                        var i = args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .type_anno = args[i] });
+                        }
+                    },
+                    .tuple => |t| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-tuple");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        const annos = self.store.sliceTypeAnnos(t.elems);
+                        var i = annos.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .type_anno = annos[i] });
+                        }
+                    },
+                    .record => |r| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-record");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        const fields = self.store.sliceAnnoRecordFields(r.fields);
+                        var i = fields.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .anno_record_field = fields[i] });
+                        }
+                    },
+                    .@"fn" => |f| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-fn");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        try tree.pushBoolPair("effectful", f.effectful);
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .type_anno = f.ret });
+                        const args = self.store.sliceTypeAnnos(f.args);
+                        var i = args.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try frames.append(frame_allocator, .{ .type_anno = args[i] });
+                        }
+                    },
+                    .parens => |p| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-parens");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        const attrs = tree.beginNode();
+                        try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                        try frames.append(frame_allocator, .{ .type_anno = p.anno });
+                    },
+                    .malformed => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("ty-malformed");
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getTypeAnnoRegion(type_anno_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                }
+            },
+            .type_header => |header_idx| {
+                const header = self.store.getTypeHeader(header_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("ty-header");
+                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(header_idx));
+                try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getRegionAt(node_idx));
+                try tree.pushStringPair("name", self.getIdent(header.name));
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                if (header.args.span.len > 0) {
+                    try frames.append(frame_allocator, .{ .type_anno_span_node = .{ .name = "ty-args", .span = header.args } });
+                }
+            },
+            .where_clause => |where_idx| {
+                const clause = self.store.getWhereClause(where_idx);
+                switch (clause) {
+                    .w_method => |method| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("method");
+                        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(where_idx));
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getRegionAt(node_idx));
+                        try frames.append(frame_allocator, .{ .where_method_after_var = .{
+                            .begin = begin,
+                            .method_name = method.method_name,
+                            .args = method.args,
+                            .ret = method.ret,
+                        } });
+                        try frames.append(frame_allocator, .{ .type_anno = method.var_ });
+                    },
+                    .w_alias => |alias| {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("alias");
+                        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(where_idx));
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getRegionAt(node_idx));
+                        try frames.append(frame_allocator, .{ .where_alias_after_var = .{
+                            .begin = begin,
+                            .alias_name = alias.alias_name,
+                        } });
+                        try frames.append(frame_allocator, .{ .type_anno = alias.var_ });
+                    },
+                    .w_malformed => {
+                        const begin = tree.beginNode();
+                        try tree.pushStaticAtom("malformed");
+                        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(where_idx));
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getRegionAt(node_idx));
+                        const attrs = tree.beginNode();
+                        try tree.endNode(begin, attrs);
+                    },
+                }
+            },
+            .annotation => |annotation_idx| {
+                const annotation = self.store.getAnnotation(annotation_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("annotation");
+                const attrs = tree.beginNode();
+                try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getAnnotationRegion(annotation_idx));
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                if (annotation.where) |where_span| {
+                    try frames.append(frame_allocator, .{ .where_node = where_span });
+                }
+                try frames.append(frame_allocator, .{ .type_anno = annotation.anno });
+            },
+            .record_field => |field_idx| try frames.append(frame_allocator, .{ .record_field_value = self.store.getRecordField(field_idx) }),
+            .record_field_value => |field| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("field");
+                try tree.pushStringPair("name", self.getIdent(field.name));
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .expr = field.value });
+            },
+            .record_destruct => |destruct_idx| {
+                const destruct = self.store.getRecordDestruct(destruct_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("record-destruct");
+                try self.appendRegionInfoToSExprTree(tree, destruct_idx);
+                try tree.pushStringPair("label", self.getIdent(destruct.label));
+                try tree.pushStringPair("ident", self.getIdent(destruct.ident));
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .record_destruct_kind = destruct.kind });
+            },
+            .record_destruct_kind => |kind| {
+                const name, const pattern_idx = switch (kind) {
+                    .Required => |idx| .{ "required", idx },
+                    .SubPattern => |idx| .{ "sub-pattern", idx },
+                    .Rest => |idx| .{ "rest-pattern", idx },
+                };
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom(name);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .pattern = pattern_idx });
+            },
+            .match_node => |m| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("match");
+                try self.appendRegionInfoToSExprTreeFromRegion(tree, m.region);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .match_branches_node = m.value.branches });
+                try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "cond", .expr = m.value.cond } });
+            },
+            .match_branch => |branch_idx| {
+                const branch = self.store.getMatchBranch(branch_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("branch");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                if (branch.guard) |guard_idx| {
+                    try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "guard", .expr = guard_idx } });
+                }
+                try frames.append(frame_allocator, .{ .single_expr_node = .{ .name = "value", .expr = branch.value } });
+                try frames.append(frame_allocator, .{ .match_branch_patterns_node = branch.patterns });
+            },
+            .match_branch_pattern => |branch_pat_idx| {
+                const branch_pat = self.store.getMatchBranchPattern(branch_pat_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("pattern");
+                try tree.pushBoolPair("degenerate", branch_pat.degenerate);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .pattern = branch_pat.pattern });
+            },
+            .if_branch => |branch_idx| {
+                const branch = self.store.getIfBranch(branch_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("if-branch");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .expr = branch.body });
+                try frames.append(frame_allocator, .{ .expr = branch.cond });
+            },
+            .capture => |capture_idx| {
+                const captured_var = self.store.getCapture(capture_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("capture");
+                try self.appendRegionInfoToSExprTreeFromRegion(tree, self.store.getPatternRegion(captured_var.pattern_idx));
+                try tree.pushStringPair("ident", self.getIdentText(captured_var.name));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .anno_record_field => |field_idx| {
+                const field = self.store.getAnnoRecordField(field_idx);
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("field");
+                try tree.pushStringPair("field", self.getIdentText(field.name));
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .type_anno = field.ty });
+            },
+            .expr_span_node => |node| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom(node.name);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const exprs = self.store.sliceExpr(node.span);
+                var i = exprs.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .expr = exprs[i] });
+                }
+            },
+            .pattern_span_node => |node| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom(node.name);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const patterns = self.store.slicePatterns(node.span);
+                var i = patterns.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .pattern = patterns[i] });
+                }
+            },
+            .type_anno_span_node => |node| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom(node.name);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const annos = self.store.sliceTypeAnnos(node.span);
+                var i = annos.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .type_anno = annos[i] });
+                }
+            },
+            .single_expr_node => |node| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom(node.name);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .expr = node.expr });
+            },
+            .if_branches_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("if-branches");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const branches = self.store.sliceIfBranches(span);
+                var i = branches.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .if_branch = branches[i] });
+                }
+            },
+            .match_branches_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("branches");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const branches = self.store.matchBranchSlice(span);
+                var i = branches.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .match_branch = branches[i] });
+                }
+            },
+            .match_branch_patterns_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("patterns");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const patterns = self.store.sliceMatchBranchPatterns(span);
+                var i = patterns.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .match_branch_pattern = patterns[i] });
+                }
+            },
+            .record_fields_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("fields");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const fields = self.store.sliceRecordFields(span);
+                var i = fields.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .record_field = fields[i] });
+                }
+            },
+            .record_destructs_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("destructs");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const destructs = self.store.sliceRecordDestructs(span);
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .record_destruct = destructs[i] });
+                }
+            },
+            .where_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("where");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const clauses = self.store.sliceWhereClauses(span);
+                var i = clauses.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .where_clause = clauses[i] });
+                }
+            },
+            .exposes_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("exposes");
+                const attrs = tree.beginNode();
+                const exposes = self.store.sliceExposedItems(span);
+                for (exposes) |exposed_idx| {
+                    try self.store.getExposedItem(exposed_idx).pushToSExprTree(undefined, self, tree);
+                }
+                try tree.endNode(begin, attrs);
+            },
+            .captures_node => |span| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("captures");
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                const captures = self.store.sliceCaptures(span);
+                var i = captures.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(frame_allocator, .{ .capture = captures[i] });
+                }
+            },
+            .pattern_rest_node => |rest| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("rest-at");
+                try tree.pushU64Pair("index", rest.index);
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = begin, .attrs = attrs } });
+                if (rest.pattern) |rest_pattern_idx| {
+                    try frames.append(frame_allocator, .{ .pattern = rest_pattern_idx });
+                }
+            },
+            .where_method_after_var => |method| {
+                try tree.pushStringPair("name", self.getIdent(method.method_name));
+                const attrs = tree.beginNode();
+                try frames.append(frame_allocator, .{ .end = .{ .begin = method.begin, .attrs = attrs } });
+                try frames.append(frame_allocator, .{ .type_anno = method.ret });
+                try frames.append(frame_allocator, .{ .type_anno_span_node = .{ .name = "args", .span = method.args } });
+            },
+            .where_alias_after_var => |alias| {
+                try tree.pushStringPair("name", self.getIdent(alias.alias_name));
+                const attrs = tree.beginNode();
+                try tree.endNode(alias.begin, attrs);
+            },
+        }
     }
 }
 
@@ -3777,8 +5303,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         const stmt_attrs = tree.beginNode();
 
                         // Add the type header
-                        const header = self.store.getTypeHeader(alias.header);
-                        try header.pushToSExprTree(self, tree, alias.header);
+                        try self.pushTypeHeaderToSExprTree(tree, alias.header);
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
@@ -3802,8 +5327,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         const stmt_attrs = tree.beginNode();
 
                         // Add the type header
-                        const header = self.store.getTypeHeader(nominal.header);
-                        try header.pushToSExprTree(self, tree, nominal.header);
+                        try self.pushTypeHeaderToSExprTree(tree, nominal.header);
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
