@@ -9,6 +9,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const can = @import("can");
+const eval = @import("eval");
 const types = @import("types");
 
 const Diagnostics = @import("diagnostics.zig");
@@ -59,6 +60,8 @@ pub const SyntaxChecker = struct {
     previous_build_env: ?*BuildEnvHandle = null,
     /// Snapshot of the most recent successful build per module (kept for completions).
     snapshot_envs: std.StringHashMapUnmanaged(*BuildEnvHandle) = .{},
+    /// Pre-published Builtin module reused by each fresh LSP BuildEnv.
+    builtin_modules: ?*eval.BuiltinModules = null,
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
     cache_config: CacheConfig,
@@ -97,6 +100,12 @@ pub const SyntaxChecker = struct {
 
         // Free hashmap allocations
         self.snapshot_envs.deinit(self.allocator);
+
+        if (self.builtin_modules) |builtin_modules| {
+            builtin_modules.deinit();
+            self.allocator.destroy(builtin_modules);
+            self.builtin_modules = null;
+        }
 
         self.dependency_graph.deinit();
     }
@@ -248,10 +257,20 @@ pub const SyntaxChecker = struct {
             self.build_env = null;
         }
 
-        // Create a fresh BuildEnv
+        // Create a fresh BuildEnv. The LSP reuses one pre-published Builtin
+        // across checks; each BuildEnv borrows it and never deinitializes it.
         const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.std_io, ".", self.allocator);
         defer self.allocator.free(cwd);
-        var env = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, self.std_io);
+        const builtin_modules = try self.sharedBuiltinModules();
+        var env = BuildEnv.initBorrowingBuiltinModules(
+            self.allocator,
+            .single_threaded,
+            1,
+            roc_target.RocTarget.detectNative(),
+            cwd,
+            self.std_io,
+            builtin_modules,
+        );
         env.compiler_version = build_options.compiler_version;
         env.setFinalizeExecutableArtifacts(false);
 
@@ -265,6 +284,17 @@ pub const SyntaxChecker = struct {
         const handle = try BuildEnvHandle.create(self.allocator, env, owner_build, debug_handles);
         self.build_env = handle;
         return handle;
+    }
+
+    fn sharedBuiltinModules(self: *SyntaxChecker) !*eval.BuiltinModules {
+        if (self.builtin_modules) |builtin_modules| return builtin_modules;
+
+        const builtin_modules = try self.allocator.create(eval.BuiltinModules);
+        errdefer self.allocator.destroy(builtin_modules);
+
+        builtin_modules.* = try eval.BuiltinModules.init(self.allocator);
+        self.builtin_modules = builtin_modules;
+        return builtin_modules;
     }
 
     fn shouldSnapshotBuild(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8, drained: []BuildEnv.DrainedModuleReports) bool {

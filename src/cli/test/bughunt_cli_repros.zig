@@ -3015,7 +3015,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
 
     const cache_dirs = util.createIsolatedTestCacheDirs(gpa) catch
         return .{ .status = .crash, .message = "failed to create cache dirs" };
-    defer cache_dirs.deinit(gpa);
+    defer cache_dirs.cleanupAndDeinit(gpa);
 
     const test_dir = std.fmt.allocPrint(gpa, ".zig-cache/bughunt-cli/{d}_{d}", .{
         currentProcessIdForFilename(),
@@ -3038,11 +3038,13 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     const argv = buildArgv(gpa, spec, main_path, test_dir, repo_root) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to build argv" };
 
-    var env_map = util.buildIsolatedTestEnvMap(gpa, null) catch
+    var env_map = util.buildProcessEnvMap(gpa, null) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set roc cache env" };
+    env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir) catch
+        return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set xdg cache env" };
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set zig cache env" };
 

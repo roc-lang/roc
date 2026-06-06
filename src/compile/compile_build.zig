@@ -174,6 +174,7 @@ pub const BuildEnv = struct {
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
+    owns_builtin_modules: bool,
 
     // Discovery state (populated by discoverDependencies, consumed by compileDiscovered)
     discovered_root_abs: ?[]const u8 = null,
@@ -204,6 +205,31 @@ pub const BuildEnv = struct {
         builtin_modules.* = try BuiltinModules.init(gpa);
         errdefer builtin_modules.deinit();
 
+        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, true);
+    }
+
+    pub fn initBorrowingBuiltinModules(
+        gpa: Allocator,
+        mode: Mode,
+        max_threads: usize,
+        target: roc_target.RocTarget,
+        cwd: []const u8,
+        std_io: std.Io,
+        builtin_modules: *BuiltinModules,
+    ) BuildEnv {
+        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, false);
+    }
+
+    fn initWithBuiltinModules(
+        gpa: Allocator,
+        mode: Mode,
+        max_threads: usize,
+        target: roc_target.RocTarget,
+        cwd: []const u8,
+        std_io: std.Io,
+        builtin_modules: *BuiltinModules,
+        owns_builtin_modules: bool,
+    ) BuildEnv {
         var env = BuildEnv{
             .gpa = gpa,
             .mode = mode,
@@ -213,6 +239,7 @@ pub const BuildEnv = struct {
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .builtin_modules = builtin_modules,
+            .owns_builtin_modules = owns_builtin_modules,
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
@@ -235,9 +262,12 @@ pub const BuildEnv = struct {
             std.debug.print("[DEINIT] BuildEnv.deinit starting\n", .{});
         }
 
-        // Deinit and free builtin modules
-        self.builtin_modules.deinit();
-        self.gpa.destroy(self.builtin_modules);
+        // Deinit and free owned builtin modules. Borrowed builtins outlive this
+        // BuildEnv and are released by their owner.
+        if (self.owns_builtin_modules) {
+            self.builtin_modules.deinit();
+            self.gpa.destroy(self.builtin_modules);
+        }
 
         if (comptime trace_build) {
             std.debug.print("[DEINIT] builtin_modules done\n", .{});

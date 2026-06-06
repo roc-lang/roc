@@ -21,7 +21,11 @@ allocator: Allocator,
 io: std.Io,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
-builtin_modules: eval.BuiltinModules,
+builtin_modules: *eval.BuiltinModules,
+/// Whether this session owns `builtin_modules` (and must deinit it). Tests can
+/// borrow a shared, already-published instance to avoid re-publishing the
+/// Builtin module for every session; see `initBorrowingBuiltins`.
+owns_builtin_modules: bool,
 
 /// Outcome of evaluating a single REPL input line.
 pub const StepResult = union(enum) {
@@ -39,18 +43,45 @@ pub const StepResult = union(enum) {
 };
 
 pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) !ReplSession {
+    const builtin_modules = try allocator.create(eval.BuiltinModules);
+    errdefer allocator.destroy(builtin_modules);
+    builtin_modules.* = try eval.BuiltinModules.init(allocator);
     return .{
         .allocator = allocator,
         .io = io,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
-        .builtin_modules = try eval.BuiltinModules.init(allocator),
+        .builtin_modules = builtin_modules,
+        .owns_builtin_modules = true,
+    };
+}
+
+/// Construct a session that borrows a caller-owned, already-published
+/// `BuiltinModules`. The session never deinits it, so one published Builtin can
+/// back many sessions. Intended for tests that would otherwise re-publish the
+/// Builtin module on every assertion.
+fn initBorrowingBuiltins(
+    allocator: Allocator,
+    io: std.Io,
+    backend_kind: eval.EvalBackend,
+    builtin_modules: *eval.BuiltinModules,
+) ReplSession {
+    return .{
+        .allocator = allocator,
+        .io = io,
+        .backend_kind = backend_kind,
+        .definitions = DefinitionStore.init(),
+        .builtin_modules = builtin_modules,
+        .owns_builtin_modules = false,
     };
 }
 
 pub fn deinit(self: *ReplSession) void {
     self.definitions.deinit(self.allocator);
-    self.builtin_modules.deinit();
+    if (self.owns_builtin_modules) {
+        self.builtin_modules.deinit();
+        self.allocator.destroy(self.builtin_modules);
+    }
 }
 
 fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin {
@@ -681,6 +712,32 @@ pub const DefinitionStore = struct {
 
 const testing = std.testing;
 
+/// One Builtin module, published once and shared (read-only) by every test
+/// session. Publishing the Builtin via `BuiltinModules.init` is the dominant
+/// per-session cost, so reusing a single instance across the ~100 sessions in
+/// this file is the largest win. Allocated with `page_allocator` (not
+/// `testing.allocator`) so the never-freed singleton isn't flagged as a leak.
+/// The cli_test runner is single-threaded, so lazy init needs no locking.
+var shared_test_builtins: ?eval.BuiltinModules = null;
+
+fn sharedTestBuiltins() !*eval.BuiltinModules {
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+    return &shared_test_builtins.?;
+}
+
+/// Build a test session that borrows the shared Builtin (see
+/// `shared_test_builtins`) instead of publishing its own.
+fn testRepl(backend_kind: eval.EvalBackend) !ReplSession {
+    return ReplSession.initBorrowingBuiltins(
+        testing.allocator,
+        std.testing.io,
+        backend_kind,
+        try sharedTestBuiltins(),
+    );
+}
+
 const TestBackend = enum { interpreter, dev, wasm };
 
 fn toEvalBackend(backend: TestBackend) eval.EvalBackend {
@@ -703,7 +760,7 @@ fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) !
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, eval_backend);
+    var repl = try testRepl(eval_backend);
     defer repl.deinit();
 
     const result = try repl.step(expr);
@@ -718,10 +775,9 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
     try expectBackend(.interpreter, expr, expected);
 }
 
-fn expectAllNative(expr: []const u8, expected: []const u8) !void {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
-    defer repl.deinit();
-
+/// Build the wrapped module source (`<defs>\nmain = <expr>`) for `expr` and
+/// confirm it is an expression. Caller owns the returned source.
+fn replExprSource(repl: *ReplSession, expr: []const u8) ![]u8 {
     const line = std.mem.trim(u8, expr, " \t\r\n");
     const input_info = switch (try repl.inputStatus(line)) {
         .complete => |info| info,
@@ -732,7 +788,43 @@ fn expectAllNative(expr: []const u8, expected: []const u8) !void {
     const definitions = try repl.definitionsSource();
     defer testing.allocator.free(definitions);
 
-    const source = try std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
+    return std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
+}
+
+/// Evaluate `expr` on the two native backends (interpreter and dev) and assert
+/// both render `expected`. Only the native target is lowered — wasm coverage is
+/// exercised explicitly by `expectAllBackends` on a representative subset, so it
+/// is not re-run for every native assertion.
+fn expectAllNative(expr: []const u8, expected: []const u8) !void {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const source = try replExprSource(&repl, expr);
+    defer testing.allocator.free(source);
+
+    var compiled = try eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
+        testing.allocator,
+        repl.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        repl.prePublishedBuiltin(),
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
+    try expectCompiledBackend(.dev, expr, expected, &compiled.lowered);
+}
+
+/// Evaluate `expr` on all backends — interpreter, dev, and wasm. Lowers both the
+/// native and wasm targets, so reserve this for a representative subset rather
+/// than every assertion.
+fn expectAllBackends(expr: []const u8, expected: []const u8) !void {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const source = try replExprSource(&repl, expr);
     defer testing.allocator.free(source);
 
     var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
@@ -776,7 +868,7 @@ fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) !void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, eval_backend);
+    var repl = try testRepl(eval_backend);
     defer repl.deinit();
 
     for (steps) |step_pair| {
@@ -793,7 +885,7 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, eval_backend);
+    var repl = try testRepl(eval_backend);
     defer repl.deinit();
 
     for (steps, 0..) |step_input, i| {
@@ -810,13 +902,13 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
 }
 
 test "Repl - initialization and cleanup" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
     try testing.expect(repl.definitions.count() == 0);
 }
 
 test "Repl - special commands" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -1182,7 +1274,7 @@ test "Repl - for loop snapshots nested product" {
 }
 
 test "Repl - build full source with block syntax" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 5", "x", .value);
@@ -1202,7 +1294,7 @@ test "Repl - build full source with block syntax" {
 }
 
 test "Repl - definition replacement" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 1", "x", .value);
@@ -1281,7 +1373,7 @@ test "splitInputIntoStatements - annotation and decl stay separate" {
 }
 
 test "Repl - paste of annotation + decl produces single assigned message" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z : U64\nz = 5");
@@ -1298,7 +1390,7 @@ test "Repl - paste of annotation + decl produces single assigned message" {
 }
 
 test "Repl - paste of two assignments processes both" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z = 5\ny = 6");
@@ -1329,4 +1421,29 @@ test "issue 9364: F64.to_str integer-valued float literal" {
 
 test "issue 9364: F64.to_str non-integer float literal" {
     try expectAllNative("F64.to_str(2.5)", "\"2.5\"");
+}
+
+// Representative wasm coverage. The bulk of expression assertions run on the
+// native backends only (`expectAllNative`); this test runs a representative
+// spread of value kinds — ints, floats, strings, bools, lists, lambdas, and
+// result/tag values — through all backends including wasm, so wasm codegen and
+// bytebox execution stay covered without paying for them on every assertion.
+// Stateful wasm behavior (assignments, redefinition, for-loops) is additionally
+// covered by the `expectStateful(.wasm, ...)` tests above.
+test "Repl - representative all-backends coverage (incl. wasm)" {
+    try expectAllBackends("42", "42.0");
+    try expectAllBackends("\"Hello, World!\"", "\"Hello, World!\"");
+    try expectAllBackends("Bool.True", "True");
+    try expectAllBackends("Bool.not(False)", "True");
+    try expectAllBackends("I8.mod_by(-10, 3)", "2");
+    try expectAllBackends("[1, 2, 3]", "[1.0, 2.0, 3.0]");
+    try expectAllBackends("[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]");
+    try expectAllBackends("List.len([1, 2, 3])", "3");
+    try expectAllBackends("List.append([1, 2], 3)", "[1.0, 2.0, 3.0]");
+    try expectAllBackends("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
+    try expectAllBackends("|x| x + 1", "<function>");
+    try expectAllBackends("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
+    try expectAllBackends("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
+    try expectAllBackends("U8.from_str(\"42\")", "Ok(42)");
+    try expectAllBackends("F64.to_str(2.5)", "\"2.5\"");
 }

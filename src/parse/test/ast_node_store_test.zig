@@ -8,36 +8,34 @@ const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
 const NumericLiteral = @import("../NumericLiteral.zig");
 
-var rand = std.Random.DefaultPrng.init(1234);
-
 /// Generate a random index of type `T`.
-fn rand_idx(comptime T: type) T {
+fn rand_idx(random: std.Random, comptime T: type) T {
     if (T == base.Ident.Idx) {
         return .{
             .attributes = .{
-                .effectful = rand.random().boolean(),
-                .ignored = rand.random().boolean(),
-                .reassignable = rand.random().boolean(),
+                .effectful = random.boolean(),
+                .ignored = random.boolean(),
+                .reassignable = random.boolean(),
             },
-            .idx = rand.random().int(u29),
+            .idx = random.int(u29),
         };
     }
 
     return switch (@typeInfo(T)) {
-        .@"enum" => @enumFromInt(rand.random().int(u32)),
+        .@"enum" => @enumFromInt(random.int(u32)),
         else => @compileError("rand_idx needs an explicit constructor for this index type"),
     };
 }
 
 /// Generate a random token index.
-fn rand_token_idx() AST.Token.Idx {
-    return rand.random().int(u32);
+fn rand_token_idx(random: std.Random) AST.Token.Idx {
+    return random.int(u32);
 }
 
 /// Helper to create a `TokenizedRegion` from raw start and end positions.
-fn rand_region() AST.TokenizedRegion {
-    const start = rand.random().int(u32);
-    const end = rand.random().int(u32);
+fn rand_region(random: std.Random) AST.TokenizedRegion {
+    const start = random.int(u32);
+    const end = random.int(u32);
     return AST.TokenizedRegion{
         .start = start,
         .end = end,
@@ -45,9 +43,9 @@ fn rand_region() AST.TokenizedRegion {
 }
 
 /// Helper to create a `DataSpan` from raw start and length positions.
-fn rand_span() base.DataSpan {
-    const start = rand.random().int(u32);
-    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+fn rand_span(random: std.Random) base.DataSpan {
+    const start = random.int(u32);
+    const len = random.int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
     return base.DataSpan{
         .start = start,
         .len = len,
@@ -55,6 +53,8 @@ fn rand_span() base.DataSpan {
 }
 
 test "NodeStore round trip - Headers" {
+    var prng = std.Random.DefaultPrng.init(0x48454144455253);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_HEADER_NODE_COUNT);
     defer store.deinit();
@@ -64,44 +64,44 @@ test "NodeStore round trip - Headers" {
 
     try headers.append(gpa, AST.Header{
         .app = .{
-            .packages = rand_idx(AST.Collection.Idx),
-            .platform_idx = rand_idx(AST.RecordField.Idx),
-            .provides = rand_idx(AST.Collection.Idx),
-            .region = rand_region(),
+            .packages = rand_idx(random, AST.Collection.Idx),
+            .platform_idx = rand_idx(random, AST.RecordField.Idx),
+            .provides = rand_idx(random, AST.Collection.Idx),
+            .region = rand_region(random),
         },
     });
 
     try headers.append(gpa, AST.Header{
         .module = .{
-            .exposes = rand_idx(AST.Collection.Idx),
-            .region = rand_region(),
+            .exposes = rand_idx(random, AST.Collection.Idx),
+            .region = rand_region(random),
         },
     });
 
     try headers.append(gpa, AST.Header{
         .package = .{
-            .exposes = rand_idx(AST.Collection.Idx),
-            .packages = rand_idx(AST.Collection.Idx),
-            .region = rand_region(),
+            .exposes = rand_idx(random, AST.Collection.Idx),
+            .packages = rand_idx(random, AST.Collection.Idx),
+            .region = rand_region(random),
         },
     });
 
     try headers.append(gpa, AST.Header{
         .platform = .{
-            .exposes = rand_idx(AST.Collection.Idx),
-            .name = rand_token_idx(),
-            .packages = rand_idx(AST.Collection.Idx),
-            .provides = rand_idx(AST.Collection.Idx),
+            .exposes = rand_idx(random, AST.Collection.Idx),
+            .name = rand_token_idx(random),
+            .packages = rand_idx(random, AST.Collection.Idx),
+            .provides = rand_idx(random, AST.Collection.Idx),
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
 
     try headers.append(gpa, AST.Header{
         .hosted = .{
-            .exposes = rand_idx(AST.Collection.Idx),
-            .region = rand_region(),
+            .exposes = rand_idx(random, AST.Collection.Idx),
+            .region = rand_region(random),
         },
     });
 
@@ -127,6 +127,8 @@ test "NodeStore round trip - Headers" {
 }
 
 test "NodeStore round trip - Statement" {
+    var prng = std.Random.DefaultPrng.init(0x53544154454d454e);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
     defer store.deinit();
@@ -136,75 +138,75 @@ test "NodeStore round trip - Statement" {
 
     try statements.append(gpa, AST.Statement{
         .decl = .{
-            .body = rand_idx(AST.Expr.Idx),
-            .pattern = rand_idx(AST.Pattern.Idx),
-            .region = rand_region(),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .pattern = rand_idx(random, AST.Pattern.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .@"var" = .{
-            .name = rand_token_idx(),
-            .body = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .name = rand_token_idx(random),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .expr = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .crash = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .dbg = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .expect = .{
-            .body = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .@"for" = .{
-            .patt = rand_idx(AST.Pattern.Idx),
-            .expr = rand_idx(AST.Expr.Idx),
-            .body = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .patt = rand_idx(random, AST.Pattern.Idx),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try statements.append(gpa, AST.Statement{
         .@"return" = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     // Simple import with no tokens
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = null,
-            .module_name_tok = rand_token_idx(),
+            .module_name_tok = rand_token_idx(random),
             .qualifier_tok = null,
-            .region = rand_region(),
-            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .region = rand_region(random),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
             .nested_import = false,
         },
     });
     // Import with alias
     try statements.append(gpa, AST.Statement{
         .import = .{
-            .alias_tok = rand_token_idx(),
-            .module_name_tok = rand_token_idx(),
+            .alias_tok = rand_token_idx(random),
+            .module_name_tok = rand_token_idx(random),
             .qualifier_tok = null,
-            .region = rand_region(),
-            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .region = rand_region(random),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
             .nested_import = false,
         },
     });
@@ -212,41 +214,41 @@ test "NodeStore round trip - Statement" {
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = null,
-            .module_name_tok = rand_token_idx(),
-            .qualifier_tok = rand_token_idx(),
-            .region = rand_region(),
-            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .module_name_tok = rand_token_idx(random),
+            .qualifier_tok = rand_token_idx(random),
+            .region = rand_region(random),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
             .nested_import = false,
         },
     });
     // Import with both qualifier and alias
     try statements.append(gpa, AST.Statement{
         .import = .{
-            .alias_tok = rand_token_idx(),
-            .module_name_tok = rand_token_idx(),
-            .qualifier_tok = rand_token_idx(),
-            .region = rand_region(),
-            .exposes = AST.ExposedItem.Span{ .span = rand_span() },
+            .alias_tok = rand_token_idx(random),
+            .module_name_tok = rand_token_idx(random),
+            .qualifier_tok = rand_token_idx(random),
+            .region = rand_region(random),
+            .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
             .nested_import = false,
         },
     });
     try statements.append(gpa, AST.Statement{
         .type_decl = .{
-            .anno = rand_idx(AST.TypeAnno.Idx),
-            .header = rand_idx(AST.TypeHeader.Idx),
+            .anno = rand_idx(random, AST.TypeAnno.Idx),
+            .header = rand_idx(random, AST.TypeHeader.Idx),
             .kind = AST.TypeDeclKind.nominal,
-            .region = rand_region(),
-            .where = rand_idx(AST.Collection.Idx),
+            .region = rand_region(random),
+            .where = rand_idx(random, AST.Collection.Idx),
             .associated = null,
         },
     });
     try statements.append(gpa, AST.Statement{
         .type_anno = .{
-            .name = rand_token_idx(),
-            .anno = rand_idx(AST.TypeAnno.Idx),
-            .where = rand_idx(AST.Collection.Idx),
+            .name = rand_token_idx(random),
+            .anno = rand_idx(random, AST.TypeAnno.Idx),
+            .where = rand_idx(random, AST.Collection.Idx),
             .is_var = false,
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
 
@@ -271,7 +273,72 @@ test "NodeStore round trip - Statement" {
     }
 }
 
+test "NodeStore round trip - Statement type annotation full-width where index" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
+    defer store.deinit();
+
+    const statements = [_]AST.Statement{
+        .{ .type_anno = .{
+            .name = 1,
+            .anno = @enumFromInt(2),
+            .where = @enumFromInt(0x80000000),
+            .is_var = false,
+            .region = .{ .start = 3, .end = 4 },
+        } },
+        .{ .type_anno = .{
+            .name = 5,
+            .anno = @enumFromInt(6),
+            .where = @enumFromInt(0xffffffff),
+            .is_var = true,
+            .region = .{ .start = 7, .end = 8 },
+        } },
+    };
+
+    for (statements) |statement| {
+        const idx = try store.addStatement(statement);
+        try testing.expectEqualDeep(statement, store.getStatement(idx));
+    }
+}
+
+test "NodeStore round trip - Statement type declaration optional data starts at zero" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_STATEMENT_NODE_COUNT);
+    defer store.deinit();
+
+    const zero_collection_idx: u32 = 0; // Collection.Idx 0 is a valid value and must round-trip.
+    const statements = [_]AST.Statement{
+        .{ .type_decl = .{
+            .anno = @enumFromInt(1),
+            .header = @enumFromInt(2),
+            .kind = .nominal,
+            .region = .{ .start = 3, .end = 4 },
+            .where = @enumFromInt(zero_collection_idx),
+            .associated = null,
+        } },
+        .{ .type_decl = .{
+            .anno = @enumFromInt(5),
+            .header = @enumFromInt(6),
+            .kind = .nominal,
+            .region = .{ .start = 7, .end = 8 },
+            .where = null,
+            .associated = .{
+                .statements = .{ .span = .{ .start = 9, .len = 10 } },
+                .scope = @enumFromInt(11),
+                .region = .{ .start = 12, .end = 13 },
+            },
+        } },
+    };
+
+    for (statements) |statement| {
+        const idx = try store.addStatement(statement);
+        try testing.expectEqualDeep(statement, store.getStatement(idx));
+    }
+}
+
 test "NodeStore round trip - Pattern" {
+    var prng = std.Random.DefaultPrng.init(0x5041545445524e);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_PATTERN_NODE_COUNT);
     defer store.deinit();
@@ -283,104 +350,104 @@ test "NodeStore round trip - Pattern" {
 
     try patterns.append(gpa, AST.Pattern{
         .ident = .{
-            .ident_tok = rand_token_idx(),
-            .region = rand_region(),
+            .ident_tok = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .var_ident = .{
-            .ident_tok = rand_token_idx(),
-            .region = rand_region(),
+            .ident_tok = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .tag = .{
-            .args = AST.Pattern.Span{ .span = rand_span() },
-            .qualifiers = AST.Token.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .tag_tok = rand_token_idx(),
+            .args = AST.Pattern.Span{ .span = rand_span(random) },
+            .qualifiers = AST.Token.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .tag_tok = rand_token_idx(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .int = .{
-            .number_tok = rand_token_idx(),
-            .literal = rand_idx(NumericLiteral.Idx),
-            .region = rand_region(),
+            .number_tok = rand_token_idx(random),
+            .literal = rand_idx(random, NumericLiteral.Idx),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .frac = .{
-            .number_tok = rand_token_idx(),
-            .literal = rand_idx(NumericLiteral.Idx),
-            .region = rand_region(),
+            .number_tok = rand_token_idx(random),
+            .literal = rand_idx(random, NumericLiteral.Idx),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .typed_int = .{
-            .number_tok = rand_token_idx(),
-            .type_ident = rand_idx(base.Ident.Idx),
-            .literal = rand_idx(NumericLiteral.Idx),
-            .region = rand_region(),
+            .number_tok = rand_token_idx(random),
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .literal = rand_idx(random, NumericLiteral.Idx),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .typed_frac = .{
-            .number_tok = rand_token_idx(),
-            .type_ident = rand_idx(base.Ident.Idx),
-            .literal = rand_idx(NumericLiteral.Idx),
-            .region = rand_region(),
+            .number_tok = rand_token_idx(random),
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .literal = rand_idx(random, NumericLiteral.Idx),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .string = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
-            .string_tok = rand_token_idx(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+            .string_tok = rand_token_idx(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .single_quote = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .record = .{
-            .fields = AST.PatternRecordField.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .fields = AST.PatternRecordField.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .list = .{
-            .patterns = AST.Pattern.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .patterns = AST.Pattern.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .list_rest = .{
-            .name = rand_token_idx(),
-            .region = rand_region(),
+            .name = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .tuple = .{
-            .patterns = AST.Pattern.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .patterns = AST.Pattern.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .underscore = .{
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
         .alternatives = .{
-            .patterns = AST.Pattern.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .patterns = AST.Pattern.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try patterns.append(gpa, AST.Pattern{
-        .as = .{ .name = rand_token_idx(), .region = rand_region(), .pattern = rand_idx(AST.Pattern.Idx) },
+        .as = .{ .name = rand_token_idx(random), .region = rand_region(random), .pattern = rand_idx(random, AST.Pattern.Idx) },
     });
 
     // We don't include .malformed variant
@@ -406,6 +473,8 @@ test "NodeStore round trip - Pattern" {
 }
 
 test "NodeStore round trip - TypeAnno" {
+    var prng = std.Random.DefaultPrng.init(0x54595045414e4e4f);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_TYPE_ANNO_NODE_COUNT);
     defer store.deinit();
@@ -417,94 +486,94 @@ test "NodeStore round trip - TypeAnno" {
 
     try ty_annos.append(gpa, AST.TypeAnno{
         .apply = .{
-            .args = AST.TypeAnno.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .args = AST.TypeAnno.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .ty_var = .{
-            .region = rand_region(),
-            .tok = rand_token_idx(),
+            .region = rand_region(random),
+            .tok = rand_token_idx(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .underscore = .{
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .underscore_type_var = .{
-            .tok = rand_token_idx(),
-            .region = rand_region(),
+            .tok = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .ty = .{
-            .qualifiers = AST.Token.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .qualifiers = AST.Token.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
             .ext = .closed,
-            .tags = AST.TypeAnno.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .tags = AST.TypeAnno.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
-            .ext = .{ .named = .{ .anno = rand_idx(AST.TypeAnno.Idx), .region = rand_region() } },
-            .tags = AST.TypeAnno.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .ext = .{ .named = .{ .anno = rand_idx(random, AST.TypeAnno.Idx), .region = rand_region(random) } },
+            .tags = AST.TypeAnno.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
-            .ext = .{ .open = rand_token_idx() },
-            .tags = AST.TypeAnno.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .ext = .{ .open = rand_token_idx(random) },
+            .tags = AST.TypeAnno.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tuple = .{
-            .annos = AST.TypeAnno.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .annos = AST.TypeAnno.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
-            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span(random) },
             .ext = .closed,
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
-            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
-            .ext = .{ .named = .{ .anno = rand_idx(AST.TypeAnno.Idx), .region = rand_region() } },
-            .region = rand_region(),
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span(random) },
+            .ext = .{ .named = .{ .anno = rand_idx(random, AST.TypeAnno.Idx), .region = rand_region(random) } },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
-            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
-            .ext = .{ .open = rand_token_idx() },
-            .region = rand_region(),
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span(random) },
+            .ext = .{ .open = rand_token_idx(random) },
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .@"fn" = .{
-            .args = AST.TypeAnno.Span{ .span = rand_span() },
-            .ret = rand_idx(AST.TypeAnno.Idx),
+            .args = AST.TypeAnno.Span{ .span = rand_span(random) },
+            .ret = rand_idx(random, AST.TypeAnno.Idx),
             .effectful = true,
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .parens = .{
-            .anno = rand_idx(AST.TypeAnno.Idx),
-            .region = rand_region(),
+            .anno = rand_idx(random, AST.TypeAnno.Idx),
+            .region = rand_region(random),
         },
     });
 
@@ -533,6 +602,8 @@ test "NodeStore round trip - TypeAnno" {
 }
 
 test "NodeStore round trip - Expr" {
+    var prng = std.Random.DefaultPrng.init(0x45585052);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_EXPR_NODE_COUNT);
     defer store.deinit();
@@ -544,218 +615,218 @@ test "NodeStore round trip - Expr" {
 
     try expressions.append(gpa, AST.Expr{
         .int = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
-            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+            .literal = rand_idx(random, NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .frac = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
-            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+            .literal = rand_idx(random, NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_int = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
-            .type_ident = rand_idx(base.Ident.Idx),
-            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .literal = rand_idx(random, NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .typed_frac = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
-            .type_ident = rand_idx(base.Ident.Idx),
-            .literal = rand_idx(NumericLiteral.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .literal = rand_idx(random, NumericLiteral.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .single_quote = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .string_part = .{
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .string = .{
-            .parts = AST.Expr.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .multiline_string = .{
-            .parts = AST.Expr.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .list = .{
-            .items = AST.Expr.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .items = AST.Expr.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .tuple = .{
-            .items = AST.Expr.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .items = AST.Expr.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .record = .{
-            .ext = rand_idx(AST.Expr.Idx),
-            .fields = AST.RecordField.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .ext = rand_idx(random, AST.Expr.Idx),
+            .fields = AST.RecordField.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .tag = .{
-            .qualifiers = AST.Token.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .qualifiers = AST.Token.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .lambda = .{
-            .args = AST.Pattern.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .body = rand_idx(AST.Expr.Idx),
+            .args = AST.Pattern.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .body = rand_idx(random, AST.Expr.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .apply = .{
-            .@"fn" = rand_idx(AST.Expr.Idx),
-            .args = AST.Expr.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .@"fn" = rand_idx(random, AST.Expr.Idx),
+            .args = AST.Expr.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .record_updater = .{
-            .token = rand_token_idx(),
-            .region = rand_region(),
+            .token = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
 
     try expressions.append(gpa, AST.Expr{
         .field_access = .{
-            .left = rand_idx(AST.Expr.Idx),
-            .right = rand_idx(AST.Expr.Idx),
-            .operator = rand_token_idx(),
-            .region = rand_region(),
+            .left = rand_idx(random, AST.Expr.Idx),
+            .right = rand_idx(random, AST.Expr.Idx),
+            .operator = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .method_call = .{
-            .receiver = rand_idx(AST.Expr.Idx),
-            .method_token = rand_token_idx(),
-            .args = AST.Expr.Span{ .span = rand_span() },
-            .region = rand_region(),
+            .receiver = rand_idx(random, AST.Expr.Idx),
+            .method_token = rand_token_idx(random),
+            .args = AST.Expr.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .tuple_access = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .elem_token = rand_token_idx(),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .elem_token = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .arrow_call = .{
-            .left = rand_idx(AST.Expr.Idx),
-            .right = rand_idx(AST.Expr.Idx),
-            .operator = rand_token_idx(),
-            .region = rand_region(),
+            .left = rand_idx(random, AST.Expr.Idx),
+            .right = rand_idx(random, AST.Expr.Idx),
+            .operator = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .bin_op = .{
-            .left = rand_idx(AST.Expr.Idx),
-            .right = rand_idx(AST.Expr.Idx),
-            .operator = rand_token_idx(),
-            .region = rand_region(),
+            .left = rand_idx(random, AST.Expr.Idx),
+            .right = rand_idx(random, AST.Expr.Idx),
+            .operator = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .suffix_single_question = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .operator = rand_token_idx(),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .operator = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .unary_op = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .operator = rand_token_idx(),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .operator = rand_token_idx(random),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .if_then_else = .{
-            .@"else" = rand_idx(AST.Expr.Idx),
-            .condition = rand_idx(AST.Expr.Idx),
-            .then = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .@"else" = rand_idx(random, AST.Expr.Idx),
+            .condition = rand_idx(random, AST.Expr.Idx),
+            .then = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .if_without_else = .{
-            .condition = rand_idx(AST.Expr.Idx),
-            .then = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .condition = rand_idx(random, AST.Expr.Idx),
+            .then = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .match = .{
-            .branches = AST.MatchBranch.Span{ .span = rand_span() },
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .branches = AST.MatchBranch.Span{ .span = rand_span(random) },
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .ident = .{
-            .qualifiers = AST.Token.Span{ .span = rand_span() },
-            .region = rand_region(),
-            .token = rand_token_idx(),
+            .qualifiers = AST.Token.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .dbg = .{
-            .expr = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .record_builder = .{
-            .fields = AST.RecordField.Span{ .span = rand_span() },
-            .mapper = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .fields = AST.RecordField.Span{ .span = rand_span(random) },
+            .mapper = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
     try expressions.append(gpa, AST.Expr{
-        .ellipsis = .{ .region = rand_region() },
+        .ellipsis = .{ .region = rand_region(random) },
     });
     try expressions.append(gpa, AST.Expr{
         .block = .{
-            .region = rand_region(),
-            .statements = AST.Statement.Span{ .span = rand_span() },
-            .scope = rand_idx(AST.DeclIndex.ScopeIdx),
+            .region = rand_region(random),
+            .statements = AST.Statement.Span{ .span = rand_span(random) },
+            .scope = rand_idx(random, AST.DeclIndex.ScopeIdx),
         },
     });
     try expressions.append(gpa, AST.Expr{
         .for_expr = .{
-            .patt = rand_idx(AST.Pattern.Idx),
-            .expr = rand_idx(AST.Expr.Idx),
-            .body = rand_idx(AST.Expr.Idx),
-            .region = rand_region(),
+            .patt = rand_idx(random, AST.Pattern.Idx),
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .body = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
         },
     });
 
@@ -782,15 +853,17 @@ test "NodeStore round trip - Expr" {
 }
 
 test "NodeStore round trip - Targets" {
+    var prng = std.Random.DefaultPrng.init(0x54415247455453);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, NodeStore.AST_HEADER_NODE_COUNT);
     defer store.deinit();
 
     // Test TargetFile round trip
     const target_files = [_]AST.TargetFile{
-        .{ .string_literal = rand_token_idx() },
-        .{ .special_ident = rand_token_idx() },
-        .{ .malformed = .{ .reason = .expected_targets_field_name, .region = rand_region() } },
+        .{ .string_literal = rand_token_idx(random) },
+        .{ .special_ident = rand_token_idx(random) },
+        .{ .malformed = .{ .reason = .expected_targets_field_name, .region = rand_region(random) } },
     };
 
     for (target_files) |file| {
@@ -806,9 +879,9 @@ test "NodeStore round trip - Targets" {
 
     // Test TargetEntry round trip
     const entry = AST.TargetEntry{
-        .target = rand_token_idx(),
-        .files = .{ .span = rand_span() },
-        .region = rand_region(),
+        .target = rand_token_idx(random),
+        .files = .{ .span = rand_span(random) },
+        .region = rand_region(random),
     };
     const entry_idx = try store.addTargetEntry(entry);
     const retrieved_entry = store.getTargetEntry(entry_idx);
@@ -821,8 +894,8 @@ test "NodeStore round trip - Targets" {
 
     // Test TargetLinkType round trip
     const link_type = AST.TargetLinkType{
-        .entries = .{ .span = rand_span() },
-        .region = rand_region(),
+        .entries = .{ .span = rand_span(random) },
+        .region = rand_region(random),
     };
     const link_type_idx = try store.addTargetLinkType(link_type);
     const retrieved_link_type = store.getTargetLinkType(link_type_idx);
@@ -835,10 +908,10 @@ test "NodeStore round trip - Targets" {
 
     // Test TargetsSection round trip
     const section = AST.TargetsSection{
-        .files_path = rand_token_idx(),
+        .files_path = rand_token_idx(random),
         .exe = link_type_idx,
         .static_lib = null,
-        .region = rand_region(),
+        .region = rand_region(random),
     };
     const section_idx = try store.addTargetsSection(section);
     const retrieved_section = store.getTargetsSection(section_idx);
@@ -854,7 +927,7 @@ test "NodeStore round trip - Targets" {
         .files_path = null,
         .exe = null,
         .static_lib = null,
-        .region = rand_region(),
+        .region = rand_region(random),
     };
     const section_nulls_idx = try store.addTargetsSection(section_nulls);
     const retrieved_section_nulls = store.getTargetsSection(section_nulls_idx);
@@ -867,6 +940,8 @@ test "NodeStore round trip - Targets" {
 }
 
 test "NodeStore debug function" {
+    var prng = std.Random.DefaultPrng.init(0x4445425547);
+    const random = prng.random();
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, 16);
     defer store.deinit();
@@ -874,7 +949,7 @@ test "NodeStore debug function" {
     // Add some nodes to make debug output more interesting
     _ = try store.addHeader(.{
         .type_module = .{
-            .region = rand_region(),
+            .region = rand_region(random),
         },
     });
 
@@ -882,4 +957,48 @@ test "NodeStore debug function" {
     var discard_buf: [4096]u8 = undefined;
     var discard = std.Io.Writer.Discarding.init(&discard_buf);
     try store.debugTo(&discard.writer);
+}
+
+test "NodeStore rejects optional index sentinel overflow in release builds" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    const max_link_type: AST.TargetLinkType.Idx = @enumFromInt(std.math.maxInt(u32));
+    try testing.expectError(error.OutOfMemory, store.addTargetsSection(.{
+        .files_path = null,
+        .exe = max_link_type,
+        .static_lib = null,
+        .region = .{ .start = 0, .end = 0 },
+    }));
+
+    const max_expr: AST.Expr.Idx = @enumFromInt(std.math.maxInt(u32));
+    try testing.expectError(error.OutOfMemory, store.addMatchBranch(.{
+        .pattern = @enumFromInt(1),
+        .guard = max_expr,
+        .body = @enumFromInt(1),
+        .region = .{ .start = 0, .end = 0 },
+    }));
+}
+
+test "NodeStore rejects unaddressable extra data reservations in release builds" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    const original_len = store.extra_data.items.len;
+    store.extra_data.items.len = std.math.maxInt(u32);
+    defer store.extra_data.items.len = original_len;
+
+    try testing.expectError(error.OutOfMemory, store.addHeader(.{
+        .platform = .{
+            .exposes = @enumFromInt(1),
+            .name = 0,
+            .packages = @enumFromInt(1),
+            .provides = @enumFromInt(1),
+            .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
+            .targets = null,
+            .region = .{ .start = 0, .end = 0 },
+        },
+    }));
 }

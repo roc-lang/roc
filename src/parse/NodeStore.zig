@@ -14,14 +14,10 @@ const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 
-/// When storing optional indices/values where 0 is a valid value, we add this offset
-/// to distinguish "value is 0" from "value is null". This is a common pattern when
-/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
+/// Packed optional indices store null as 0 and non-null values as value + 1.
+/// All producers must use the fallible helpers below so maxInt(u32) overflows
+/// become OutOfMemory in every build mode.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
-
-/// Bit flag for is_var in type_anno statement's main_token field.
-/// Uses the high bit to store whether this is a var declaration.
-const TYPE_ANNO_IS_VAR_BIT: u32 = 0x80000000;
 
 /// The root node is always stored at index 0 in the node list.
 pub const root_node_idx: Node.List.Idx = .first;
@@ -48,6 +44,88 @@ scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
 scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
 numeric_literal_bytes: std.ArrayList(u8),
+
+fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
+    const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
+    if (count != 0) {
+        const last_offset = std.math.cast(u32, count - 1) orelse return error.OutOfMemory;
+        if (start > std.math.maxInt(u32) - last_offset) return error.OutOfMemory;
+    }
+    try store.extra_data.ensureUnusedCapacity(store.gpa, count);
+    return start;
+}
+
+fn reserveExtraDataToken(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
+    const start = try store.reserveExtraDataStart(count);
+    return packNonNullOptionalU32(start);
+}
+
+fn extraDataStart(token: u32) u32 {
+    std.debug.assert(token != 0);
+    return unpackNonNullOptionalU32(token);
+}
+
+fn packNonNullOptionalU32(value: u32) std.mem.Allocator.Error!u32 {
+    if (value == std.math.maxInt(u32)) return error.OutOfMemory;
+    return value + OPTIONAL_VALUE_OFFSET;
+}
+
+fn packOptionalIndex(value: anytype) std.mem.Allocator.Error!u32 {
+    if (value) |idx| {
+        return packNonNullOptionalU32(@intFromEnum(idx));
+    }
+    return 0;
+}
+
+fn unpackNonNullOptionalU32(value: u32) u32 {
+    std.debug.assert(value != 0);
+    return value - OPTIONAL_VALUE_OFFSET;
+}
+
+fn unpackOptionalIndex(comptime Idx: type, value: u32) ?Idx {
+    if (value == 0) return null;
+    return @enumFromInt(unpackNonNullOptionalU32(value));
+}
+
+const TypeDeclExtra = struct {
+    where: ?AST.Collection.Idx,
+    associated: ?AST.Associated,
+};
+
+fn decodeTypeDeclExtra(store: *const NodeStore, token: u32) TypeDeclExtra {
+    if (token == 0) {
+        return .{
+            .where = null,
+            .associated = null,
+        };
+    }
+
+    const extra_start = extraDataStart(token);
+    const has_where = store.extra_data.items[extra_start] != 0;
+    const where_clause: ?AST.Collection.Idx = if (has_where)
+        @enumFromInt(store.extra_data.items[extra_start + 1])
+    else
+        null;
+
+    const has_associated = store.extra_data.items[extra_start + 2] != 0;
+    const associated: ?AST.Associated = if (has_associated) blk: {
+        const stmt_start = store.extra_data.items[extra_start + 3];
+        const stmt_len = store.extra_data.items[extra_start + 4];
+        const scope_idx = store.extra_data.items[extra_start + 5];
+        const reg_start = store.extra_data.items[extra_start + 6];
+        const reg_end = store.extra_data.items[extra_start + 7];
+        break :blk AST.Associated{
+            .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+            .scope = @enumFromInt(scope_idx),
+            .region = .{ .start = reg_start, .end = reg_end },
+        };
+    } else null;
+
+    return .{
+        .where = where_clause,
+        .associated = associated,
+    };
+}
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from AST unions. Update these when modifying the unions.
@@ -342,20 +420,17 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = store.extra_data.items.len;
+            const ed_start = try store.reserveExtraDataStart(6);
             // Store requires_entries span (start and len)
-            try store.extra_data.append(store.gpa, platform.requires_entries.span.start);
-            try store.extra_data.append(store.gpa, platform.requires_entries.span.len);
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.exposes));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.packages));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.provides));
-            // Store targets as optional (0 = null, val + OPTIONAL_VALUE_OFFSET = val)
-            const targets_val: u32 = if (platform.targets) |t| @intFromEnum(t) + OPTIONAL_VALUE_OFFSET else 0;
-            try store.extra_data.append(store.gpa, targets_val);
-            const ed_len = store.extra_data.items.len - ed_start;
+            store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
+            store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.exposes));
+            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.packages));
+            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.provides));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
 
-            node.data.lhs = @intCast(ed_start);
-            node.data.rhs = @intCast(ed_len);
+            node.data.lhs = ed_start;
+            node.data.rhs = 6;
 
             node.region = platform.region;
         },
@@ -532,31 +607,32 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = @intFromEnum(d.header);
             node.data.rhs = @intFromEnum(d.anno);
 
-            // Store optional where and associated in extra_data if either is present
+            // Store optional where and associated in extra_data if either is present.
+            // Collection.Idx 0 is valid, so presence is stored explicitly.
             if (d.where != null or d.associated != null) {
-                // Format: [where_idx, has_associated, associated_data...]
-                // where_idx is 0 if null, otherwise the Collection.Idx value
+                // Format: [has_where, where_idx, has_associated, associated_data...]
+                // where_idx is meaningful only when has_where is 1.
                 // has_associated is 0 or 1
                 // associated_data is [statements_start, statements_len, scope_idx, region_start, region_end] if has_associated == 1
-                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                const extra_count: usize = if (d.associated != null) 8 else 3;
+                node.main_token = try store.reserveExtraDataToken(extra_count);
 
-                // Store where clause index (0 if null)
-                const where_idx = if (d.where) |w| @intFromEnum(w) else 0;
-                try store.extra_data.append(store.gpa, where_idx);
+                const has_where: u32 = @intFromBool(d.where != null);
+                const where_idx: u32 = if (d.where) |w| @intFromEnum(w) else 0;
+                store.extra_data.appendAssumeCapacity(has_where);
+                store.extra_data.appendAssumeCapacity(where_idx);
 
                 // Store associated data if present
                 if (d.associated) |assoc| {
-                    try store.extra_data.append(store.gpa, 1); // has_associated = 1
-                    try store.extra_data.append(store.gpa, assoc.statements.span.start);
-                    try store.extra_data.append(store.gpa, assoc.statements.span.len);
-                    try store.extra_data.append(store.gpa, @intFromEnum(assoc.scope));
-                    try store.extra_data.append(store.gpa, assoc.region.start);
-                    try store.extra_data.append(store.gpa, assoc.region.end);
+                    store.extra_data.appendAssumeCapacity(1); // has_associated = 1
+                    store.extra_data.appendAssumeCapacity(assoc.statements.span.start);
+                    store.extra_data.appendAssumeCapacity(assoc.statements.span.len);
+                    store.extra_data.appendAssumeCapacity(@intFromEnum(assoc.scope));
+                    store.extra_data.appendAssumeCapacity(assoc.region.start);
+                    store.extra_data.appendAssumeCapacity(assoc.region.end);
                 } else {
-                    try store.extra_data.append(store.gpa, 0); // has_associated = 0
+                    store.extra_data.appendAssumeCapacity(0); // has_associated = 0
                 }
-
-                node.main_token = extra_start;
             } else {
                 node.main_token = 0;
             }
@@ -566,9 +642,14 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.region = a.region;
             node.data.lhs = a.name;
             node.data.rhs = @intFromEnum(a.anno);
-            const where_val: u32 = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
-            const is_var_bit: u32 = if (a.is_var) TYPE_ANNO_IS_VAR_BIT else 0;
-            node.main_token = where_val | is_var_bit;
+            if (a.where != null or a.is_var) {
+                node.main_token = try store.reserveExtraDataToken(3);
+                store.extra_data.appendAssumeCapacity(@intFromBool(a.where != null));
+                store.extra_data.appendAssumeCapacity(if (a.where) |w| @intFromEnum(w) else 0);
+                store.extra_data.appendAssumeCapacity(@intFromBool(a.is_var));
+            } else {
+                node.main_token = 0;
+            }
         },
         .file_import => |fi| {
             node.tag = .file_import;
@@ -1003,7 +1084,7 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
 pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Allocator.Error!AST.MatchBranch.Idx {
     const node = Node{
         .tag = .branch,
-        .main_token = if (branch.guard) |g| @intFromEnum(g) + 1 else 0,
+        .main_token = try packOptionalIndex(branch.guard),
         .data = .{
             .lhs = @intFromEnum(branch.pattern),
             .rhs = @intFromEnum(branch.body),
@@ -1288,9 +1369,8 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             const ed_start = node.data.lhs;
             std.debug.assert(node.data.rhs == 6);
 
-            // Decode optional targets (0 = null, val = val - OPTIONAL_VALUE_OFFSET)
             const targets_val = store.extra_data.items[ed_start + 5];
-            const targets: ?AST.TargetsSection.Idx = if (targets_val == 0) null else @enumFromInt(targets_val - OPTIONAL_VALUE_OFFSET);
+            const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
 
             return .{ .platform = .{
                 .name = node.main_token,
@@ -1479,121 +1559,56 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             } };
         },
         .type_decl => {
-            // Read where and associated from extra_data if present (main_token != 0)
-            var where_clause: ?AST.Collection.Idx = null;
-            var associated: ?AST.Associated = null;
-            if (node.main_token != 0) {
-                const extra_start = node.main_token;
-                // Format: [where_idx, has_associated, associated_data...]
-                const where_idx = store.extra_data.items[extra_start];
-                if (where_idx != 0) {
-                    where_clause = @enumFromInt(where_idx);
-                }
-
-                const has_associated = store.extra_data.items[extra_start + 1];
-                if (has_associated == 1) {
-                    const stmt_start = store.extra_data.items[extra_start + 2];
-                    const stmt_len = store.extra_data.items[extra_start + 3];
-                    const scope_idx = store.extra_data.items[extra_start + 4];
-                    const reg_start = store.extra_data.items[extra_start + 5];
-                    const reg_end = store.extra_data.items[extra_start + 6];
-                    associated = AST.Associated{
-                        .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
-                        .scope = @enumFromInt(scope_idx),
-                        .region = .{ .start = reg_start, .end = reg_end },
-                    };
-                }
-            }
+            const extra = store.decodeTypeDeclExtra(node.main_token);
 
             return .{ .type_decl = .{
                 .region = node.region,
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .alias,
-                .where = where_clause,
-                .associated = associated,
+                .where = extra.where,
+                .associated = extra.associated,
             } };
         },
         .type_decl_nominal => {
-            // Read where and associated from extra_data if present (main_token != 0)
-            var where_clause: ?AST.Collection.Idx = null;
-            var associated: ?AST.Associated = null;
-            if (node.main_token != 0) {
-                const extra_start = node.main_token;
-                // Format: [where_idx, has_associated, associated_data...]
-                const where_idx = store.extra_data.items[extra_start];
-                if (where_idx != 0) {
-                    where_clause = @enumFromInt(where_idx);
-                }
-
-                const has_associated = store.extra_data.items[extra_start + 1];
-                if (has_associated == 1) {
-                    const stmt_start = store.extra_data.items[extra_start + 2];
-                    const stmt_len = store.extra_data.items[extra_start + 3];
-                    const scope_idx = store.extra_data.items[extra_start + 4];
-                    const reg_start = store.extra_data.items[extra_start + 5];
-                    const reg_end = store.extra_data.items[extra_start + 6];
-                    associated = AST.Associated{
-                        .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
-                        .scope = @enumFromInt(scope_idx),
-                        .region = .{ .start = reg_start, .end = reg_end },
-                    };
-                }
-            }
+            const extra = store.decodeTypeDeclExtra(node.main_token);
 
             return .{ .type_decl = .{
                 .region = node.region,
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .nominal,
-                .where = where_clause,
-                .associated = associated,
+                .where = extra.where,
+                .associated = extra.associated,
             } };
         },
         .type_decl_opaque => {
-            // Read where and associated from extra_data if present (main_token != 0)
-            var where_clause: ?AST.Collection.Idx = null;
-            var associated: ?AST.Associated = null;
-            if (node.main_token != 0) {
-                const extra_start = node.main_token;
-                // Format: [where_idx, has_associated, associated_data...]
-                const where_idx = store.extra_data.items[extra_start];
-                if (where_idx != 0) {
-                    where_clause = @enumFromInt(where_idx);
-                }
-
-                const has_associated = store.extra_data.items[extra_start + 1];
-                if (has_associated == 1) {
-                    const stmt_start = store.extra_data.items[extra_start + 2];
-                    const stmt_len = store.extra_data.items[extra_start + 3];
-                    const scope_idx = store.extra_data.items[extra_start + 4];
-                    const reg_start = store.extra_data.items[extra_start + 5];
-                    const reg_end = store.extra_data.items[extra_start + 6];
-                    associated = AST.Associated{
-                        .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
-                        .scope = @enumFromInt(scope_idx),
-                        .region = .{ .start = reg_start, .end = reg_end },
-                    };
-                }
-            }
+            const extra = store.decodeTypeDeclExtra(node.main_token);
 
             return .{ .type_decl = .{
                 .region = node.region,
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .@"opaque",
-                .where = where_clause,
-                .associated = associated,
+                .where = extra.where,
+                .associated = extra.associated,
             } };
         },
         .type_anno => {
-            const is_var = (node.main_token & TYPE_ANNO_IS_VAR_BIT) != 0;
-            const where_val = node.main_token & ~TYPE_ANNO_IS_VAR_BIT;
+            var where_clause: ?AST.Collection.Idx = null;
+            var is_var = false;
+            if (node.main_token != 0) {
+                const extra_start = extraDataStart(node.main_token);
+                if (store.extra_data.items[extra_start] != 0) {
+                    where_clause = @enumFromInt(store.extra_data.items[extra_start + 1]);
+                }
+                is_var = store.extra_data.items[extra_start + 2] != 0;
+            }
             return .{ .type_anno = .{
                 .region = node.region,
                 .name = node.data.lhs,
                 .anno = @enumFromInt(node.data.rhs),
-                .where = if (where_val != 0) @enumFromInt(where_val - OPTIONAL_VALUE_OFFSET) else null,
+                .where = where_clause,
                 .is_var = is_var,
             } };
         },
@@ -2079,7 +2094,7 @@ pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.M
         .region = node.region,
         .pattern = @enumFromInt(node.data.lhs),
         .body = @enumFromInt(node.data.rhs),
-        .guard = if (node.main_token == 0) null else @enumFromInt(node.main_token - 1),
+        .guard = unpackOptionalIndex(AST.Expr.Idx, node.main_token),
     };
 }
 
@@ -2721,8 +2736,8 @@ pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem
         .tag = .targets_section,
         .main_token = section.files_path orelse 0,
         .data = .{
-            .lhs = if (section.exe) |e| @intFromEnum(e) + OPTIONAL_VALUE_OFFSET else 0,
-            .rhs = if (section.static_lib) |s| @intFromEnum(s) + OPTIONAL_VALUE_OFFSET else 0,
+            .lhs = try packOptionalIndex(section.exe),
+            .rhs = try packOptionalIndex(section.static_lib),
         },
         .region = section.region,
     };
@@ -2861,8 +2876,8 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     std.debug.assert(node.tag == .targets_section);
 
     const files_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
-    const exe: ?AST.TargetLinkType.Idx = if (node.data.lhs == 0) null else @enumFromInt(node.data.lhs - OPTIONAL_VALUE_OFFSET);
-    const static_lib: ?AST.TargetLinkType.Idx = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs - OPTIONAL_VALUE_OFFSET);
+    const exe = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.lhs);
+    const static_lib = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.rhs);
 
     return .{
         .files_path = files_path,
