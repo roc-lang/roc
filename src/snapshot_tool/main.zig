@@ -4390,7 +4390,7 @@ const SnapshotReplParsedLine = struct {
     }
 };
 
-fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplParsedLine {
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplParsedLine {
     const module_env = try allocator.create(ModuleEnv);
     errdefer allocator.destroy(module_env);
     module_env.* = try ModuleEnv.init(allocator, line);
@@ -4428,7 +4428,7 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) Allocator
     };
 }
 
-fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allocator.Error!?AST.Statement {
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) parse.Parser.Error!?AST.Statement {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -4441,7 +4441,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allo
     return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
 }
 
-fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplInputKind {
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplInputKind {
     var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
     const statement = if (maybe_file_parse) |*parsed| blk: {
         defer parsed.deinit();
@@ -4480,7 +4480,7 @@ fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocato
     };
 }
 
-fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplDefinitionIdentity {
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplDefinitionIdentity {
     var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
     defer parsed.deinit();
 
