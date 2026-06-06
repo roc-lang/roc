@@ -376,14 +376,30 @@ Builtin :: [].{
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
 		len_if_known : [Known(U64), Unknown],
-		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done],
+		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 	}.{
-		custom : source, [Known(U64), Unknown], (source -> Try((item, Iter(item)), [NoMore])) -> Iter(item)
-		custom = |source, len_if_known, advance| {
+		# The general unfold. `advance` maps a seed to either the next item paired with the
+		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
+		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
+		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
+		custom = |seed, len_if_known, advance| {
 			len_if_known,
 			step: ||
-				match advance(source) {
-					Ok((item, rest_iter)) => One({ item, rest: rest_iter })
+				match advance(seed) {
+					Ok((item, next_seed)) =>
+						One(
+							{
+								item,
+								rest: Iter.custom(
+									next_seed,
+									match len_if_known {
+										Known(l) => Known(l - 1)
+										Unknown => Unknown
+									},
+									advance,
+								),
+							},
+						)
 					Err(NoMore) => Done
 				},
 		}
@@ -391,7 +407,7 @@ Builtin :: [].{
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
-		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ count : U64, rest : Iter(item) }), Done]
+		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
 		next = |iterator| (iterator.step)()
 
 		map : Iter(a), (a -> b) -> Iter(b)
@@ -402,7 +418,7 @@ Builtin :: [].{
 					step: ||
 						match step() {
 							Done => Done
-							Skip({ count, rest }) => Skip({ count, rest: Iter.map(rest, transform) })
+							Skip({ rest }) => Skip({ rest: Iter.map(rest, transform) })
 							One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 						},
 				}
@@ -416,12 +432,12 @@ Builtin :: [].{
 					step: || {
 						match step() {
 							Done => Done
-							Skip({ count, rest }) => Skip({ count, rest: Iter.keep_if(rest, predicate) })
+							Skip({ rest }) => Skip({ rest: Iter.keep_if(rest, predicate) })
 							One({ item, rest }) =>
 								if predicate(item) {
 									One({ item, rest: Iter.keep_if(rest, predicate) })
 								} else {
-									Skip({ count: 1, rest: Iter.keep_if(rest, predicate) })
+									Skip({ rest: Iter.keep_if(rest, predicate) })
 								}
 							}
 					},
@@ -436,10 +452,10 @@ Builtin :: [].{
 					step: || {
 						match step() {
 							Done => Done
-							Skip({ count, rest }) => Skip({ count, rest: Iter.drop_if(rest, predicate) })
+							Skip({ rest }) => Skip({ rest: Iter.drop_if(rest, predicate) })
 							One({ item, rest }) =>
 								if predicate(item) {
-									Skip({ count: 1, rest: Iter.drop_if(rest, predicate) })
+									Skip({ rest: Iter.drop_if(rest, predicate) })
 								} else {
 									One({ item, rest: Iter.drop_if(rest, predicate) })
 								}
@@ -452,7 +468,7 @@ Builtin :: [].{
 		fold = |iterator, acc, step|
 			match Iter.next(iterator) {
 				Done => acc
-				Skip({ rest, .. }) => Iter.fold(rest, acc, step)
+				Skip({ rest }) => Iter.fold(rest, acc, step)
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
 
@@ -483,7 +499,7 @@ Builtin :: [].{
 						step: ||
 							match step() {
 								Done => Done
-								Skip({ count, rest }) => Skip({ count, rest: Iter.take_first(rest, n) })
+								Skip({ rest }) => Skip({ rest: Iter.take_first(rest, n) })
 								One({ item, rest }) => One({ item, rest: Iter.take_first(rest, n - 1) })
 							},
 					}
@@ -517,8 +533,8 @@ Builtin :: [].{
 						step: ||
 							match step() {
 								Done => Done
-								Skip({ count, rest }) => Skip({ count, rest: Iter.drop_first(rest, n) })
-								One({ item: _, rest }) => Skip({ count: 1, rest: Iter.drop_first(rest, n - 1) })
+								Skip({ rest }) => Skip({ rest: Iter.drop_first(rest, n) })
+								One({ item: _, rest }) => Skip({ rest: Iter.drop_first(rest, n - 1) })
 							},
 					}
 				}

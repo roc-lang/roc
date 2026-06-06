@@ -239,7 +239,7 @@ pub fn compareTypes(
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
     tags: *SnapshotTagSafeList,
-) HintList {
+) Allocator.Error!HintList {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -253,21 +253,21 @@ pub fn compareTypes(
     switch (expected) {
         .structure => |exp_flat| switch (actual) {
             .structure => |act_flat| {
-                compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
+                try compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
             },
             else => {},
         },
         .alias => |exp_alias| switch (actual) {
             .alias => |act_alias| {
                 // Compare the backing types of aliases
-                compareTypesInternal(snap_store, ident_store, exp_alias.backing, act_alias.backing, &hints, gpa, fields, tags);
+                try compareTypesInternal(snap_store, ident_store, exp_alias.backing, act_alias.backing, &hints, gpa, fields, tags);
             },
             .structure => |act_flat| {
                 // Compare alias backing with structure
                 const exp_backing = snap_store.getContent(exp_alias.backing);
                 switch (exp_backing) {
                     .structure => |exp_flat| {
-                        compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
+                        try compareStructures(snap_store, ident_store, exp_flat, act_flat, &hints, gpa, fields, tags);
                     },
                     else => {},
                 }
@@ -290,26 +290,26 @@ fn compareTypesInternal(
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
     tags: *SnapshotTagSafeList,
-) void {
+) Allocator.Error!void {
     const expected = snap_store.getContent(expected_idx);
     const actual = snap_store.getContent(actual_idx);
 
     switch (expected) {
         .structure => |exp_flat| switch (actual) {
             .structure => |act_flat| {
-                compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
+                try compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
             },
             else => {},
         },
         .alias => |exp_alias| switch (actual) {
             .alias => |act_alias| {
-                compareTypesInternal(snap_store, ident_store, exp_alias.backing, act_alias.backing, hints, gpa, fields, tags);
+                try compareTypesInternal(snap_store, ident_store, exp_alias.backing, act_alias.backing, hints, gpa, fields, tags);
             },
             .structure => |act_flat| {
                 const exp_backing = snap_store.getContent(exp_alias.backing);
                 switch (exp_backing) {
                     .structure => |exp_flat| {
-                        compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
+                        try compareStructures(snap_store, ident_store, exp_flat, act_flat, hints, gpa, fields, tags);
                     },
                     else => {},
                 }
@@ -329,7 +329,7 @@ fn compareStructures(
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
     tags: *SnapshotTagSafeList,
-) void {
+) Allocator.Error!void {
     switch (expected) {
         .fn_pure => |exp_func| {
             switch (actual) {
@@ -374,20 +374,20 @@ fn compareStructures(
         .record => |exp_record| {
             switch (actual) {
                 .record => |act_record| {
-                    compareRecords(snap_store, ident_store, exp_record, act_record, hints, gpa, fields);
+                    try compareRecords(snap_store, ident_store, exp_record, act_record, hints, gpa, fields);
                 },
                 .record_unbound => |act_fields_range| {
                     // Gather expected fields (with extensions), actual is just immediate fields
-                    const exp_range = gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
+                    const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
                     const exp_names = fields.sliceRange(exp_range).items(.name);
                     const act_names = snap_store.sliceRecordFields(act_fields_range).items(.name);
-                    compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+                    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
                 },
                 .empty_record => {
                     // Actual is empty but expected has fields - gather all missing
-                    const exp_range = gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
+                    const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
                     const exp_names = fields.sliceRange(exp_range).items(.name);
-                    addMissingFields(exp_names, hints, gpa, fields);
+                    try addMissingFields(exp_names, hints, gpa, fields);
                 },
                 else => {},
             }
@@ -397,19 +397,19 @@ fn compareStructures(
                 .record => |act_record| {
                     // Expected is just immediate fields, gather actual (with extensions)
                     const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
-                    const act_range = gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
+                    const act_range = try gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
                     const act_names = fields.sliceRange(act_range).items(.name);
-                    compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+                    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
                 },
                 .record_unbound => |act_fields_range| {
                     // Both are just immediate fields, no extensions
                     const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
                     const act_names = snap_store.sliceRecordFields(act_fields_range).items(.name);
-                    compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+                    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
                 },
                 .empty_record => {
                     const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
-                    addMissingFields(exp_names, hints, gpa, fields);
+                    try addMissingFields(exp_names, hints, gpa, fields);
                 },
                 else => {},
             }
@@ -417,7 +417,7 @@ fn compareStructures(
         .tag_union => |exp_union| {
             switch (actual) {
                 .tag_union => |act_union| {
-                    compareTagUnions(snap_store, ident_store, exp_union, act_union, hints, gpa, tags);
+                    try compareTagUnions(snap_store, ident_store, exp_union, act_union, hints, gpa, tags);
                 },
                 else => {},
             }
@@ -450,16 +450,16 @@ fn compareRecords(
     hints: *HintList,
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
-) void {
+) Allocator.Error!void {
     // Gather ALL fields from expected (including extensions)
-    const exp_range = gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
+    const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
     const exp_names = fields.sliceRange(exp_range).items(.name);
 
     // Gather ALL fields from actual (including extensions)
-    const act_range = gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
+    const act_range = try gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
     const act_names = fields.sliceRange(act_range).items(.name);
 
-    compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
 }
 
 /// Gather all fields from a record, following extension chain.
@@ -469,12 +469,12 @@ pub fn gatherFieldsFromRecord(
     record: snapshot.SnapshotRecord,
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
-) SnapshotRecordFieldSafeList.Range {
+) Allocator.Error!SnapshotRecordFieldSafeList.Range {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const start: u32 = fields.len();
-    snap_store.gatherRecordFieldsHelp(record, gpa, fields) catch {};
+    try snap_store.gatherRecordFieldsHelp(record, gpa, fields);
     return fields.rangeToEnd(start);
 }
 
@@ -486,7 +486,7 @@ fn compareFieldNames(
     hints: *HintList,
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
-) void {
+) Allocator.Error!void {
     // Track where missing fields start in buffer
     const start_idx: u32 = fields.len();
 
@@ -509,7 +509,7 @@ fn compareFieldNames(
                 } });
             } else {
                 // No typo found, add to missing fields (with placeholder content)
-                _ = fields.append(gpa, .{ .name = exp_name_idx, .content = .first }) catch {};
+                _ = try fields.append(gpa, .{ .name = exp_name_idx, .content = .first });
             }
         }
     }
@@ -529,12 +529,12 @@ fn addMissingFields(
     hints: *HintList,
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
-) void {
+) Allocator.Error!void {
     if (exp_names.len == 0) return;
 
     const start_idx: u32 = fields.len();
     for (exp_names) |name| {
-        _ = fields.append(gpa, .{ .name = name, .content = .first }) catch {};
+        _ = try fields.append(gpa, .{ .name = name, .content = .first });
     }
 
     hints.append(.{ .fields_missing = .{
@@ -550,14 +550,14 @@ fn compareTagUnions(
     hints: *HintList,
     gpa: Allocator,
     tags: *SnapshotTagSafeList,
-) void {
+) Allocator.Error!void {
     // Gather ALL tags from expected (including extensions)
-    const exp_gathered = gatherTagsFromUnion(snap_store, exp_union, gpa, tags);
+    const exp_gathered = try gatherTagsFromUnion(snap_store, exp_union, gpa, tags);
     const exp_range = exp_gathered.fields;
     const exp_tag_names = tags.sliceRange(exp_range).items(.name);
 
     // Gather ALL tags from actual (including extensions)
-    const act_gathered = gatherTagsFromUnion(snap_store, act_union, gpa, tags);
+    const act_gathered = try gatherTagsFromUnion(snap_store, act_union, gpa, tags);
     const act_range = act_gathered.fields;
     const act_tag_names = tags.sliceRange(act_range).items(.name);
 
@@ -626,13 +626,13 @@ fn gatherTagsFromUnion(
     union_: snapshot.SnapshotTagUnion,
     gpa: Allocator,
     tags: *SnapshotTagSafeList,
-) struct { fields: SnapshotTagSafeList.Range, ext: TagExt } {
+) Allocator.Error!struct { fields: SnapshotTagSafeList.Range, ext: TagExt } {
     const start: u32 = tags.len();
 
     // Add immediate tags
     const union_tags = snap_store.sliceTags(union_.tags);
     for (union_tags.items(.name), union_tags.items(.args), union_tags.items(.formatted)) |name, args, formatted| {
-        _ = tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
+        _ = try tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted });
     }
 
     var ext: TagExt = .other;
@@ -646,7 +646,7 @@ fn gatherTagsFromUnion(
                 .tag_union => |ext_union| {
                     const ext_tags = snap_store.sliceTags(ext_union.tags);
                     for (ext_tags.items(.name), ext_tags.items(.args), ext_tags.items(.formatted)) |name, args, formatted| {
-                        _ = tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted }) catch {};
+                        _ = try tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted });
                     }
                     ext_idx = ext_union.ext;
                 },

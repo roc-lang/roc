@@ -65,7 +65,7 @@ pub const ExtractWriter = struct {
 
     pub const VTable = struct {
         createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!*std.Io.Writer,
-        finishFile: *const fn (ptr: *anyopaque) void,
+        finishFile: *const fn (ptr: *anyopaque) std.mem.Allocator.Error!void,
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
@@ -76,13 +76,14 @@ pub const ExtractWriter = struct {
 
     pub const MakeDirError = error{
         DirectoryCreateFailed,
+        OutOfMemory,
     };
 
     pub fn createFile(self: ExtractWriter, path: []const u8) CreateFileError!*std.Io.Writer {
         return self.vtable.createFile(self.ptr, path);
     }
 
-    pub fn finishFile(self: ExtractWriter) void {
+    pub fn finishFile(self: ExtractWriter) std.mem.Allocator.Error!void {
         return self.vtable.finishFile(self.ptr);
     }
 
@@ -164,7 +165,7 @@ pub const DirExtractWriter = struct {
         return &entry.writer.interface;
     }
 
-    fn finishFile(ptr: *anyopaque) void {
+    fn finishFile(ptr: *anyopaque) std.mem.Allocator.Error!void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
         // Close and remove the last file
         if (self.open_files.items.len > 0) {
@@ -237,19 +238,21 @@ pub const BufferExtractWriter = struct {
         return &self.current_file_writer.?.writer;
     }
 
-    fn finishFile(ptr: *anyopaque) void {
+    fn finishFile(ptr: *anyopaque) std.mem.Allocator.Error!void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
         if (self.current_file_writer) |*writer| {
             if (self.current_file_path) |path| {
                 // Convert writer contents to Managed ArrayList
                 const unmanaged_list = writer.toArrayList();
                 var managed_list = std.array_list.Managed(u8).fromOwnedSlice(self.allocator, unmanaged_list.items);
-                self.files.put(path, managed_list) catch {
-                    // If put fails, clean up
+                self.current_file_path = null;
+                self.current_file_writer = null;
+                self.files.put(path, managed_list) catch |err| {
                     managed_list.deinit();
                     self.allocator.free(path);
+                    return err;
                 };
-                self.current_file_path = null;
+                return;
             } else {
                 writer.deinit();
             }
@@ -259,10 +262,12 @@ pub const BufferExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
-        const dir_copy = self.allocator.dupe(u8, path) catch return error.DirectoryCreateFailed;
-        self.directories.append(dir_copy) catch {
-            self.allocator.free(dir_copy);
-            return error.DirectoryCreateFailed;
+        const dir_copy = self.allocator.dupe(u8, path) catch return error.OutOfMemory;
+        self.directories.append(dir_copy) catch |err| switch (err) {
+            error.OutOfMemory => {
+                self.allocator.free(dir_copy);
+                return error.OutOfMemory;
+            },
         };
     }
 };
@@ -280,13 +285,6 @@ const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "COM9", "LPT1", "LPT2", "LPT3",
     "LPT4", "LPT5", "LPT6", "LPT7",
     "LPT8", "LPT9",
-};
-
-/// Length of the longest Windows reserved device name (e.g. "COM1").
-const max_reserved_name_len: usize = blk: {
-    var longest: usize = 0;
-    for (WINDOWS_RESERVED_NAMES) |name| longest = @max(longest, name.len);
-    break :blk longest;
 };
 
 /// Check if a path has security or compatibility issues for unbundling
@@ -335,24 +333,20 @@ pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
             };
         }
 
-        // Only the base name (before the first dot) can be a Windows reserved
-        // name, and those are short, so longer base names can't match.
-        const dot = std.mem.findScalar(u8, component, '.') orelse component.len;
-        const base = component[0..dot];
-        if (base.len <= max_reserved_name_len) {
-            var upper_base_buf: [max_reserved_name_len]u8 = undefined;
-            for (base, 0..) |c, i| {
-                upper_base_buf[i] = std.ascii.toUpper(c);
-            }
-            const upper_base = upper_base_buf[0..base.len];
+        // The Windows reserved-name check is case-insensitive on the base name
+        // (the part before the first '.'). Compare without allocating so this
+        // validator cannot fail on OOM.
+        const base_name = if (std.mem.findScalar(u8, component, '.')) |dot_pos|
+            component[0..dot_pos]
+        else
+            component;
 
-            for (WINDOWS_RESERVED_NAMES) |reserved| {
-                if (std.mem.eql(u8, upper_base, reserved)) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .windows_reserved_name,
-                    };
-                }
+        for (WINDOWS_RESERVED_NAMES) |reserved| {
+            if (std.ascii.eqlIgnoreCase(base_name, reserved)) {
+                return PathValidationError{
+                    .path = path,
+                    .reason = .windows_reserved_name,
+                };
             }
         }
 
@@ -593,10 +587,15 @@ pub fn unbundleStream(
             },
             .file => {
                 const file_writer = try extract_writer.createFile(file_path);
-                defer extract_writer.finishFile();
+                // On the error path, finish the file to release the open-file
+                // resource; a secondary OOM here cannot be propagated from the
+                // unwind, so it is dropped. The success path commits explicitly
+                // below and propagates OOM.
+                errdefer extract_writer.finishFile() catch {};
 
                 try tar_iterator.streamRemaining(entry, file_writer);
                 try file_writer.flush();
+                try extract_writer.finishFile();
 
                 data_extracted = true;
             },

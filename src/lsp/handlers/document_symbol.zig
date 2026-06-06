@@ -54,9 +54,12 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Use the syntax checker to get the canonicalized module
-            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch {
-                try self.sendResponse(id, &[_]SymbolInformation{});
-                return;
+            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    try self.sendResponse(id, &[_]SymbolInformation{});
+                    return;
+                },
             };
             defer {
                 for (symbols) |*sym| {

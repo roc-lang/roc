@@ -82,7 +82,7 @@ pub const BuildSession = struct {
 
         // Drain reports regardless of build success to capture parse errors
         // Parse errors are emitted to the sink even when build fails
-        const drained_reports = env.drainReports() catch null;
+        const drained_reports = try env.drainReports();
 
         return BuildSession{
             .allocator = allocator,

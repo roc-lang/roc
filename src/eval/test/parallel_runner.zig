@@ -1699,6 +1699,36 @@ fn collectTests() []const TestCase {
     return &eval_tests.tests;
 }
 
+const WeightedEvalTest = struct {
+    original_i: usize,
+    weight: u64,
+    test_case: TestCase,
+};
+
+fn sortEvalTests(allocator: std.mem.Allocator, tests: []TestCase, weights: *const harness.TimingWeights) !void {
+    const weighted = try allocator.alloc(WeightedEvalTest, tests.len);
+    defer allocator.free(weighted);
+
+    for (tests, 0..) |test_case, original_i| {
+        weighted[original_i] = .{
+            .original_i = original_i,
+            .weight = weights.weight(test_case.name, 0),
+            .test_case = test_case,
+        };
+    }
+
+    std.mem.sort(WeightedEvalTest, weighted, {}, struct {
+        fn lessThan(_: void, a: WeightedEvalTest, b: WeightedEvalTest) bool {
+            if (a.weight != b.weight) return a.weight > b.weight;
+            return a.original_i < b.original_i;
+        }
+    }.lessThan);
+
+    for (weighted, 0..) |entry, i| {
+        tests[i] = entry.test_case;
+    }
+}
+
 //
 // CLI parsing
 //
@@ -1941,6 +1971,23 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     }
 }
 
+fn writeEvalTimingWeights(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    timing_path: []const u8,
+    tests: []const TestCase,
+    results: []const TestResult,
+) void {
+    var durations = gpa.alloc(u64, results.len) catch return;
+    defer gpa.free(durations);
+
+    for (results, 0..) |result, i| {
+        durations[i] = result.duration_ns;
+    }
+
+    harness.writeTimingWeights(TestCase, io, gpa, timing_path, tests, durations, getTestName);
+}
+
 //
 // Main
 //
@@ -2056,6 +2103,12 @@ pub fn main(init: std.process.Init) !void {
         }
         return;
     }
+
+    const timing_path = try harness.defaultTimingPath(args_arena.allocator(), "eval");
+    var timing_weights = harness.TimingWeights.init(gpa);
+    defer timing_weights.deinit();
+    timing_weights.load(io, timing_path);
+    try sortEvalTests(gpa, tests, &timing_weights);
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
     const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
@@ -2222,6 +2275,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const wall_elapsed = wall_timer.read();
+
+    writeEvalTimingWeights(io, gpa, timing_path, tests, results);
 
     var passed: usize = 0;
     var failed: usize = 0;

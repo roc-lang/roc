@@ -12122,22 +12122,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_stmt_id = saved_current_stmt_id;
                 self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
                 self.proc_debug_args_slot = saved_proc_debug_args_slot;
-                self.local_locations.deinit();
-                self.local_locations = saved_local_locations.clone() catch unreachable;
-                self.join_points.deinit();
-                self.join_points = saved_join_points.clone() catch unreachable;
-                self.stmt_locations.deinit();
-                self.stmt_locations = saved_stmt_locations.clone() catch unreachable;
-                self.deinitJoinPointJumpsMap(&self.join_point_jumps);
-                self.join_point_jumps = self.cloneJoinPointJumpsMap(&saved_join_point_jumps) catch unreachable;
-                self.join_point_params.deinit();
-                self.join_point_params = saved_join_point_params.clone() catch unreachable;
-                self.loop_continue_targets.deinit(self.allocator);
-                self.loop_continue_targets = saved_loop_continue_targets.clone(self.allocator) catch unreachable;
-                self.loop_break_patch_starts.deinit(self.allocator);
-                self.loop_break_patch_starts = saved_loop_break_patch_starts.clone(self.allocator) catch unreachable;
-                self.loop_break_patches.deinit(self.allocator);
-                self.loop_break_patches = saved_loop_break_patches.clone(self.allocator) catch unreachable;
+                // Restore the saved maps by swapping them back into place. This
+                // cannot allocate (so it is safe in an errdefer that cannot
+                // propagate errors): the mutated maps end up in the saved_*
+                // locals, which their own defers deinit.
+                std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
+                std.mem.swap(@TypeOf(self.join_points), &self.join_points, &saved_join_points);
+                std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
+                std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
+                std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
+                std.mem.swap(@TypeOf(self.loop_continue_targets), &self.loop_continue_targets, &saved_loop_continue_targets);
+                std.mem.swap(@TypeOf(self.loop_break_patch_starts), &self.loop_break_patch_starts, &saved_loop_break_patch_starts);
+                std.mem.swap(@TypeOf(self.loop_break_patches), &self.loop_break_patches, &saved_loop_break_patches);
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }

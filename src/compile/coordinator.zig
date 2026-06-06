@@ -2741,6 +2741,7 @@ pub const Coordinator = struct {
             .parse_failed => |*r| try self.handleParseFailed(r),
             .compile_failed => |*r| try self.handleCompileFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
+            .worker_oom => return error.OutOfMemory,
         }
     }
 
@@ -3568,21 +3569,26 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeParseFallible(task, allocators) catch |err| {
-            const title = switch (err) {
-                error.FileNotFound => "FILE NOT FOUND",
-                else => "PARSING FAILED",
-            };
-            return .{
-                .parse_failed = .{
+        return self.executeParseFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| blk: {
+                const title = switch (e) {
+                    error.FileNotFound => "FILE NOT FOUND",
+                    else => "PARSING FAILED",
+                };
+                break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, title, task.path, err),
+                    .reports = self.workerFailureReports(allocators.result, title, task.path, e),
                     .partial_env = null,
-                },
-            };
+                } };
+            },
         };
     }
 
@@ -3699,17 +3705,12 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeCanonicalizeFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+        return self.executeCanonicalizeFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
         };
     }
 
@@ -3783,17 +3784,20 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeTypeCheckFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+        return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| WorkerResult{ .compile_failed = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .path = task.path,
+                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .partial_env = task.module_env,
+            } },
         };
     }
 
