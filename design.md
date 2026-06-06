@@ -1107,12 +1107,31 @@ No `for` node exists after Monotype IR.
 Monotype Lifted IR removes closures and local functions from expression
 position. Its type store is the Monotype type store.
 
-The expression language is intentionally close to Monotype IR, but:
+The expression language is intentionally close to Monotype IR, and the
+implementation consumes Monotype expression storage in place. Expression,
+pattern, statement, and side-array ids are preserved across the Monotype to
+Monotype Lifted boundary. Patterns and statements are the same storage. Most
+expressions are the same storage. Lifting rewrites only the expression variants
+whose callable meaning changes:
 
-- there is no `lambda` expression
-- there is no local function definition inside an expression
+- `lambda`, `def_ref`, and `fn_def` become `fn_ref`
+- a direct-call callee changes from a Monotype function template to a lifted
+  function id
+
+This is a representation-sharing rule, not a license for later stages to accept
+pre-lift callable forms. After lifting, a valid lifted program has no reachable
+`lambda`, `def_ref`, `fn_def`, or template-callee `call_proc` expression. Those
+variants may still exist in the shared Zig union because Monotype and Monotype
+Lifted use one backing expression representation, but seeing one through the
+Monotype Lifted API is a compiler bug.
+
+The lifted stage output adds only the data that lifting owns:
+
 - every function body is a top-level lifted definition
 - each lifted function definition declares its capture symbols explicitly
+- roots and layout requests refer to lifted function ids
+- capture spans appended by lifting are stored in the shared typed-local side
+  array
 
 ```zig
 const LiftedDef = struct {
@@ -1140,6 +1159,13 @@ definition; callable representation is not chosen until Lambda Mono.
 The lifting pass owns free-variable analysis. It does not choose finite
 callable representations, erased callable representations, closure object
 layouts, or runtime tags.
+
+Release builds must not allocate or fill a second expression, pattern,
+statement, branch, field-expression, or span arena for Monotype Lifted. The
+normal path may allocate lifted function metadata, capture spans, request
+rewrites, and traversal scratch owned by lifting. Debug builds may materialize
+the old copied lifted tree only as a verifier; the in-place lifted program
+remains the source consumed by Lambda Solved and later stages.
 
 ## Lambda Solved IR
 
@@ -1214,8 +1240,8 @@ use the full ordered argument list plus the result type.
 
 ### Lambda Solving
 
-Lambda Solved IR has the same lifted expression shape as Monotype Lifted IR.
-Only the type store changes.
+Lambda Solved IR keeps the Monotype Lifted expression storage and adds solved
+type arrays beside it. Only the type store changes.
 
 The solver:
 
@@ -1955,8 +1981,9 @@ Minimum boundary checks:
 - Monotype IR contains only closed monomorphic types.
 - Monotype IR contains no runtime tag discriminants, layout ids, or callable
   representation ids.
-- Monotype Lifted IR contains no closure expressions or local function
-  definitions in expression position.
+- Monotype Lifted IR contains no reachable closure expressions, local function
+  definitions in expression position, definition references in expression
+  position, or direct calls whose callee is still a Monotype function template.
 - Lambda Solved IR has every function type in `args/callable/ret` form.
 - Lambda Solved IR has no unresolved callable slot before Lambda Mono lowering.
 - Lambda Mono decisions contain no function type and no value-call node.
