@@ -1,9 +1,0 @@
-app "test" provides [always] to "./platform"
-
-Effect a := {} -> a
-
-MockTask a err : Effect (Result a err)
-
-always : a -> MockTask a *
-always = \x -> @Effect (\{} -> Ok x)
-#^^^^^^{-1} a -[[always(0)]]-> MockTask a *

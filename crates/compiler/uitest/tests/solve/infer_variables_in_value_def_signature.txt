@@ -1,5 +1,0 @@
-app "test" provides [a] to "./platform"
-
-a : {a: _}
-a = {a: ""}
-#^{-1} { a : Str }

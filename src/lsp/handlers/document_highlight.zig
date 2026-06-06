@@ -87,7 +87,11 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Try CIR-based highlighting first (scope-aware)
-            if (self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch null) |result| {
+            const cir_highlights = self.syntax_checker.getHighlightsAtPosition(uri, text, line, character) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
+            if (cir_highlights) |result| {
                 defer result.deinit(self.allocator);
 
                 // Convert to DocumentHighlight array
@@ -109,11 +113,7 @@ pub fn handler(comptime ServerType: type) type {
             }
 
             // Fall back to token-based highlighting
-            const highlights = findHighlightsByToken(self.allocator, text, line, character) catch |err| {
-                std.log.err("document highlight failed: {s}", .{@errorName(err)});
-                try self.sendResponse(id, &[_]DocumentHighlight{});
-                return;
-            };
+            const highlights = try findHighlightsByToken(self.allocator, text, line, character);
             defer self.allocator.free(highlights);
 
             try self.sendResponse(id, highlights);
@@ -155,13 +155,12 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     };
 
     // Parse to get tokens
-    var module_env = can.ModuleEnv.init(allocator, source) catch {
-        return &[_]DocumentHighlight{};
-    };
+    var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch {
-        return &[_]DocumentHighlight{};
+    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TooNested => return &[_]DocumentHighlight{},
     };
     defer ast.deinit();
 

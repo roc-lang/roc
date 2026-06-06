@@ -21,12 +21,37 @@ pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
 
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
 pub const IsolatedCacheDirs = struct {
+    cache_root_dir: []u8,
     roc_cache_dir: []u8,
     zig_local_cache_dir: []u8,
+
+    pub fn cleanup(self: IsolatedCacheDirs) void {
+        std.Io.Dir.cwd().deleteTree(io, self.cache_root_dir) catch {};
+    }
+
+    pub fn cleanupAndDeinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
+        self.cleanup();
+        self.deinit(allocator);
+    }
 
     pub fn deinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
         allocator.free(self.zig_local_cache_dir);
         allocator.free(self.roc_cache_dir);
+        allocator.free(self.cache_root_dir);
+    }
+};
+
+/// Process environment map plus any test-owned cache directories it references.
+pub const IsolatedTestEnv = struct {
+    env_map: std.process.Environ.Map,
+    cache_dirs: ?IsolatedCacheDirs,
+
+    pub fn deinit(self: *IsolatedTestEnv, allocator: std.mem.Allocator) void {
+        self.env_map.deinit();
+        if (self.cache_dirs) |cache_dirs| {
+            cache_dirs.cleanupAndDeinit(allocator);
+            self.cache_dirs = null;
+        }
     }
 };
 
@@ -246,15 +271,14 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
     try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
     return .{
+        .cache_root_dir = try std.fs.path.join(allocator, &.{ cwd_path, cache_root_rel }),
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
         .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
     };
 }
 
-/// Build an environment map for a test Roc subprocess.
-/// Unless the caller already set them, this gives the subprocess unique Roc,
-/// URL package, and Zig local cache roots so concurrent CLI tests cannot share cache state.
-pub fn buildIsolatedTestEnvMap(
+/// Copy the current process environment and overlay any caller-provided entries.
+pub fn buildProcessEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,
 ) !std.process.Environ.Map {
@@ -276,27 +300,47 @@ pub fn buildIsolatedTestEnvMap(
         }
     }
 
+    return env_map;
+}
+
+/// Build an environment map for a test Roc subprocess.
+/// Unless the caller already set them, this gives the subprocess unique Roc,
+/// URL package, and Zig local cache roots so concurrent CLI tests cannot share cache state.
+pub fn buildIsolatedTestEnv(
+    allocator: std.mem.Allocator,
+    extra_env: ?*const std.process.Environ.Map,
+) !IsolatedTestEnv {
+    var env_map = try buildProcessEnvMap(allocator, extra_env);
+    errdefer env_map.deinit();
+    var cache_dirs: ?IsolatedCacheDirs = null;
+    errdefer if (cache_dirs) |dirs| {
+        dirs.cleanupAndDeinit(allocator);
+    };
+
     if (env_map.get("ROC_CACHE_DIR") == null or
         env_map.get("XDG_CACHE_HOME") == null or
         env_map.get("ZIG_LOCAL_CACHE_DIR") == null)
     {
-        const cache_dirs = try createIsolatedTestCacheDirs(allocator);
-        defer cache_dirs.deinit(allocator);
+        const dirs = try createIsolatedTestCacheDirs(allocator);
+        cache_dirs = dirs;
 
         if (env_map.get("ROC_CACHE_DIR") == null) {
-            try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+            try env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir);
         }
 
         if (env_map.get("XDG_CACHE_HOME") == null) {
-            try env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir);
+            try env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir);
         }
 
         if (env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
-            try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
+            try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
         }
     }
 
-    return env_map;
+    return .{
+        .env_map = env_map,
+        .cache_dirs = cache_dirs,
+    };
 }
 
 fn runChild(
@@ -305,12 +349,12 @@ fn runChild(
     cwd_path: []const u8,
     extra_env: ?*const std.process.Environ.Map,
 ) !RocResult {
-    var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
-    defer env_map.deinit();
+    var env = try buildIsolatedTestEnv(allocator, extra_env);
+    defer env.deinit(allocator);
 
     const result = try runChildWithTimeout(allocator, argv, .{
         .cwd = cwd_path,
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024, // 10MB
     });
 
@@ -497,11 +541,11 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     });
     defer allocator.free(argv);
 
-    var env_map = try buildIsolatedTestEnvMap(allocator, null);
-    defer env_map.deinit();
+    var env = try buildIsolatedTestEnv(allocator, null);
+    defer env.deinit(allocator);
     const result = try runChildWithTimeout(allocator, argv, .{
         .cwd = cwd_path,
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
         .stdin = stdin_input,
     });

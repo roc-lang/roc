@@ -95,9 +95,12 @@ fn readFdInfoFromCommandLine(allocator: std.mem.Allocator) CoordinationError!FdI
 /// POSIX: Read fd and size from temporary file
 fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationError!FdInfo {
     // Get our own executable path
-    const exe_path = std.process.executablePathAlloc(io, allocator) catch {
-        std.log.err("Failed to get executable path", .{});
-        return error.FdInfoReadFailed;
+    const exe_path = std.process.executablePathAlloc(io, allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.AllocationFailed,
+        else => {
+            std.log.err("Failed to get executable path", .{});
+            return error.FdInfoReadFailed;
+        },
     };
     defer allocator.free(exe_path);
 
@@ -137,9 +140,12 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     defer allocator.free(fd_file_path);
 
     // Read the file
-    const content = std.Io.Dir.cwd().readFileAlloc(io, fd_file_path, allocator, .limited(128)) catch {
-        std.log.err("Failed to read fd file at '{s}'", .{fd_file_path});
-        return error.FileReadFailed;
+    const content = std.Io.Dir.cwd().readFileAlloc(io, fd_file_path, allocator, .limited(128)) catch |err| switch (err) {
+        error.OutOfMemory => return error.AllocationFailed,
+        else => {
+            std.log.err("Failed to read fd file at '{s}'", .{fd_file_path});
+            return error.FileReadFailed;
+        },
     };
     defer allocator.free(content);
 

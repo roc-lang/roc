@@ -37,9 +37,7 @@ pub fn handler(comptime ServerType: type) type {
                 else => 0,
             };
 
-            self.doc_store.upsert(uri, version, text) catch |err| {
-                std.log.err("failed to open {s}: {s}", .{ uri, @errorName(err) });
-            };
+            try self.doc_store.upsert(uri, version, text);
 
             self.onDocumentChanged(uri);
         }

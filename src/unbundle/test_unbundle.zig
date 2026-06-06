@@ -143,7 +143,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Hello, World!");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Create a directory (should be no-op for buffer writer)
     try writer.extractWriter().makeDir("test_dir");
@@ -151,7 +151,7 @@ test "BufferExtractWriter - basic functionality" {
     // Create another file in a subdirectory
     const file_writer2 = try writer.extractWriter().createFile("subdir/test2.txt");
     try file_writer2.writeAll("Second file");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify files were stored
     try testing.expectEqual(@as(usize, 2), writer.files.count());
@@ -187,7 +187,7 @@ test "DirExtractWriter - basic functionality" {
     // Create a file
     const file_writer = try writer.extractWriter().createFile("test.txt");
     try file_writer.writeAll("Test content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify file was created
     const content = try tmp.dir.readFileAlloc(io, "test.txt", testing.allocator, .limited(1024));
@@ -197,7 +197,7 @@ test "DirExtractWriter - basic functionality" {
     // Create a file in a subdirectory (should create parent dirs)
     const file_writer2 = try writer.extractWriter().createFile("deep/nested/file.txt");
     try file_writer2.writeAll("Nested content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify nested file was created
     const nested_content = try tmp.dir.readFileAlloc(io, "deep/nested/file.txt", testing.allocator, .limited(1024));
@@ -307,12 +307,12 @@ test "BufferExtractWriter - overwrite existing file" {
     // Create a file with initial content
     const file_writer1 = try writer.extractWriter().createFile("test.txt");
     try file_writer1.writeAll("Initial content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Overwrite the same file
     const file_writer2 = try writer.extractWriter().createFile("test.txt");
     try file_writer2.writeAll("New content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify it was overwritten
     const file = writer.files.get("test.txt");
@@ -332,7 +332,7 @@ test "DirExtractWriter - nested directory creation" {
     // Create a file in a deeply nested path
     const file_writer = try writer.extractWriter().createFile("a/b/c/d/e/file.txt");
     try file_writer.writeAll("Nested content");
-    writer.extractWriter().finishFile();
+    try writer.extractWriter().finishFile();
 
     // Verify the file was created
     const content = try tmp.dir.readFileAlloc(io, "a/b/c/d/e/file.txt", testing.allocator, .limited(1024));

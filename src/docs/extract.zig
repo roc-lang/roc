@@ -674,12 +674,12 @@ fn extractDefEntry(
 
                 const def_var = ModuleEnv.varFrom(def_idx);
                 if (@intFromEnum(def_var) >= module_env.types.len()) break :blk null;
-                break :blk extractDocType(
+                break :blk try extractDocType(
                     gpa,
                     &module_env.types,
                     module_env.getIdentStoreConst(),
                     def_var,
-                ) catch break :blk null;
+                );
             };
             errdefer if (type_sig) |s| {
                 s.deinit(gpa);
