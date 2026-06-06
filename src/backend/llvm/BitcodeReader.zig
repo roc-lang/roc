@@ -6,9 +6,10 @@ const BitcodeReader = @This();
 
 const std = @import("std");
 const assert = std.debug.assert;
+const base = @import("base");
 
 allocator: std.mem.Allocator,
-record_arena: std.heap.ArenaAllocator.State,
+record_arena: base.SingleThreadArena.State,
 reader: *std.Io.Reader,
 keep_names: bool,
 bit_buffer: u32,

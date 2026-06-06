@@ -376,7 +376,7 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -446,7 +446,7 @@ test "SmallStringInterner basic CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -519,7 +519,7 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -580,7 +580,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -646,7 +646,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 

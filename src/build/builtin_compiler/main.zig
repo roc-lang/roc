@@ -497,7 +497,7 @@ fn serializeModuleEnv(
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

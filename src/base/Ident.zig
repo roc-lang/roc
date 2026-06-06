@@ -472,7 +472,7 @@ test "Ident.Store empty CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -540,7 +540,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -623,7 +623,7 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -684,7 +684,7 @@ test "Ident.Store CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -764,7 +764,7 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 

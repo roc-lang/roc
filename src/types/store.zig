@@ -1727,7 +1727,7 @@ test "SlotStore.Serialized roundtrip" {
     defer file.close(io);
 
     // Serialize using SlotStore.Serialized with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1785,7 +1785,7 @@ test "DescStore.Serialized roundtrip" {
     defer file.close(io);
 
     // Serialize using DescStore.Serialized with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1995,7 +1995,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 

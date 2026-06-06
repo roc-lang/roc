@@ -689,7 +689,7 @@ pub fn main(init: std.process.Init) !void {
         gpa = gpa_tracy.allocator();
     }
 
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

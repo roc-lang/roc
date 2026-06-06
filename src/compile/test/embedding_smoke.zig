@@ -16,6 +16,7 @@ const lir = @import("lir");
 const eval = @import("eval");
 const check = @import("check");
 const base = @import("base");
+const collections = @import("collections");
 const host_abi = @import("builtins").host_abi;
 const roc_target = @import("roc_target");
 
@@ -53,7 +54,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     const app_path = "test/cli/simple_success.roc";
 
     const gpa = std.testing.allocator;
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

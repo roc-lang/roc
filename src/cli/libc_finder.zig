@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const collections = @import("collections");
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -306,7 +307,7 @@ test "libc detection integration test" {
     // This test is not relevant on Windows (`uname` not available)
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     var io = Io.create(std.testing.io);

@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
+const base = @import("base");
 
 const SupportedOS = enum { windows, linux, macos };
 
@@ -465,7 +466,7 @@ fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *
 }
 
 fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) !ReadLineResult {
-    var arena_allocator = std.heap.ArenaAllocator.init(outlive);
+    var arena_allocator = base.SingleThreadArena.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
 
