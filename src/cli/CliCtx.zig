@@ -316,8 +316,8 @@ pub fn renderProblem(
     allocator: Allocator,
     writer: anytype,
     problem: CliProblem,
-) void {
-    var report = problem.toReport(allocator) catch return;
+) Allocator.Error!void {
+    var report = try problem.toReport(allocator);
     defer report.deinit();
 
     const config = ReportingConfig.initColorTerminal();

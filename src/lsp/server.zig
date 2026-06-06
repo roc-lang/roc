@@ -263,8 +263,8 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
                 try uri_util.uriToPath(self.allocator, root_uri)
             else
                 null;
+            defer if (root_path) |p| self.allocator.free(p);
             const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path);
-            if (root_path) |p| self.allocator.free(p);
             defer {
                 for (publish_sets) |*set| set.deinit(self.allocator);
                 self.allocator.free(publish_sets);
