@@ -2560,16 +2560,14 @@ const ExprFrame = union(enum) {
         min_bp: u8,
         expr: AST.Expr.Idx,
     },
-    finish_last: struct {
-        start: Token.Idx,
-        min_bp: u8,
-    },
     after_unary: struct {
         start: Token.Idx,
+        min_bp: u8,
         operator: Token.Idx,
     },
     expr_collection_next: struct {
         start: Token.Idx,
+        min_bp: ?u8,
         scratch_top: u32,
         end_token: Token.Tag,
         result: ExprCollectionResult,
@@ -2577,6 +2575,7 @@ const ExprFrame = union(enum) {
     },
     expr_collection_after_item: struct {
         start: Token.Idx,
+        min_bp: ?u8,
         scratch_top: u32,
         end_token: Token.Tag,
         result: ExprCollectionResult,
@@ -2621,11 +2620,13 @@ const ExprFrame = union(enum) {
     },
     string_next: struct {
         start: Token.Idx,
+        min_bp: ?u8,
         scratch_top: u32,
         multiline: bool,
     },
     string_after_interp: struct {
         start: Token.Idx,
+        min_bp: ?u8,
         scratch_top: u32,
         multiline: bool,
     },
@@ -2655,9 +2656,13 @@ const ExprFrame = union(enum) {
     },
     lambda_after_body: struct {
         start: Token.Idx,
+        min_bp: u8,
         args: AST.Pattern.Span,
     },
-    lambda_after_args: Token.Idx,
+    lambda_after_args: struct {
+        start: Token.Idx,
+        min_bp: u8,
+    },
     pattern_collection_next: struct {
         start: Token.Idx,
         scratch_top: u32,
@@ -2672,30 +2677,41 @@ const ExprFrame = union(enum) {
         alternatives: Alternatives,
         close_error: AST.Diagnostic.Tag,
     },
-    if_after_condition: Token.Idx,
+    if_after_condition: struct {
+        start: Token.Idx,
+        min_bp: u8,
+    },
     if_after_then: struct {
         start: Token.Idx,
+        min_bp: u8,
         condition: AST.Expr.Idx,
     },
     if_after_else: struct {
         start: Token.Idx,
+        min_bp: u8,
         condition: AST.Expr.Idx,
         then: AST.Expr.Idx,
     },
-    match_after_expr: Token.Idx,
+    match_after_expr: struct {
+        start: Token.Idx,
+        min_bp: u8,
+    },
     match_branch_next: struct {
         start: Token.Idx,
+        min_bp: u8,
         matched: AST.Expr.Idx,
         scratch_top: u32,
     },
     match_branch_after_pattern: struct {
         match_start: Token.Idx,
+        min_bp: u8,
         matched: AST.Expr.Idx,
         scratch_top: u32,
         branch_start: Token.Idx,
     },
     match_branch_after_guard: struct {
         match_start: Token.Idx,
+        min_bp: u8,
         matched: AST.Expr.Idx,
         scratch_top: u32,
         branch_start: Token.Idx,
@@ -2704,38 +2720,53 @@ const ExprFrame = union(enum) {
     },
     match_branch_after_body: struct {
         match_start: Token.Idx,
+        min_bp: u8,
         matched: AST.Expr.Idx,
         scratch_top: u32,
         branch_start: Token.Idx,
         pattern: AST.Pattern.Idx,
         guard: ?AST.Expr.Idx,
     },
-    dbg_after_expr: Token.Idx,
-    for_after_pattern: Token.Idx,
+    dbg_after_expr: struct {
+        start: Token.Idx,
+        min_bp: u8,
+    },
+    for_after_pattern: struct {
+        start: Token.Idx,
+        min_bp: u8,
+    },
     for_after_list: struct {
         start: Token.Idx,
+        min_bp: u8,
         pattern: AST.Pattern.Idx,
     },
     for_after_body: struct {
         start: Token.Idx,
+        min_bp: u8,
         pattern: AST.Pattern.Idx,
         list_expr: AST.Expr.Idx,
     },
-    block_begin: Token.Idx,
+    block_begin: struct {
+        start: Token.Idx,
+        min_bp: u8,
+    },
     block_next: struct {
         start: Token.Idx,
+        min_bp: u8,
         scope: DeclIndex.ScopeIdx,
         scratch_top: u32,
         previous_type_path_visible_start: usize,
     },
     block_after_statement: struct {
         start: Token.Idx,
+        min_bp: u8,
         scope: DeclIndex.ScopeIdx,
         scratch_top: u32,
         previous_type_path_visible_start: usize,
     },
     block_finish: struct {
         start: Token.Idx,
+        min_bp: u8,
         scope: DeclIndex.ScopeIdx,
         scratch_top: u32,
         previous_type_path_visible_start: usize,
@@ -2966,6 +2997,7 @@ fn handleExprPatternFrame(
                     try frames.append(allocator, .{ .pattern = .{ .string_after_expr = start } });
                     try frames.append(allocator, .{ .string_next = .{
                         .start = start,
+                        .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
                         .multiline = false,
                     } });
@@ -3457,8 +3489,8 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
     var last_associated: ?AST.Associated = null;
     try frames.append(frame_allocator, initial);
 
-    while (frames.pop()) |frame| {
-        switch (frame) {
+    while (frames.pop()) |initial_frame| {
+        frame: switch (initial_frame) {
             .parse => |frame_min_bp| {
                 const start = self.pos;
                 switch (self.peek()) {
@@ -3477,7 +3509,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                 .qualifiers = qual_result.qualifiers,
                                 .region = .{ .start = start, .end = self.pos },
                             } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
+                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
                     },
                     .LowerIdent, .NamedUnderscore => {
                         self.advance();
@@ -3487,7 +3519,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .qualifiers = empty_qualifiers,
                             .region = .{ .start = start, .end = self.pos },
                         } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
+                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
                     },
                     .Int => {
                         self.advance();
@@ -3526,7 +3558,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .literal = literal,
                             .region = deprecated_region,
                         } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
+                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
                     },
                     .Float => {
                         self.advance();
@@ -3560,7 +3592,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .literal = literal,
                             .region = deprecated_region,
                         } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
+                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
                     },
                     .SingleQuote => {
                         self.advance();
@@ -3568,54 +3600,54 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .token = start,
                             .region = .{ .start = start, .end = self.pos },
                         } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
+                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
                     },
                     .StringStart, .MultilineStringStart => {
                         const multiline = self.peek() == .MultilineStringStart;
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .string_next = .{
+                        continue :frame .{ .string_next = .{
                             .start = start,
+                            .min_bp = frame_min_bp,
                             .scratch_top = self.store.scratchExprTop(),
                             .multiline = multiline,
-                        } });
+                        } };
                     },
                     .OpenSquare => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                        continue :frame .{ .expr_collection_next = .{
                             .start = start,
+                            .min_bp = frame_min_bp,
                             .scratch_top = self.store.scratchExprTop(),
                             .end_token = .CloseSquare,
                             .result = .list,
                             .close_error = .expected_expr_close_square_or_comma,
-                        } });
+                        } };
                     },
                     .NoSpaceOpenRound, .OpenRound => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                        continue :frame .{ .expr_collection_next = .{
                             .start = start,
+                            .min_bp = frame_min_bp,
                             .scratch_top = self.store.scratchExprTop(),
                             .end_token = .CloseRound,
                             .result = .tuple,
                             .close_error = .expected_expr_close_round_or_comma,
-                        } });
+                        } };
                     },
                     .OpenCurly => {
                         self.advance();
 
                         if (self.peek() == .CloseCurly) {
-                            try frames.append(frame_allocator, .{ .record_finish = .{
+                            continue :frame .{ .record_finish = .{
                                 .start = start,
                                 .min_bp = frame_min_bp,
                                 .scratch_top = self.store.scratchRecordFieldTop(),
                                 .ext = null,
-                            } });
+                            } };
                         } else if (self.peek() == .DoubleDot) {
                             self.advance();
                             try frames.append(frame_allocator, .{ .record_ext_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
+                            continue :frame .{ .parse = 0 };
                         } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
                             var is_block = false;
                             if (self.peekNext() == .OpColon) {
@@ -3640,55 +3672,48 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                 }
                             }
                             if (is_block) {
-                                try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                                try frames.append(frame_allocator, .{ .block_begin = start });
+                                continue :frame .{ .block_begin = .{ .start = start, .min_bp = frame_min_bp } };
                             } else {
-                                try frames.append(frame_allocator, .{ .record_fields_next = .{
+                                continue :frame .{ .record_fields_next = .{
                                     .start = start,
                                     .min_bp = frame_min_bp,
                                     .scratch_top = self.store.scratchRecordFieldTop(),
                                     .ext = null,
-                                } });
+                                } };
                             }
                         } else {
-                            try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                            try frames.append(frame_allocator, .{ .block_begin = start });
+                            continue :frame .{ .block_begin = .{ .start = start, .min_bp = frame_min_bp } };
                         }
                     },
                     .OpBar => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .lambda_after_args = start });
-                        try frames.append(frame_allocator, .{ .pattern_collection_next = .{
+                        try frames.append(frame_allocator, .{ .lambda_after_args = .{ .start = start, .min_bp = frame_min_bp } });
+                        continue :frame .{ .pattern_collection_next = .{
                             .start = start,
                             .scratch_top = self.store.scratchPatternTop(),
                             .end_token = .OpBar,
                             .alternatives = .alternatives_forbidden,
                             .close_error = .expected_expr_bar,
-                        } });
+                        } };
                     },
                     .KwIf => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .if_after_condition = start });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
+                        try frames.append(frame_allocator, .{ .if_after_condition = .{ .start = start, .min_bp = frame_min_bp } });
+                        continue :frame .{ .parse = 0 };
                     },
                     .KwMatch => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .match_after_expr = start });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
+                        try frames.append(frame_allocator, .{ .match_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
+                        continue :frame .{ .parse = 0 };
                     },
                     .KwDbg => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .dbg_after_expr = start });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
+                        try frames.append(frame_allocator, .{ .dbg_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
+                        continue :frame .{ .parse = 0 };
                     },
                     .KwFor => {
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .for_after_pattern = start });
+                        try frames.append(frame_allocator, .{ .for_after_pattern = .{ .start = start, .min_bp = frame_min_bp } });
                         try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
                     },
                     .TripleDot => {
@@ -3696,14 +3721,13 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
+                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
                     },
                     .OpUnaryMinus, .OpBang => {
                         const operator_token = start;
                         self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .after_unary = .{ .start = start, .operator = operator_token } });
-                        try frames.append(frame_allocator, .{ .parse = 100 });
+                        try frames.append(frame_allocator, .{ .after_unary = .{ .start = start, .min_bp = frame_min_bp, .operator = operator_token } });
+                        continue :frame .{ .parse = 100 };
                     },
                     .KwReturn => {
                         last = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
@@ -3727,14 +3751,14 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                 .min_bp = state.min_bp,
                                 .function = expression,
                             } });
-                            try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                            continue :frame .{ .expr_collection_next = .{
                                 .start = state.start,
+                                .min_bp = null,
                                 .scratch_top = self.store.scratchExprTop(),
                                 .end_token = .CloseRound,
                                 .result = .apply_args,
                                 .close_error = .expected_expr_apply_close_round,
-                            } });
-                            break;
+                            } };
                         },
                         .NoSpaceOpQuestion => {
                             self.advance();
@@ -3770,14 +3794,14 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                     .receiver = expression,
                                     .method_token = s,
                                 } });
-                                try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                                continue :frame .{ .expr_collection_next = .{
                                     .start = s,
+                                    .min_bp = null,
                                     .scratch_top = self.store.scratchExprTop(),
                                     .end_token = .CloseRound,
                                     .result = .apply_args,
                                     .close_error = .expected_expr_apply_close_round,
-                                } });
-                                break;
+                                } };
                             } else {
                                 expression = try self.store.addExpr(.{ .field_access = .{
                                     .region = .{ .start = state.start, .end = self.pos },
@@ -3811,14 +3835,13 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         .token = qual_result.final_token,
                                         .qualifiers = qual_result.qualifiers,
                                     } });
-                                try frames.append(frame_allocator, .{ .arrow_app_next = .{
+                                continue :frame .{ .arrow_app_next = .{
                                     .start = state.start,
                                     .min_bp = state.min_bp,
                                     .left = expression,
                                     .operator = s,
                                     .rhs = expr_node,
-                                } });
-                                break;
+                                } };
                             } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
                                 self.advance();
                                 try frames.append(frame_allocator, .{ .arrow_after_inner = .{
@@ -3827,8 +3850,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                     .left = expression,
                                     .operator = s,
                                 } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                                break;
+                                continue :frame .{ .parse = 0 };
                             } else {
                                 last = try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
                                 continue;
@@ -3845,8 +3867,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         .left = expression,
                                         .operator = op_pos,
                                     } });
-                                    try frames.append(frame_allocator, .{ .parse = bp.right });
-                                    break;
+                                    continue :frame .{ .parse = bp.right };
                                 }
                             }
                             last = expression;
@@ -3855,22 +3876,15 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     }
                 }
             },
-            .finish_last => |state| {
-                const expr = last orelse unreachable;
-                last = null;
-                try frames.append(frame_allocator, .{ .finish = .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .expr = expr,
-                } });
-            },
             .after_unary => |state| {
                 const operand = last orelse unreachable;
-                last = try self.store.addExpr(.{ .unary_op = .{
+                last = null;
+                const expr = try self.store.addExpr(.{ .unary_op = .{
                     .operator = state.operator,
                     .expr = operand,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .expr_collection_next => |state| {
                 if (self.peek() == state.end_token) {
@@ -3892,6 +3906,11 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             } });
                         },
                     }
+                    if (state.min_bp) |min_bp| {
+                        const expr = last orelse unreachable;
+                        last = null;
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = min_bp, .expr = expr } };
+                    }
                 } else if (self.peek() == .EndOfFile) {
                     self.store.clearScratchExprsFrom(state.scratch_top);
                     last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
@@ -3899,12 +3918,13 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 } else {
                     try frames.append(frame_allocator, .{ .expr_collection_after_item = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
                         .result = state.result,
                         .close_error = state.close_error,
                     } });
-                    try frames.append(frame_allocator, .{ .parse = 0 });
+                    continue :frame .{ .parse = 0 };
                 }
             },
             .expr_collection_after_item => |state| {
@@ -3913,21 +3933,23 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 try self.store.addScratchExpr(item);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                    continue :frame .{ .expr_collection_next = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
                         .result = state.result,
                         .close_error = state.close_error,
-                    } });
+                    } };
                 } else if (self.peek() == state.end_token) {
-                    try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                    continue :frame .{ .expr_collection_next = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
                         .result = state.result,
                         .close_error = state.close_error,
-                    } });
+                    } };
                 } else {
                     self.store.clearScratchExprsFrom(state.scratch_top);
                     if (state.result == .apply_args) {
@@ -3966,21 +3988,21 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 try self.store.addScratchPattern(item);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.append(frame_allocator, .{ .pattern_collection_next = .{
+                    continue :frame .{ .pattern_collection_next = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
                         .alternatives = state.alternatives,
                         .close_error = state.close_error,
-                    } });
+                    } };
                 } else if (self.peek() == state.end_token) {
-                    try frames.append(frame_allocator, .{ .pattern_collection_next = .{
+                    continue :frame .{ .pattern_collection_next = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
                         .alternatives = state.alternatives,
                         .close_error = state.close_error,
-                    } });
+                    } };
                 } else {
                     self.store.clearScratchPatternsFrom(state.scratch_top);
                     last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
@@ -3994,8 +4016,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 const args = switch (tuple) {
                     .tuple => |t| t.items,
                     .malformed => {
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } });
-                        continue;
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } };
                     },
                     else => {
                         last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
@@ -4007,7 +4028,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     .@"fn" = state.function,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .after_method_args => |state| {
                 const tuple_expr = last orelse unreachable;
@@ -4016,8 +4037,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 const args = switch (tuple) {
                     .tuple => |t| t.items,
                     .malformed => {
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } });
-                        continue;
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } };
                     },
                     else => {
                         last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
@@ -4030,7 +4050,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     .args = args,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .after_binary_rhs => |state| {
                 const rhs = last orelse unreachable;
@@ -4041,7 +4061,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     .operator = state.operator,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .arrow_after_inner => |state| {
                 const inner = last orelse unreachable;
@@ -4051,13 +4071,13 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     continue;
                 }
                 self.advance();
-                try frames.append(frame_allocator, .{ .arrow_app_next = .{
+                continue :frame .{ .arrow_app_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .left = state.left,
                     .operator = state.operator,
                     .rhs = inner,
-                } });
+                } };
             },
             .arrow_app_next => |state| {
                 if (self.peek() == .NoSpaceOpenRound) {
@@ -4069,13 +4089,14 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         .operator = state.operator,
                         .function = state.rhs,
                     } });
-                    try frames.append(frame_allocator, .{ .expr_collection_next = .{
+                    continue :frame .{ .expr_collection_next = .{
                         .start = state.operator,
+                        .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
                         .end_token = .CloseRound,
                         .result = .apply_args,
                         .close_error = .expected_expr_apply_close_round,
-                    } });
+                    } };
                 } else {
                     const expr = try self.store.addExpr(.{ .arrow_call = .{
                         .region = .{ .start = state.start, .end = self.pos },
@@ -4083,7 +4104,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         .left = state.left,
                         .right = state.rhs,
                     } });
-                    try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
+                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 }
             },
             .arrow_app_after_args => |state| {
@@ -4099,8 +4120,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .left = state.left,
                             .right = tuple_expr,
                         } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-                        continue;
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                     },
                     else => {
                         last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
@@ -4112,13 +4132,13 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     .@"fn" = state.function,
                     .region = .{ .start = state.operator, .end = self.pos },
                 } });
-                try frames.append(frame_allocator, .{ .arrow_app_next = .{
+                continue :frame .{ .arrow_app_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .left = state.left,
                     .operator = state.operator,
                     .rhs = rhs,
-                } });
+                } };
             },
             .string_next => |state| {
                 while (self.peek() != .EndOfFile) {
@@ -4151,11 +4171,11 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             self.advance();
                             try frames.append(frame_allocator, .{ .string_after_interp = .{
                                 .start = state.start,
+                                .min_bp = state.min_bp,
                                 .scratch_top = state.scratch_top,
                                 .multiline = state.multiline,
                             } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
-                            break;
+                            continue :frame .{ .parse = 0 };
                         },
                         .MalformedStringPart => {
                             self.advance();
@@ -4200,6 +4220,12 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         } });
                     }
                 }
+                if (last) |expr| {
+                    if (state.min_bp) |min_bp| {
+                        last = null;
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = min_bp, .expr = expr } };
+                    }
+                }
             },
             .string_after_interp => |state| {
                 const ex = last orelse unreachable;
@@ -4210,11 +4236,12 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     continue;
                 }
                 self.advance();
-                try frames.append(frame_allocator, .{ .string_next = .{
+                continue :frame .{ .string_next = .{
                     .start = state.start,
+                    .min_bp = state.min_bp,
                     .scratch_top = state.scratch_top,
                     .multiline = state.multiline,
-                } });
+                } };
             },
             .record_ext_after_expr => |state| {
                 const ext_expr = last orelse unreachable;
@@ -4224,21 +4251,21 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     continue;
                 }
                 self.advance();
-                try frames.append(frame_allocator, .{ .record_fields_next = .{
+                continue :frame .{ .record_fields_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .scratch_top = self.store.scratchRecordFieldTop(),
                     .ext = ext_expr,
-                } });
+                } };
             },
             .record_fields_next => |state| {
                 if (self.peek() == .CloseCurly) {
-                    try frames.append(frame_allocator, .{ .record_finish = .{
+                    continue :frame .{ .record_finish = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .ext = state.ext,
-                    } });
+                    } };
                 } else if (self.peek() == .EndOfFile) {
                     self.store.clearScratchRecordFieldsFrom(state.scratch_top);
                     last = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
@@ -4262,7 +4289,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .field_start = field_start,
                             .name = name,
                         } });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
+                        continue :frame .{ .parse = 0 };
                     } else {
                         const field = try self.store.addRecordField(.{
                             .name = name,
@@ -4272,19 +4299,19 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         try self.store.addScratchRecordField(field);
                         if (self.peek() == .Comma) {
                             self.advance();
-                            try frames.append(frame_allocator, .{ .record_fields_next = .{
+                            continue :frame .{ .record_fields_next = .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .scratch_top = state.scratch_top,
                                 .ext = state.ext,
-                            } });
+                            } };
                         } else {
-                            try frames.append(frame_allocator, .{ .record_finish = .{
+                            continue :frame .{ .record_finish = .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .scratch_top = state.scratch_top,
                                 .ext = state.ext,
-                            } });
+                            } };
                         }
                     }
                 }
@@ -4300,19 +4327,19 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 try self.store.addScratchRecordField(field);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.append(frame_allocator, .{ .record_fields_next = .{
+                    continue :frame .{ .record_fields_next = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .ext = state.ext,
-                    } });
+                    } };
                 } else {
-                    try frames.append(frame_allocator, .{ .record_finish = .{
+                    continue :frame .{ .record_finish = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .ext = state.ext,
-                    } });
+                    } };
                 }
             },
             .record_finish => |state| {
@@ -4323,27 +4350,29 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 };
                 const fields = try self.store.recordFieldSpanFrom(state.scratch_top);
                 const expr = try self.finishRecordExpr(state.start, fields, state.ext);
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .lambda_after_body => |state| {
                 const body = last orelse unreachable;
-                last = try self.store.addExpr(.{ .lambda = .{
+                last = null;
+                const expr = try self.store.addExpr(.{ .lambda = .{
                     .body = body,
                     .args = state.args,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
-            .lambda_after_args => |start| {
+            .lambda_after_args => |state| {
                 const args = last_pattern_span orelse unreachable;
                 last_pattern_span = null;
-                try frames.append(frame_allocator, .{ .lambda_after_body = .{ .start = start, .args = args } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
+                try frames.append(frame_allocator, .{ .lambda_after_body = .{ .start = state.start, .min_bp = state.min_bp, .args = args } });
+                continue :frame .{ .parse = 0 };
             },
-            .if_after_condition => |start| {
+            .if_after_condition => |state| {
                 const condition = last orelse unreachable;
                 last = null;
-                try frames.append(frame_allocator, .{ .if_after_then = .{ .start = start, .condition = condition } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
+                try frames.append(frame_allocator, .{ .if_after_then = .{ .start = state.start, .min_bp = state.min_bp, .condition = condition } });
+                continue :frame .{ .parse = 0 };
             },
             .if_after_then => |state| {
                 const then = last orelse unreachable;
@@ -4352,61 +4381,68 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     self.advance();
                     try frames.append(frame_allocator, .{ .if_after_else = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .condition = state.condition,
                         .then = then,
                     } });
-                    try frames.append(frame_allocator, .{ .parse = 0 });
+                    continue :frame .{ .parse = 0 };
                 } else {
-                    last = try self.store.addExpr(.{ .if_without_else = .{
+                    const expr = try self.store.addExpr(.{ .if_without_else = .{
                         .region = .{ .start = state.start, .end = self.pos },
                         .condition = state.condition,
                         .then = then,
                     } });
+                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 }
             },
             .if_after_else => |state| {
                 const else_idx = last orelse unreachable;
-                last = try self.store.addExpr(.{ .if_then_else = .{
+                last = null;
+                const expr = try self.store.addExpr(.{ .if_then_else = .{
                     .region = .{ .start = state.start, .end = self.pos },
                     .condition = state.condition,
                     .then = state.then,
                     .@"else" = else_idx,
                 } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
-            .match_after_expr => |start| {
+            .match_after_expr => |state| {
                 const e = last orelse unreachable;
                 last = null;
                 self.expect(.OpenCurly) catch {
-                    last = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
-                    continue;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
+                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 };
-                try frames.append(frame_allocator, .{ .match_branch_next = .{
-                    .start = start,
+                continue :frame .{ .match_branch_next = .{
+                    .start = state.start,
+                    .min_bp = state.min_bp,
                     .matched = e,
                     .scratch_top = self.store.scratchMatchBranchTop(),
-                } });
+                } };
             },
             .match_branch_next => |state| {
                 if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
                     const branches = try self.store.matchBranchSpanFrom(state.scratch_top);
                     if (branches.span.len == 0) {
-                        last = try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, state.start);
-                        continue;
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, state.start);
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                     }
                     if (self.peek() != .CloseCurly) {
-                        last = try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
-                        continue;
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
+                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                     }
                     self.advance();
-                    last = try self.store.addExpr(.{ .match = .{
+                    const expr = try self.store.addExpr(.{ .match = .{
                         .region = .{ .start = state.start, .end = self.pos },
                         .expr = state.matched,
                         .branches = branches,
                     } });
+                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 } else {
                     const branch_start = self.pos;
                     try frames.append(frame_allocator, .{ .match_branch_after_pattern = .{
                         .match_start = state.start,
+                        .min_bp = state.min_bp,
                         .matched = state.matched,
                         .scratch_top = state.scratch_top,
                         .branch_start = branch_start,
@@ -4421,22 +4457,24 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     self.advance();
                     try frames.append(frame_allocator, .{ .match_branch_after_guard = .{
                         .match_start = state.match_start,
+                        .min_bp = state.min_bp,
                         .matched = state.matched,
                         .scratch_top = state.scratch_top,
                         .branch_start = state.branch_start,
                         .pattern = pattern,
                         .guard = null,
                     } });
-                    try frames.append(frame_allocator, .{ .parse = 0 });
+                    continue :frame .{ .parse = 0 };
                 } else {
-                    try frames.append(frame_allocator, .{ .match_branch_after_guard = .{
+                    continue :frame .{ .match_branch_after_guard = .{
                         .match_start = state.match_start,
+                        .min_bp = state.min_bp,
                         .matched = state.matched,
                         .scratch_top = state.scratch_top,
                         .branch_start = state.branch_start,
                         .pattern = pattern,
                         .guard = null,
-                    } });
+                    } };
                 }
             },
             .match_branch_after_guard => |state| {
@@ -4455,13 +4493,14 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 }
                 try frames.append(frame_allocator, .{ .match_branch_after_body = .{
                     .match_start = state.match_start,
+                    .min_bp = state.min_bp,
                     .matched = state.matched,
                     .scratch_top = state.scratch_top,
                     .branch_start = state.branch_start,
                     .pattern = state.pattern,
                     .guard = guard,
                 } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
+                continue :frame .{ .parse = 0 };
             },
             .match_branch_after_body => |state| {
                 const body = last orelse unreachable;
@@ -4476,76 +4515,85 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 if (self.peek() == .Comma) {
                     self.advance();
                 }
-                try frames.append(frame_allocator, .{ .match_branch_next = .{
+                continue :frame .{ .match_branch_next = .{
                     .start = state.match_start,
+                    .min_bp = state.min_bp,
                     .matched = state.matched,
                     .scratch_top = state.scratch_top,
-                } });
+                } };
             },
-            .dbg_after_expr => |start| {
+            .dbg_after_expr => |state| {
                 const e = last orelse unreachable;
-                last = try self.store.addExpr(.{ .dbg = .{
-                    .region = .{ .start = start, .end = self.pos },
+                last = null;
+                const expr = try self.store.addExpr(.{ .dbg = .{
+                    .region = .{ .start = state.start, .end = self.pos },
                     .expr = e,
                 } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
-            .for_after_pattern => |start| {
+            .for_after_pattern => |state| {
                 const pattern = last_pattern orelse unreachable;
                 last_pattern = null;
                 if (self.peek() != .KwIn) {
-                    last = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
-                    continue;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
+                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 }
                 self.advance();
-                try frames.append(frame_allocator, .{ .for_after_list = .{ .start = start, .pattern = pattern } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
+                try frames.append(frame_allocator, .{ .for_after_list = .{ .start = state.start, .min_bp = state.min_bp, .pattern = pattern } });
+                continue :frame .{ .parse = 0 };
             },
             .for_after_list => |state| {
                 const list_expr = last orelse unreachable;
                 last = null;
                 try frames.append(frame_allocator, .{ .for_after_body = .{
                     .start = state.start,
+                    .min_bp = state.min_bp,
                     .pattern = state.pattern,
                     .list_expr = list_expr,
                 } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
+                continue :frame .{ .parse = 0 };
             },
             .for_after_body => |state| {
                 const body = last orelse unreachable;
-                last = try self.store.addExpr(.{ .for_expr = .{
+                last = null;
+                const expr = try self.store.addExpr(.{ .for_expr = .{
                     .region = .{ .start = state.start, .end = self.pos },
                     .patt = state.pattern,
                     .expr = state.list_expr,
                     .body = body,
                 } });
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
-            .block_begin => |start| {
+            .block_begin => |state| {
                 const previous_type_path_visible_start = self.type_path_stack_visible_start;
                 self.type_path_stack_visible_start = self.type_path_stack.items.len;
-                const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
-                try frames.append(frame_allocator, .{ .block_next = .{
-                    .start = start,
+                const block_scope = try self.enterDeclScope(.block, .none, .{ .start = state.start, .end = state.start });
+                continue :frame .{ .block_next = .{
+                    .start = state.start,
+                    .min_bp = state.min_bp,
                     .scope = block_scope,
                     .scratch_top = self.store.scratchStatementTop(),
                     .previous_type_path_visible_start = previous_type_path_visible_start,
-                } });
+                } };
             },
             .block_next => |state| {
                 if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    try frames.append(frame_allocator, .{ .block_finish = .{
+                    continue :frame .{ .block_finish = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scope = state.scope,
                         .scratch_top = state.scratch_top,
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
+                    } };
                 } else {
                     try frames.append(frame_allocator, .{ .block_after_statement = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scope = state.scope,
                         .scratch_top = state.scratch_top,
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
                     } });
-                    try frames.append(frame_allocator, .{ .statement = .{ .parse = .in_body } });
+                    continue :frame .{ .statement = .{ .parse = .in_body } };
                 }
             },
             .block_after_statement => |state| {
@@ -4553,19 +4601,21 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                 last_statement = null;
                 try self.store.addScratchStatement(statement);
                 if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    try frames.append(frame_allocator, .{ .block_finish = .{
+                    continue :frame .{ .block_finish = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scope = state.scope,
                         .scratch_top = state.scratch_top,
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
+                    } };
                 } else {
-                    try frames.append(frame_allocator, .{ .block_next = .{
+                    continue :frame .{ .block_next = .{
                         .start = state.start,
+                        .min_bp = state.min_bp,
                         .scope = state.scope,
                         .scratch_top = state.scratch_top,
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
+                    } };
                 }
             },
             .block_finish => |state| {
@@ -4586,7 +4636,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                     .region = block_region,
                 } });
                 self.decl_index.setScopeOwner(state.scope, .{ .expr = @intFromEnum(expr_idx) });
-                last = expr_idx;
+                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr_idx } };
             },
             .pattern => |pattern_frame| {
                 try self.handleExprPatternFrame(pattern_frame, &frames, frame_allocator, &last, &last_pattern);
@@ -4606,7 +4656,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                 const start = self.pos;
                                 self.advance();
                                 try frames.append(frame_allocator, .{ .statement = .{ .after_expect = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
+                                continue :frame .{ .parse = 0 };
                             },
                             .KwFor => {
                                 const start = self.pos;
@@ -4618,25 +4668,25 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                 const start = self.pos;
                                 self.advance();
                                 try frames.append(frame_allocator, .{ .statement = .{ .after_while_cond = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
+                                continue :frame .{ .parse = 0 };
                             },
                             .KwCrash => {
                                 const start = self.pos;
                                 self.advance();
                                 try frames.append(frame_allocator, .{ .statement = .{ .after_crash = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
+                                continue :frame .{ .parse = 0 };
                             },
                             .KwDbg => {
                                 const start = self.pos;
                                 self.advance();
                                 try frames.append(frame_allocator, .{ .statement = .{ .after_dbg = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
+                                continue :frame .{ .parse = 0 };
                             },
                             .KwReturn => {
                                 const start = self.pos;
                                 self.advance();
                                 try frames.append(frame_allocator, .{ .statement = .{ .after_return = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
+                                continue :frame .{ .parse = 0 };
                             },
                             .KwVar => {
                                 const start = self.pos;
@@ -4667,7 +4717,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         continue;
                                     };
                                     try frames.append(frame_allocator, .{ .statement = .{ .after_var_body = .{ .start = start, .name = name } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
+                                    continue :frame .{ .parse = 0 };
                                 }
                             },
                             .KwBreak => {
@@ -4687,7 +4737,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                     } });
                                     self.advance();
                                     try frames.append(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
+                                    continue :frame .{ .parse = 0 };
                                 } else if (self.peekNext() == .OpColon) {
                                     if (self.isVarIdent(start)) {
                                         last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
@@ -4708,7 +4758,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
                                         try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
+                                        continue :frame .{ .parse = 0 };
                                     }
                                 }
                             },
@@ -4722,7 +4772,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                     } });
                                     self.advance();
                                     try frames.append(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
+                                    continue :frame .{ .parse = 0 };
                                 } else if (self.peekNext() == .OpColon) {
                                     self.advance();
                                     self.advance();
@@ -4739,7 +4789,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
                                         try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
+                                        continue :frame .{ .parse = 0 };
                                     }
                                 }
                             },
@@ -4752,13 +4802,13 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                     } });
                                     self.advance();
                                     try frames.append(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
+                                    continue :frame .{ .parse = 0 };
                                 } else {
                                     if (statementType == .top_level) {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
                                         try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
+                                        continue :frame .{ .parse = 0 };
                                     }
                                 }
                             },
@@ -4772,7 +4822,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
                                         try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
+                                        continue :frame .{ .parse = 0 };
                                     }
                                     continue;
                                 }
@@ -4834,10 +4884,10 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         .type_path = type_path,
                                         .dot_pos = dot_pos,
                                     } } });
-                                    try frames.append(frame_allocator, .{ .statement = .{ .associated_block_begin = .{
+                                    continue :frame .{ .statement = .{ .associated_block_begin = .{
                                         .start = associated_start,
                                         .owner_type_path = type_path,
-                                    } } });
+                                    } } };
                                 } else {
                                     last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
                                         .header = header,
@@ -4881,7 +4931,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
                                         try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
+                                        continue :frame .{ .parse = 0 };
                                     }
                                 }
                             },
@@ -4890,7 +4940,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                     last_statement = try self.addTopLevelUnexpectedStatement();
                                 } else {
                                     try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = self.pos } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
+                                    continue :frame .{ .parse = 0 };
                                 }
                             },
                         }
@@ -4911,7 +4961,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         } else {
                             self.advance();
                             try frames.append(frame_allocator, .{ .statement = .{ .after_for_expr = .{ .start = start, .patt = patt } } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
+                            continue :frame .{ .parse = 0 };
                         }
                     },
                     .after_for_expr => |state| {
@@ -4922,7 +4972,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             .patt = state.patt,
                             .expr = expr,
                         } } });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
+                        continue :frame .{ .parse = 0 };
                     },
                     .after_for_body => |state| {
                         const body = last orelse unreachable;
@@ -4938,7 +4988,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         const cond = last orelse unreachable;
                         last = null;
                         try frames.append(frame_allocator, .{ .statement = .{ .after_while_body = .{ .start = start, .cond = cond } } });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
+                        continue :frame .{ .parse = 0 };
                     },
                     .after_while_body => |state| {
                         const body = last orelse unreachable;
@@ -4999,7 +5049,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                         } else {
                             self.advance();
                             try frames.append(frame_allocator, .{ .statement = .{ .after_destructure_body = .{ .start = start, .pattern = pattern } } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
+                            continue :frame .{ .parse = 0 };
                         }
                     },
                     .after_destructure_body => |state| {
@@ -5026,21 +5076,21 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             pushed_type_path = true;
                         }
                         const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = state.start, .end = state.start });
-                        try frames.append(frame_allocator, .{ .statement = .{ .associated_block_next = .{
+                        continue :frame .{ .statement = .{ .associated_block_next = .{
                             .start = state.start,
                             .scope = assoc_scope,
                             .scratch_top = self.store.scratchStatementTop(),
                             .pushed_type_path = pushed_type_path,
-                        } } });
+                        } } };
                     },
                     .associated_block_next => |state| {
                         if (self.peek() == .EndOfFile or self.peek() == .CloseCurly) {
-                            try frames.append(frame_allocator, .{ .statement = .{ .associated_block_finish = .{
+                            continue :frame .{ .statement = .{ .associated_block_finish = .{
                                 .start = state.start,
                                 .scope = state.scope,
                                 .scratch_top = state.scratch_top,
                                 .pushed_type_path = state.pushed_type_path,
-                            } } });
+                            } } };
                         } else {
                             const statement_pos = self.pos;
                             try frames.append(frame_allocator, .{ .statement = .{ .associated_block_after_statement = .{
@@ -5050,7 +5100,7 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                                 .pushed_type_path = state.pushed_type_path,
                                 .statement_pos = statement_pos,
                             } } });
-                            try frames.append(frame_allocator, .{ .statement = .{ .parse = .in_associated_block } });
+                            continue :frame .{ .statement = .{ .parse = .in_associated_block } };
                         }
                     },
                     .associated_block_after_statement => |state| {
@@ -5064,12 +5114,12 @@ fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
                             });
                         }
                         try self.store.addScratchStatement(statement);
-                        try frames.append(frame_allocator, .{ .statement = .{ .associated_block_next = .{
+                        continue :frame .{ .statement = .{ .associated_block_next = .{
                             .start = state.start,
                             .scope = state.scope,
                             .scratch_top = state.scratch_top,
                             .pushed_type_path = state.pushed_type_path,
-                        } } });
+                        } } };
                     },
                     .associated_block_finish => |state| {
                         self.expect(.CloseCurly) catch {
