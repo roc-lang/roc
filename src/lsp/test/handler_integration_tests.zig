@@ -254,9 +254,9 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
     const roc_source = try std.fmt.allocPrint(allocator,
         \\app [main] {{ pf: platform "{s}" }}
         \\
-        \\myVar = 42
+        \\my_var = 42
         \\
-        \\main = myVar + 1
+        \\main = my_var + 1
     , .{platform_path});
     defer allocator.free(roc_source);
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "symbols.roc", .data = roc_source });
@@ -275,7 +275,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
 
     // Document with a simple declaration (more reliable than lambda syntax in JSON)
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\n\nmyVar = 42\n\nmain = myVar"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main] {{ pf: platform \"{s}\" }}\n\nmy_var = 42\n\nmain = my_var"}}}}}}
     , .{ file_uri, platform_path });
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
@@ -342,7 +342,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() !void {
         try std.testing.expect(name == .string);
         try std.testing.expect(symbol.object.get("kind") != null);
         try std.testing.expect(symbol.object.get("location") != null);
-        if (std.mem.eql(u8, name.string, "myVar")) found_my_var = true;
+        if (std.mem.eql(u8, name.string, "my_var")) found_my_var = true;
         if (std.mem.eql(u8, name.string, "main")) found_main = true;
     }
     try std.testing.expect(found_my_var);
@@ -453,9 +453,9 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     const roc_source = try std.fmt.allocPrint(allocator,
         \\app [main] {{ pf: platform "{s}" }}
         \\
-        \\myVar = 42
+        \\my_var = 42
         \\
-        \\main = myVar + 1
+        \\main = my_var + 1
     , .{platform_path});
     defer allocator.free(roc_source);
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "definition.roc", .data = roc_source });
@@ -482,7 +482,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for 'myVar' on line 4, character 8 (inside the usage).
+    // Request definition for 'my_var' on line 4, character 8 (inside the usage).
     const definition_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":8}}}}}}
     , .{file_uri});
@@ -532,7 +532,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() !void {
 
     var response = try responseById(allocator, responses, 2);
     defer response.deinit();
-    try expectLocation(try response.result(), file_uri, 2, 0, 2, 5);
+    try expectLocation(try response.result(), file_uri, 2, 0, 2, 6);
 }
 
 /// Verifies goto definition returns null for an unresolved symbol.
@@ -833,9 +833,9 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     const roc_source = try std.fmt.allocPrint(allocator,
         \\app [result] {{ pf: platform "{s}" }}
         \\
-        \\myFunc = |x| x + 1
+        \\my_func = |x| x + 1
         \\
-        \\result = myFunc(42)
+        \\result = my_func(42)
     , .{platform_path});
     defer allocator.free(roc_source);
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "regression.roc", .data = roc_source });
@@ -862,7 +862,7 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // First request goto definition on myFunc usage (line 4, character 9).
+    // First request goto definition on my_func usage (line 4, character 9).
     const definition_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":9}}}}}}
     , .{file_uri});
@@ -921,11 +921,11 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() !void {
 
     var definition_response = try responseById(allocator, responses, 2);
     defer definition_response.deinit();
-    try expectNullOrLocation(try definition_response.result(), file_uri, 2, 0, 2, 6);
+    try expectNullOrLocation(try definition_response.result(), file_uri, 2, 0, 2, 7);
 
     var symbols_response = try responseById(allocator, responses, 3);
     defer symbols_response.deinit();
-    try expectSymbolNames(try symbols_response.result(), &.{ "myFunc", "result" });
+    try expectSymbolNames(try symbols_response.result(), &.{ "my_func", "result" });
 }
 
 /// Verifies repeated goto-definition requests preserve later document symbols.

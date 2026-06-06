@@ -171,13 +171,13 @@ const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     }
 };
 
-/// Public `SourceKind` declaration.
+/// Whether the source is a standalone expression or a full module.
 pub const SourceKind = enum {
     expr,
     module,
 };
 
-/// Public `ModuleSource` declaration.
+/// A named module with its source text, used to supply additional imports.
 pub const ModuleSource = struct {
     name: []const u8,
     source: []const u8,
@@ -194,7 +194,7 @@ const ModuleValidation = enum {
     checked_artifact,
 };
 
-/// Public `CheckedModule` declaration.
+/// Compiler stage outputs (parse, canonicalize, typecheck) for a single module.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -209,7 +209,7 @@ pub const CheckedModule = struct {
     typecheck_ns: u64 = 0,
 };
 
-/// Public `ProblemResources` declaration.
+/// Groups a checked module with its builtin and extra modules for problem reporting.
 pub const ProblemResources = struct {
     main: CheckedModule,
     /// Locally-loaded Builtin; null when the caller supplied a pre-published
@@ -236,7 +236,7 @@ pub const PrePublishedBuiltin = struct {
     artifact: *check.CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Public `ParsedResources` declaration.
+/// Fully parsed, canonicalized, and type-checked module ready for LIR lowering.
 pub const ParsedResources = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -313,7 +313,7 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Public `LirImageProgram` declaration.
+/// LIR image stored in shared memory, ready for an eval backend to execute.
 pub const LirImageProgram = struct {
     shm: SharedMemoryAllocator,
     image_header: *LirImage.Header,
@@ -337,10 +337,10 @@ pub const LirImageProgram = struct {
     }
 };
 
-/// Public `LoweredProgram` declaration.
+/// Type alias for LirImageProgram.
 pub const LoweredProgram = LirImageProgram;
 
-/// Public `BoolRoot` declaration.
+/// Describes a single boolean-returning proc used as a test root.
 pub const BoolRoot = struct {
     symbol_name: [:0]const u8,
     proc: LirProcSpecId,
@@ -348,19 +348,19 @@ pub const BoolRoot = struct {
     ret_layout: LayoutIdx,
 };
 
-/// Public `BoolRootEvalResult` declaration.
+/// Result of evaluating a bool-returning test root: passed (bool) or crashed (message).
 pub const BoolRootEvalResult = union(enum) {
     passed: bool,
     crashed: []const u8,
 };
 
-/// Public `LlvmTestOpt` declaration.
+/// LLVM optimization level for test compilation.
 pub const LlvmTestOpt = enum {
     size,
     speed,
 };
 
-/// Public `deinitBoolRootEvalResults` function.
+/// Free all crash messages and the results slice.
 pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalResult) void {
     for (results) |result| {
         switch (result) {
@@ -371,7 +371,7 @@ pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalRe
     allocator.free(results);
 }
 
-/// Public `CompiledProgram` declaration.
+/// Parsed resources plus native and wasm LIR lowerings.
 pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
@@ -384,7 +384,7 @@ pub const CompiledProgram = struct {
     }
 };
 
-/// Public `CompiledTargetProgram` declaration.
+/// Parsed resources plus a single-target LIR lowering.
 pub const CompiledTargetProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
@@ -395,10 +395,10 @@ pub const CompiledTargetProgram = struct {
     }
 };
 
-/// Public `CompiledInspectedExpr` declaration.
+/// Type alias for CompiledProgram used for inspect-wrapped expressions.
 pub const CompiledInspectedExpr = CompiledProgram;
 
-/// Public `parseAndCanonicalizeProgram` function.
+/// Parse, canonicalize, and type-check a program without inspect wrapping.
 pub fn parseAndCanonicalizeProgram(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -428,12 +428,12 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     );
 }
 
-/// Public `parseAndCanonicalizeExpr` function.
+/// Parse and canonicalize a single expression (no imports).
 pub fn parseAndCanonicalizeExpr(allocator: Allocator, source: []const u8) !ParsedResources {
     return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
 
-/// Public `parseAndCheckProgramForProblems` function.
+/// Parse and type-check a program, returning resources for problem reporting.
 pub fn parseAndCheckProgramForProblems(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -558,7 +558,7 @@ fn parseAndCheckProgramForProblemsImpl(
     };
 }
 
-/// Public `compileProgram` function.
+/// Parse, canonicalize, type-check, and lower to native and wasm LIR.
 pub fn compileProgram(
     allocator: Allocator,
     io: std.Io,
@@ -588,7 +588,7 @@ pub fn compileProgram(
     };
 }
 
-/// Public `compileProgramForTarget` function.
+/// Parse, canonicalize, type-check, and lower to LIR for a specific target.
 pub fn compileProgramForTarget(
     allocator: Allocator,
     io: std.Io,
@@ -612,7 +612,7 @@ pub fn compileProgramForTarget(
     };
 }
 
-/// Public `compileInspectedProgram` function.
+/// Compile a program with inspect wrapping so the main proc returns a Str.
 pub fn compileInspectedProgram(
     allocator: Allocator,
     io: std.Io,
@@ -674,7 +674,7 @@ fn compileInspectedProgramImpl(
     };
 }
 
-/// Public `compileInspectedProgramForTarget` function.
+/// Compile an inspect-wrapped program for a specific target pointer size.
 pub fn compileInspectedProgramForTarget(
     allocator: Allocator,
     io: std.Io,
@@ -732,18 +732,18 @@ fn compileInspectedProgramForTargetImpl(
     };
 }
 
-/// Public `compileInspectedExpr` function.
+/// Compile a single expression with inspect wrapping, returning a Str result.
 pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8) !CompiledInspectedExpr {
     return compileInspectedProgram(allocator, io, .expr, source, &.{});
 }
 
-/// Public `cleanupParseAndCanonical` function.
+/// Free all resources held by a ParsedResources value.
 pub fn cleanupParseAndCanonical(allocator: Allocator, resources: ParsedResources) void {
     var owned = resources;
     owned.deinit(allocator);
 }
 
-/// Public `parseAndCanonicalizeProgramWrapped` function.
+/// Parse and canonicalize a program, optionally wrapping it for inspect output.
 pub fn parseAndCanonicalizeProgramWrapped(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -754,7 +754,7 @@ pub fn parseAndCanonicalizeProgramWrapped(
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap }, null);
 }
 
-/// Public `parseAndCanonicalizeProgramPublishedRoots` function.
+/// Parse and canonicalize a program using published-roots-only root selection.
 pub fn parseAndCanonicalizeProgramPublishedRoots(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -985,7 +985,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     };
 }
 
-/// Public `parseCheckModule` function.
+/// Run parse, canonicalize, and typecheck for a single named module.
 pub fn parseCheckModule(
     allocator: Allocator,
     module_name: []const u8,
@@ -1509,7 +1509,7 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     }
 }
 
-/// Public `mainProcArgLayouts` function.
+/// Return the layout indices for the main proc's arguments.
 pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) ![]LayoutIdx {
     const proc = lowered.view.store.getProcSpec(lowered.mainProc());
     const arg_locals = lowered.view.store.getLocalSpan(proc.args);
@@ -1520,7 +1520,7 @@ pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) 
     return arg_layouts;
 }
 
-/// Public `entrypointParamSlotSizeForLayouts` function.
+/// Compute the entrypoint calling-convention slot size for a layout.
 pub fn entrypointParamSlotSizeForLayouts(layouts: *const LayoutStore, layout_idx: LayoutIdx) u32 {
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
     if (runtime_layout_idx == .str) return 24;
@@ -1540,12 +1540,12 @@ pub fn entrypointParamSlotSizeForLayouts(layouts: *const LayoutStore, layout_idx
     return if (size == 0) 0 else 8;
 }
 
-/// Public `entrypointParamSlotSize` function.
+/// Entrypoint slot size for a layout, looked up from a lowered program.
 pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
     return entrypointParamSlotSizeForLayouts(&lowered.view.layouts, layout_idx);
 }
 
-/// Public `zeroedEntrypointArgBufferForLayouts` function.
+/// Allocate a zeroed, alignment-sorted entrypoint argument buffer, or null if no args.
 pub fn zeroedEntrypointArgBufferForLayouts(
     allocator: Allocator,
     layouts: *const LayoutStore,
@@ -1602,7 +1602,7 @@ pub fn zeroedEntrypointArgBufferForLayouts(
     return buffer;
 }
 
-/// Public `zeroedEntrypointArgBuffer` function.
+/// Zeroed entrypoint arg buffer using layout info from a lowered program.
 pub fn zeroedEntrypointArgBuffer(
     allocator: Allocator,
     lowered: *const LoweredProgram,
@@ -1674,7 +1674,7 @@ fn runExecutableBoolRoot(
     return result;
 }
 
-/// Public `devEvalBoolRoots` function.
+/// JIT-compile and run bool-returning test roots via the dev backend.
 pub fn devEvalBoolRoots(
     allocator: Allocator,
     store: *const lir.LirStore,
@@ -1769,7 +1769,7 @@ fn callLlvmBoolRoot(
     return result;
 }
 
-/// Public `llvmEvalBoolRoots` function.
+/// Compile and run bool-returning test roots via the LLVM backend.
 pub fn llvmEvalBoolRoots(
     allocator: Allocator,
     store: *const lir.LirStore,
@@ -1835,13 +1835,13 @@ pub fn llvmEvalBoolRoots(
     return results;
 }
 
-/// Public `lirInterpreterInspectedStr` function.
+/// Evaluate a lowered program via the LIR interpreter and return the output string.
 pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     const result = try lirInterpreterStrWithStats(allocator, lowered);
     return result.output;
 }
 
-/// Public `lirInterpreterStrWithStats` function.
+/// Evaluate via the LIR interpreter, returning output string and allocation count.
 pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
@@ -1879,13 +1879,13 @@ pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredP
     };
 }
 
-/// Public `devEvaluatorInspectedStr` function.
+/// Evaluate a lowered program via the dev JIT backend and return the output string.
 pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     const result = try devEvaluatorStrWithStats(allocator, lowered);
     return result.output;
 }
 
-/// Public `devEvaluatorStrWithStats` function.
+/// Evaluate via the dev JIT backend, returning output string and allocation count.
 pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
@@ -1956,7 +1956,7 @@ pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPro
     }
 }
 
-/// Public `llvmEvaluatorInspectedStr` function.
+/// Evaluate a lowered program via the LLVM backend and return the output string.
 pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
@@ -2036,13 +2036,13 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     );
 }
 
-/// Public `wasmEvaluatorInspectedStr` function.
+/// Evaluate a lowered program via the wasm backend and return the output string.
 pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
     const result = try wasmEvaluatorStrWithStats(allocator, lowered);
     return result.output;
 }
 
-/// Public `wasmEvaluatorStrWithStats` function.
+/// Evaluate via the wasm backend, returning output string and allocation count.
 pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
     var codegen = backend.wasm.WasmCodeGen.init(
