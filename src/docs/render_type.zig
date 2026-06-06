@@ -22,15 +22,15 @@ pub const RenderBuffer = struct {
         self.list.deinit(gpa);
     }
 
-    pub fn toOwnedSlice(self: *RenderBuffer, gpa: Allocator) ![]u8 {
+    pub fn toOwnedSlice(self: *RenderBuffer, gpa: Allocator) Allocator.Error![]u8 {
         return self.list.toOwnedSlice(gpa);
     }
 
-    fn append(self: *RenderBuffer, gpa: Allocator, byte: u8) !void {
+    fn append(self: *RenderBuffer, gpa: Allocator, byte: u8) Allocator.Error!void {
         try self.list.append(gpa, byte);
     }
 
-    fn appendSlice(self: *RenderBuffer, gpa: Allocator, bytes: []const u8) !void {
+    fn appendSlice(self: *RenderBuffer, gpa: Allocator, bytes: []const u8) Allocator.Error!void {
         try self.list.appendSlice(gpa, bytes);
     }
 };
@@ -40,7 +40,7 @@ pub fn renderTypeAnnoToString(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     type_anno_idx: TypeAnno.Idx,
-) ![]u8 {
+) Allocator.Error![]u8 {
     var buf = RenderBuffer.init();
     errdefer buf.deinit(gpa);
     try renderTypeAnno(&buf, gpa, module_env, type_anno_idx, false);
@@ -57,7 +57,7 @@ pub fn renderTypeAnno(
     module_env: *const ModuleEnv,
     type_anno_idx: TypeAnno.Idx,
     needs_parens: bool,
-) !void {
+) Allocator.Error!void {
     const anno = module_env.store.getTypeAnno(type_anno_idx);
     switch (anno) {
         .apply => |a| {
@@ -165,7 +165,7 @@ pub fn renderTypeHeader(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     header_idx: CIR.TypeHeader.Idx,
-) !void {
+) Allocator.Error!void {
     const header = module_env.store.getTypeHeader(header_idx);
     try buf.appendSlice(gpa, module_env.getIdentText(header.relative_name));
     const args_slice = module_env.store.sliceTypeAnnos(header.args);

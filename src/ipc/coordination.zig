@@ -2,6 +2,7 @@
 //! Handles communication of shared memory info between parent and child processes
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const platform = @import("platform.zig");
 
 /// Information about shared memory file descriptor or handle
@@ -186,7 +187,7 @@ pub fn writeFdInfo(
     handle: platform.Handle,
     size: usize,
     target_path: []const u8,
-) ![]const u8 {
+) anyerror![]const u8 {
     if (comptime platform.is_windows) {
         // On Windows, return command line arguments
         const handle_int = @intFromPtr(handle);

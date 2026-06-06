@@ -1,6 +1,7 @@
 //! Scope management for identifier resolution during canonicalization.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("CIR.zig");
@@ -369,7 +370,7 @@ pub fn introduceTypeAlias(
     gpa: std.mem.Allocator,
     unqualified_name: Ident.Idx,
     qualified_type_decl: CIR.Statement.Idx,
-) !void {
+) Allocator.Error!void {
     try scope.type_bindings.put(gpa, unqualified_name, TypeBinding{
         .associated_nominal = qualified_type_decl,
     });

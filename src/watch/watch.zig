@@ -2,6 +2,7 @@
 //! Provides efficient, cross-platform file watching with recursive directory support.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
@@ -292,7 +293,7 @@ pub const Watcher = struct {
     };
 
     /// Initialize a new file watcher
-    pub fn init(allocator: std.mem.Allocator, std_io: std.Io, paths: []const []const u8, callback: WatchCallback) !*Watcher {
+    pub fn init(allocator: std.mem.Allocator, std_io: std.Io, paths: []const []const u8, callback: WatchCallback) Allocator.Error!*Watcher {
         const watcher = try allocator.create(Watcher);
         errdefer allocator.destroy(watcher);
 
@@ -375,7 +376,7 @@ pub const Watcher = struct {
     }
 
     /// Start watching for file changes
-    pub fn start(self: *Watcher) !void {
+    pub fn start(self: *Watcher) (std.Thread.SpawnError || error{AlreadyStarted})!void {
         if (self.thread != null) return error.AlreadyStarted;
         self.should_stop.store(false, .seq_cst);
         self.is_ready.store(false, .seq_cst);
@@ -734,7 +735,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn addWatchRecursiveLinux(self: *Watcher, path: []const u8) !void {
+    fn addWatchRecursiveLinux(self: *Watcher, path: []const u8) (Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{InotifyAddWatchFailed})!void {
         const flags = std.os.linux.IN.CREATE | std.os.linux.IN.DELETE |
             std.os.linux.IN.MODIFY | std.os.linux.IN.MOVED_FROM |
             std.os.linux.IN.MOVED_TO | std.os.linux.IN.CLOSE_WRITE;
@@ -864,7 +865,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn setupWindowsWatch(self: *Watcher, path: []const u8) !void {
+    fn setupWindowsWatch(self: *Watcher, path: []const u8) (Allocator.Error || error{ InvalidUtf8, FailedToOpenDirectory, FailedToCreateEvent, ReadDirectoryChangesFailed })!void {
         // Convert path to wide string
         var path_w_buf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
         const path_w_len = try std.unicode.utf8ToUtf16Le(path_w_buf[0..], path);
@@ -940,7 +941,7 @@ pub const Watcher = struct {
         try self.startWindowsRead(self.impl.handles.items.len - 1);
     }
 
-    fn startWindowsRead(self: *Watcher, index: usize) !void {
+    fn startWindowsRead(self: *Watcher, index: usize) (Allocator.Error || error{ReadDirectoryChangesFailed})!void {
         const ReadDirectoryChangesW = struct {
             extern "kernel32" fn ReadDirectoryChangesW(
                 hDirectory: std.os.windows.HANDLE,
@@ -982,7 +983,7 @@ pub const Watcher = struct {
         }
     }
 
-    fn processWindowsEvents(self: *Watcher, index: usize) !void {
+    fn processWindowsEvents(self: *Watcher, index: usize) Allocator.Error!void {
         const GetOverlappedResult = struct {
             extern "kernel32" fn GetOverlappedResult(
                 hFile: std.os.windows.HANDLE,
@@ -1068,7 +1069,7 @@ pub const Watcher = struct {
 
 // TESTS
 
-fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32, io: std.Io) !void {
+fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32, io: std.Io) error{EventsNotReceived}!void {
     // When using stubs, don't wait for events since they won't be generated
     if (use_stubs) {
         return;
@@ -1084,7 +1085,7 @@ fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms
     }
 }
 
-fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) !void {
+fn expectEventsOrSkip(event_count: *std.atomic.Value(u32), expected: u32) anyerror!void {
     if (use_stubs) {
         // When using stubs, skip the event count check
         return;

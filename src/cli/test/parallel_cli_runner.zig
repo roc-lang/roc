@@ -70,7 +70,7 @@ const run_configs = [_]RunConfig{
 
 // Spec generation
 
-fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]CliTestSpec {
+fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) anyerror![]CliTestSpec {
     var specs: std.ArrayListUnmanaged(CliTestSpec) = .empty;
 
     for (&run_configs) |cfg| {
@@ -134,7 +134,7 @@ fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
     return spec.skip_on_windows and builtin.os.tag == .windows;
 }
 
-fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8) ![]const u8 {
+fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8) anyerror![]const u8 {
     if (backend) |b| {
         return std.fmt.allocPrint(allocator, "{s} [{s}]", .{ roc_file, b });
     }
@@ -279,14 +279,14 @@ fn currentProcessIdForFilename() u64 {
     return @intCast(std.c.getpid());
 }
 
-fn deleteIfExists(path: []const u8) !void {
+fn deleteIfExists(path: []const u8) anyerror!void {
     std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
 }
 
-fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) !void {
+fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) anyerror!void {
     try deleteIfExists(output_name);
 
     if (comptime builtin.os.tag == .windows) {
@@ -448,7 +448,7 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
 /// duplication when the harness appends `--worker <idx>` per spawn).
-fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path_len = try std.process.executablePath(std.Options.debug_io, &self_path_buf);
     const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
@@ -645,7 +645,7 @@ fn printUsage() void {
 }
 
 /// Entry point for the parallel CLI test runner.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     // Initialize the debug IO with a real allocator so std.Options.debug_io
     // can spawn processes, create directories, delete files, etc.
     debug_threaded_io_instance = .init(init.gpa, .{

@@ -45,7 +45,7 @@ pub const CacheConfig = struct {
     /// - Respects XDG_CACHE_HOME if set
     /// - Falls back to ~/.cache/roc on Unix and %APPDATA%\Roc on Windows
     /// - Uses "roc" on Unix and "Roc" on Windows as the cache dir name
-    pub fn getDefaultCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getDefaultCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         // ROC_CACHE_DIR selects the cache root ahead of platform defaults.
         // Useful for test isolation and CI on any OS.
         if (self.roc_ctx.getEnvVar("ROC_CACHE_DIR", allocator)) |roc_dir| {
@@ -87,7 +87,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the effective cache directory, using default if none specified.
-    pub fn getEffectiveCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getEffectiveCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         if (self.cache_dir) |dir| {
             return allocator.dupe(u8, dir);
         } else {
@@ -99,7 +99,7 @@ pub const CacheConfig = struct {
     ///
     /// This isolates cache entries by compiler version to prevent
     /// conflicts when switching between compiler versions.
-    pub fn getVersionCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getVersionCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const base_dir = try self.getEffectiveCacheDir(allocator);
         defer allocator.free(base_dir);
 
@@ -110,7 +110,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the checked-artifact cache directory.
-    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -118,7 +118,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the module source cache directory for tooling-owned materialized sources.
-    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -126,7 +126,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the executable cache directory (for cached linked executables).
-    pub fn getExeCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getExeCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -134,7 +134,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the test cache directory (for cached test results).
-    pub fn getTestCacheDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
@@ -142,7 +142,7 @@ pub const CacheConfig = struct {
     }
 
     /// Get the cache entries directory (alias for module cache dir).
-    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
+    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         return self.getModuleCacheDir(allocator);
     }
 
@@ -223,7 +223,7 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
-pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) ![]u8 {
+pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
     const temp_base = switch (builtin.target.os.tag) {
         .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
             roc_ctx.getEnvVar("TMP", allocator) catch
@@ -237,7 +237,7 @@ pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) ![]u8 {
 }
 
 /// Get the version-specific temporary directory for runtime executables.
-pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) ![]u8 {
+pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
     const temp_base = try getTempDir(roc_ctx, allocator);
     defer allocator.free(temp_base);
 
@@ -251,7 +251,7 @@ pub fn getVersionTempDir(roc_ctx: CoreCtx, allocator: Allocator) ![]u8 {
 ///
 /// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
 /// to isolate cache entries between different compiler builds.
-pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
+pub fn getCompilerVersionDir(allocator: Allocator) Allocator.Error![]u8 {
     // Use build-time compiler version that includes git commit SHA
     const version_info = build_options.compiler_version;
     return allocator.dupe(u8, version_info);

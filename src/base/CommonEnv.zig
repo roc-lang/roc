@@ -5,6 +5,7 @@
 //! different phases of compilation.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -115,7 +116,7 @@ pub const Serialized = extern struct {
         env: *const CommonEnv,
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
-    ) !void {
+    ) Allocator.Error!void {
         // Serialize each component using its Serialized struct
         try self.idents.serialize(&env.idents, allocator, writer);
         try self.strings.serialize(&env.strings, allocator, writer);
@@ -192,7 +193,7 @@ pub fn getStringStore(self: *CommonEnv) *StringLiteral.Store {
 }
 
 /// Adds an identifier to the exposed items list by its index.
-pub fn addExposedById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx) !void {
+pub fn addExposedById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx) Allocator.Error!void {
     return try self.exposed_items.addExposedById(gpa, @bitCast(ident_idx));
 }
 
@@ -202,12 +203,12 @@ pub fn getNodeIndexById(self: *const CommonEnv, allocator: std.mem.Allocator, id
 }
 
 /// Associates a node index with an exposed identifier.
-pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) !void {
+pub fn setNodeIndexById(self: *CommonEnv, gpa: std.mem.Allocator, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
     return try self.exposed_items.setNodeIndexById(gpa, @bitCast(ident_idx), node_idx);
 }
 
 /// Get region info for a given region
-pub fn getRegionInfo(self: *const CommonEnv, region: Region) !RegionInfo {
+pub fn getRegionInfo(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }!RegionInfo {
     return RegionInfo.position(
         self.source,
         self.line_starts.items.items,
@@ -250,7 +251,7 @@ pub fn getSourceAll(self: *const CommonEnv) []const u8 {
 }
 
 /// Calculate and store line starts from the source text
-pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) !void {
+pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!void {
     // Reset line_starts by creating a new SafeList
     self.line_starts.deinit(gpa);
     self.line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
@@ -299,7 +300,7 @@ pub fn getSource(self: *const CommonEnv, region: Region) []const u8 {
 }
 
 /// Get the source line for a given region
-pub fn getSourceLine(self: *const CommonEnv, region: Region) ![]const u8 {
+pub fn getSourceLine(self: *const CommonEnv, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }![]const u8 {
     const region_info = try self.getRegionInfo(region);
     const line_start = self.line_starts.items.items[region_info.start_line_idx];
     const line_end = if (region_info.start_line_idx + 1 < self.line_starts.items.items.len)

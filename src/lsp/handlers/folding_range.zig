@@ -3,6 +3,7 @@
 //! Provides code folding ranges for the editor.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
@@ -11,7 +12,7 @@ const Token = parse.tokenize.Token;
 /// Handler for `textDocument/foldingRange` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "foldingRange requires params");
                 return;
@@ -72,7 +73,7 @@ const FoldingRange = struct {
 };
 
 /// Extract folding ranges from source code by finding matching brackets.
-fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) ![]FoldingRange {
+fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Allocator.Error![]FoldingRange {
     // Build line offset table
     const line_offsets = buildLineOffsets(source);
 

@@ -16,6 +16,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
@@ -243,7 +244,7 @@ pub fn bundle(
 
 /// Validate a base58-encoded hash string and return the decoded hash.
 /// Returns null if the hash is invalid.
-pub fn validateBase58Hash(base58_hash: []const u8) !?[32]u8 {
+pub fn validateBase58Hash(base58_hash: []const u8) Allocator.Error!?[32]u8 {
     if (base58_hash.len > base58.base58_hash_bytes) {
         return null;
     }
@@ -454,11 +455,11 @@ pub const ExtractWriter = struct {
     makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) anyerror!void,
     streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void,
 
-    pub fn makeDir(self: ExtractWriter, path: []const u8) !void {
+    pub fn makeDir(self: ExtractWriter, path: []const u8) anyerror!void {
         return self.makeDirFn(self.ptr, path);
     }
 
-    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: *std.Io.Reader, size: usize) !void {
+    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: *std.Io.Reader, size: usize) anyerror!void {
         return self.streamFileFn(self.ptr, path, reader, size);
     }
 };

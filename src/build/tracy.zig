@@ -403,12 +403,13 @@ extern fn ___tracy_emit_plot_int(name: ?[*:0]const u8, val: i64) void;
 extern fn ___tracy_wait_shutdown() void;
 
 /// Wait for the tracy profiler to fully shutdown and finish syncing data.
-pub fn waitForShutdown(std_io: std.Io) !void {
+pub fn waitForShutdown(std_io: std.Io) void {
     if (!enable) return;
 
-    // stderr not available on freestanding
+    // stderr not available on freestanding. The notice is best-effort: a failed
+    // write must not prevent tracy from flushing its collected profiling data.
     if (comptime builtin.os.tag != .freestanding) {
-        try std.Io.File.stderr().writeStreamingAll(std_io, "Program ended, waiting for tracy to finish collecting data.\n");
+        std.Io.File.stderr().writeStreamingAll(std_io, "Program ended, waiting for tracy to finish collecting data.\n") catch {};
     }
     ___tracy_wait_shutdown();
 }

@@ -2,11 +2,12 @@
 //! selection range, and document highlight.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const server_module = @import("../server.zig");
 const transport_module = @import("../transport.zig");
 
 /// Get the path to the test platform for creating valid Roc files
-fn platformPath(allocator: std.mem.Allocator) ![]u8 {
+fn platformPath(allocator: std.mem.Allocator) anyerror![]u8 {
     // Resolve from repo root to ensure absolute path
     const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(repo_root);
@@ -19,11 +20,11 @@ fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     return path;
 }
 
-fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+fn frame(allocator: std.mem.Allocator, body: []const u8) Allocator.Error![]u8 {
     return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }
 
-fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
+fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) anyerror![][]u8 {
     const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
     const sink: std.Io.Writer = .fixed(&sink_storage);
@@ -49,11 +50,11 @@ fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     return responses.toOwnedSlice(allocator);
 }
 
-fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) Allocator.Error![]u8 {
     return @import("../uri.zig").pathToUri(allocator, path);
 }
 
-fn isolateServerCache(allocator: std.mem.Allocator, tmp_path: []const u8, server: anytype) ![]u8 {
+fn isolateServerCache(allocator: std.mem.Allocator, tmp_path: []const u8, server: anytype) anyerror![]u8 {
     const cache_dir = try std.fs.path.join(allocator, &.{ tmp_path, ".roc_cache" });
     server.syntax_checker.cache_config.cache_dir = cache_dir;
     return cache_dir;

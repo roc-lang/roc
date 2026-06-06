@@ -14,6 +14,7 @@
 //! the cross-compilation test runner.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
@@ -28,7 +29,7 @@ fn runDevBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
     self_test_flag: []const u8,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -99,7 +100,7 @@ fn buildAndRunDevBackendApp(
     roc_file: []const u8,
     output_basename: []const u8,
     inspect_output: ?*const fn (std.mem.Allocator, []const u8) anyerror!void,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -166,7 +167,7 @@ fn buildAndRunDevBackendApp(
     });
 }
 
-fn expectInterpreterRuntimeStackOverflow() !void {
+fn expectInterpreterRuntimeStackOverflow() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/stack_overflow_runtime.roc");
@@ -192,7 +193,7 @@ fn expectInterpreterRuntimeStackOverflow() !void {
     }
 }
 
-fn expectDevRuntimeStackOverflow() !void {
+fn expectDevRuntimeStackOverflow() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try runDevBackendHostSelfTest(
@@ -227,7 +228,7 @@ fn expectDevRuntimeStackOverflow() !void {
     }
 }
 
-fn expectInterpreterRuntimeDivisionByZero() !void {
+fn expectInterpreterRuntimeDivisionByZero() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/division_by_zero.roc");
@@ -253,7 +254,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
     }
 }
 
-fn expectDevRuntimeDivisionByZero() !void {
+fn expectDevRuntimeDivisionByZero() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(
@@ -297,7 +298,7 @@ fn expectDevRuntimeDivisionByZero() !void {
 // test runner.
 
 /// Shared body for IO spec tests with a specific backend.
-fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !void {
+fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) anyerror!void {
     try runIoSpecTestWithEnv(opt_flag, spec, null);
 }
 
@@ -305,7 +306,7 @@ fn runIoSpecTestWithEnv(
     comptime opt_flag: []const u8,
     spec: fx_test_specs.TestSpec,
     extra_env: ?*const std.process.Environ.Map,
-) !void {
+) anyerror!void {
     const allocator = testing.allocator;
 
     const result = util.runRocCommandWithEnv(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }, extra_env) catch |err| {
@@ -329,7 +330,7 @@ const IoSpecPartition = struct {
     count: usize,
 };
 
-fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) anyerror!?[]u8 {
     const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
         .block = .global,
     } else blk: {
@@ -343,7 +344,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
     };
 }
 
-fn ioSpecPartitionFromEnv(allocator: std.mem.Allocator) !IoSpecPartition {
+fn ioSpecPartitionFromEnv(allocator: std.mem.Allocator) anyerror!IoSpecPartition {
     const index_text = try getEnvVarOwned(allocator, "ROC_FX_IO_SPEC_PARTITION_INDEX") orelse
         return .{ .index = 0, .count = 1 };
     defer allocator.free(index_text);
@@ -387,7 +388,7 @@ fn leastLoadedPartition(loads: []const u64) usize {
     return min_i;
 }
 
-fn assignIoSpecPartitions(allocator: std.mem.Allocator, partition_count: usize) ![]usize {
+fn assignIoSpecPartitions(allocator: std.mem.Allocator, partition_count: usize) anyerror![]usize {
     std.debug.assert(partition_count > 0);
 
     var weighted = std.ArrayList(WeightedIoSpec).empty;
@@ -425,7 +426,7 @@ fn assignIoSpecPartitions(allocator: std.mem.Allocator, partition_count: usize) 
     return owners;
 }
 
-fn runIoSpecTests(comptime opt_flag: []const u8) !void {
+fn runIoSpecTests(comptime opt_flag: []const u8) anyerror!void {
     if (!fx_test_options.include_io_spec_tests) return error.SkipZigTest;
 
     const allocator = testing.allocator;
@@ -507,7 +508,7 @@ test "provided static data exports are host-linkable readonly constants" {
     try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
 }
 
-fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) !void {
+fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) anyerror!void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, allocator, .limited(256 * 1024 * 1024));
     defer allocator.free(bytes);
 
@@ -542,7 +543,7 @@ fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []cons
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
-fn testRocTestSinglePass(opt: []const u8, roc_file: []const u8) !void {
+fn testRocTestSinglePass(opt: []const u8, roc_file: []const u8) anyerror!void {
     const allocator = testing.allocator;
     const run_result = try util.runRoc(allocator, &.{ "test", opt }, roc_file);
     defer allocator.free(run_result.stdout);

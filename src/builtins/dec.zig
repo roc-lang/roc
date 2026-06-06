@@ -337,7 +337,7 @@ pub const RocDec = extern struct {
         return if (negated) |n| .{ .num = n } else null;
     }
 
-    pub fn abs(self: RocDec) !RocDec {
+    pub fn abs(self: RocDec) error{OutOfRange}!RocDec {
         const absolute = @abs(self.num);
         if (absolute <= @as(u128, @intCast(std.math.maxInt(i128)))) {
             return RocDec{ .num = @intCast(absolute) };

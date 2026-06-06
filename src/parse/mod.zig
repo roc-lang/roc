@@ -157,7 +157,7 @@ test "parse error triggers errdefer cleanup" {
     try std.testing.expectError(error.TooNested, result);
 }
 
-fn parserInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+fn parserInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();
     defer parser.decl_index.deinit();

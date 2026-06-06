@@ -1753,12 +1753,12 @@ pub const MonoLlvmCodeGen = struct {
             self.values.deinit(allocator);
         }
 
-        fn append(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) !void {
+        fn append(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) Allocator.Error!void {
             try self.types.append(allocator, ty);
             try self.values.append(allocator, value);
         }
 
-        fn prepend(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) !void {
+        fn prepend(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) Allocator.Error!void {
             try self.types.insert(allocator, 0, ty);
             try self.values.insert(allocator, 0, value);
         }

@@ -1,6 +1,7 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
@@ -1002,7 +1003,7 @@ pub const Store = struct {
     }
 
     /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
-    fn getEmptyStructLayout(self: *Self) !Idx {
+    fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
         // Check if we already have an empty struct layout
         for (self.struct_data.items.items, 0..) |sd, i| {
             if (sd.size == 0 and sd.fields.count == 0) {
@@ -1031,7 +1032,7 @@ pub const Store = struct {
     /// Backwards-compat alias
     pub const getEmptyRecordLayout = getEmptyStructLayout;
 
-    pub fn ensureEmptyRecordLayout(self: *Self) !Idx {
+    pub fn ensureEmptyRecordLayout(self: *Self) Allocator.Error!Idx {
         return self.getEmptyStructLayout();
     }
 
@@ -1075,7 +1076,7 @@ pub const Store = struct {
     }
 
     /// Get or create a zero-sized type layout
-    pub fn ensureZstLayout(self: *Self) !Idx {
+    pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
         // Check if we already have a ZST layout
         const len: u32 = @intCast(self.layouts.len());
         for (0..len) |i| {
@@ -2924,7 +2925,7 @@ pub const Store = struct {
         list_elem_span: can.CIR.Expr.Span,
         type_scope: *const TypeScope,
         caller_module_idx: ?u32,
-    ) !Idx {
+    ) Allocator.Error!Idx {
         const elems = module_env.store.exprSlice(list_elem_span);
 
         if (elems.len == 0) {

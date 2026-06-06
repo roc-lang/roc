@@ -1,6 +1,7 @@
 //! LSP module entry point, providing protocol types, transport layer, and server implementation.
 
 pub const std = @import("std");
+const Allocator = std.mem.Allocator;
 pub const protocol = @import("protocol.zig");
 pub const transport = @import("transport.zig");
 pub const server = @import("server.zig");
@@ -12,7 +13,7 @@ pub const module_lookup = @import("module_lookup.zig");
 pub const doc_comments = @import("doc_comments.zig");
 
 /// Convenience wrapper to launch the server using stdin/stdout from other modules.
-pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: server.DebugOptions) !void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: server.DebugOptions) anyerror!void {
     try server.runWithStdIo(allocator, std_io, debug);
 }
 
