@@ -652,7 +652,7 @@ const Builder = struct {
         const body = try self.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = callee,
+                .callee = .{ .template = callee },
                 .args = try self.program.addExprSpan(arg_exprs),
             } },
         });
@@ -1925,13 +1925,13 @@ const Builder = struct {
 
         const args = [_]Ast.ExprId{value};
         return try self.program.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
-            .callee = self.fnDefForTemplate(
+            .callee = .{ .template = self.fnDefForTemplate(
                 lookup.view,
                 template,
                 lookup.target.callable_ty,
                 lookup.view.types.rootKey(lookup.target.callable_ty),
                 callable_mono_ty,
-            ),
+            ) },
             .args = try self.program.addExprSpan(&args),
         } } });
     }
@@ -4379,7 +4379,7 @@ const BodyContext = struct {
             return .{
                 .ret_ty = fn_data.ret,
                 .data = .{ .call_proc = .{
-                    .callee = callee,
+                    .callee = .{ .template = callee },
                     .args = try self.lowerExprSpanAtTypes(call.args, self.builder.program.types.span(fn_data.args)),
                 } },
             };
@@ -6464,7 +6464,7 @@ const BodyContext = struct {
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
         return .{ .call_proc = .{
-            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
+            .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
             .args = args,
         } };
     }
@@ -6727,7 +6727,7 @@ const BodyContext = struct {
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
         const args = [_]Ast.ExprId{ lhs, rhs };
         return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
+            .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
             .args = try self.builder.program.addExprSpan(&args),
         } } });
     }
@@ -8416,7 +8416,7 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = try self.methodTargetCalleeWithMono(lookup, target_mono_ty),
+                .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, target_mono_ty) },
                 .args = try self.builder.program.addExprSpan(args),
             } },
         });
