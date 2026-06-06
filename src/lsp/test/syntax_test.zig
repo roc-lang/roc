@@ -30,16 +30,30 @@ const TestHarness = struct {
     allocator: std.mem.Allocator,
     checker: SyntaxChecker,
     tmp: std.testing.TmpDir,
+    cache_dir: []u8,
     platform_path: []u8,
     file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
 
     fn init() anyerror!TestHarness {
         const allocator = std.testing.allocator;
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+        defer allocator.free(tmp_path);
+
+        const cache_dir = try std.fs.path.join(allocator, &.{ tmp_path, ".roc_cache" });
+        errdefer allocator.free(cache_dir);
+
+        var checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null);
+        checker.cache_config.cache_dir = cache_dir;
+
         return .{
             .allocator = allocator,
-            .checker = SyntaxChecker.init(allocator, std.testing.io, .{}, null),
-            .tmp = std.testing.tmpDir(.{}),
+            .checker = checker,
+            .tmp = tmp,
+            .cache_dir = cache_dir,
             .platform_path = try platformPath(allocator),
         };
     }
@@ -48,8 +62,9 @@ const TestHarness = struct {
         if (self.uri) |u| self.allocator.free(u);
         if (self.file_path) |f| self.allocator.free(f);
         self.allocator.free(self.platform_path);
-        self.tmp.cleanup();
         self.checker.deinit();
+        self.tmp.cleanup();
+        self.allocator.free(self.cache_dir);
     }
 
     /// Format a Roc source template, substituting the platform path for `{s}`.
@@ -126,7 +141,6 @@ const TestHarness = struct {
 test "syntax checker skips rebuild when content unchanged" {
     var h = try TestHarness.init();
     defer h.deinit();
-    h.checker.cache_config.enabled = false;
 
     const contents = try h.formatSource(
         \\app [main] {{ pf: platform "{s}" }}
@@ -163,7 +177,6 @@ test "syntax checker skips rebuild when content unchanged" {
 test "syntax checker rebuilds when content changes" {
     var h = try TestHarness.init();
     defer h.deinit();
-    h.checker.cache_config.enabled = false;
 
     const contents1 = try h.formatSource(
         \\app [main] {{ pf: platform "{s}" }}
@@ -206,7 +219,6 @@ test "syntax checker rebuilds when content changes" {
 test "syntax checker reports diagnostics for invalid source" {
     var h = try TestHarness.init();
     defer h.deinit();
-    h.checker.cache_config.enabled = false;
 
     const contents = try h.formatSource(
         \\app [main] {{ pf: platform "{s}" }}
@@ -235,7 +247,6 @@ test "syntax checker reports diagnostics for invalid source" {
 test "getDocumentSymbols returns symbols for valid app file" {
     var h = try TestHarness.init();
     defer h.deinit();
-    h.checker.cache_config.enabled = false;
 
     const contents = try h.formatSource(
         \\app [main, helper] {{ pf: platform "{s}" }}

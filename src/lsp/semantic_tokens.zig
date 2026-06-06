@@ -282,29 +282,27 @@ pub fn extractSemanticTokensWithImports(
     imported_envs: ?[]*ModuleEnv,
 ) Allocator.Error![]SemanticToken {
     // Create ModuleEnv with source
-    var module_env = ModuleEnv.init(allocator, source) catch {
-        // Fall back to token-only extraction on error
-        return extractSemanticTokens(allocator, source, info);
-    };
+    var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
     defer module_env.deinit();
 
     // Parse the source
-    const parse_ast = parse.parse(allocator, &module_env.common) catch {
+    const parse_ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
         // Fall back to token-only extraction on parse error
-        return extractSemanticTokens(allocator, source, info);
+        else => return extractSemanticTokens(allocator, source, info),
     };
     defer parse_ast.deinit();
 
     // Initialize CIR fields
-    module_env.initCIRFields("semantic-tokens") catch {
-        return extractSemanticTokens(allocator, source, info);
-    };
+    module_env.initCIRFields("semantic-tokens") catch return error.OutOfMemory;
 
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch {
-        return extractSemanticTokens(allocator, source, info);
+    const builtin_indices = builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return extractSemanticTokens(allocator, source, info),
     };
-    var builtin_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source) catch {
-        return extractSemanticTokens(allocator, source, info);
+    var builtin_module = builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return extractSemanticTokens(allocator, source, info),
     };
     defer builtin_module.deinit();
 
@@ -315,15 +313,10 @@ pub fn extractSemanticTokensWithImports(
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
-    }) catch {
-        return extractSemanticTokens(allocator, source, info);
-    };
+    }) catch return error.OutOfMemory;
     defer canonicalizer.deinit();
 
-    canonicalizer.canonicalizeFile() catch {
-        // Fall back to token-only on canonicalization error
-        return extractSemanticTokens(allocator, source, info);
-    };
+    canonicalizer.canonicalizeFile() catch return error.OutOfMemory;
 
     // Build import context for cross-module lookups
     var import_context = ImportContext.init(allocator);
@@ -331,7 +324,7 @@ pub fn extractSemanticTokensWithImports(
 
     if (imported_envs) |envs| {
         for (envs) |imp_env| {
-            import_context.addModuleExports(imp_env) catch {};
+            try import_context.addModuleExports(imp_env);
         }
     }
 
@@ -347,11 +340,7 @@ pub fn extractSemanticTokensWithImports(
     errdefer collector.tokens.deinit(allocator);
 
     // Walk CIR statements for semantic information
-    collector.walkStatements() catch {
-        // Fall back on error
-        collector.tokens.deinit(allocator);
-        return extractSemanticTokens(allocator, source, info);
-    };
+    collector.walkStatements() catch return error.OutOfMemory;
 
     // Also extract tokens from the tokenizer that weren't covered by CIR
     // (keywords, operators, and identifiers as fallback)
@@ -386,7 +375,7 @@ const ImportContext = struct {
     }
 
     /// Add exports from a module to the context.
-    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) Allocator.Error!void {
+    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) std.mem.Allocator.Error!void {
         const module_name = module_env.module_name;
         if (module_name.len == 0) return;
 

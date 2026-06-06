@@ -1,7 +1,6 @@
 //! Tests for CLI platform resolution that do not cross the post-check lowering boundary
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
@@ -11,6 +10,19 @@ const test_helpers = eval.test_helpers;
 const cli_context = @import("CliCtx.zig");
 const CliCtx = cli_context.CliCtx;
 const Io = cli_context.Io;
+
+var shared_test_builtins: ?eval.BuiltinModules = null;
+
+fn sharedPrePublishedBuiltin() anyerror!test_helpers.PrePublishedBuiltin {
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+    return .{
+        .env = shared_test_builtins.?.builtin_module.env,
+        .indices = shared_test_builtins.?.builtin_indices,
+        .artifact = &shared_test_builtins.?.checked_artifact,
+    };
+}
 
 test "platform resolution - basic cli platform" {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
@@ -145,7 +157,24 @@ fn compileLirImageForSharedTest(
     source: []const u8,
     imports: []const test_helpers.ModuleSource,
 ) anyerror!test_helpers.CompiledTargetProgram {
-    return test_helpers.compileProgramForTarget(allocator, std.testing.io, .module, source, imports, .native);
+    return compileLirImageForSharedTestTarget(allocator, source, imports, .native);
+}
+
+fn compileLirImageForSharedTestTarget(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    imports: []const test_helpers.ModuleSource,
+    target_usize: base.target.TargetUsize,
+) anyerror!test_helpers.CompiledTargetProgram {
+    return test_helpers.compileProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        imports,
+        target_usize,
+        try sharedPrePublishedBuiltin(),
+    );
 }
 
 fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.CompiledTargetProgram) anyerror!void {
@@ -164,6 +193,11 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
+fn expectPublishedImportArtifactCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) anyerror!void {
+    const borrowed_builtin_count: usize = if (compiled.resources.borrowed_builtin_artifact != null) 1 else 0;
+    try testing.expectEqual(expected, compiled.resources.import_artifacts.len + borrowed_builtin_count);
+}
+
 test "integration - shared memory setup and parsing" {
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -175,30 +209,29 @@ test "integration - shared memory setup and parsing" {
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
 }
 
-test "integration - compilation pipeline for different platforms" {
-    var native = try test_helpers.compileProgramForTarget(
+test "integration - compilation pipeline for native platform" {
+    var native = try compileLirImageForSharedTestTarget(
         testing.allocator,
-        std.testing.io,
-        .module,
         "main : () -> List(I64)\nmain = || [1, 2, 3]",
         &.{},
         .native,
     );
     defer native.deinit(testing.allocator);
 
-    var wasm32 = try test_helpers.compileProgramForTarget(
+    try expectLirImageCanBeViewedFromMappedHeader(&native);
+    try testing.expectEqual(base.target.TargetUsize.native, native.lowered.view.target_usize);
+}
+
+test "integration - compilation pipeline for u32 platform" {
+    var wasm32 = try compileLirImageForSharedTestTarget(
         testing.allocator,
-        std.testing.io,
-        .module,
         "main : () -> List(I64)\nmain = || [1, 2, 3]",
         &.{},
         .u32,
     );
     defer wasm32.deinit(testing.allocator);
 
-    try expectLirImageCanBeViewedFromMappedHeader(&native);
     try expectLirImageCanBeViewedFromMappedHeader(&wasm32);
-    try testing.expectEqual(base.target.TargetUsize.native, native.lowered.view.target_usize);
     try testing.expectEqual(base.target.TargetUsize.u32, wasm32.lowered.view.target_usize);
 }
 
@@ -231,7 +264,7 @@ test "integration - automatic module dependency ordering" {
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
+    try expectPublishedImportArtifactCount(&compiled, 3);
 }
 
 test "integration - transitive module imports (module A imports module B)" {
@@ -247,7 +280,7 @@ test "integration - transitive module imports (module A imports module B)" {
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
+    try expectPublishedImportArtifactCount(&compiled, 3);
 }
 
 test "integration - diamond dependency pattern (A imports B and C, both import D)" {
@@ -265,7 +298,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try testing.expectEqual(@as(usize, 5), compiled.resources.import_artifacts.len);
+    try expectPublishedImportArtifactCount(&compiled, 5);
 }
 
 test "integration - direct Core and Utils calls from app" {
@@ -281,5 +314,5 @@ test "integration - direct Core and Utils calls from app" {
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try testing.expectEqual(@as(usize, 3), compiled.resources.import_artifacts.len);
+    try expectPublishedImportArtifactCount(&compiled, 3);
 }

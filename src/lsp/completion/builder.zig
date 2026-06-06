@@ -84,7 +84,7 @@ pub const CompletionBuilder = struct {
 
     /// Get or build the scope map for the given module env.
     /// Reuses a previously built scope if the module's qualified ident idx matches.
-    fn getOrBuildScope(self: *CompletionBuilder, module_env: *ModuleEnv) *scope_map.ScopeMap {
+    fn getOrBuildScope(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!*scope_map.ScopeMap {
         const module_ident = module_env.qualified_module_ident;
         if (self.cached_scope != null and
             !self.cached_scope_module_ident.isNone() and
@@ -96,7 +96,8 @@ pub const CompletionBuilder = struct {
         if (self.cached_scope) |*old| old.deinit();
 
         var scope = scope_map.ScopeMap.init(self.allocator);
-        scope.build(module_env) catch {};
+        errdefer scope.deinit();
+        try scope.build(module_env);
         self.cached_scope = scope;
         self.cached_scope_module_ident = module_ident;
         return &self.cached_scope.?;
@@ -272,7 +273,7 @@ pub const CompletionBuilder = struct {
         module_env: *ModuleEnv,
         module_name: []const u8,
     ) Allocator.Error!void {
-        var type_writer = module_env.initTypeWriter() catch null;
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
         defer if (type_writer) |*tw| tw.deinit();
 
         const exposed = &module_env.common.exposed_items;
@@ -315,19 +316,22 @@ pub const CompletionBuilder = struct {
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
                         // Type formatting is best-effort; missing type info is acceptable
-                        tw.write(type_var, .one_line) catch {};
+                        tw.write(type_var, .one_line) catch |err| switch (err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            error.WriteFailed => {},
+                        };
                         const type_str = tw.get();
                         if (type_str.len > 0) {
-                            detail = self.allocator.dupe(u8, type_str) catch null;
+                            detail = try self.allocator.dupe(u8, type_str);
                         }
                         tw.reset();
 
-                        documentation = doc_comments.extractDocForDef(
+                        documentation = try doc_comments.extractDocForDef(
                             self.allocator,
                             module_env.common.source,
                             &module_env.store,
                             def,
-                        ) catch null;
+                        );
                     }
                 }
             }
@@ -433,13 +437,13 @@ pub const CompletionBuilder = struct {
                     const name = module_env.getIdentText(header.name);
                     if (name.len == 0) continue;
 
-                    const documentation = doc_comments.extractDocForStatement(
+                    const documentation = try doc_comments.extractDocForStatement(
                         self.allocator,
                         module_env.common.source,
                         &module_env.store,
                         stmt,
                         stmt_idx,
-                    ) catch null;
+                    );
 
                     _ = try self.addItem(.{
                         .label = name,
@@ -458,10 +462,10 @@ pub const CompletionBuilder = struct {
     /// Add local definition completions (variables, functions in scope).
     pub fn addLocalCompletions(self: *CompletionBuilder, module_env: *ModuleEnv, cursor_offset: u32) Allocator.Error!void {
         // Initialize type writer for formatting types
-        var type_writer = module_env.initTypeWriter() catch null;
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
         defer if (type_writer) |*tw| tw.deinit();
 
-        const scope = self.getOrBuildScope(module_env);
+        const scope = try self.getOrBuildScope(module_env);
 
         // Add local variables in scope at cursor position
         for (scope.bindings.items) |binding| {
@@ -481,19 +485,22 @@ pub const CompletionBuilder = struct {
             if (type_writer) |*tw| {
                 const type_var = ModuleEnv.varFrom(binding.pattern_idx);
                 // Type formatting is best-effort; missing type info is acceptable
-                tw.write(type_var, .one_line) catch {};
+                tw.write(type_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = self.allocator.dupe(u8, type_str) catch null;
+                    detail = try self.allocator.dupe(u8, type_str);
                 }
                 tw.reset();
             }
 
-            const documentation = doc_comments.extractDocCommentBefore(
+            const documentation = try doc_comments.extractDocCommentBefore(
                 self.allocator,
                 module_env.common.source,
                 module_env.store.getPatternRegion(binding.pattern_idx).start.offset,
-            ) catch null;
+            );
 
             _ = try self.addItem(.{
                 .label = label,
@@ -531,20 +538,23 @@ pub const CompletionBuilder = struct {
             if (type_writer) |*tw| {
                 const type_var = ModuleEnv.varFrom(def.pattern);
                 // Type formatting is best-effort; missing type info is acceptable
-                tw.write(type_var, .one_line) catch {};
+                tw.write(type_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = self.allocator.dupe(u8, type_str) catch null;
+                    detail = try self.allocator.dupe(u8, type_str);
                 }
                 tw.reset();
             }
 
-            const documentation = doc_comments.extractDocForDef(
+            const documentation = try doc_comments.extractDocForDef(
                 self.allocator,
                 module_env.common.source,
                 &module_env.store,
                 def,
-            ) catch null;
+            );
 
             _ = try self.addItem(.{
                 .label = name,
@@ -588,21 +598,24 @@ pub const CompletionBuilder = struct {
                 if (type_writer) |*tw| {
                     const type_var = ModuleEnv.varFrom(pattern_idx);
                     // Type formatting is best-effort; missing type info is acceptable
-                    tw.write(type_var, .one_line) catch {};
+                    tw.write(type_var, .one_line) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.WriteFailed => {},
+                    };
                     const type_str = tw.get();
                     if (type_str.len > 0) {
-                        detail = self.allocator.dupe(u8, type_str) catch null;
+                        detail = try self.allocator.dupe(u8, type_str);
                     }
                     tw.reset();
                 }
 
-                const documentation = doc_comments.extractDocForStatement(
+                const documentation = try doc_comments.extractDocForStatement(
                     self.allocator,
                     module_env.common.source,
                     &module_env.store,
                     stmt,
                     stmt_idx,
-                ) catch null;
+                );
 
                 _ = try self.addItem(.{
                     .label = name,
@@ -750,17 +763,20 @@ pub const CompletionBuilder = struct {
                         .tuple => |tuple| {
                             const elem_vars = type_store.sliceVars(tuple.elems);
 
-                            var type_writer = module_env.initTypeWriter() catch null;
+                            var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
                             defer if (type_writer) |*tw| tw.deinit();
 
                             for (elem_vars, 0..) |elem_var, i| {
                                 var detail: ?[]const u8 = null;
                                 if (type_writer) |*tw| {
                                     // Type formatting is best-effort; missing type info is acceptable
-                                    tw.write(elem_var, .one_line) catch {};
+                                    tw.write(elem_var, .one_line) catch |err| switch (err) {
+                                        error.OutOfMemory => return error.OutOfMemory,
+                                        error.WriteFailed => {},
+                                    };
                                     const type_str = tw.get();
                                     if (type_str.len > 0) {
-                                        detail = self.allocator.dupe(u8, type_str) catch null;
+                                        detail = try self.allocator.dupe(u8, type_str);
                                     }
                                     tw.reset();
                                 }
@@ -908,7 +924,7 @@ pub const CompletionBuilder = struct {
         self.logDebug("addFieldsFromRecord: record.fields={}, fields_slice.len={}, field_names.len={d}", .{ record.fields, fields_slice.len, field_names.len });
 
         // Initialize type writer for formatting field types
-        var type_writer = module_env.initTypeWriter() catch null;
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
         defer if (type_writer) |*tw| tw.deinit();
 
         // Iterate over record fields
@@ -921,10 +937,13 @@ pub const CompletionBuilder = struct {
             var detail: ?[]const u8 = null;
             if (type_writer) |*tw| {
                 // Type formatting is best-effort; missing type info is acceptable
-                tw.write(field_var, .one_line) catch {};
+                tw.write(field_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = self.allocator.dupe(u8, type_str) catch null;
+                    detail = try self.allocator.dupe(u8, type_str);
                 }
                 tw.reset();
             }
@@ -966,7 +985,7 @@ pub const CompletionBuilder = struct {
     ) Allocator.Error!void {
         self.logDebug("addMethodCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
 
-        const scope = self.getOrBuildScope(module_env);
+        const scope = try self.getOrBuildScope(module_env);
         self.logDebug("addMethodCompletions: scope has {d} bindings", .{scope.bindings.items.len});
 
         // Find the binding with matching name that's visible at the variable position
@@ -1142,15 +1161,18 @@ pub const CompletionBuilder = struct {
 
             // Try to get detail from the constraint's function type
             var detail: ?[]const u8 = null;
-            var type_writer = module_env.initTypeWriter() catch null;
+            var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
             defer if (type_writer) |*tw| tw.deinit();
 
             if (type_writer) |*tw| {
                 // Type formatting is best-effort; missing type info is acceptable
-                tw.write(constraint.fn_var, .one_line) catch {};
+                tw.write(constraint.fn_var, .one_line) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => {},
+                };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = self.allocator.dupe(u8, type_str) catch null;
+                    detail = try self.allocator.dupe(u8, type_str);
                 }
                 tw.reset();
             }
@@ -1196,7 +1218,7 @@ pub const CompletionBuilder = struct {
     /// Add methods for a specific source declaration owner by searching method_idents.
     fn addMethodsForOwnerInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) Allocator.Error!void {
         // Initialize type writer for formatting method signatures
-        var type_writer = module_env.initTypeWriter() catch null;
+        var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
         defer if (type_writer) |*tw| tw.deinit();
 
         // Get the type name for display purposes
@@ -1221,10 +1243,13 @@ pub const CompletionBuilder = struct {
                 if (self.findMethodType(module_env, qualified_ident)) |method_type_var| {
                     if (type_writer) |*tw| {
                         // Type formatting is best-effort; missing type info is acceptable
-                        tw.write(method_type_var, .one_line) catch {};
+                        tw.write(method_type_var, .one_line) catch |err| switch (err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            error.WriteFailed => {},
+                        };
                         const type_str = tw.get();
                         if (type_str.len > 0) {
-                            detail = self.allocator.dupe(u8, type_str) catch null;
+                            detail = try self.allocator.dupe(u8, type_str);
                         }
                         tw.reset();
                     }
@@ -1232,11 +1257,11 @@ pub const CompletionBuilder = struct {
 
                 // If we couldn't get the type signature, at least show which type it's from
                 if (detail == null and type_name.len > 0 and qualified_name.len > 0) {
-                    detail = std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name}) catch null;
+                    detail = try std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name});
                 }
 
                 // Extract documentation for the method definition.
-                const documentation = self.findMethodDocumentation(module_env, qualified_ident);
+                const documentation = try self.findMethodDocumentation(module_env, qualified_ident);
 
                 const added = try self.addItem(.{
                     .label = method_name,
@@ -1253,7 +1278,7 @@ pub const CompletionBuilder = struct {
     ///
     /// Searches top-level definitions and statements for a def/decl whose
     /// pattern ident matches `qualified_ident`, then extracts the doc comment.
-    fn findMethodDocumentation(self: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?[]const u8 {
+    fn findMethodDocumentation(self: *CompletionBuilder, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) Allocator.Error!?[]const u8 {
         // Search all_defs for a matching definition.
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
@@ -1267,12 +1292,12 @@ pub const CompletionBuilder = struct {
             };
 
             if (ident_idx.eql(qualified_ident)) {
-                return doc_comments.extractDocForDef(
+                return try doc_comments.extractDocForDef(
                     self.allocator,
                     module_env.common.source,
                     &module_env.store,
                     def,
-                ) catch null;
+                );
             }
         }
 
@@ -1294,13 +1319,13 @@ pub const CompletionBuilder = struct {
             };
 
             if (ident_idx.eql(qualified_ident)) {
-                return doc_comments.extractDocForStatement(
+                return try doc_comments.extractDocForStatement(
                     self.allocator,
                     module_env.common.source,
                     &module_env.store,
                     stmt,
                     stmt_idx,
-                ) catch null;
+                );
             }
         }
 
@@ -1408,7 +1433,7 @@ pub const CompletionBuilder = struct {
                             if (tag_name.len == 0) continue;
 
                             // Show the tag signature (e.g. "SubVal(Str)") as detail
-                            const detail = self.formatTagSignature(module_env, tag_name, t.args);
+                            const detail = try self.formatTagSignature(module_env, tag_name, t.args);
 
                             const added = try self.addItem(.{
                                 .label = tag_name,
@@ -1428,11 +1453,11 @@ pub const CompletionBuilder = struct {
 
     /// Format a tag signature like "SubVal(Str)" or "Cons(a, List(a))".
     /// Returns null for tags with no arguments.
-    fn formatTagSignature(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args: CIR.TypeAnno.Span) ?[]const u8 {
+    fn formatTagSignature(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args: CIR.TypeAnno.Span) Allocator.Error!?[]const u8 {
         const args_slice = module_env.store.sliceTypeAnnos(args);
         if (args_slice.len == 0) return null;
 
-        return self.formatTagSignatureInner(module_env, tag_name, args_slice) catch null;
+        return try self.formatTagSignatureInner(module_env, tag_name, args_slice);
     }
 
     fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) Allocator.Error![]const u8 {
@@ -1443,106 +1468,106 @@ pub const CompletionBuilder = struct {
         for (args_slice, 0..) |arg_idx, i| {
             if (i > 0) try buf.appendSlice(self.allocator, ", ");
             const arg_anno = module_env.store.getTypeAnno(arg_idx);
-            self.writeTypeAnno(&buf, module_env, arg_anno);
+            try self.writeTypeAnno(&buf, module_env, arg_anno);
         }
         try buf.append(self.allocator, ')');
         return try buf.toOwnedSlice(self.allocator);
     }
 
     /// Write a human-readable representation of a TypeAnno to a buffer.
-    fn writeTypeAnno(self: *CompletionBuilder, buf: *std.ArrayList(u8), module_env: *ModuleEnv, anno: CIR.TypeAnno) void {
+    fn writeTypeAnno(self: *CompletionBuilder, buf: *std.ArrayList(u8), module_env: *ModuleEnv, anno: CIR.TypeAnno) Allocator.Error!void {
         const alloc = self.allocator;
         switch (anno) {
             .lookup => |t| {
                 const name = module_env.getIdentText(t.name);
-                buf.appendSlice(alloc, stripBuiltinPrefix(name)) catch return;
+                try buf.appendSlice(alloc, stripBuiltinPrefix(name));
             },
             .rigid_var => |t| {
-                buf.appendSlice(alloc, module_env.getIdentText(t.name)) catch return;
+                try buf.appendSlice(alloc, module_env.getIdentText(t.name));
             },
             .rigid_var_lookup => |t| {
                 const ref_anno = module_env.store.getTypeAnno(t.ref);
-                self.writeTypeAnno(buf, module_env, ref_anno);
+                try self.writeTypeAnno(buf, module_env, ref_anno);
             },
             .apply => |a| {
                 const name = module_env.getIdentText(a.name);
-                buf.appendSlice(alloc, stripBuiltinPrefix(name)) catch return;
+                try buf.appendSlice(alloc, stripBuiltinPrefix(name));
                 const apply_args = module_env.store.sliceTypeAnnos(a.args);
                 if (apply_args.len > 0) {
-                    buf.append(alloc, '(') catch return;
+                    try buf.append(alloc, '(');
                     for (apply_args, 0..) |arg_idx, i| {
-                        if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                        if (i > 0) try buf.appendSlice(alloc, ", ");
                         const arg_anno = module_env.store.getTypeAnno(arg_idx);
-                        self.writeTypeAnno(buf, module_env, arg_anno);
+                        try self.writeTypeAnno(buf, module_env, arg_anno);
                     }
-                    buf.append(alloc, ')') catch return;
+                    try buf.append(alloc, ')');
                 }
             },
             .tag_union => |tu| {
-                buf.append(alloc, '[') catch return;
+                try buf.append(alloc, '[');
                 const tags = module_env.store.sliceTypeAnnos(tu.tags);
                 for (tags, 0..) |tag_idx, i| {
-                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    if (i > 0) try buf.appendSlice(alloc, ", ");
                     const tag_anno = module_env.store.getTypeAnno(tag_idx);
-                    self.writeTypeAnno(buf, module_env, tag_anno);
+                    try self.writeTypeAnno(buf, module_env, tag_anno);
                 }
-                buf.append(alloc, ']') catch return;
+                try buf.append(alloc, ']');
             },
             .tag => |t| {
-                buf.appendSlice(alloc, module_env.getIdentText(t.name)) catch return;
+                try buf.appendSlice(alloc, module_env.getIdentText(t.name));
                 const tag_args = module_env.store.sliceTypeAnnos(t.args);
                 if (tag_args.len > 0) {
-                    buf.append(alloc, '(') catch return;
+                    try buf.append(alloc, '(');
                     for (tag_args, 0..) |arg_idx, i| {
-                        if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                        if (i > 0) try buf.appendSlice(alloc, ", ");
                         const arg_anno = module_env.store.getTypeAnno(arg_idx);
-                        self.writeTypeAnno(buf, module_env, arg_anno);
+                        try self.writeTypeAnno(buf, module_env, arg_anno);
                     }
-                    buf.append(alloc, ')') catch return;
+                    try buf.append(alloc, ')');
                 }
             },
             .tuple => |t| {
-                buf.append(alloc, '(') catch return;
+                try buf.append(alloc, '(');
                 const elems = module_env.store.sliceTypeAnnos(t.elems);
                 for (elems, 0..) |elem_idx, i| {
-                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    if (i > 0) try buf.appendSlice(alloc, ", ");
                     const elem_anno = module_env.store.getTypeAnno(elem_idx);
-                    self.writeTypeAnno(buf, module_env, elem_anno);
+                    try self.writeTypeAnno(buf, module_env, elem_anno);
                 }
-                buf.append(alloc, ')') catch return;
+                try buf.append(alloc, ')');
             },
             .record => |r| {
-                buf.append(alloc, '{') catch return;
+                try buf.append(alloc, '{');
                 const fields = module_env.store.sliceAnnoRecordFields(r.fields);
                 for (fields, 0..) |field_idx, i| {
-                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    if (i > 0) try buf.appendSlice(alloc, ", ");
                     const field = module_env.store.getAnnoRecordField(field_idx);
-                    buf.appendSlice(alloc, module_env.getIdentText(field.name)) catch return;
-                    buf.appendSlice(alloc, ": ") catch return;
+                    try buf.appendSlice(alloc, module_env.getIdentText(field.name));
+                    try buf.appendSlice(alloc, ": ");
                     const field_anno = module_env.store.getTypeAnno(field.ty);
-                    self.writeTypeAnno(buf, module_env, field_anno);
+                    try self.writeTypeAnno(buf, module_env, field_anno);
                 }
-                buf.append(alloc, '}') catch return;
+                try buf.append(alloc, '}');
             },
             .@"fn" => |f| {
                 const fn_args = module_env.store.sliceTypeAnnos(f.args);
                 for (fn_args, 0..) |arg_idx, i| {
-                    if (i > 0) buf.appendSlice(alloc, ", ") catch return;
+                    if (i > 0) try buf.appendSlice(alloc, ", ");
                     const arg_anno = module_env.store.getTypeAnno(arg_idx);
-                    self.writeTypeAnno(buf, module_env, arg_anno);
+                    try self.writeTypeAnno(buf, module_env, arg_anno);
                 }
-                buf.appendSlice(alloc, if (f.effectful) " => " else " -> ") catch return;
+                try buf.appendSlice(alloc, if (f.effectful) " => " else " -> ");
                 const ret_anno = module_env.store.getTypeAnno(f.ret);
-                self.writeTypeAnno(buf, module_env, ret_anno);
+                try self.writeTypeAnno(buf, module_env, ret_anno);
             },
             .parens => |p| {
-                buf.append(alloc, '(') catch return;
+                try buf.append(alloc, '(');
                 const inner = module_env.store.getTypeAnno(p.anno);
-                self.writeTypeAnno(buf, module_env, inner);
-                buf.append(alloc, ')') catch return;
+                try self.writeTypeAnno(buf, module_env, inner);
+                try buf.append(alloc, ')');
             },
-            .underscore => buf.append(alloc, '_') catch return,
-            .malformed => buf.appendSlice(alloc, "?") catch return,
+            .underscore => try buf.append(alloc, '_'),
+            .malformed => try buf.appendSlice(alloc, "?"),
         }
     }
 

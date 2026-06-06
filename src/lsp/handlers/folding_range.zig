@@ -58,11 +58,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Extract folding ranges from the document
-            const ranges = extractFoldingRanges(self.allocator, text) catch |err| {
-                std.log.err("folding range extraction failed: {s}", .{@errorName(err)});
-                try self.sendResponse(id, &[_]FoldingRange{});
-                return;
-            };
+            const ranges = try extractFoldingRanges(self.allocator, text);
             defer self.allocator.free(ranges);
 
             try self.sendResponse(id, ranges);
@@ -90,13 +86,12 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Alloca
     defer bracket_stack.deinit(allocator);
 
     // Parse to get tokens
-    var module_env = can.ModuleEnv.init(allocator, source) catch {
-        return &[_]FoldingRange{};
-    };
+    var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch {
-        return &[_]FoldingRange{};
+    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TooNested => return &[_]FoldingRange{},
     };
     defer ast.deinit();
 

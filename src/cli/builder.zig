@@ -175,7 +175,7 @@ pub fn initializeLLVM() void {
 /// Compile LLVM bitcode file to object file
 pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) Allocator.Error!bool {
     if (comptime !llvm_available) {
-        renderLLVMNotAvailableError(gpa);
+        try renderLLVMNotAvailableError(gpa);
         return error.LLVMNotAvailable;
     }
 
@@ -189,7 +189,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     // Verify input file exists
     std.Io.Dir.cwd().access(std_io, config.input_path, .{}) catch |err| {
-        renderFileNotAccessibleError(gpa, config.input_path, err);
+        try renderFileNotAccessibleError(gpa, config.input_path, err);
         return false;
     };
 
@@ -207,7 +207,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
-        renderLLVMError(gpa, "BITCODE LOAD ERROR", "Failed to load bitcode file", std.mem.span(error_message));
+        try renderLLVMError(gpa, "BITCODE LOAD ERROR", "Failed to load bitcode file", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -218,7 +218,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
-        renderLLVMError(gpa, "BITCODE PARSE ERROR", "Failed to parse bitcode", std.mem.span(error_message));
+        try renderLLVMError(gpa, "BITCODE PARSE ERROR", "Failed to parse bitcode", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -238,7 +238,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
     if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &llvm_target, &error_message) != 0) {
-        renderTargetError(gpa, target_triple, std.mem.span(error_message));
+        try renderTargetError(gpa, target_triple, std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -266,7 +266,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         false, // emulated_tls
     );
     if (target_machine == null) {
-        renderTargetMachineError(gpa, target_triple, config.cpu, config.features);
+        try renderTargetMachineError(gpa, target_triple, config.cpu, config.features);
         return false;
     }
     defer externs.LLVMDisposeTargetMachine(target_machine);
@@ -308,7 +308,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     );
 
     if (emit_result) {
-        renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message));
+        try renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message));
         externs.LLVMDisposeMessage(emit_error_message);
         return false;
     }
@@ -324,17 +324,17 @@ pub fn isLLVMAvailable() bool {
 
 // --- Error Reporting Helpers ---
 
-fn renderLLVMNotAvailableError(allocator: Allocator) void {
+fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
     var report = reporting.Report.init(allocator, "LLVM NOT AVAILABLE", .fatal);
     defer report.deinit();
 
-    report.document.addText("LLVM is not available at compile time.") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("This binary was built without LLVM support.") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("To use this feature, rebuild roc with LLVM enabled.") catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("LLVM is not available at compile time.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("This binary was built without LLVM support.");
+    try report.document.addLineBreak();
+    try report.document.addText("To use this feature, rebuild roc with LLVM enabled.");
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -344,20 +344,20 @@ fn renderLLVMNotAvailableError(allocator: Allocator) void {
     ) catch {};
 }
 
-fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: anyerror) void {
+fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: anyerror) Allocator.Error!void {
     var report = reporting.Report.init(allocator, "FILE NOT ACCESSIBLE", .fatal);
     defer report.deinit();
 
-    report.document.addText("Input bitcode file does not exist or is not accessible:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    ") catch return;
-    report.document.addAnnotated(path, .path) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("Error: ") catch return;
-    report.document.addAnnotated(@errorName(err), .error_highlight) catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Input bitcode file does not exist or is not accessible:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(path, .path);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Error: ");
+    try report.document.addAnnotated(@errorName(err), .error_highlight);
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -367,16 +367,16 @@ fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: any
     ) catch {};
 }
 
-fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8, llvm_message: []const u8) void {
+fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8, llvm_message: []const u8) Allocator.Error!void {
     var report = reporting.Report.init(allocator, title, .fatal);
     defer report.deinit();
 
-    report.document.addText(message) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("LLVM error: ") catch return;
-    report.document.addAnnotated(llvm_message, .error_highlight) catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText(message);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("LLVM error: ");
+    try report.document.addAnnotated(llvm_message, .error_highlight);
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -386,20 +386,20 @@ fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8,
     ) catch {};
 }
 
-fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) void {
+fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) Allocator.Error!void {
     var report = reporting.Report.init(allocator, "INVALID TARGET", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to get LLVM target for triple:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    ") catch return;
-    report.document.addAnnotated(triple, .emphasized) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("LLVM error: ") catch return;
-    report.document.addAnnotated(llvm_message, .error_highlight) catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Failed to get LLVM target for triple:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(triple, .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("LLVM error: ");
+    try report.document.addAnnotated(llvm_message, .error_highlight);
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -409,33 +409,33 @@ fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []c
     ) catch {};
 }
 
-fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) void {
+fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) Allocator.Error!void {
     var report = reporting.Report.init(allocator, "TARGET MACHINE ERROR", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to create LLVM target machine with configuration:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    Triple:   ") catch return;
-    report.document.addAnnotated(triple, .emphasized) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    CPU:      ") catch return;
+    try report.document.addText("Failed to create LLVM target machine with configuration:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    Triple:   ");
+    try report.document.addAnnotated(triple, .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addText("    CPU:      ");
     if (cpu.len > 0) {
-        report.document.addAnnotated(cpu, .emphasized) catch return;
+        try report.document.addAnnotated(cpu, .emphasized);
     } else {
-        report.document.addText("(default)") catch return;
+        try report.document.addText("(default)");
     }
-    report.document.addLineBreak() catch return;
-    report.document.addText("    Features: ") catch return;
+    try report.document.addLineBreak();
+    try report.document.addText("    Features: ");
     if (features.len > 0) {
-        report.document.addAnnotated(features, .emphasized) catch return;
+        try report.document.addAnnotated(features, .emphasized);
     } else {
-        report.document.addText("(default)") catch return;
+        try report.document.addText("(default)");
     }
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("This may indicate an unsupported target configuration.") catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("This may indicate an unsupported target configuration.");
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,
@@ -445,20 +445,20 @@ fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []con
     ) catch {};
 }
 
-fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) void {
+fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) Allocator.Error!void {
     var report = reporting.Report.init(allocator, "OBJECT FILE EMIT ERROR", .fatal);
     defer report.deinit();
 
-    report.document.addText("Failed to emit object file:") catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("    Output: ") catch return;
-    report.document.addAnnotated(output_path, .path) catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addLineBreak() catch return;
-    report.document.addText("LLVM error: ") catch return;
-    report.document.addAnnotated(llvm_message, .error_highlight) catch return;
-    report.document.addLineBreak() catch return;
+    try report.document.addText("Failed to emit object file:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    Output: ");
+    try report.document.addAnnotated(output_path, .path);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("LLVM error: ");
+    try report.document.addAnnotated(llvm_message, .error_highlight);
+    try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
         &report,

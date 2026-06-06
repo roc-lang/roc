@@ -157,6 +157,15 @@ const HostEnv = struct {
     dealloc_count: usize = 0,
 };
 
+/// Report an out-of-memory failure from a Roc host allocation callback and
+/// abort. These callbacks use the C ABI and cannot return a Zig error, so a
+/// reported `exit(1)` is the graceful failure path.
+fn hostAllocFailed(host: *HostEnv) noreturn {
+    const stderr: std.Io.File = .stderr();
+    stderr.writeStreamingAll(host.std_io, "\x1b[31mHost error:\x1b[0m out of memory\n") catch {};
+    std.process.exit(1);
+}
+
 /// Roc allocation function with size-tracking metadata
 fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
     const roc_alloc_addr = @intFromPtr(roc_alloc);
@@ -180,16 +189,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
-    const base_ptr = result orelse {
-        const stderr: std.Io.File = .stderr();
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
-            total_size,
-            roc_alloc.alignment,
-        }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        stderr.writeStreamingAll(host.std_io, msg) catch {};
-        std.process.exit(1);
-    };
+    const base_ptr = result orelse hostAllocFailed(host);
 
     const base_addr = @intFromPtr(base_ptr);
     if (base_addr % min_alignment != 0) {
@@ -210,7 +210,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
         .ptr = base_ptr,
         .total_size = total_size,
         .alignment = align_enum,
-    }) catch {};
+    }) catch hostAllocFailed(host);
     host.alloc_count += 1;
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
@@ -280,11 +280,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
 
-    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        const stderr: std.Io.File = .stderr();
-        stderr.writeStreamingAll(host.std_io, "\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
-        std.process.exit(1);
-    };
+    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse hostAllocFailed(host);
 
     const copy_size = @min(old_total_size, new_total_size);
     @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
@@ -299,7 +295,7 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
         .ptr = new_ptr,
         .total_size = new_total_size,
         .alignment = align_enum,
-    }) catch {};
+    }) catch hostAllocFailed(host);
 
     allocator.rawFree(old_slice, align_enum, @returnAddress());
 

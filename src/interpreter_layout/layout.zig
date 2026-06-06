@@ -220,6 +220,11 @@ pub const StructData = struct {
     size: u32,
     /// Range of fields in the struct_fields list
     fields: collections.NonEmptyRange,
+    /// Whether this struct transitively contains refcounted data. Precomputed
+    /// when the struct is committed so `Store.layoutContainsRefcounted` is an
+    /// O(1), infallible lookup. Defaults to `false` for the few literals that
+    /// don't set it (e.g. empty structs, which never contain refcounted data).
+    contains_refcounted: bool = false,
 
     pub fn getFields(self: StructData) StructField.SafeMultiList.Range {
         // Handle empty structs specially - NonEmptyRange.toRange() asserts count > 0
@@ -265,6 +270,9 @@ pub const TagUnionData = struct {
     discriminant_size: u8,
     /// Range of variants in the tag_union_variants list
     variants: collections.NonEmptyRange,
+    /// Whether this tag union transitively contains refcounted data. Precomputed
+    /// at commit time so `Store.layoutContainsRefcounted` is an O(1) lookup.
+    contains_refcounted: bool = false,
 
     pub fn getVariants(self: TagUnionData) TagUnionVariant.SafeMultiList.Range {
         return self.variants.toRange(TagUnionVariant.SafeMultiList.Idx);

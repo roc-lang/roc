@@ -54,6 +54,7 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
     // CompactWriter requires specific alignment for serialization
     const CompactWriter = collections.CompactWriter;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
+    errdefer gpa.free(buffer);
     @memcpy(buffer, bin_data);
 
     // Cast to the serialized structure and deserialize

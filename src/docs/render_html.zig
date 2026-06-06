@@ -188,7 +188,7 @@ const RenderContext = struct {
         label: []const u8,
         resolved_anchor: []const u8,
         bracket_offset: usize,
-    ) void {
+    ) Allocator.Error!void {
         const list = self.broken_links orelse return;
         const gpa = self.broken_links_gpa orelse return;
         const source_module = self.current_module orelse "";
@@ -205,21 +205,17 @@ const RenderContext = struct {
             break :blk active.start_line + newlines;
         };
 
-        const label_dup = gpa.dupe(u8, label) catch return;
-        const anchor_dup = gpa.dupe(u8, resolved_anchor) catch {
-            gpa.free(label_dup);
-            return;
-        };
-        list.append(gpa, .{
+        const label_dup = try gpa.dupe(u8, label);
+        errdefer gpa.free(label_dup);
+        const anchor_dup = try gpa.dupe(u8, resolved_anchor);
+        errdefer gpa.free(anchor_dup);
+        try list.append(gpa, .{
             .source_module = source_module,
             .source_path = self.current_source_path.*,
             .source_line = source_line,
             .label = label_dup,
             .resolved_anchor = anchor_dup,
-        }) catch {
-            gpa.free(label_dup);
-            gpa.free(anchor_dup);
-        };
+        });
     }
 
     /// Replace `current_module` and `current_module_entries`, then rebuild the
@@ -1561,7 +1557,7 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
                 try writeHtmlEscaped(w, label[d..]);
                 append(&anchor_buf, &anchor_len, &anchor_overflow, label[d..]);
             }
-            validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+            try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
             return;
         }
 
@@ -1575,7 +1571,7 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
             try w.writeAll("#");
             try writeHtmlEscaped(w, label);
             append(&anchor_buf, &anchor_len, &anchor_overflow, label);
-            validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+            try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
         }
         // No fragment — the link points at the module's index page, which is
         // guaranteed to exist by the `known_modules.contains` check above.
@@ -1600,7 +1596,7 @@ fn writeDocRefHref(w: Writer, ctx: *const RenderContext, label: []const u8, brac
         try writeHtmlEscaped(w, label[d..]);
         append(&anchor_buf, &anchor_len, &anchor_overflow, label[d..]);
     }
-    validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
+    try validateAnchor(ctx, label, anchor_buf[0..anchor_len], anchor_overflow, bracket_offset);
 }
 
 /// Report `label` as broken when its resolved anchor isn't in `all_anchors`.
@@ -1613,11 +1609,11 @@ fn validateAnchor(
     anchor: []const u8,
     overflow: bool,
     bracket_offset: usize,
-) void {
+) Allocator.Error!void {
     if (overflow) return;
     if (anchor.len == 0) return;
     if (ctx.all_anchors.contains(anchor)) return;
-    ctx.reportBrokenLink(label, anchor, bracket_offset);
+    try ctx.reportBrokenLink(label, anchor, bracket_offset);
 }
 
 fn renderDocTypeHtml(

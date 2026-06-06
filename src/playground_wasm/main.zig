@@ -588,8 +588,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
-        error.WriteFailed => @intFromEnum(WasmError.internal_error),
-        error.OutOfMemory => @intFromEnum(WasmError.internal_error),
+        error.WriteFailed, error.OutOfMemory => @intFromEnum(WasmError.internal_error),
     };
 }
 
@@ -1304,7 +1303,7 @@ fn compileSource(source: []const u8, module_name: []const u8) anyerror!CompilerS
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.tokenize_reports.append(report) catch continue;
+        try result.tokenize_reports.append(report);
     }
 
     // Collect parse diagnostics with additional error handling
@@ -1314,7 +1313,7 @@ fn compileSource(source: []const u8, module_name: []const u8) anyerror!CompilerS
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.parse_reports.append(report) catch continue;
+        try result.parse_reports.append(report);
     }
 
     // Stage 2: Canonicalization (always run, even with parse errors)
@@ -1392,7 +1391,7 @@ fn compileSource(source: []const u8, module_name: []const u8) anyerror!CompilerS
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.can_reports.append(report) catch continue;
+        try result.can_reports.append(report);
     }
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
@@ -1763,16 +1762,19 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
 
     if (defs_count == 0 and stmts_count == 0) {
         const debug_begin = tree.beginNode();
-        tree.pushStaticAtom("empty-cir-debug") catch {};
-        tree.pushStaticAtom("no-defs-or-statements") catch {};
+        try tree.pushStaticAtom("empty-cir-debug");
+        try tree.pushStaticAtom("no-defs-or-statements");
         const debug_attrs = tree.beginNode();
-        tree.endNode(debug_begin, debug_attrs) catch {};
+        try tree.endNode(debug_begin, debug_attrs);
     }
 
     const mutable_cir = @constCast(cir);
-    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    try ModuleEnv.pushToSExprTree(mutable_cir, null, &tree);
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
@@ -1999,9 +2001,12 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     }
 
-    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
-        return;
+    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
+            return;
+        },
     };
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"hover_info\":");
@@ -2121,8 +2126,11 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) (Allocator
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
     try writeJsonString(w, sexpr_writer_allocating.written());

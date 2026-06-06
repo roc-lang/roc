@@ -118,7 +118,13 @@ pub const Report = struct {
         };
 
         const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
-            const truncated = truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
+            // `suggestion` is already validated as UTF-8 above, and the limit is
+            // large enough that a truncation point always exists, so the only
+            // failure `truncateUtf8` can produce here is running out of memory.
+            const truncated = truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidUtf8, error.CannotTruncate => unreachable,
+            };
             if (truncated.ptr != suggestion.ptr) {
                 try self.owned_strings.append(truncated);
             }

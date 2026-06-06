@@ -80,12 +80,11 @@ pub fn handler(comptime ServerType: type) type {
                     std.log.err("received invalid mix of full and incremental changes for {s}", .{uri});
                     return;
                 }
-                self.doc_store.upsert(uri, version, parsed_changes.items[0].text) catch |err| {
-                    std.log.err("failed to apply full change for {s}: {s}", .{ uri, @errorName(err) });
-                };
+                try self.doc_store.upsert(uri, version, parsed_changes.items[0].text);
             } else {
-                self.doc_store.applyContentChanges(uri, version, parsed_changes.items) catch |err| {
-                    std.log.err("failed to apply incremental change for {s}: {s}", .{ uri, @errorName(err) });
+                self.doc_store.applyContentChanges(uri, version, parsed_changes.items) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => std.log.err("failed to apply incremental change for {s}: {s}", .{ uri, @errorName(err) }),
                 };
             }
 

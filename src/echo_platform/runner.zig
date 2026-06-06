@@ -151,12 +151,12 @@ pub fn runEcho(opts: RunOptions) anyerror!u8 {
     build_env.filesystem = echo_ctx.io();
 
     build_env.discoverDependencies(opts.paths.app_abs) catch |err| {
-        _ = emitDiagnostics(&build_env, diag, allocator);
+        _ = try emitDiagnostics(&build_env, diag, allocator);
         diag.step("discoverDependencies", err);
         return err;
     };
     build_env.compileDiscovered() catch |err| {
-        _ = emitDiagnostics(&build_env, diag, allocator);
+        _ = try emitDiagnostics(&build_env, diag, allocator);
         diag.step("compileDiscovered", err);
         return err;
     };
@@ -166,7 +166,7 @@ pub fn runEcho(opts: RunOptions) anyerror!u8 {
     // The CIR contains runtime_error placeholder nodes in that state, and
     // mono lowering asserts they don't appear as runtime values — proceeding
     // would trap. The reports themselves are the user-facing output.
-    if (emitDiagnostics(&build_env, diag, allocator)) {
+    if (try emitDiagnostics(&build_env, diag, allocator)) {
         return error.CompilationFailed;
     }
 
@@ -262,7 +262,7 @@ fn runEchoView(
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
-    var cli_args_list = echo_platform.buildCliArgs(&.{}, &roc_ops);
+    var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
     var interpreter = eval.LirInterpreter.init(
@@ -302,8 +302,8 @@ fn runEchoView(
 
 /// Drain BuildEnv reports through `diag` and return true if any
 /// had `runtime_error` or `fatal` severity (i.e. compile-blocking).
-fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) bool {
-    const drained = build_env.drainReports() catch return false;
+fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allocator.Error!bool {
+    const drained = try build_env.drainReports();
     defer build_env.freeDrainedReports(drained);
 
     var has_blocking_error = false;

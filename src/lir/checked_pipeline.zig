@@ -46,10 +46,10 @@ pub const CheckedModuleState = enum {
     checking_finalization,
 };
 
-pub const RuntimeRecordFieldSchema = postcheck.LirLower.RuntimeRecordFieldSchema;
-pub const RuntimeRecordSchema = postcheck.LirLower.RuntimeRecordSchema;
-pub const RuntimeTagSchema = postcheck.LirLower.RuntimeTagSchema;
-pub const RuntimeTagUnionSchema = postcheck.LirLower.RuntimeTagUnionSchema;
+pub const RuntimeRecordFieldSchema = postcheck.SolvedLirLower.RuntimeRecordFieldSchema;
+pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
+pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
+pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -171,7 +171,7 @@ pub fn lowerCheckedModulesToLir(
     roots: RootRequestSet,
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
-    verifyCheckedBoundary(modules, target);
+    try verifyCheckedBoundary(modules, target);
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
     defer allocator.free(layout_requests);
@@ -201,15 +201,9 @@ pub fn lowerCheckedModulesToLir(
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
 
-    var lambda_mono = try postcheck.LambdaMono.Lower.run(allocator, solved);
+    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved);
     solved_owned = false;
     solved = undefined;
-    var lambda_mono_owned = true;
-    errdefer if (lambda_mono_owned) lambda_mono.deinit();
-
-    var lowered = try postcheck.LirLower.run(allocator, target.target_usize, lambda_mono);
-    lambda_mono_owned = false;
-    lambda_mono = undefined;
     errdefer lowered.deinit();
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
@@ -223,7 +217,7 @@ pub fn lowerCheckedModulesToLir(
     else
         lowered.lir_result.root_procs.items[0];
     const runtime_value_schemas = convertRuntimeSchemas(allocator, lowered.runtime_schemas);
-    lowered.runtime_schemas = postcheck.LirLower.RuntimeSchemaStore.init(allocator);
+    lowered.runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator);
     errdefer runtime_value_schemas.deinit();
 
     const lir_result = lowered.lir_result;
@@ -237,10 +231,10 @@ pub fn lowerCheckedModulesToLir(
     };
 }
 
-fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) void {
+fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
     if (builtin.mode != .Debug) return;
     switch (target.checked_module_state) {
-        .complete => modules.root.module.verifyComplete(),
+        .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
     }
 }
@@ -385,7 +379,7 @@ fn checkedTagsContainFunction(
 
 fn convertRuntimeSchemas(
     allocator: Allocator,
-    input: postcheck.LirLower.RuntimeSchemaStore,
+    input: postcheck.SolvedLirLower.RuntimeSchemaStore,
 ) RuntimeValueSchemaStore {
     return .{
         .allocator = allocator,

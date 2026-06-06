@@ -124,15 +124,18 @@ pub fn handler(comptime ServerType: type) type {
                 text,
                 line,
                 character,
-            ) catch |err| {
-                std.log.err("completion failed: {s}", .{@errorName(err)});
-                // Return empty completion list on error
-                const CompletionResponse = struct {
-                    isIncomplete: bool = false,
-                    items: []const CompletionItem = &.{},
-                };
-                try self.sendResponse(id, CompletionResponse{});
-                return;
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("completion failed: {s}", .{@errorName(err)});
+                    // Return empty completion list on error
+                    const CompletionResponse = struct {
+                        isIncomplete: bool = false,
+                        items: []const CompletionItem = &.{},
+                    };
+                    try self.sendResponse(id, CompletionResponse{});
+                    return;
+                },
             };
 
             if (completion_result) |result| {

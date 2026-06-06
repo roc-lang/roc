@@ -260,10 +260,10 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
         fn runSyntaxCheck(self: *Self, uri: []const u8) anyerror!void {
             const doc = self.doc_store.get(uri);
-            const root_path = if (self.client.root_uri) |root_uri| blk: {
-                const path = uri_util.uriToPath(self.allocator, root_uri) catch null;
-                break :blk path;
-            } else null;
+            const root_path = if (self.client.root_uri) |root_uri|
+                try uri_util.uriToPath(self.allocator, root_uri)
+            else
+                null;
             const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path);
             if (root_path) |p| self.allocator.free(p);
             defer {

@@ -2473,28 +2473,34 @@ pub const Coordinator = struct {
     }
 
     fn appendWorkerFailureReport(
+        self: *Coordinator,
         allocator: Allocator,
         reports: *std.ArrayList(Report),
         title: []const u8,
         path: []const u8,
         err: anyerror,
-    ) Allocator.Error!void {
+    ) void {
         var rep = Report.init(allocator, title, .fatal);
-        errdefer rep.deinit();
-        const msg = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) });
-        defer allocator.free(msg);
-        try rep.addErrorMessage(msg);
-        try reports.append(allocator, rep);
+        const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ path, @errorName(err) }) catch null;
+        defer if (msg) |owned| allocator.free(owned);
+        rep.addErrorMessage(msg orelse @errorName(err)) catch |report_err| {
+            self.bugReport("BUG: failed to add worker failure report message for {s}: {s}\n", .{ path, @errorName(report_err) });
+        };
+        reports.append(allocator, rep) catch |append_err| {
+            rep.deinit();
+            self.bugReport("BUG: failed to append worker failure report for {s}: {s}\n", .{ path, @errorName(append_err) });
+        };
     }
 
     fn workerFailureReports(
+        self: *Coordinator,
         allocator: Allocator,
         title: []const u8,
         path: []const u8,
         err: anyerror,
-    ) Allocator.Error!std.ArrayList(Report) {
+    ) std.ArrayList(Report) {
         var reports = std.ArrayList(Report).empty;
-        try appendWorkerFailureReport(allocator, &reports, title, path, err);
+        self.appendWorkerFailureReport(allocator, &reports, title, path, err);
         return reports;
     }
 
@@ -2757,6 +2763,7 @@ pub const Coordinator = struct {
             .parse_failed => |*r| try self.handleParseFailed(r),
             .compile_failed => |*r| try self.handleCompileFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
+            .worker_oom => return error.OutOfMemory,
         }
     }
 
@@ -3583,22 +3590,27 @@ pub const Coordinator = struct {
     }
 
     /// Execute a parse task (pure function)
-    fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
-        return self.executeParseFallible(task, allocators) catch |err| {
-            const title = switch (err) {
-                error.FileNotFound => "FILE NOT FOUND",
-                else => "PARSING FAILED",
-            };
-            return .{
-                .parse_failed = .{
+    fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executeParseFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| blk: {
+                const title = switch (e) {
+                    error.FileNotFound => "FILE NOT FOUND",
+                    else => "PARSING FAILED",
+                };
+                break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = try workerFailureReports(allocators.result, title, task.path, err),
+                    .reports = self.workerFailureReports(allocators.result, title, task.path, e),
                     .partial_env = null,
-                },
-            };
+                } };
+            },
         };
     }
 
@@ -3714,18 +3726,13 @@ pub const Coordinator = struct {
     }
 
     /// Execute a canonicalize task (pure function)
-    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
-        return self.executeCanonicalizeFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = try workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+    fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executeCanonicalizeFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
         };
     }
 
@@ -3798,18 +3805,21 @@ pub const Coordinator = struct {
     }
 
     /// Execute a type-check task (pure function)
-    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
-        return self.executeTypeCheckFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = try workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+    fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
+        return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| WorkerResult{ .compile_failed = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .path = task.path,
+                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .partial_env = task.module_env,
+            } },
         };
     }
 

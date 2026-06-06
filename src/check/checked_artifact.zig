@@ -15274,7 +15274,7 @@ pub const CheckedModuleArtifact = struct {
         }
     }
 
-    pub fn verifyComplete(self: *const CheckedModuleArtifact) void {
+    pub fn verifyComplete(self: *const CheckedModuleArtifact) Allocator.Error!void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
@@ -15675,7 +15675,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
-        self.const_store.verifyComplete();
+        try self.const_store.verifyComplete();
         self.interface_capabilities.verifyComplete();
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
@@ -17423,7 +17423,7 @@ pub fn publishFromTypedModule(
         inputs.relation_artifacts,
         inputs.problem_store,
     );
-    artifact.verifyComplete();
+    try artifact.verifyComplete();
     return artifact;
 }
 

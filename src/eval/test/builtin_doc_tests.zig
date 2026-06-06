@@ -62,7 +62,72 @@ const Block = struct {
     }
 };
 
-fn extractBlocks(allocator: Allocator, source: []const u8) Allocator.Error![]Block {
+const WeightedBlock = struct {
+    work_i: usize,
+    weight: u64,
+};
+
+fn blockWeight(block: *const Block) u64 {
+    var weight: u64 = 1 + @as(u64, @intCast(block.source.len));
+    switch (block.kind) {
+        .expects_only => weight += 1_000_000,
+        .module_with_def => weight += 2_000_000,
+        .expression_block => weight += 1_500_000,
+    }
+    return weight;
+}
+
+fn leastLoadedPartition(loads: []const u64) usize {
+    var min_i: usize = 0;
+    for (loads[1..], 1..) |load, i| {
+        if (load < loads[min_i]) min_i = i;
+    }
+    return min_i;
+}
+
+fn assignBlockPartitions(
+    allocator: Allocator,
+    blocks: []const Block,
+    runnable_block_indices: []const usize,
+    partition_count: usize,
+) anyerror![]usize {
+    std.debug.assert(partition_count > 0);
+
+    var weighted = std.ArrayList(WeightedBlock).empty;
+    defer weighted.deinit(allocator);
+
+    for (runnable_block_indices, 0..) |block_i, work_i| {
+        try weighted.append(allocator, .{
+            .work_i = work_i,
+            .weight = blockWeight(&blocks[block_i]),
+        });
+    }
+
+    std.mem.sort(WeightedBlock, weighted.items, {}, struct {
+        fn lessThan(_: void, a: WeightedBlock, b: WeightedBlock) bool {
+            if (a.weight != b.weight) return a.weight > b.weight;
+            return a.work_i < b.work_i;
+        }
+    }.lessThan);
+
+    const owners = try allocator.alloc(usize, runnable_block_indices.len);
+    @memset(owners, partition_count);
+    errdefer allocator.free(owners);
+
+    const loads = try allocator.alloc(u64, partition_count);
+    defer allocator.free(loads);
+    @memset(loads, 0);
+
+    for (weighted.items) |entry| {
+        const owner = leastLoadedPartition(loads);
+        owners[entry.work_i] = owner;
+        loads[owner] +|= entry.weight;
+    }
+
+    return owners;
+}
+
+fn extractBlocks(allocator: Allocator, source: []const u8) anyerror![]Block {
     var blocks = std.ArrayList(Block).empty;
     errdefer {
         for (blocks.items) |*b| b.deinit(allocator);
@@ -770,8 +835,43 @@ fn wrapForBinary(allocator: Allocator, block: *const Block) Allocator.Error![]u8
     };
 }
 
-fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
-    std.debug.assert(shard_index < shard_count);
+const DocBlockRun = struct {
+    index: usize,
+    count: usize,
+};
+
+fn getEnvVarOwned(allocator: Allocator, name: []const u8) anyerror!?[]u8 {
+    const environ: std.process.Environ = if (builtin.os.tag == .windows)
+        .{ .block = .global }
+    else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+
+    return environ.getAlloc(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => null,
+        else => err,
+    };
+}
+
+fn docBlockRunFromEnv(allocator: Allocator) anyerror!DocBlockRun {
+    const index_text = try getEnvVarOwned(allocator, "ROC_DOC_BLOCK_RUN_INDEX") orelse
+        return .{ .index = 0, .count = 1 };
+    defer allocator.free(index_text);
+
+    const count_text = try getEnvVarOwned(allocator, "ROC_DOC_BLOCK_RUN_COUNT") orelse
+        return error.InvalidDocBlockRun;
+    defer allocator.free(count_text);
+
+    const index = try std.fmt.parseUnsigned(usize, index_text, 10);
+    const count = try std.fmt.parseUnsigned(usize, count_text, 10);
+    if (count == 0 or index >= count) return error.InvalidDocBlockRun;
+
+    return .{ .index = index, .count = count };
+}
+
+fn testBuiltinDocBlocks(partition_index: usize, partition_count: usize) anyerror!void {
+    std.debug.assert(partition_index < partition_count);
 
     const allocator = std.heap.page_allocator;
 
@@ -793,6 +893,22 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
 
     try testing.expect(blocks.len > 0);
 
+    var runnable_block_indices = std.ArrayList(usize).empty;
+    defer runnable_block_indices.deinit(allocator);
+    for (blocks, 0..) |*block, i| {
+        if (containsEffectfulCall(block.source)) continue;
+        try runnable_block_indices.append(allocator, i);
+    }
+    try testing.expect(runnable_block_indices.items.len > 0);
+
+    const partition_owners = try assignBlockPartitions(
+        allocator,
+        blocks,
+        runnable_block_indices.items,
+        partition_count,
+    );
+    defer allocator.free(partition_owners);
+
     var failures = std.ArrayList(Failure).empty;
     defer {
         for (failures.items) |*f| f.deinit(allocator);
@@ -801,13 +917,9 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
 
     var phantom_failures: usize = 0;
 
-    var processed_blocks: usize = 0;
-    for (blocks, 0..) |*block, i| {
-        if (i % shard_count != shard_index) continue;
-        if (containsEffectfulCall(block.source)) {
-            continue;
-        }
-        processed_blocks += 1;
+    for (runnable_block_indices.items, 0..) |block_i, work_i| {
+        if (partition_owners[work_i] != partition_index) continue;
+        const block = &blocks[block_i];
         const result = try processBlock(allocator, block);
         switch (result) {
             .success => {},
@@ -817,10 +929,10 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
                     .crashed => |sig| try std.fmt.allocPrint(allocator, "in-memory evaluation crashed with signal {d}", .{sig}),
                     else => unreachable,
                 };
-                const repro = reproduceWithBinary(allocator, block, i) catch |err| blk: {
+                const repro = reproduceWithBinary(allocator, block, block_i) catch |err| blk: {
                     std.debug.print(
                         "[builtin-doc-tests] reproduction failed with {s} (block #{d} line {d})\n",
-                        .{ @errorName(err), i, block.start_line },
+                        .{ @errorName(err), block_i, block.start_line },
                     );
                     break :blk true;
                 };
@@ -828,11 +940,11 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
                     phantom_failures += 1;
                     std.debug.print(
                         "[builtin-doc-tests] PHANTOM FAILURE: in-memory check reported a failure for block #{d} (Builtin.roc line {d}) but the roc binary succeeded — investigate!\nMessage was: {s}\n",
-                        .{ i, block.start_line, message },
+                        .{ block_i, block.start_line, message },
                     );
                 }
                 try failures.append(allocator, .{
-                    .block_index = i,
+                    .block_index = block_i,
                     .start_line = block.start_line,
                     .stage = @tagName(block.kind),
                     .message = message,
@@ -849,7 +961,7 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
         };
         std.debug.print(
             "\n[builtin-doc-tests] {d} of {d} doc code blocks failed ({d} crashed):\n",
-            .{ failures.items.len, blocks.len, crashed_count },
+            .{ failures.items.len, runnable_block_indices.items.len, crashed_count },
         );
         for (failures.items) |*f| {
             std.debug.print(
@@ -874,48 +986,11 @@ fn testBuiltinDocBlocks(shard_index: usize, shard_count: usize) anyerror!void {
         );
         return error.DocBlockFailures;
     }
-
-    try testing.expect(processed_blocks > 0);
 }
 
-test "Builtin.roc doc code blocks shard 00" {
-    try testBuiltinDocBlocks(0, 10);
-}
-
-test "Builtin.roc doc code blocks shard 01" {
-    try testBuiltinDocBlocks(1, 10);
-}
-
-test "Builtin.roc doc code blocks shard 02" {
-    try testBuiltinDocBlocks(2, 10);
-}
-
-test "Builtin.roc doc code blocks shard 03" {
-    try testBuiltinDocBlocks(3, 10);
-}
-
-test "Builtin.roc doc code blocks shard 04" {
-    try testBuiltinDocBlocks(4, 10);
-}
-
-test "Builtin.roc doc code blocks shard 05" {
-    try testBuiltinDocBlocks(5, 10);
-}
-
-test "Builtin.roc doc code blocks shard 06" {
-    try testBuiltinDocBlocks(6, 10);
-}
-
-test "Builtin.roc doc code blocks shard 07" {
-    try testBuiltinDocBlocks(7, 10);
-}
-
-test "Builtin.roc doc code blocks shard 08" {
-    try testBuiltinDocBlocks(8, 10);
-}
-
-test "Builtin.roc doc code blocks shard 09" {
-    try testBuiltinDocBlocks(9, 10);
+test "Builtin.roc doc code blocks" {
+    const run = try docBlockRunFromEnv(testing.allocator);
+    try testBuiltinDocBlocks(run.index, run.count);
 }
 
 /// Used by `runInChild EINTR regression` to mark that the test's signal

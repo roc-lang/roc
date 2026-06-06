@@ -1,9 +1,0 @@
-app "test" provides [main] to "./platform"
-
-entry =
-    Age := U32
-
-    \@Age n -> n
-
-main = entry
-#      ^^^^^ Age -[[entry(1)]]-> U32

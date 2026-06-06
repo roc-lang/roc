@@ -471,7 +471,7 @@ pub const ReportBuilder = struct {
         }
 
         // Generate and print type comparison hints
-        const diff_hints = diff.compareTypes(
+        const diff_hints = try diff.compareTypes(
             self.snapshots,
             self.module_env.getIdentStoreConst(),
             expected_snapshot,

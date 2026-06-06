@@ -1585,7 +1585,9 @@ const Builder = struct {
             while (initialized > 0) {
                 initialized -= 1;
                 if (captures[initialized].previous) |previous| {
-                    fn_ctx.binders.put(captures[initialized].binder, previous) catch {};
+                    fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
+                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                    };
                 } else {
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
                 }
@@ -1615,7 +1617,9 @@ const Builder = struct {
             while (index > 0) {
                 index -= 1;
                 if (captures[index].previous) |previous| {
-                    fn_ctx.binders.put(captures[index].binder, previous) catch {};
+                    fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
+                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                    };
                 } else {
                     _ = fn_ctx.binders.remove(captures[index].binder);
                 }
@@ -7725,7 +7729,9 @@ const BodyContext = struct {
         while (index > 0) {
             index -= 1;
             if (saved[index].previous) |previous| {
-                self.binders.put(saved[index].binder, previous) catch {};
+                self.binders.put(saved[index].binder, previous) catch |err| switch (err) {
+                    error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                };
             } else {
                 _ = self.binders.remove(saved[index].binder);
             }
@@ -8730,12 +8736,8 @@ const BodyContext = struct {
         iterator_ty: Type.TypeId,
         rest_local: Ast.LocalId,
     ) Allocator.Error!Ast.PatId {
-        const count_field = try self.iteratorRecordDestruct(step.skip_count.name, try self.builder.program.addPat(.{
-            .ty = try self.lowerType(step.skip_count.ty),
-            .data = .wildcard,
-        }));
         const rest_field = try self.iteratorRecordDestruct(step.skip_rest.name, try self.builder.bindPat(rest_local, iterator_ty));
-        const fields = [_]Ast.RecordDestruct{ count_field, rest_field };
+        const fields = [_]Ast.RecordDestruct{rest_field};
         return try self.builder.program.addPat(.{
             .ty = try self.lowerType(step.skip_payload_ty),
             .data = .{ .record = try self.builder.program.addRecordDestructSpan(&fields) },
@@ -9030,7 +9032,6 @@ const BodyContext = struct {
         skip_payload_ty: checked.CheckedTypeId,
         one_item: checked.CheckedRecordField,
         one_rest: checked.CheckedRecordField,
-        skip_count: checked.CheckedRecordField,
         skip_rest: checked.CheckedRecordField,
     };
 
@@ -9106,7 +9107,6 @@ const BodyContext = struct {
             .skip_payload_ty = skip_payload,
             .one_item = checkedRecordFieldByName(self.view, one_payload, "item"),
             .one_rest = checkedRecordFieldByName(self.view, one_payload, "rest"),
-            .skip_count = checkedRecordFieldByName(self.view, skip_payload, "count"),
             .skip_rest = checkedRecordFieldByName(self.view, skip_payload, "rest"),
         };
     }

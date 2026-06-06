@@ -94,10 +94,13 @@ pub fn handler(comptime ServerType: type) type {
                 text,
                 line,
                 character,
-            ) catch |err| {
-                std.log.err("definition failed: {s}", .{@errorName(err)});
-                try self.sendNullResponse(id);
-                return;
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("definition failed: {s}", .{@errorName(err)});
+                    try self.sendNullResponse(id);
+                    return;
+                },
             };
 
             if (def_result) |result| {
