@@ -5319,6 +5319,13 @@ fn checkFileWithBuildEnv(
     }
     build_env.setPostCheckPublicationMode(.platform_relations);
 
+    // When checking the Builtin module itself, mark it as such so the
+    // canonicalizer skips loading the pre-compiled builtin types into its
+    // scope (which would cause shadowing errors for every type it defines).
+    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+        build_env.setRootModuleRole(.builtin);
+    }
+
     if (comptime build_options.trace_build) {
         std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
     }

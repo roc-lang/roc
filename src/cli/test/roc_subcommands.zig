@@ -2156,6 +2156,17 @@ test "roc docs Builtin.roc succeeds" {
     try testing.expect(has_generated);
 }
 
+test "roc check Builtin.roc succeeds" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "src/build/roc/Builtin.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try util.checkSuccess(result);
+}
+
 test "roc test complex_package --verbose passes all tests" {
     const testing = std.testing;
     const gpa = testing.allocator;
