@@ -140,21 +140,97 @@ test {
     _ = @import("test/ast_node_store_test.zig");
 }
 
-test "parse error triggers errdefer cleanup" {
+test "deeply nested parentheses parse stack-safely" {
     const gpa = std.testing.allocator;
 
-    // Create a deeply nested expression that exceeds MAX_NESTING_LEVELS (128)
-    // to trigger the TooNested error and exercise the errdefer cleanup paths
-    const open_parens = "(" ** 150;
-    const close_parens = ")" ** 150;
+    const open_parens = "(" ** 512;
+    const close_parens = ")" ** 512;
     const source = open_parens ++ "1" ++ close_parens;
 
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
 
-    // This should fail with TooNested error
-    const result = parseExpr(gpa, &env);
-    try std.testing.expectError(error.TooNested, result);
+    const ast = try parseExpr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}
+
+fn parserExprAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+    var parser = try Parser.init(tokens, allocator);
+    defer parser.store.deinit();
+    defer parser.decl_index.deinit();
+    defer parser.diagnostics.deinit(allocator);
+    defer parser.deinit();
+
+    _ = try parser.parseExpr();
+}
+
+test "parse error triggers errdefer cleanup" {
+    const gpa = std.testing.allocator;
+    const source = "((1";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const messages = try gpa.alloc(tokenize.Diagnostic, 128);
+    defer gpa.free(messages);
+
+    var tokenizer = try tokenize.Tokenizer.init(&env, gpa, env.source, messages);
+    var tokenizer_finished = false;
+    defer if (!tokenizer_finished) tokenizer.deinit(gpa);
+
+    try tokenizer.tokenize(gpa);
+
+    var output = tokenizer.finishAndDeinit();
+    tokenizer_finished = true;
+    defer output.tokens.deinit(gpa);
+
+    try std.testing.checkAllAllocationFailures(gpa, parserExprAllocationFailureImpl, .{output.tokens});
+}
+
+fn expectStatementParsesWithoutDiagnostics(source: []const u8) !void {
+    const gpa = std.testing.allocator;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parseStatement(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}
+
+fn expectFileParsesWithoutDiagnostics(source: []const u8) !void {
+    const gpa = std.testing.allocator;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try parse(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}
+
+test "method and static dispatch chains parse stack-safely" {
+    try expectStatementParsesWithoutDiagnostics("Dict.from_list([(\"a\", 1), (\"b\", 2)]).get(\"a\")");
+    try expectStatementParsesWithoutDiagnostics("lst.map(|_| \"zzz \").join_with(\" \").trim()");
+}
+
+test "double question operator parses after static dispatch" {
+    try expectStatementParsesWithoutDiagnostics("Try.Ok(\"hello\") ?? \"default\"");
+}
+
+test "where clause method function types parse stack-safely" {
+    try expectFileParsesWithoutDiagnostics(
+        \\module []
+        \\
+        \\A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
+    );
 }
 
 fn parserInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {

@@ -336,10 +336,7 @@ fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, repor
     env.common.source = source;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = parse.parseStatement(self.allocator, &env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return self.renderFallbackParseDiagnostic(source, report_config),
-    };
+    const ast = try parse.parseStatement(self.allocator, &env.common);
     defer ast.deinit();
 
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
@@ -441,10 +438,7 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) !InputSt
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return .invalid,
-    };
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
         return if (inputDiagnosticsAreIncomplete(ast)) .incomplete else .invalid;

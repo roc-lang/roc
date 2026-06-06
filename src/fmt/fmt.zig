@@ -3177,7 +3177,6 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 
     const formatted = parseAndFmt(gpa, input, debug) catch |err| {
         switch (err) {
-            error.TooNested => return error.ParseFailed,
             else => return err,
         }
     };

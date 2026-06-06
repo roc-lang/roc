@@ -5039,7 +5039,6 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) !void
         error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
         error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
         error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors
