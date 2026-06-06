@@ -1108,22 +1108,7 @@ fn processSnapshotContent(
                 },
                 .statement => {
                     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-                    const ast_stmt_idxs = [_]AST.Statement.Idx{ast_stmt_idx};
-                    const can_stmt_result = try czer.canonicalizeBlockStatement(
-                        czer.parse_ir.store.getStatement(ast_stmt_idx),
-                        &ast_stmt_idxs,
-                        0,
-                        .{
-                            .captures_top = czer.scratch_captures.top(),
-                            .bound_vars_top = czer.scratch_bound_vars.top(),
-                        },
-                    );
-                    if (can_stmt_result.canonicalized_stmt) |can_stmt| {
-                        // Manually track scratch statements because we aren't using the file entrypoint
-                        const scratch_statements_start = can_ir.store.scratch.?.statements.top();
-                        try can_ir.store.addScratchStatement(can_stmt.idx);
-                        can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                    }
+                    try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
                 else => unreachable,
             }

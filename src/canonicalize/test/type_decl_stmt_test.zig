@@ -183,8 +183,10 @@ fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) !void {
 }
 
 fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) !void {
-    const block_start = std.mem.find(u8, can_source, "fn canonicalizeBlock(") orelse return error.MissingCanonicalizeBlock;
-    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "var last_expr") orelse return error.MissingCanonicalizeBlockWalk;
+    const expr_driver_start = std.mem.find(u8, can_source, "fn canonicalizeExprStackSafe(") orelse return error.MissingCanonicalizeBlock;
+    const block_start_rel = std.mem.find(u8, can_source[expr_driver_start..], ".block => |e| {") orelse return error.MissingCanonicalizeBlock;
+    const block_start = expr_driver_start + block_start_rel;
+    const walk_start_rel = std.mem.find(u8, can_source[block_start..], ".block_next = .{") orelse return error.MissingCanonicalizeBlockWalk;
     const block_setup = can_source[block_start .. block_start + walk_start_rel];
 
     try expectSourceDoesNotContain(block_setup, "while (");

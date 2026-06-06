@@ -94,31 +94,537 @@ pub fn reset(self: *Self) void {
 
 /// Emit an expression as Roc source code
 pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) !void {
-    const expr = self.module_env.store.getExpr(expr_idx);
-    try self.emitExprValue(expr_idx, expr);
+    try self.emitFromFrame(.{ .expr = expr_idx });
 }
 
 /// Emit a pattern as Roc source code
 pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
-    const pattern = self.module_env.store.getPattern(pattern_idx);
-    try self.emitPatternValue(pattern);
+    try self.emitFromFrame(.{ .pattern = pattern_idx });
 }
 
-/// Emit a binop operand, wrapping in parens only if needed for precedence
-fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !void {
-    const expr = self.module_env.store.getExpr(expr_idx);
-    if (expr == .e_binop) {
-        const inner_op = expr.e_binop.op;
-        // Only add parens if inner op has lower precedence than outer op
-        if (binopPrecedence(inner_op) < binopPrecedence(outer_op)) {
-            try self.write("(");
-            try self.emitExprValue(expr_idx, expr);
-            try self.write(")");
-        } else {
-            try self.emitExpr(expr_idx);
+const EmitFrame = union(enum) {
+    expr: Expr.Idx,
+    pattern: CIR.Pattern.Idx,
+    statement: CIR.Statement.Idx,
+    binop_operand: struct { expr_idx: Expr.Idx, outer_op: Expr.Binop.Op },
+    write: []const u8,
+    indent,
+    inc_indent,
+    dec_indent,
+    pattern_record_field: struct { destruct_idx: CIR.Pattern.RecordDestruct.Idx, index: usize },
+};
+
+fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
+    var stack_allocator_state = std.heap.stackFallback(8192, self.allocator);
+    const stack_allocator = stack_allocator_state.get();
+    var frames: std.ArrayList(EmitFrame) = .empty;
+    defer frames.deinit(stack_allocator);
+
+    try frames.append(stack_allocator, first);
+    while (frames.pop()) |frame| {
+        switch (frame) {
+            .write => |text| try self.write(text),
+            .indent => try self.emitIndent(),
+            .inc_indent => self.indent_level += 1,
+            .dec_indent => self.indent_level -= 1,
+            .expr => |idx| try self.emitExprFrame(idx, &frames, stack_allocator),
+            .pattern => |idx| try self.emitPatternFrame(idx, &frames, stack_allocator),
+            .statement => |idx| try self.emitStatementFrame(idx, &frames, stack_allocator),
+            .binop_operand => |operand| try self.emitBinopOperandFrame(operand.expr_idx, operand.outer_op, &frames, stack_allocator),
+            .pattern_record_field => |field| try self.emitPatternRecordFieldFrame(field.destruct_idx, field.index, &frames, stack_allocator),
         }
+    }
+}
+
+fn pushExprList(
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    exprs: []const Expr.Idx,
+    close: []const u8,
+    separator: []const u8,
+) std.mem.Allocator.Error!void {
+    try frames.append(allocator, .{ .write = close });
+    var i = exprs.len;
+    while (i > 0) {
+        i -= 1;
+        try frames.append(allocator, .{ .expr = exprs[i] });
+        if (i > 0) try frames.append(allocator, .{ .write = separator });
+    }
+}
+
+fn pushPatternList(
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    patterns: []const CIR.Pattern.Idx,
+    close: []const u8,
+    separator: []const u8,
+) std.mem.Allocator.Error!void {
+    try frames.append(allocator, .{ .write = close });
+    var i = patterns.len;
+    while (i > 0) {
+        i -= 1;
+        try frames.append(allocator, .{ .pattern = patterns[i] });
+        if (i > 0) try frames.append(allocator, .{ .write = separator });
+    }
+}
+
+fn emitBinopOperandFrame(
+    self: *Self,
+    expr_idx: Expr.Idx,
+    outer_op: Expr.Binop.Op,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    if (expr == .e_binop and binopPrecedence(expr.e_binop.op) < binopPrecedence(outer_op)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = expr_idx });
+        try frames.append(allocator, .{ .write = "(" });
     } else {
-        try self.emitExpr(expr_idx);
+        try frames.append(allocator, .{ .expr = expr_idx });
+    }
+}
+
+fn emitExprFrame(
+    self: *Self,
+    expr_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    switch (expr) {
+        .e_num => |num| try self.emitIntValue(num.value),
+        .e_frac_f32 => |frac| try self.output.print(self.allocator, "{d}f32", .{frac.value}),
+        .e_frac_f64 => |frac| try self.output.print(self.allocator, "{d}f64", .{frac.value}),
+        .e_dec => |dec| {
+            const value = dec.value.num;
+            const scale: i128 = 1_000_000_000_000_000_000;
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+            try self.write(try self.formatI128(whole));
+            if (frac_part != 0) {
+                try self.write(".");
+                const frac_str = try self.formatU128(frac_part);
+                var pad: usize = 18 - frac_str.len;
+                while (pad > 0) : (pad -= 1) try self.write("0");
+                try self.write(frac_str);
+            }
+        },
+        .e_dec_small => |small| {
+            const numerator = small.value.numerator;
+            const power = small.value.denominator_power_of_ten;
+            if (power == 0) {
+                try self.output.print(self.allocator, "{}", .{numerator});
+            } else {
+                var divisor: i32 = 1;
+                for (0..power) |_| divisor *= 10;
+                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
+                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
+                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
+            }
+        },
+        .e_num_from_numeral => try self.emitRecordedNumeral(expr_idx, null),
+        .e_typed_int => |typed| {
+            try self.emitIntValue(typed.value);
+            try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
+        },
+        .e_typed_frac => |typed| {
+            const value = typed.value.toI128();
+            const scale: i128 = 1_000_000_000_000_000_000;
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+            if (frac_part == 0) {
+                try self.output.print(self.allocator, "{d}.0", .{whole});
+            } else {
+                try self.output.print(self.allocator, "{d}.{d:0>18}", .{ whole, frac_part });
+            }
+            try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
+        },
+        .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(expr_idx, typed.type_name),
+        .e_str_segment => |seg| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(seg.literal)}),
+        .e_bytes_literal => |bytes| try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len}),
+        .e_str => |str| {
+            const segments = self.module_env.store.sliceExpr(str.span);
+            var i = segments.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .expr = segments[i] });
+            }
+        },
+        .e_lookup_local => |lookup| {
+            if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
+                try self.emitIdent(renamed);
+            } else {
+                try frames.append(allocator, .{ .pattern = lookup.pattern_idx });
+            }
+        },
+        .e_lookup_external => |ext| try self.emitIdent(self.module_env.getIdent(ext.ident_idx)),
+        .e_list => |list| {
+            try self.write("[");
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(list.elems), "]", ", ");
+        },
+        .e_empty_list => try self.write("[]"),
+        .e_tuple => |tuple| {
+            try self.write("(");
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(tuple.elems), ")", ", ");
+        },
+        .e_tuple_access => |tuple_access| {
+            try frames.append(allocator, .{ .write = try std.fmt.allocPrint(allocator, ".{d}", .{tuple_access.elem_index}) });
+            try frames.append(allocator, .{ .expr = tuple_access.tuple });
+        },
+        .e_if => |if_expr| {
+            try frames.append(allocator, .{ .expr = if_expr.final_else });
+            try frames.append(allocator, .{ .write = " else " });
+            const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
+            var i = branches.len;
+            while (i > 0) {
+                i -= 1;
+                const branch = self.module_env.store.getIfBranch(branches[i]);
+                try frames.append(allocator, .{ .expr = branch.body });
+                try frames.append(allocator, .{ .write = ") " });
+                try frames.append(allocator, .{ .expr = branch.cond });
+                try frames.append(allocator, .{ .write = if (i > 0) " else if (" else "if (" });
+            }
+        },
+        .e_call => |call| {
+            try self.write("");
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .expr = call.func });
+        },
+        .e_record => |record| {
+            try self.write("{ ");
+            try frames.append(allocator, .{ .write = " }" });
+            if (record.ext) |ext_idx| {
+                try frames.append(allocator, .{ .expr = ext_idx });
+                try frames.append(allocator, .{ .write = ".." });
+                if (self.module_env.store.sliceRecordFields(record.fields).len > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+            const fields = self.module_env.store.sliceRecordFields(record.fields);
+            var i = fields.len;
+            while (i > 0) {
+                i -= 1;
+                const field = self.module_env.store.getRecordField(fields[i]);
+                try frames.append(allocator, .{ .expr = field.value });
+                try frames.append(allocator, .{ .write = ": " });
+                try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+                if (i > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+        },
+        .e_empty_record => try self.write("{}"),
+        .e_block => |block| {
+            try self.write("{\n");
+            self.indent_level += 1;
+            try frames.append(allocator, .{ .write = "}" });
+            try frames.append(allocator, .indent);
+            try frames.append(allocator, .dec_indent);
+            try frames.append(allocator, .{ .write = "\n" });
+            try frames.append(allocator, .{ .expr = block.final_expr });
+            try frames.append(allocator, .indent);
+            const stmts = self.module_env.store.sliceStatements(block.stmts);
+            var i = stmts.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .write = "\n" });
+                try frames.append(allocator, .{ .statement = stmts[i] });
+                try frames.append(allocator, .indent);
+            }
+        },
+        .e_tag => |tag| {
+            try self.emitTagName(self.module_env.getIdent(tag.name));
+            const args = self.module_env.store.sliceExpr(tag.args);
+            if (args.len > 0) {
+                try self.write("(");
+                try pushExprList(frames, allocator, args, ")", ", ");
+            }
+        },
+        .e_zero_argument_tag => |tag| try self.emitTagName(self.module_env.getIdent(tag.name)),
+        .e_closure => |closure| try frames.append(allocator, .{ .expr = closure.lambda_idx }),
+        .e_lambda => |lambda| {
+            try self.write("|");
+            const args = self.module_env.store.slicePatterns(lambda.args);
+            try frames.append(allocator, .{ .expr = lambda.body });
+            try frames.append(allocator, .{ .write = "| " });
+            var i = args.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .pattern = args[i] });
+                if (i > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+        },
+        .e_binop => |binop| {
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.rhs, .outer_op = binop.op } });
+            try frames.append(allocator, .{ .write = " " });
+            try frames.append(allocator, .{ .write = binopToStr(binop.op) });
+            try frames.append(allocator, .{ .write = " " });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.lhs, .outer_op = binop.op } });
+        },
+        .e_unary_minus => |unary| {
+            try frames.append(allocator, .{ .expr = unary.expr });
+            try frames.append(allocator, .{ .write = "-" });
+        },
+        .e_unary_not => |unary| {
+            try frames.append(allocator, .{ .expr = unary.expr });
+            try frames.append(allocator, .{ .write = "!" });
+        },
+        .e_field_access => |field_access| {
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(field_access.field_name) });
+            try frames.append(allocator, .{ .write = "." });
+            try frames.append(allocator, .{ .expr = field_access.receiver });
+        },
+        .e_method_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            try frames.append(allocator, .{ .expr = method_call.receiver });
+        },
+        .e_dispatch_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            try frames.append(allocator, .{ .expr = method_call.receiver });
+        },
+        .e_structural_eq => |eq| {
+            try frames.append(allocator, .{ .expr = eq.rhs });
+            try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
+            try frames.append(allocator, .{ .expr = eq.lhs });
+        },
+        .e_method_eq => |eq| {
+            try frames.append(allocator, .{ .expr = eq.rhs });
+            try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
+            try frames.append(allocator, .{ .expr = eq.lhs });
+        },
+        .e_type_method_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            const alias_str = try std.fmt.allocPrint(allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try frames.append(allocator, .{ .write = alias_str });
+        },
+        .e_type_dispatch_call => |method_call| {
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+            try frames.append(allocator, .{ .write = "(" });
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+            try frames.append(allocator, .{ .write = "." });
+            const alias_str = try std.fmt.allocPrint(allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
+            try frames.append(allocator, .{ .write = alias_str });
+        },
+        .e_runtime_error => try self.write("<runtime_error>"),
+        .e_crash => |crash| try self.output.print(self.allocator, "crash \"{s}\"", .{self.module_env.common.getString(crash.msg)}),
+        .e_dbg => |dbg| {
+            try frames.append(allocator, .{ .expr = dbg.expr });
+            try frames.append(allocator, .{ .write = "dbg " });
+        },
+        .e_expect => |expect| {
+            try frames.append(allocator, .{ .expr = expect.body });
+            try frames.append(allocator, .{ .write = "expect " });
+        },
+        .e_ellipsis => try self.write("..."),
+        .e_anno_only => try self.write("<anno_only>"),
+        .e_return => |ret| {
+            try frames.append(allocator, .{ .expr = ret.expr });
+            try frames.append(allocator, .{ .write = "return " });
+        },
+        .e_match => |match| {
+            try self.write("match ");
+            try frames.append(allocator, .{ .write = "}" });
+            try frames.append(allocator, .indent);
+            try frames.append(allocator, .dec_indent);
+            const branches = self.module_env.store.sliceMatchBranches(match.branches);
+            var i = branches.len;
+            while (i > 0) {
+                i -= 1;
+                const branch = self.module_env.store.getMatchBranch(branches[i]);
+                try frames.append(allocator, .{ .write = "\n" });
+                try frames.append(allocator, .{ .expr = branch.value });
+                try frames.append(allocator, .{ .write = " => " });
+                if (branch.guard) |guard_idx| {
+                    try frames.append(allocator, .{ .expr = guard_idx });
+                    try frames.append(allocator, .{ .write = " if " });
+                }
+                const patterns = self.module_env.store.sliceMatchBranchPatterns(branch.patterns);
+                var j = patterns.len;
+                while (j > 0) {
+                    j -= 1;
+                    try frames.append(allocator, .{ .pattern = self.module_env.store.getMatchBranchPattern(patterns[j]).pattern });
+                    if (j > 0) try frames.append(allocator, .{ .write = " | " });
+                }
+                try frames.append(allocator, .indent);
+            }
+            try frames.append(allocator, .inc_indent);
+            try frames.append(allocator, .{ .write = " {\n" });
+            try frames.append(allocator, .{ .expr = match.cond });
+        },
+        .e_nominal => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
+        .e_nominal_external => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
+        .e_lookup_required => try self.write("<required>"),
+        .e_for => |for_expr| {
+            try frames.append(allocator, .{ .expr = for_expr.body });
+            try frames.append(allocator, .{ .write = " " });
+            try frames.append(allocator, .{ .expr = for_expr.expr });
+            try frames.append(allocator, .{ .write = " in " });
+            try frames.append(allocator, .{ .pattern = for_expr.patt });
+            try frames.append(allocator, .{ .write = "for " });
+        },
+        .e_hosted_lambda => try self.write("<hosted_lambda>"),
+        .e_run_low_level => |run_ll| try self.output.print(self.allocator, "<run_low_level: {s}>", .{@tagName(run_ll.op)}),
+    }
+}
+
+fn emitPatternFrame(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const pattern = self.module_env.store.getPattern(pattern_idx);
+    switch (pattern) {
+        .assign => |ident| try self.emitIdent(self.module_env.getIdent(ident.ident)),
+        .underscore => try self.write("_"),
+        .num_literal => |num| try self.emitIntValue(num.value),
+        .str_literal => |str| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(str.literal)}),
+        .applied_tag => |tag| {
+            try self.emitTagName(self.module_env.getIdent(tag.name));
+            const args = self.module_env.store.slicePatterns(tag.args);
+            if (args.len > 0) {
+                try self.write("(");
+                try pushPatternList(frames, allocator, args, ")", ", ");
+            }
+        },
+        .record_destructure => |record| {
+            const destructs = self.module_env.store.sliceRecordDestructs(record.destructs);
+            if (destructs.len == 0) {
+                try self.write("{}");
+            } else {
+                try self.write("{ ");
+                try frames.append(allocator, .{ .write = " }" });
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    try frames.append(allocator, .{ .pattern_record_field = .{ .destruct_idx = destructs[i], .index = i } });
+                    if (i > 0) try frames.append(allocator, .{ .write = ", " });
+                }
+            }
+        },
+        .tuple => |t| {
+            try self.write("(");
+            try pushPatternList(frames, allocator, self.module_env.store.slicePatterns(t.patterns), ")", ", ");
+        },
+        .list => |l| {
+            try self.write("[");
+            try frames.append(allocator, .{ .write = "]" });
+            if (l.rest_info) |rest| {
+                if (rest.pattern) |rest_pat| {
+                    try frames.append(allocator, .{ .pattern = rest_pat });
+                }
+                try frames.append(allocator, .{ .write = ".." });
+                if (self.module_env.store.slicePatterns(l.patterns).len > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+            const elems = self.module_env.store.slicePatterns(l.patterns);
+            var i = elems.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .pattern = elems[i] });
+                if (i > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+        },
+        .as => |as_pat| {
+            try frames.append(allocator, .{ .write = self.module_env.getIdent(as_pat.ident) });
+            try frames.append(allocator, .{ .write = " as " });
+            try frames.append(allocator, .{ .pattern = as_pat.pattern });
+        },
+        .runtime_error => try self.write("<pattern_error>"),
+        .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
+        .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
+        .small_dec_literal => |dec| {
+            const numerator = dec.value.numerator;
+            const power = dec.value.denominator_power_of_ten;
+            if (power == 0) {
+                try self.output.print(self.allocator, "{}", .{numerator});
+            } else {
+                var divisor: i32 = 1;
+                for (0..power) |_| divisor *= 10;
+                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
+                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
+                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
+            }
+        },
+        .dec_literal => |dec| {
+            const value = dec.value.num;
+            const scale: i128 = 1_000_000_000_000_000_000;
+            const whole = i128h.divTrunc_i128(value, scale);
+            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+            try self.write(try self.formatI128(whole));
+            if (frac_part != 0) {
+                try self.write(".");
+                const frac_str = try self.formatU128(frac_part);
+                var pad: usize = 18 - frac_str.len;
+                while (pad > 0) : (pad -= 1) try self.write("0");
+                try self.write(frac_str);
+            }
+        },
+        .frac_f32_literal => |frac| {
+            try self.write(try self.formatF32(frac.value));
+            try self.write("f32");
+        },
+        .frac_f64_literal => |frac| {
+            try self.write(try self.formatF64(frac.value));
+            try self.write("f64");
+        },
+    }
+}
+
+fn emitPatternRecordFieldFrame(
+    self: *Self,
+    destruct_idx: CIR.Pattern.RecordDestruct.Idx,
+    _: usize,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
+    const name = self.module_env.getIdent(destruct.label);
+    try self.write(name);
+    switch (destruct.kind) {
+        .Required => |pat_idx| {
+            const inner_pat = self.module_env.store.getPattern(pat_idx);
+            const shorthand = if (inner_pat == .assign)
+                std.mem.eql(u8, name, self.module_env.getIdent(inner_pat.assign.ident))
+            else
+                false;
+            if (!shorthand) {
+                try frames.append(allocator, .{ .pattern = pat_idx });
+                try frames.append(allocator, .{ .write = ": " });
+            }
+        },
+        .SubPattern => |pat_idx| {
+            try frames.append(allocator, .{ .pattern = pat_idx });
+            try frames.append(allocator, .{ .write = ": " });
+        },
+        .Rest => |pat_idx| {
+            try frames.append(allocator, .{ .pattern = pat_idx });
+            try frames.append(allocator, .{ .write = ".." });
+        },
+    }
+}
+
+fn emitStatementFrame(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    const stmt = self.module_env.store.getStatement(stmt_idx);
+    switch (stmt) {
+        .s_decl => |decl| {
+            try self.addPatternToScope(decl.pattern);
+            try frames.append(allocator, .{ .expr = decl.expr });
+            try frames.append(allocator, .{ .write = " = " });
+            try frames.append(allocator, .{ .pattern = decl.pattern });
+        },
+        else => {},
     }
 }
 
@@ -206,593 +712,6 @@ fn base256ToDecimalDigits(self: *Self, bytes_be: []const u8) std.mem.Allocator.E
         digit.* = digits.items[digits.items.len - 1 - i];
     }
     return out;
-}
-
-fn emitExprValue(self: *Self, expr_idx: Expr.Idx, expr: Expr) EmitError!void {
-    switch (expr) {
-        .e_num => |num| {
-            try self.emitIntValue(num.value);
-        },
-        .e_frac_f32 => |frac| {
-            try self.output.print(self.allocator, "{d}f32", .{frac.value});
-        },
-        .e_frac_f64 => |frac| {
-            try self.output.print(self.allocator, "{d}f64", .{frac.value});
-        },
-        .e_dec => |dec| {
-            // Dec is stored scaled by 10^18, need to emit as decimal
-            const value = dec.value.num;
-            const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            if (frac_part == 0) {
-                try self.write(try self.formatI128(whole));
-            } else {
-                try self.write(try self.formatI128(whole));
-                try self.write(".");
-                // Format frac_part with leading zeros (18 digits)
-                const frac_str = try self.formatU128(frac_part);
-                // Pad with leading zeros to 18 digits
-                var pad: usize = 18 - frac_str.len;
-                while (pad > 0) : (pad -= 1) {
-                    try self.output.appendSlice(self.allocator, "0");
-                }
-                try self.output.appendSlice(self.allocator, frac_str);
-            }
-        },
-        .e_dec_small => |small| {
-            const numerator = small.value.numerator;
-            const power = small.value.denominator_power_of_ten;
-            if (power == 0) {
-                try self.output.print(self.allocator, "{}", .{numerator});
-            } else {
-                // Convert to decimal string
-                var divisor: i32 = 1;
-                for (0..power) |_| {
-                    divisor *= 10;
-                }
-                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
-                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
-            }
-        },
-        .e_num_from_numeral => {
-            try self.emitRecordedNumeral(expr_idx, null);
-        },
-        .e_typed_int => |typed| {
-            try self.emitIntValue(typed.value);
-            const type_name = self.module_env.getIdent(typed.type_name);
-            try self.output.print(self.allocator, ".{s}", .{type_name});
-        },
-        .e_typed_frac => |typed| {
-            // Emit as decimal and add type suffix
-            const value = typed.value.toI128();
-            const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            if (frac_part == 0) {
-                try self.output.print(self.allocator, "{d}.0", .{whole});
-            } else {
-                try self.output.print(self.allocator, "{d}.{d:0>18}", .{ whole, frac_part });
-            }
-            const type_name = self.module_env.getIdent(typed.type_name);
-            try self.output.print(self.allocator, ".{s}", .{type_name});
-        },
-        .e_typed_num_from_numeral => |typed| {
-            try self.emitRecordedNumeral(expr_idx, typed.type_name);
-        },
-        .e_str_segment => |seg| {
-            const text = self.module_env.common.getString(seg.literal);
-            try self.output.print(self.allocator, "\"{s}\"", .{text});
-        },
-        .e_bytes_literal => |bytes| {
-            const data = self.module_env.common.getString(bytes.literal);
-            try self.output.print(self.allocator, "<bytes:{d}>", .{data.len});
-        },
-        .e_str => |str| {
-            // Multi-segment string
-            const segments = self.module_env.store.sliceExpr(str.span);
-            for (segments) |seg_idx| {
-                try self.emitExpr(seg_idx);
-            }
-        },
-        .e_lookup_local => |lookup| {
-            // Check if this lookup refers to a renamed capture
-            if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
-                try self.emitIdent(renamed);
-            } else {
-                const pattern = self.module_env.store.getPattern(lookup.pattern_idx);
-                try self.emitPatternValue(pattern);
-            }
-        },
-        .e_lookup_external => |ext| {
-            // Get the identifier name from the ident_idx
-            const ident_text = self.module_env.getIdent(ext.ident_idx);
-            try self.emitIdent(ident_text);
-        },
-        .e_list => |list| {
-            try self.write("[");
-            const elems = self.module_env.store.sliceExpr(list.elems);
-            for (elems, 0..) |elem_idx, i| {
-                if (i > 0) try self.write(", ");
-                try self.emitExpr(elem_idx);
-            }
-            try self.write("]");
-        },
-        .e_empty_list => {
-            try self.write("[]");
-        },
-        .e_tuple => |tuple| {
-            try self.write("(");
-            const elems = self.module_env.store.sliceExpr(tuple.elems);
-            for (elems, 0..) |elem_idx, i| {
-                if (i > 0) try self.write(", ");
-                try self.emitExpr(elem_idx);
-            }
-            try self.write(")");
-        },
-        .e_tuple_access => |tuple_access| {
-            try self.emitExpr(tuple_access.tuple);
-            try self.output.print(self.allocator, ".{d}", .{tuple_access.elem_index});
-        },
-        .e_if => |if_expr| {
-            const branch_indices = self.module_env.store.sliceIfBranches(if_expr.branches);
-            for (branch_indices, 0..) |branch_idx, i| {
-                const branch = self.module_env.store.getIfBranch(branch_idx);
-                if (i > 0) {
-                    try self.write(" else if (");
-                } else {
-                    try self.write("if (");
-                }
-                try self.emitExpr(branch.cond);
-                try self.write(") ");
-                try self.emitExpr(branch.body);
-            }
-            try self.write(" else ");
-            try self.emitExpr(if_expr.final_else);
-        },
-        .e_call => |call| {
-            try self.emitExpr(call.func);
-            try self.write("(");
-            const args = self.module_env.store.sliceExpr(call.args);
-            for (args, 0..) |arg_idx, i| {
-                if (i > 0) try self.write(", ");
-                try self.emitExpr(arg_idx);
-            }
-            try self.write(")");
-        },
-        .e_record => |record| {
-            try self.write("{ ");
-            const field_indices = self.module_env.store.sliceRecordFields(record.fields);
-            for (field_indices, 0..) |field_idx, i| {
-                const field = self.module_env.store.getRecordField(field_idx);
-                if (i > 0) try self.write(", ");
-                const name = self.module_env.getIdent(field.name);
-
-                // Check if we can use shorthand syntax { x, y } instead of { x: x, y: y }
-                // NOTE: Only use shorthand for records with multiple fields!
-                // Single-field { x } would be parsed as a block, not a record shorthand.
-                const field_value = self.module_env.store.getExpr(field.value);
-                const use_shorthand = if (field_indices.len > 1 and field_value == .e_lookup_local) blk: {
-                    const lookup_pattern = self.module_env.store.getPattern(field_value.e_lookup_local.pattern_idx);
-                    if (lookup_pattern == .assign) {
-                        const lookup_name = self.module_env.getIdent(lookup_pattern.assign.ident);
-                        break :blk std.mem.eql(u8, name, lookup_name);
-                    }
-                    break :blk false;
-                } else false;
-
-                if (use_shorthand) {
-                    try self.write(name);
-                } else {
-                    try self.output.print(self.allocator, "{s}: ", .{name});
-                    try self.emitExpr(field.value);
-                }
-            }
-            if (record.ext) |ext_idx| {
-                if (field_indices.len > 0) try self.write(", ");
-                try self.write("..");
-                try self.emitExpr(ext_idx);
-            }
-            try self.write(" }");
-        },
-        .e_empty_record => {
-            try self.write("{}");
-        },
-        .e_block => |block| {
-            try self.write("{\n");
-            self.indent_level += 1;
-
-            // Emit statements
-            const stmts = self.module_env.store.sliceStatements(block.stmts);
-            for (stmts) |stmt_idx| {
-                try self.emitIndent();
-                try self.emitStatement(stmt_idx);
-                try self.write("\n");
-            }
-
-            // Emit final expression
-            try self.emitIndent();
-            try self.emitExpr(block.final_expr);
-            try self.write("\n");
-
-            self.indent_level -= 1;
-            try self.emitIndent();
-            try self.write("}");
-        },
-        .e_tag => |tag| {
-            const name = self.module_env.getIdent(tag.name);
-            try self.emitTagName(name);
-            const args = self.module_env.store.sliceExpr(tag.args);
-            if (args.len > 0) {
-                try self.write("(");
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) try self.write(", ");
-                    try self.emitExpr(arg_idx);
-                }
-                try self.write(")");
-            }
-        },
-        .e_zero_argument_tag => |tag| {
-            const name = self.module_env.getIdent(tag.name);
-            try self.emitTagName(name);
-        },
-        .e_closure => |closure| {
-            // Emit closure as its underlying lambda - captured variables are
-            // already in scope from the enclosing function/block, so we don't
-            // need to inline them as parameters.
-            const lambda = self.module_env.store.getExpr(closure.lambda_idx);
-            std.debug.assert(lambda == .e_lambda);
-            try self.emitExpr(closure.lambda_idx);
-        },
-        .e_lambda => |lambda| {
-            try self.write("|");
-            const args = self.module_env.store.slicePatterns(lambda.args);
-            for (args, 0..) |arg_idx, i| {
-                if (i > 0) try self.write(", ");
-                try self.emitPattern(arg_idx);
-            }
-            try self.write("| ");
-            try self.emitExpr(lambda.body);
-        },
-        .e_binop => |binop| {
-            // Wrap nested binops in parens only when precedence requires it
-            try self.emitBinopOperand(binop.lhs, binop.op);
-            try self.write(" ");
-            try self.write(binopToStr(binop.op));
-            try self.write(" ");
-            try self.emitBinopOperand(binop.rhs, binop.op);
-        },
-        .e_unary_minus => |unary| {
-            try self.write("-");
-            try self.emitExpr(unary.expr);
-        },
-        .e_unary_not => |unary| {
-            try self.write("!");
-            try self.emitExpr(unary.expr);
-        },
-        .e_field_access => |field_access| {
-            try self.emitExpr(field_access.receiver);
-            try self.write(".");
-            const field_name = self.module_env.getIdent(field_access.field_name);
-            try self.write(field_name);
-        },
-        .e_method_call => |method_call| {
-            try self.emitExpr(method_call.receiver);
-            try self.write(".");
-            try self.write(self.module_env.getIdent(method_call.method_name));
-            try self.write("(");
-            const args = self.module_env.store.sliceExpr(method_call.args);
-            for (args, 0..) |arg_idx, i| {
-                if (i != 0) try self.write(", ");
-                try self.emitExpr(arg_idx);
-            }
-            try self.write(")");
-        },
-        .e_dispatch_call => |method_call| {
-            try self.emitExpr(method_call.receiver);
-            try self.write(".");
-            try self.write(self.module_env.getIdent(method_call.method_name));
-            try self.write("(");
-            const args = self.module_env.store.sliceExpr(method_call.args);
-            for (args, 0..) |arg_idx, i| {
-                if (i != 0) try self.write(", ");
-                try self.emitExpr(arg_idx);
-            }
-            try self.write(")");
-        },
-        .e_structural_eq => |eq| {
-            try self.emitExpr(eq.lhs);
-            try self.write(if (eq.negated) " != " else " == ");
-            try self.emitExpr(eq.rhs);
-        },
-        .e_method_eq => |eq| {
-            try self.emitExpr(eq.lhs);
-            try self.write(if (eq.negated) " != " else " == ");
-            try self.emitExpr(eq.rhs);
-        },
-        .e_type_method_call => |method_call| {
-            const alias_str = try std.fmt.allocPrint(self.allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
-            defer self.allocator.free(alias_str);
-            try self.write(alias_str);
-            try self.write(".");
-            try self.write(self.module_env.getIdent(method_call.method_name));
-            try self.write("(");
-            const args = self.module_env.store.sliceExpr(method_call.args);
-            for (args, 0..) |arg_idx, i| {
-                if (i != 0) try self.write(", ");
-                try self.emitExpr(arg_idx);
-            }
-            try self.write(")");
-        },
-        .e_type_dispatch_call => |method_call| {
-            const alias_str = try std.fmt.allocPrint(self.allocator, "__type_var_alias_{d}__", .{@intFromEnum(method_call.type_var_alias_stmt)});
-            defer self.allocator.free(alias_str);
-            try self.write(alias_str);
-            try self.write(".");
-            try self.write(self.module_env.getIdent(method_call.method_name));
-            try self.write("(");
-            const args = self.module_env.store.sliceExpr(method_call.args);
-            for (args, 0..) |arg_idx, i| {
-                if (i != 0) try self.write(", ");
-                try self.emitExpr(arg_idx);
-            }
-            try self.write(")");
-        },
-        .e_runtime_error => {
-            try self.write("<runtime_error>");
-        },
-        .e_crash => |crash| {
-            const msg = self.module_env.common.getString(crash.msg);
-            try self.output.print(self.allocator, "crash \"{s}\"", .{msg});
-        },
-        .e_dbg => |dbg| {
-            try self.write("dbg ");
-            try self.emitExpr(dbg.expr);
-        },
-        .e_expect => |expect| {
-            try self.write("expect ");
-            try self.emitExpr(expect.body);
-        },
-        .e_ellipsis => {
-            try self.write("...");
-        },
-        .e_anno_only => {
-            try self.write("<anno_only>");
-        },
-        .e_return => |ret| {
-            try self.write("return ");
-            try self.emitExpr(ret.expr);
-        },
-        .e_match => |match| {
-            try self.write("match ");
-            try self.emitExpr(match.cond);
-            try self.write(" {\n");
-            self.indent_level += 1;
-            const branch_indices = self.module_env.store.sliceMatchBranches(match.branches);
-            for (branch_indices) |branch_idx| {
-                const branch = self.module_env.store.getMatchBranch(branch_idx);
-                try self.emitIndent();
-                // Emit patterns
-                const pattern_indices = self.module_env.store.sliceMatchBranchPatterns(branch.patterns);
-                for (pattern_indices, 0..) |pat_entry_idx, i| {
-                    const pat_entry = self.module_env.store.getMatchBranchPattern(pat_entry_idx);
-                    if (i > 0) try self.write(" | ");
-                    try self.emitPattern(pat_entry.pattern);
-                }
-                // Emit guard if present
-                if (branch.guard) |guard_idx| {
-                    try self.write(" if ");
-                    try self.emitExpr(guard_idx);
-                }
-                try self.write(" => ");
-                try self.emitExpr(branch.value);
-                try self.write("\n");
-            }
-            self.indent_level -= 1;
-            try self.emitIndent();
-            try self.write("}");
-        },
-        .e_nominal => |nominal| {
-            // Emit the backing expression for now
-            try self.emitExpr(nominal.backing_expr);
-        },
-        .e_nominal_external => |nominal| {
-            try self.emitExpr(nominal.backing_expr);
-        },
-        .e_lookup_required => {
-            try self.write("<required>");
-        },
-        .e_for => |for_expr| {
-            try self.write("for ");
-            try self.emitPattern(for_expr.patt);
-            try self.write(" in ");
-            try self.emitExpr(for_expr.expr);
-            try self.write(" ");
-            try self.emitExpr(for_expr.body);
-        },
-        .e_hosted_lambda => {
-            try self.write("<hosted_lambda>");
-        },
-        .e_run_low_level => |run_ll| {
-            try self.write("<run_low_level: ");
-            try self.write(@tagName(run_ll.op));
-            try self.write(">");
-        },
-    }
-}
-
-fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
-    switch (pattern) {
-        .assign => |ident| {
-            const name = self.module_env.getIdent(ident.ident);
-            try self.emitIdent(name);
-        },
-        .underscore => {
-            try self.write("_");
-        },
-        .num_literal => |num| {
-            try self.emitIntValue(num.value);
-        },
-        .str_literal => |str| {
-            const text = self.module_env.common.getString(str.literal);
-            try self.output.print(self.allocator, "\"{s}\"", .{text});
-        },
-        .applied_tag => |tag| {
-            const name = self.module_env.getIdent(tag.name);
-            try self.emitTagName(name);
-            const args = self.module_env.store.slicePatterns(tag.args);
-            if (args.len > 0) {
-                try self.write("(");
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) try self.write(", ");
-                    try self.emitPattern(arg_idx);
-                }
-                try self.write(")");
-            }
-        },
-        .record_destructure => |record| {
-            const destruct_indices = self.module_env.store.sliceRecordDestructs(record.destructs);
-            // Empty record destructure should be {}
-            if (destruct_indices.len == 0) {
-                try self.write("{}");
-            } else {
-                try self.write("{ ");
-                for (destruct_indices, 0..) |destruct_idx, i| {
-                    const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
-                    if (i > 0) try self.write(", ");
-                    const name = self.module_env.getIdent(destruct.label);
-                    try self.write(name);
-                    switch (destruct.kind) {
-                        .Required => |pat_idx| {
-                            // Check if the pattern is just an assign with same name
-                            const inner_pat = self.module_env.store.getPattern(pat_idx);
-                            switch (inner_pat) {
-                                .assign => |inner_assign| {
-                                    const inner_name = self.module_env.getIdent(inner_assign.ident);
-                                    if (!std.mem.eql(u8, name, inner_name)) {
-                                        try self.write(": ");
-                                        try self.emitPattern(pat_idx);
-                                    }
-                                },
-                                else => {
-                                    try self.write(": ");
-                                    try self.emitPattern(pat_idx);
-                                },
-                            }
-                        },
-                        .SubPattern => |pat_idx| {
-                            try self.write(": ");
-                            try self.emitPattern(pat_idx);
-                        },
-                        .Rest => |pat_idx| {
-                            try self.write("..");
-                            try self.emitPattern(pat_idx);
-                        },
-                    }
-                }
-                try self.write(" }");
-            }
-        },
-        .tuple => |t| {
-            try self.write("(");
-            const elems = self.module_env.store.slicePatterns(t.patterns);
-            for (elems, 0..) |elem_idx, i| {
-                if (i > 0) try self.write(", ");
-                try self.emitPattern(elem_idx);
-            }
-            try self.write(")");
-        },
-        .list => |l| {
-            try self.write("[");
-            const elems = self.module_env.store.slicePatterns(l.patterns);
-            for (elems, 0..) |elem_idx, i| {
-                if (i > 0) try self.write(", ");
-                try self.emitPattern(elem_idx);
-            }
-            if (l.rest_info) |rest| {
-                if (elems.len > 0) try self.write(", ");
-                try self.write("..");
-                if (rest.pattern) |rest_pat| {
-                    try self.emitPattern(rest_pat);
-                }
-            }
-            try self.write("]");
-        },
-        .as => |as_pat| {
-            try self.emitPattern(as_pat.pattern);
-            try self.write(" as ");
-            const name = self.module_env.getIdent(as_pat.ident);
-            try self.write(name);
-        },
-        .runtime_error => {
-            try self.write("<pattern_error>");
-        },
-        .nominal => |nom| {
-            try self.emitPattern(nom.backing_pattern);
-        },
-        .nominal_external => |nom| {
-            try self.emitPattern(nom.backing_pattern);
-        },
-        .small_dec_literal => |dec| {
-            const numerator = dec.value.numerator;
-            const power = dec.value.denominator_power_of_ten;
-            if (power == 0) {
-                try self.output.print(self.allocator, "{}", .{numerator});
-            } else {
-                var divisor: i32 = 1;
-                for (0..power) |_| {
-                    divisor *= 10;
-                }
-                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
-                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
-            }
-        },
-        .dec_literal => |dec| {
-            const value = dec.value.num;
-            const scale: i128 = 1_000_000_000_000_000_000;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            if (frac_part == 0) {
-                try self.write(try self.formatI128(whole));
-            } else {
-                try self.write(try self.formatI128(whole));
-                try self.write(".");
-                const frac_str = try self.formatU128(frac_part);
-                var pad: usize = 18 - frac_str.len;
-                while (pad > 0) : (pad -= 1) {
-                    try self.output.appendSlice(self.allocator, "0");
-                }
-                try self.output.appendSlice(self.allocator, frac_str);
-            }
-        },
-        .frac_f32_literal => |frac| {
-            try self.write(try self.formatF32(frac.value));
-            try self.write("f32");
-        },
-        .frac_f64_literal => |frac| {
-            try self.write(try self.formatF64(frac.value));
-            try self.write("f64");
-        },
-    }
-}
-
-fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
-    const stmt = self.module_env.store.getStatement(stmt_idx);
-    switch (stmt) {
-        .s_decl => |decl| {
-            // Add the declared name to scope
-            try self.addPatternToScope(decl.pattern);
-            try self.emitPattern(decl.pattern);
-            try self.write(" = ");
-            try self.emitExpr(decl.expr);
-        },
-        .s_type_anno, .s_type_var_alias, .s_alias_decl, .s_nominal_decl => {
-            // Type declarations are not emitted for now
-        },
-        else => {},
-    }
 }
 
 fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
