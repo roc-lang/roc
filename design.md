@@ -115,19 +115,21 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
-The parser is a single direct state machine over tokens. Each state says exactly
-what token shape it expects next, what AST node or scratch span it will output,
-and the next state to run. Control flow is written as a labeled loop over a
-small state tag, with each state assigning the next tag before jumping back to
-the dispatcher. This mirrors simdjson stage 2: tokenization does the linear
-input discovery, and the parser proper is a stack-safe token walker that uses
-explicit parser state rather than host call-stack recursion.
+The parser is a direct token-dispatch machine. Each hot parser transition is
+written as a labeled Zig `switch` over the current grammar context and current
+token tag. Transitions use `continue :dispatch key(next_context, self.peek())`,
+which lets Zig's optimizer lower the parser to jump-table or direct-branch
+control flow instead of recursive calls or an instruction interpreter. This
+mirrors simdjson stage 2: tokenization does the linear input discovery, and the
+parser proper is a stack-safe token walker with explicit parser-owned state.
 
-Nested Roc syntax uses explicit continuation stacks. A continuation stack entry
-contains only a narrow state tag and compact indexes into side storage. The
-parser must not store wide tagged unions as stack frames for grammar work. Any
-state that needs payload data stores that data in domain side arrays, and the
-continuation entry stores the side-array index. This keeps the hot stack
+Nested Roc syntax uses explicit continuation stacks only where the grammar
+really needs to return from a nested construct. A continuation stack entry
+contains a narrow return target and compact indexes into side storage. The
+parser must not store wide tagged unions as call records for grammar work, and
+must not push generic parser instructions just to decide what token to inspect
+next. Any state that needs payload data stores that data in domain side arrays,
+and the continuation entry stores the side-array index. This keeps the hot stack
 contiguous and predictable: tags are byte-sized where possible, payload arrays
 are naturally aligned by their element type, and no push or pop copies the
 largest payload for every state.
@@ -158,14 +160,14 @@ malformed AST nodes and diagnostics; later stages must not recover missing
 syntax on their own.
 
 The parser implementation must not keep the old recursive-descent or
-per-subgrammar frame-interpreter architecture. Old expression, pattern,
+per-subgrammar instruction-interpreter architecture. Old expression, pattern,
 statement, block, and type-annotation parser entrypoints are forbidden
 implementation details. Public package functions may continue to expose parsing
 capabilities such as parsing a whole file, header, expression, or statement, but
-inside the parser they must enter the same token VM with an explicit goal state.
-Static verification for this invariant is part of parser work: searches for the
-old frame names and recursive parser entrypoint names must come back empty
-before Zig is run.
+inside the parser they must enter direct token dispatch with an explicit goal
+context. Static verification for this invariant is part of parser work:
+searches for the old architecture names and recursive parser entrypoint names
+must come back empty before Zig is run.
 
 Post-check names should be short and precise. Do not encode whole explanations
 into long compound type or function names. Prefer a small local vocabulary such
