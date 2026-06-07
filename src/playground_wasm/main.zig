@@ -314,7 +314,7 @@ const ReplTryType = enum {
     definition,
     @"error",
 
-    pub fn jsonStringify(self: ReplTryType, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplTryType, writer: anytype) error{WriteFailed}!void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -332,7 +332,7 @@ const ReplErrorStage = enum {
     runtime,
     unknown,
 
-    pub fn jsonStringify(self: ReplErrorStage, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplErrorStage, writer: anytype) error{WriteFailed}!void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -441,7 +441,7 @@ export fn clearDebugLog() void {
     debug_log_oom = false;
 }
 
-fn getCachedBuiltinModule() !*LoadedBuiltinModule {
+fn getCachedBuiltinModule() (Allocator.Error || error{Internal})!*LoadedBuiltinModule {
     if (cached_builtin_module == null) {
         logDebug("compileSource: Loading Builtin module\n", .{});
         cached_builtin_module = try eval.builtin_loading.loadCompiledModule(
@@ -473,6 +473,7 @@ pub const WasmError = enum(u8) {
 const ResponseWriteError = error{
     OutOfBufferSpace,
     WriteFailed,
+    OutOfMemory,
 };
 
 fn cleanupReplState() void {
@@ -587,7 +588,7 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
         error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
-        error.WriteFailed => @intFromEnum(WasmError.internal_error),
+        error.WriteFailed, error.OutOfMemory => @intFromEnum(WasmError.internal_error),
     };
 }
 
@@ -810,13 +811,13 @@ const ReplDefinitionIdentity = struct {
     name: []const u8,
 };
 
-fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
+fn resolveReplInputKind(line: []const u8) parse.Parser.Error!?ReplInputKind {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -842,13 +843,13 @@ fn resolveReplInputKind(line: []const u8) !?ReplInputKind {
     };
 }
 
-fn replDefinitionIdentity(line: []const u8) !?ReplDefinitionIdentity {
+fn replDefinitionIdentity(line: []const u8) parse.Parser.Error!?ReplDefinitionIdentity {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
@@ -882,7 +883,7 @@ fn writeDefinitionsWithReplacement(
     session: *const ReplSession,
     replacement: ?ReplDefinitionIdentity,
     replacement_source: ?[]const u8,
-) !void {
+) error{WriteFailed}!void {
     var replaced = false;
     for (session.definitions.items) |definition| {
         if (replacement) |identity| {
@@ -911,7 +912,7 @@ fn buildReplModuleSource(
     replacement: ?ReplDefinitionIdentity,
     replacement_source: ?[]const u8,
     main_expr: ?[]const u8,
-) ![]u8 {
+) (Allocator.Error || error{WriteFailed})![]u8 {
     var source_writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer source_writer.deinit();
 
@@ -951,7 +952,7 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
     return null;
 }
 
-fn compileReplInspectedModule(source: []const u8) !ReplCompiledModule {
+fn compileReplInspectedModule(source: []const u8) anyerror!ReplCompiledModule {
     var checked_module = try compileCheckedReplModuleSource(source);
     errdefer checked_module.deinit();
 
@@ -1025,7 +1026,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
     return false;
 }
 
-fn compileCheckedReplModuleSource(source: []const u8) !CompilerStageData {
+fn compileCheckedReplModuleSource(source: []const u8) anyerror!CompilerStageData {
     var data = try compileSource(source, "main");
     errdefer data.deinit();
 
@@ -1049,7 +1050,7 @@ fn replaceCompilerData(new_data: CompilerStageData) void {
     compiler_data = new_data;
 }
 
-fn replaceCompilerDataFromReplSource(source: []const u8) !void {
+fn replaceCompilerDataFromReplSource(source: []const u8) anyerror!void {
     replaceCompilerData(try compileSource(source, "main"));
 }
 
@@ -1180,7 +1181,7 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
 
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
-fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData {
+fn compileSource(source: []const u8, module_name: []const u8) anyerror!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1302,7 +1303,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.tokenize_reports.append(report) catch continue;
+        try result.tokenize_reports.append(report);
     }
 
     // Collect parse diagnostics with additional error handling
@@ -1312,7 +1313,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.parse_reports.append(report) catch continue;
+        try result.parse_reports.append(report);
     }
 
     // Stage 2: Canonicalization (always run, even with parse errors)
@@ -1390,7 +1391,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             // This prevents crashes on malformed diagnostics or empty input
             continue;
         };
-        result.can_reports.append(report) catch continue;
+        try result.can_reports.append(report);
     }
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
@@ -1414,7 +1415,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
         // Resolve imports - map each import to its index in imported_envs
         type_can_ir.imports.clearResolvedModules();
-        type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
+        try type_can_ir.imports.resolveImportsByExactModuleName(type_can_ir, imported_envs);
         type_can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         // Use pointer to the stored CIR to ensure solver references valid memory
@@ -1517,7 +1518,7 @@ const ResponseWriter = struct {
 };
 
 /// Write an error response.
-fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) ResponseWriteError!void {
+fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []const u8) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     // Advance past length prefix, will be written by finalize
     resp_writer.pos = @sizeOf(u32);
@@ -1531,7 +1532,7 @@ fn writeErrorResponse(response_buffer: []u8, status: ResponseStatus, message: []
 }
 
 /// Write a success response
-fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) ResponseWriteError!void {
+fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]const u8) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
 
@@ -1551,7 +1552,7 @@ fn writeSuccessResponse(response_buffer: []u8, message: []const u8, data: ?[]con
 }
 
 /// Write response for LOADED state with diagnostics
-fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
 
@@ -1560,10 +1561,10 @@ fn writeLoadedResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
     // TIER 1: Extract diagnostics for VISUAL INDICATORS (gutter markers, squiggly lines)
     var diagnostics = std.array_list.Managed(Diagnostic).init(allocator);
     defer diagnostics.deinit();
-    extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.parse_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.can_reports) catch {};
-    extractDiagnosticsFromReports(&diagnostics, data.type_reports) catch {};
+    try extractDiagnosticsFromReports(&diagnostics, data.tokenize_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.parse_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.can_reports);
+    try extractDiagnosticsFromReports(&diagnostics, data.type_reports);
 
     // TIER 2: Count ALL diagnostics from reports (for SUMMARY display)
     var total_errors: u32 = 0;
@@ -1637,7 +1638,7 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
 }
 
 /// Write REPL step result as JSON
-fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) ResponseWriteError!void {
+fn writeReplStepResultJson(response_buffer: []u8, result: ReplStepResult) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1687,7 +1688,7 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
 }
 
 /// Write tokens response with direct HTML generation
-fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1705,7 +1706,7 @@ fn writeTokensResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 }
 
 /// Write parse AST response in S-expression format
-fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1723,7 +1724,7 @@ fn writeParseAstResponse(response_buffer: []u8, data: CompilerStageData) Respons
 }
 
 /// Write formatted response with formatted Roc code
-fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1741,7 +1742,7 @@ fn writeFormattedResponse(response_buffer: []u8, data: CompilerStageData) Respon
 }
 
 /// Write canonicalized CIR response in S-expression format
-fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1761,16 +1762,19 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 
     if (defs_count == 0 and stmts_count == 0) {
         const debug_begin = tree.beginNode();
-        tree.pushStaticAtom("empty-cir-debug") catch {};
-        tree.pushStaticAtom("no-defs-or-statements") catch {};
+        try tree.pushStaticAtom("empty-cir-debug");
+        try tree.pushStaticAtom("no-defs-or-statements");
         const debug_attrs = tree.beginNode();
-        tree.endNode(debug_begin, debug_attrs) catch {};
+        try tree.endNode(debug_begin, debug_attrs);
     }
 
     const mutable_cir = @constCast(cir);
-    ModuleEnv.pushToSExprTree(mutable_cir, null, &tree) catch {};
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    try ModuleEnv.pushToSExprTree(mutable_cir, null, &tree);
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try writeJsonString(w, sexpr_writer_allocating.written());
     try w.writeAll("\"}");
@@ -1780,7 +1784,7 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) ResponseW
 fn collectPlaygroundTestRootRequests(
     alloc: Allocator,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) ![]check.CheckedArtifact.RootRequest {
+) Allocator.Error![]check.CheckedArtifact.RootRequest {
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(alloc);
 
@@ -1809,7 +1813,7 @@ fn argLayoutsForProc(
     return arg_layouts;
 }
 
-fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
+fn buildEvaluateTestsHtml(data: CompilerStageData) anyerror![]u8 {
     var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
         allocator,
         .module,
@@ -1905,7 +1909,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) ![]u8 {
     return html_writer_allocating.toOwnedSlice();
 }
 
-fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     const html = buildEvaluateTestsHtml(data) catch |err| {
         try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
         return;
@@ -1937,7 +1941,7 @@ const HoverInfo = struct {
 };
 
 /// Write hover info response for a specific position
-fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) ResponseWriteError!void {
+fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, message_json: std.json.Value) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -1997,9 +2001,12 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     }
 
-    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch {
-        try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
-        return;
+    var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
+            return;
+        },
     };
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"hover_info\":");
@@ -2035,7 +2042,7 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
 }
 
 /// Find hover information for an identifier at a specific byte position
-fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) !?HoverInfo {
+fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier: []const u8) (Allocator.Error || error{WriteFailed})!?HoverInfo {
     const cir = data.module_env;
     const local_allocator = allocator;
 
@@ -2093,7 +2100,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
 }
 
 /// Write types response in S-expression format
-fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWriteError!void {
+fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) (Allocator.Error || error{ OutOfBufferSpace, WriteFailed })!void {
     var resp_writer = ResponseWriter.init(response_buffer);
     resp_writer.pos = @sizeOf(u32);
     const w = &resp_writer.interface;
@@ -2119,8 +2126,11 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
         try writeErrorResponse(response_buffer, .ERROR, error_msg);
         return;
     };
-    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch {};
-    sexpr_writer_allocating.writer.flush() catch {};
+    tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.WriteFailed,
+    };
+    try sexpr_writer_allocating.writer.flush();
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"data\":\"");
     try writeJsonString(w, sexpr_writer_allocating.written());
@@ -2129,7 +2139,7 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) ResponseWr
 }
 
 /// Write a diagnostic as JSON
-fn writeDiagnosticHtml(writer: *std.Io.Writer, report: reporting.Report) !void {
+fn writeDiagnosticHtml(writer: *std.Io.Writer, report: reporting.Report) (Allocator.Error || error{WriteFailed})!void {
     try reporting.renderReportToHtml(&report, writer, reporting.ReportingConfig.initHtml());
 }
 
@@ -2149,7 +2159,7 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
 fn extractDiagnosticsFromReports(
     diagnostics: *std.array_list.Managed(Diagnostic),
     reports: std.array_list.Managed(reporting.Report),
-) !void {
+) Allocator.Error!void {
     var count: usize = 0;
     const max_diagnostics = 100;
     for (reports.items) |*report| {
@@ -2181,7 +2191,7 @@ fn extractDiagnosticsFromReports(
     }
 }
 
-fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
+fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) error{WriteFailed}!void {
     try writer.print("{{\"severity\":\"{s}\",\"message\":\"", .{@tagName(diagnostic.severity)});
     try writeJsonString(writer, diagnostic.message);
     try writer.print("\",\"region\":{{\"start_line\":{d},\"start_column\":{d},\"end_line\":{d},\"end_column\":{d}}}}}", .{
@@ -2191,7 +2201,7 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
 }
 
 /// Write a string with JSON escaping (without surrounding quotes)
-fn writeJsonString(writer: *std.Io.Writer, str: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, str: []const u8) error{WriteFailed}!void {
     try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 

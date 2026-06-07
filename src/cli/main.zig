@@ -88,7 +88,6 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
-        std.testing.refAllDecls(ReplSession);
         std.testing.refAllDecls(@import("stack_probe.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
@@ -146,7 +145,7 @@ fn interpreterShimDigest(target: ?RocTarget) [32]u8 {
     return out;
 }
 
-fn interpreterShimCacheFilename(ctx: *CliCtx, target: RocTarget) ![]const u8 {
+fn interpreterShimCacheFilename(ctx: *CliCtx, target: RocTarget) Allocator.Error![]const u8 {
     const digest = interpreterShimDigest(target);
     const digest_hex = std.fmt.bytesToHex(digest, .lower);
     return if (target.isWindows())
@@ -377,7 +376,7 @@ const legalDetailsFileContent = @embedFile("legal_details");
 ///
 /// On Windows, SEC_RESERVE on CreateFileMapping reserves address space without
 /// page file backing, but MapViewOfFile still appears to charge against the
-/// system commit limit. Under parallel test load (`zig build test` with several
+/// system commit limit. Under parallel test load (`zig build run-test-zig` with several
 /// workers each spawning `roc.exe`), four concurrent 2 TB reservations trip
 /// ERROR_COMMITMENT_LIMIT on CI runners (7 GB RAM + limited page file). 8 GB
 /// matches the macOS bound and leaves plenty of headroom for real programs.
@@ -427,12 +426,12 @@ else
 /// image. Tries the preferred size first and halves down to
 /// `SHARED_MEMORY_MIN_SIZE` if the OS rejects the reservation; see
 /// `SharedMemoryAllocator.createWithMinSize` for details.
-fn createSharedMemory(io: std.Io, page_size: usize) !SharedMemoryAllocator {
+fn createSharedMemory(io: std.Io, page_size: usize) error{ CreateFileMappingFailed, FtruncateFailed, InvalidHandle, MapViewOfFileFailed, MemfdCreateFailed, MmapFailed, OpenFileMappingFailed, OutOfMemory, ShmOpenFailed, ShmUnlinkFailed, UnsupportedPlatform }!SharedMemoryAllocator {
     return SharedMemoryAllocator.createWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
 /// Cross-platform hardlink creation
-fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) !void {
+fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator.Error || error{ InvalidUtf8, PathAlreadyExists, Unexpected })!void {
     if (comptime builtin.target.os.tag == .windows) {
         // On Windows, use CreateHardLinkW
         const source_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, source);
@@ -471,7 +470,7 @@ fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) !void {
 }
 
 /// Generate a cryptographically secure random ASCII string for directory names
-fn generateRandomSuffix(ctx: *CliCtx) ![]u8 {
+fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
     // TODO: Consider switching to a library like https://github.com/abhinav/temp.zig
     // for more robust temporary file/directory handling
     const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -492,7 +491,7 @@ fn generateRandomSuffix(ctx: *CliCtx) ![]u8 {
 /// Create a unique temporary directory under roc/{version}/{random}/.
 /// Returns the path to the directory (allocated from arena, no need to free).
 /// Uses system temp directory to avoid race conditions when cache is cleared.
-pub fn createUniqueTempDir(ctx: *CliCtx) ![]const u8 {
+pub fn createUniqueTempDir(ctx: *CliCtx) anyerror![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
     const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
 
@@ -526,7 +525,7 @@ pub fn createUniqueTempDir(ctx: *CliCtx) ![]const u8 {
 
 /// Write shared memory coordination file (.txt) next to the executable.
 /// This is the file that the child process reads to find the shared memory fd.
-pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
+pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) anyerror!void {
     // The coordination file is at {temp_dir}.txt where temp_dir is the directory containing the exe
     const temp_dir = std.fs.path.dirname(temp_exe_path) orelse return error.InvalidPath;
 
@@ -555,7 +554,7 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
 /// Returns the path to the executable in the temp directory (allocated from arena, no need to free).
 /// Uses the standard roc/{version}/{random}/ structure in the system temp directory.
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
-pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
+pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) Allocator.Error![]const u8 {
     // Get the version-specific temp directory: {temp}/roc/{version}
     const version_temp_dir = try cache_config_mod.getVersionTempDir(ctx.coreCtx(), ctx.arena);
 
@@ -638,13 +637,13 @@ fn renderValidationError(
     if (rendered) {} else {}
 }
 
-fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) void {
-    const diag = build_env.renderDiagnostics(stderr);
+fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) Allocator.Error!void {
+    const diag = try build_env.renderDiagnostics(stderr);
     if (diag.errors > 0) {} else {}
 }
 
 /// The CLI entrypoint for the Roc compiler.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) Allocator.Error!void {
     // Initialize the debug IO with a real allocator so std.Options.debug_io
     // can spawn processes, create directories, etc.
     debug_threaded_io_instance = .init(init.gpa, .{
@@ -702,22 +701,25 @@ pub fn main(init: std.process.Init) !void {
                 // TODO: if virtual address allocation fails at 4gb, fall back on doing `roc build` followed by manually running the executable
                 std.debug.print("The Roc compiler ran out of memory trying to preallocate virtual address space for compiling and running this program. Try using `roc build` to build the executable separately, then run it manually.\n", .{});
             },
-            else => {}, // Other errors should already have printed messages
+            else => {
+                // All other errors: problems were already recorded/rendered by the
+                // command handlers; exit cleanly below without a stack trace.
+            },
         }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
-            tracy.waitForShutdown(init.io) catch {};
+            tracy.waitForShutdown(init.io);
         }
         restoreWindowsConsoleCodePage();
         std.process.exit(1);
     };
 
     if (tracy.enable) {
-        try tracy.waitForShutdown(init.io);
+        tracy.waitForShutdown(init.io);
     }
 }
 
-fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) !void {
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -861,7 +863,7 @@ fn generatePlatformHostShim(
     target: RocTarget,
     lir_image: ?[]const u8,
     debug: bool,
-) !?[]const u8 {
+) (Allocator.Error || error{ CliError, LLVMCompilationFailed })!?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -983,7 +985,7 @@ fn generatePlatformHostShim(
     return object_path;
 }
 
-fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) !void {
+fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) anyerror!void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
@@ -997,7 +999,7 @@ fn interpreterExeCacheName(
     app_path: []const u8,
     target: RocTarget,
     entrypoint_names: []const []const u8,
-) ![]const u8 {
+) (Allocator.Error || error{CliError})![]const u8 {
     var hash = std.hash.Crc32.init();
     hash.update("roc-run-lir-shared-memory-v1");
     hash.update(build_options.compiler_version);
@@ -1014,7 +1016,7 @@ fn interpreterExeCacheName(
     };
 }
 
-fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) !void {
+fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
     const native_target = RocTarget.detectNative();
     try ctx.io.stderr().print(
         "Error: unsupported target for roc run: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
@@ -1023,13 +1025,13 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) !void {
     return error.UnsupportedTarget;
 }
 
-fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) !void {
+fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
-    if (readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path)) |source| {
         return rocRunDefaultApp(ctx, args, source);
     }
 
@@ -1359,26 +1361,41 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
 /// Check if a file is a default_app (headerless file with a main! function).
 /// On success, returns the file source (caller owns the allocation).
 /// Returns null if the file is not a default_app.
-fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) ?[]const u8 {
+fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.Error!?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch return null;
-
-    const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch {
-        ctx.gpa.free(source);
-        return null;
+    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // Any other read failure (e.g. file not found) means this isn't a
+        // default app to handle here; fall through to the normal path.
+        else => return null,
     };
 
-    var env = ModuleEnv.init(ctx.gpa, source) catch {
-        ctx.gpa.free(source);
-        return null;
+    const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch |err| switch (err) {
+        error.OutOfMemory => {
+            ctx.gpa.free(source);
+            return error.OutOfMemory;
+        },
+    };
+
+    var env = ModuleEnv.init(ctx.gpa, source) catch |err| switch (err) {
+        error.OutOfMemory => {
+            ctx.gpa.free(source);
+            return error.OutOfMemory;
+        },
     };
     defer env.deinit();
     env.common.source = source;
     env.module_name = module_name;
 
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
-        ctx.gpa.free(source);
-        return null;
+    const ast = parse.parse(ctx.gpa, &env.common) catch |err| switch (err) {
+        error.OutOfMemory => {
+            ctx.gpa.free(source);
+            return error.OutOfMemory;
+        },
+        error.TooNested => {
+            ctx.gpa.free(source);
+            return null;
+        },
     };
     defer ast.deinit();
 
@@ -1404,7 +1421,7 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) ?[]const u8 {
 /// Run a default_app (headerless file with main! and echo platform).
 /// This compiles the app through checked artifacts and executes the resulting
 /// LIR image with the echo platform host function.
-fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) !void {
+fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) anyerror!void {
     defer ctx.gpa.free(original_source);
 
     // Write synthetic app + echo platform files into a unique temp directory.
@@ -1462,7 +1479,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
-    var cli_args_list = echo_platform.buildCliArgs(args.app_args, &roc_ops);
+    var cli_args_list = try echo_platform.buildCliArgs(args.app_args, &roc_ops);
 
     var result_buf: [16]u8 align(16) = undefined;
     try evaluateLirImageEntrypoint(
@@ -1484,7 +1501,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
 /// - Arguments containing spaces, tabs, or quotes must be quoted
 /// - Embedded quotes must be escaped with backslash: " -> \"
 /// - Backslashes before quotes must be doubled: \" -> \\"
-fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const u8) !void {
+fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const u8) Allocator.Error!void {
     const needs_quoting = arg.len == 0 or std.mem.findAny(u8, arg, " \t\"") != null;
 
     if (!needs_quoting) {
@@ -1922,7 +1939,7 @@ fn evaluateLirImageEntrypoint(
     ops: *echo_platform.host_abi.RocOps,
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
-) !void {
+) Allocator.Error!void {
     var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops);
     defer interpreter.deinit();
 
@@ -1951,7 +1968,7 @@ pub fn buildLirImageWithCoordinator(
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
     max_threads: ?usize,
-) !SharedMemoryResult {
+) anyerror!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -2112,7 +2129,7 @@ pub fn buildLirImageWithCoordinator(
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
-pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) !SharedMemoryResult {
+pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) anyerror!SharedMemoryResult {
     return buildLirImageWithCoordinator(ctx, roc_file_path, null, null);
 }
 
@@ -2137,7 +2154,7 @@ pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) CliError!Pl
 
 /// Extract platform specification from app file header by parsing it properly.
 /// Takes a CliCtx which provides allocators and error reporting.
-fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) ![]const u8 {
+fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})![]const u8 {
     // Read the app file
     var source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, app_file_path, ctx.gpa, .unlimited) catch |err| {
         return ctx.fail(switch (err) {
@@ -2216,7 +2233,7 @@ fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) ![]const 
 }
 
 /// Extract a string value from an expression (for platform/package paths).
-fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
+fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) error{ExpectedString}![]const u8 {
     const e = ast.store.getExpr(expr_idx);
     return switch (e) {
         .string => |s| {
@@ -2295,23 +2312,23 @@ fn resolvePlatformSpecToPaths(ctx: *CliCtx, platform_spec: []const u8, base_dir:
 /// Standard cache locations by platform:
 /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
 /// - Windows: %LOCALAPPDATA%\roc\packages\
-fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
+fn getRocCacheDir(allocator: std.mem.Allocator) (Allocator.Error || error{NoCacheDir})![]const u8 {
     // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+    if (try getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
         defer allocator.free(xdg_cache);
         return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
     }
 
     // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
     if (comptime builtin.os.tag == .windows) {
-        if (getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+        if (try getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
             defer allocator.free(local_app_data);
             return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
         }
     }
 
     // Fall back to ~/.cache/roc/packages (Unix)
-    if (getEnvVar(allocator, "HOME")) |home| {
+    if (try getEnvVar(allocator, "HOME")) |home| {
         defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
     }
@@ -2321,12 +2338,12 @@ fn getRocCacheDir(allocator: std.mem.Allocator) ![]const u8 {
 
 /// Cross-platform helper to get environment variable.
 /// Returns null if the variable is not set. Caller must free the returned slice.
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
-    const key_z = allocator.dupeZ(u8, key) catch return null;
+fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error!?[]const u8 {
+    const key_z = try allocator.dupeZ(u8, key);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
     const len = std.mem.len(value);
-    return allocator.dupe(u8, value[0..len]) catch null;
+    return try allocator.dupe(u8, value[0..len]);
 }
 
 /// Resolve a URL bundle (platform or package) by downloading and caching it.
@@ -2418,7 +2435,7 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
 /// This library contains the shim code that runs in child processes to read the LIR image.
 /// For native builds and roc run, use the native shim (pass null or native target).
 /// For cross-compilation, pass the target to get the appropriate shim.
-pub fn extractReadRocFilePathShimLibrary(ctx: *CliCtx, output_path: []const u8, target: ?RocTarget) !void {
+pub fn extractReadRocFilePathShimLibrary(ctx: *CliCtx, output_path: []const u8, target: ?RocTarget) anyerror!void {
     if (builtin.is_test) {
         // In test mode, create an empty file to avoid embedding issues
         const shim_file = try std.Io.Dir.cwd().createFile(ctx.io.std_io, output_path, .{});
@@ -2498,7 +2515,7 @@ fn discoverAndAddBundleModules(
     file_paths: *std.ArrayList([]const u8),
     uncompressed_size: *u64,
     stderr: anytype,
-) !void {
+) anyerror!void {
     // Resolve the entry point to an absolute path
     const abs_entry = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, first_roc_file, ctx.gpa) catch |err| {
         try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
@@ -2603,7 +2620,7 @@ fn discoverAndAddBundleModules(
 /// Returns the common parent directory with no trailing path separator (except for
 /// a filesystem root such as "/"). Returns an empty slice if the inputs share no
 /// directory ancestor (e.g. two Windows paths on different drives).
-fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []const u8) ![]u8 {
+fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []const u8) Allocator.Error![]u8 {
     std.debug.assert(abs_paths.len > 0);
 
     const isSep = struct {
@@ -2658,7 +2675,7 @@ fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []con
 }
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
-pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) !void {
+pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) anyerror!void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
@@ -2835,7 +2852,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) !void {
         paths: []const []const u8,
         index: usize = 0,
 
-        pub fn next(self: *@This()) !?[]const u8 {
+        pub fn next(self: *@This()) Allocator.Error!?[]const u8 {
             if (self.index >= self.paths.len) return null;
             const path = self.paths[self.index];
             self.index += 1;
@@ -2901,7 +2918,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) !void {
     try stdout.print("Time: {} ms\n", .{elapsed_ms});
 }
 
-fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) !void {
+fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) anyerror!void {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
     const cwd = std.Io.Dir.cwd();
@@ -2992,7 +3009,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) !void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
+fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     // Handle the --z-bench-tokenize flag
     if (args.z_bench_tokenize) |file_path| {
         try benchTokenizer(ctx.gpa, ctx.io.std_io, file_path);
@@ -3006,9 +3023,9 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     // Headerless apps use a simple builtin platform and cannot be compiled
-    if (readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path)) |source| {
         ctx.gpa.free(source);
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .build_not_supported_for_headerless = .{ .app_path = args.path },
         });
         return error.UnsupportedTarget;
@@ -3028,7 +3045,7 @@ fn nativeBuildEntrypoints(
     ctx: *CliCtx,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) ![]backend.Entrypoint {
+) Allocator.Error![]backend.Entrypoint {
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
@@ -3076,7 +3093,7 @@ fn nativeEntrypointSymbolName(
     ctx: *CliCtx,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
-) ![]const u8 {
+) Allocator.Error![]const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
@@ -3101,7 +3118,7 @@ fn selectBuildPlatformTarget(
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
-) !target_selection.SelectedTarget {
+) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
     return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
@@ -3135,7 +3152,7 @@ fn selectRunPlatformTarget(
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
-) !target_selection.SelectedTarget {
+) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
     return switch (target_selection.selectRunTarget(targets_config, target_arg)) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
@@ -3173,7 +3190,7 @@ fn selectRunPlatformTarget(
     };
 }
 
-fn rejectRequiredExecutableOutput(ctx: *CliCtx, link_type: roc_target.LinkType) !void {
+fn rejectRequiredExecutableOutput(ctx: *CliCtx, link_type: roc_target.LinkType) error{ UnsupportedTarget, WriteFailed }!void {
     const stderr = ctx.io.stderr();
     switch (link_type) {
         .static_lib => {
@@ -3199,7 +3216,7 @@ fn collectPlatformLinkInputs(
     targets_config: roc_target.TargetsConfig,
     target: RocTarget,
     link_type: roc_target.LinkType,
-) !PlatformLinkInputs {
+) (Allocator.Error || error{ CliError, MissingTargetFile })!PlatformLinkInputs {
     const target_name = @tagName(target);
     const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
         return ctx.fail(.{ .linker_failed = .{
@@ -3244,7 +3261,7 @@ fn collectPlatformLinkInputs(
     };
 }
 
-fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) ![]const u8 {
+fn appendOwnedWasmInput(ctx: *CliCtx, owned_inputs: *std.ArrayList([]u8), path: []const u8) anyerror![]const u8 {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .unlimited);
     errdefer ctx.gpa.free(bytes);
     try owned_inputs.append(ctx.gpa, bytes);
@@ -3263,7 +3280,7 @@ fn preloadWasmObject(
     path: []const u8,
     member_name: ?[]const u8,
     bytes: []const u8,
-) !backend.wasm.WasmModule {
+) backend.wasm.WasmModule.ParseError!backend.wasm.WasmModule {
     return backend.wasm.WasmModule.preload(ctx.gpa, bytes, true) catch |err| {
         if (member_name) |name| {
             std.log.err("Failed to preload wasm archive member {s}({s}): {}", .{ path, name, err });
@@ -3281,7 +3298,7 @@ fn addWasmObject(
     member_name: ?[]const u8,
     bytes: []const u8,
     loaded_module: *bool,
-) !void {
+) (backend.wasm.WasmModule.ParseError || backend.wasm.WasmModule.MergeError)!void {
     var next_module = try preloadWasmObject(ctx, path, member_name, bytes);
 
     if (!loaded_module.*) {
@@ -3302,7 +3319,7 @@ fn addWasmInput(
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
     loaded_module: *bool,
-) !void {
+) anyerror!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
@@ -3348,7 +3365,7 @@ fn rocBuildWasmSurgical(
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
-) !void {
+) anyerror!void {
     if (args.no_link) {
         if (entrypoints.len == 0) {
             if (builtin.mode == .Debug) {
@@ -3452,7 +3469,7 @@ fn rocBuildWasmSurgical(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    wasm_module.exportGlobalSymbols();
+    try wasm_module.exportGlobalSymbols();
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
@@ -3508,7 +3525,7 @@ fn rocBuildWasmSurgical(
     const stack_bytes = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE;
     try codegen.module.finalizeMemoryAndTable(@intCast(stack_bytes));
     codegen.module.ensureMemoryMinBytes(args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY);
-    codegen.module.resolveRelocations();
+    try codegen.module.resolveRelocations();
 
     const called_fns = try ctx.gpa.alloc(bool, codegen.module.liveFunctionCount());
     defer ctx.gpa.free(called_fns);
@@ -3544,7 +3561,7 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
-fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) !std.Target {
+fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     if (target == RocTarget.detectNative()) return builtin.target;
 
     const query = std.Target.Query{
@@ -3565,7 +3582,7 @@ fn compileLlvmAppObject(
     target: RocTarget,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
-) !LlvmObjectPaths {
+) anyerror!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
 
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
@@ -3576,7 +3593,17 @@ fn compileLlvmAppObject(
     codegen.layout_store = &lowered.lir_result.layouts;
     defer codegen.deinit();
 
-    var bitcode = try codegen.generateEntrypointModule("roc_app_llvm", entrypoints);
+    const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
+    for (entrypoints, 0..) |entrypoint, i| {
+        llvm_entrypoints[i] = .{
+            .symbol_name = entrypoint.symbol_name,
+            .proc = entrypoint.proc,
+            .arg_layouts = entrypoint.arg_layouts,
+            .ret_layout = entrypoint.ret_layout,
+        };
+    }
+
+    var bitcode = try codegen.generateEntrypointModule("roc_app_llvm", llvm_entrypoints);
     defer bitcode.deinit();
 
     const target_name = @tagName(target);
@@ -3614,7 +3641,7 @@ fn compileLlvmAppObject(
 fn validateWasmStaticFunctionRelocations(
     module: *const backend.wasm.WasmModule,
     static_data_exports: []const backend.StaticDataExport,
-) !void {
+) backend.wasm.WasmModule.SymbolLookupError!void {
     for (static_data_exports) |data_export| {
         for (data_export.relocations) |relocation| {
             if (relocation.kind != .function_pointer) continue;
@@ -3628,7 +3655,7 @@ fn mergeLlvmStaticDataWasmModule(
     module: *backend.wasm.WasmModule,
     static_data_exports: []const backend.StaticDataExport,
     mode: backend.wasm.WasmModule.MergeMode,
-) !void {
+) anyerror!void {
     if (static_data_exports.len == 0) return;
 
     try validateWasmStaticFunctionRelocations(module, static_data_exports);
@@ -3654,7 +3681,7 @@ fn rocBuildWasmLlvm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
-) !void {
+) anyerror!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
@@ -3728,7 +3755,7 @@ fn rocBuildWasmLlvm(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    wasm_module.exportGlobalSymbols();
+    try wasm_module.exportGlobalSymbols();
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
@@ -3768,7 +3795,7 @@ fn rocBuildWasmLlvm(
     const stack_bytes = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE;
     try wasm_module.finalizeMemoryAndTable(@intCast(stack_bytes));
     wasm_module.ensureMemoryMinBytes(args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY);
-    wasm_module.resolveRelocations();
+    try wasm_module.resolveRelocations();
 
     const called_fns = try ctx.gpa.alloc(bool, wasm_module.liveFunctionCount());
     defer ctx.gpa.free(called_fns);
@@ -3789,7 +3816,7 @@ fn rocBuildWasmLlvm(
     loaded_module = false;
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
@@ -3830,12 +3857,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3890,11 +3917,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     build_env.setTarget(target);
     build_env.compileDiscovered() catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
         if (args.allow_errors) return;
@@ -4072,7 +4099,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 }
 
-fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
+fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
@@ -4113,12 +4140,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -4166,11 +4193,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     build_env.setTarget(target);
     build_env.compileDiscovered() catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
         if (args.allow_errors) return;
@@ -4273,13 +4300,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| {
-        std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
-        return err;
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    var cleanup_build_scratch_dir = true;
+    defer if (cleanup_build_scratch_dir) {
+        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), build_scratch_dir);
     };
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
     object_compiler.compileToObjectFileAndWrite(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -4295,6 +4325,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     };
 
     if (args.no_link) {
+        cleanup_build_scratch_dir = false;
         if (!args.suppress_build_status) {
             try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
         }
@@ -4303,7 +4334,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
         return error.BuiltinsExtractionFailed;
     };
@@ -4325,7 +4356,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_cache_dir,
+        .scratch_dir = build_scratch_dir,
     };
 
     if (args.z_dump_linker) {
@@ -4378,7 +4409,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
-fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
+fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     const output_path = if (args.output) |output|
@@ -4419,12 +4450,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
     const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -4460,11 +4491,11 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
     build_env.setTarget(target);
     build_env.compileDiscovered() catch |err| {
-        renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(&build_env, ctx.io.stderr());
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     const total_warning_count = diag.warnings;
     if (diag.errors > 0) {
         if (args.allow_errors) return;
@@ -4614,7 +4645,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) !void {
 
 /// Dump linker inputs to a temp directory for debugging linking issues.
 /// Creates a directory with all input files copied and a README with the linker command.
-fn dumpLinkerInputs(ctx: *CliCtx, link_config: linker.LinkConfig) !void {
+fn dumpLinkerInputs(ctx: *CliCtx, link_config: linker.LinkConfig) anyerror!void {
     const stderr = ctx.io.stderr();
 
     // Create temp directory with unique name based on timestamp
@@ -4743,7 +4774,7 @@ const CopiedFile = struct {
 // Test cache blob format
 // Binary format for caching test results.
 
-const CliTestResult = enum { passed, failed };
+const CliTestResult = enum { passed, failed, compiler_error };
 
 const CliTestFailureDetailVisibility = enum(u8) {
     always = 0,
@@ -4768,13 +4799,14 @@ const CliModuleTestResult = struct {
 const CliTestRunSummary = struct {
     passed: u32 = 0,
     failed: u32 = 0,
+    compiler_errors: u32 = 0,
     modules_with_tests: u32 = 0,
     cached_modules: u32 = 0,
 };
 
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V3";
+const cli_test_cache_magic = "ROC_TEST_RESULTS_V4";
 
-fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) !void {
+fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
     try bytes.appendSlice(allocator, &buf);
@@ -4807,6 +4839,7 @@ fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
         switch (result.result) {
             .passed => summary.passed += 1,
             .failed => summary.failed += 1,
+            .compiler_error => summary.compiler_errors += 1,
         }
     }
     return summary;
@@ -4818,8 +4851,11 @@ fn storeCliTestResultsInCache(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     opt: cli_args.OptLevel,
     results: []const CliTestResultItem,
-) !void {
+) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
+    for (results) |result| {
+        if (result.result == .compiler_error) return;
+    }
 
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(ctx.gpa);
@@ -4830,6 +4866,7 @@ fn storeCliTestResultsInCache(
         try bytes.append(ctx.gpa, switch (result.result) {
             .passed => 0,
             .failed => 1,
+            .compiler_error => 2,
         });
         if (result.failure_detail) |message| {
             try bytes.append(ctx.gpa, 1);
@@ -4854,7 +4891,7 @@ fn appendCachedCliTestResults(
     opt: cli_args.OptLevel,
     test_roots: []const check.CheckedArtifact.RootRequest,
     module_results: *std.ArrayList(CliModuleTestResult),
-) !?CliTestRunSummary {
+) (Allocator.Error || error{NoHomeDirectory})!?CliTestRunSummary {
     const manager = cache_manager orelse return null;
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
@@ -4891,6 +4928,7 @@ fn appendCachedCliTestResults(
         const result: CliTestResult = switch (result_tag) {
             0 => .passed,
             1 => .failed,
+            2 => .compiler_error,
             else => return null,
         };
 
@@ -4946,7 +4984,7 @@ fn appendCachedCliTestResults(
 fn collectTestRootRequests(
     allocator: std.mem.Allocator,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) ![]check.CheckedArtifact.RootRequest {
+) Allocator.Error![]check.CheckedArtifact.RootRequest {
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(allocator);
 
@@ -4986,6 +5024,103 @@ fn testRootByOrder(
     unreachable;
 }
 
+const CliTestExecutionMode = enum {
+    interpreter,
+    dev,
+    llvm_size,
+    llvm_speed,
+
+    fn displayName(self: CliTestExecutionMode) []const u8 {
+        return switch (self) {
+            .interpreter => "interpreter",
+            .dev => "dev",
+            .llvm_size => "LLVM size",
+            .llvm_speed => "LLVM speed",
+        };
+    }
+};
+
+fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
+    return switch (opt) {
+        .interpreter => .interpreter,
+        .dev => .dev,
+        .size => .llvm_size,
+        .speed => .llvm_speed,
+    };
+}
+
+const CliTestRootRun = struct {
+    root: check.CheckedArtifact.RootRequest,
+    root_proc: lir.LirProcSpecId,
+    region: base.Region,
+    arg_layouts: []const layout.Idx,
+    ret_layout: layout.Idx,
+    symbol_name: [:0]const u8,
+};
+
+fn deinitCliTestRootRuns(allocator: Allocator, runs: []CliTestRootRun) void {
+    for (runs) |run| {
+        allocator.free(run.arg_layouts);
+        allocator.free(run.symbol_name);
+    }
+    allocator.free(runs);
+}
+
+fn collectCliTestRootRuns(
+    ctx: *CliCtx,
+    module: BuildEnv.CompiledModuleInfo,
+    test_roots: []const check.CheckedArtifact.RootRequest,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) Allocator.Error![]CliTestRootRun {
+    var runs = std.ArrayList(CliTestRootRun).empty;
+    errdefer {
+        for (runs.items) |run| {
+            ctx.gpa.free(run.arg_layouts);
+            ctx.gpa.free(run.symbol_name);
+        }
+        runs.deinit(ctx.gpa);
+    }
+
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("CLI test invariant violated: root proc count differs from root metadata count", .{});
+        }
+        unreachable;
+    }
+
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.kind != .test_expect) continue;
+        const root = testRootByOrder(test_roots, metadata.order);
+        const proc = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_layouts = try argLayoutsForProc(ctx.gpa, &lowered.lir_result.store, root_proc);
+        errdefer ctx.gpa.free(arg_layouts);
+        const symbol_name = try std.fmt.allocPrintSentinel(ctx.gpa, "roc_test_expect_{d}", .{root.order}, 0);
+        errdefer ctx.gpa.free(symbol_name);
+        try runs.append(ctx.gpa, .{
+            .root = root,
+            .root_proc = root_proc,
+            .region = testRootRegion(module.semantic.env, root),
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+            .symbol_name = symbol_name,
+        });
+    }
+
+    if (runs.items.len != test_roots.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
+                .{ runs.items.len, test_roots.len },
+            );
+        }
+        unreachable;
+    }
+
+    return try runs.toOwnedSlice(ctx.gpa);
+}
+
 fn interpreterTestFailureMessage(
     allocator: std.mem.Allocator,
     interpreter: *const eval.LirInterpreter,
@@ -5000,6 +5135,190 @@ fn interpreterTestFailureMessage(
     return try allocator.dupe(u8, message);
 }
 
+fn appendFailedCliTestResult(
+    ctx: *CliCtx,
+    results: *std.ArrayList(CliTestResultItem),
+    run: CliTestRootRun,
+    result: CliTestResult,
+    message: []const u8,
+    visibility: CliTestFailureDetailVisibility,
+) Allocator.Error!void {
+    errdefer ctx.gpa.free(message);
+    try results.append(ctx.gpa, .{
+        .result = result,
+        .order = run.root.order,
+        .region = run.region,
+        .failure_detail = message,
+        .failure_detail_visibility = visibility,
+    });
+}
+
+fn runInterpreterTestRoots(
+    ctx: *CliCtx,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    root_runs: []const CliTestRootRun,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
+    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
+    var interpreter = try eval.LirInterpreter.init(
+        ctx.gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    );
+    defer interpreter.deinit();
+
+    for (root_runs) |run| {
+        const eval_result = interpreter.eval(.{
+            .proc_id = run.root_proc,
+            .arg_layouts = run.arg_layouts,
+            .ret_layout = run.ret_layout,
+        }) catch |err| {
+            summary.failed += 1;
+            try appendFailedCliTestResult(
+                ctx,
+                results,
+                run,
+                .failed,
+                try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
+                .always,
+            );
+            continue;
+        };
+
+        const passed = switch (eval_result) {
+            .value => |value| blk: {
+                const ok = value.read(u8) != 0;
+                interpreter.dropValue(value, run.ret_layout);
+                break :blk ok;
+            },
+        };
+
+        if (passed) {
+            summary.passed += 1;
+            try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
+        } else {
+            summary.failed += 1;
+            try appendFailedCliTestResult(
+                ctx,
+                results,
+                run,
+                .failed,
+                try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
+                .verbose_only,
+            );
+        }
+    }
+}
+
+fn appendCompilerErrorsForRuns(
+    ctx: *CliCtx,
+    mode: CliTestExecutionMode,
+    err: anyerror,
+    root_runs: []const CliTestRootRun,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    for (root_runs) |run| {
+        summary.compiler_errors += 1;
+        try appendFailedCliTestResult(
+            ctx,
+            results,
+            run,
+            .compiler_error,
+            try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
+            .always,
+        );
+    }
+}
+
+fn runCompiledTestRoots(
+    ctx: *CliCtx,
+    mode: CliTestExecutionMode,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    root_runs: []const CliTestRootRun,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
+    defer ctx.gpa.free(bool_roots);
+
+    for (root_runs, 0..) |run, i| {
+        bool_roots[i] = .{
+            .symbol_name = run.symbol_name,
+            .proc = run.root_proc,
+            .arg_layouts = run.arg_layouts,
+            .ret_layout = run.ret_layout,
+        };
+    }
+
+    const eval_results = switch (mode) {
+        .dev => eval.test_helpers.devEvalBoolRoots(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            bool_roots,
+        ),
+        .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            bool_roots,
+            .size,
+        ),
+        .llvm_speed => eval.test_helpers.llvmEvalBoolRoots(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            bool_roots,
+            .speed,
+        ),
+        .interpreter => unreachable,
+    } catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            try appendCompilerErrorsForRuns(ctx, mode, err, root_runs, results, summary);
+            return;
+        },
+    };
+    defer eval.test_helpers.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+
+    for (root_runs, eval_results) |run, eval_result| {
+        switch (eval_result) {
+            .passed => |passed| {
+                if (passed) {
+                    summary.passed += 1;
+                    try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
+                } else {
+                    summary.failed += 1;
+                    try appendFailedCliTestResult(
+                        ctx,
+                        results,
+                        run,
+                        .failed,
+                        try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
+                        .verbose_only,
+                    );
+                }
+            },
+            .crashed => |message| {
+                summary.failed += 1;
+                try appendFailedCliTestResult(
+                    ctx,
+                    results,
+                    run,
+                    .failed,
+                    try ctx.gpa.dupe(u8, message),
+                    .always,
+                );
+            },
+        }
+    }
+}
+
 fn runCheckedArtifactTests(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -5007,7 +5326,7 @@ fn runCheckedArtifactTests(
     opt: cli_args.OptLevel,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
-) !CliTestRunSummary {
+) (Allocator.Error || error{NoHomeDirectory})!CliTestRunSummary {
     const artifact = module.semantic.checked_artifact orelse return .{};
     const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
     defer ctx.gpa.free(test_roots);
@@ -5043,16 +5362,8 @@ fn runCheckedArtifactTests(
     );
     defer lowered.deinit();
 
-    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
-    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
-    var interpreter = try eval.LirInterpreter.init(
-        ctx.gpa,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        &roc_ops,
-    );
-    defer interpreter.deinit();
+    const root_runs = try collectCliTestRootRuns(ctx, module, test_roots, &lowered);
+    defer deinitCliTestRootRuns(ctx.gpa, root_runs);
 
     var results = std.ArrayList(CliTestResultItem).empty;
     errdefer {
@@ -5063,53 +5374,10 @@ fn runCheckedArtifactTests(
     }
 
     var summary = CliTestRunSummary{};
-    const root_procs = lowered.lir_result.root_procs.items;
-    const root_metadata = lowered.lir_result.root_metadata.items;
-    for (root_procs, root_metadata) |root_proc, metadata| {
-        if (metadata.kind != .test_expect) continue;
-        const root = testRootByOrder(test_roots, metadata.order);
-        const region = testRootRegion(module.semantic.env, root);
-        const proc = lowered.lir_result.store.getProcSpec(root_proc);
-        const arg_layouts = try argLayoutsForProc(ctx.gpa, &lowered.lir_result.store, root_proc);
-        defer ctx.gpa.free(arg_layouts);
-
-        const eval_result = interpreter.eval(.{
-            .proc_id = root_proc,
-            .arg_layouts = arg_layouts,
-            .ret_layout = proc.ret_layout,
-        }) catch |err| {
-            summary.failed += 1;
-            try results.append(ctx.gpa, .{
-                .result = .failed,
-                .order = root.order,
-                .region = region,
-                .failure_detail = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
-                .failure_detail_visibility = .always,
-            });
-            continue;
-        };
-
-        const passed = switch (eval_result) {
-            .value => |value| blk: {
-                const ok = value.read(u8) != 0;
-                interpreter.dropValue(value, proc.ret_layout);
-                break :blk ok;
-            },
-        };
-
-        if (passed) {
-            summary.passed += 1;
-            try results.append(ctx.gpa, .{ .result = .passed, .order = root.order, .region = region, .failure_detail = null });
-        } else {
-            summary.failed += 1;
-            try results.append(ctx.gpa, .{
-                .result = .failed,
-                .order = root.order,
-                .region = region,
-                .failure_detail = try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
-                .failure_detail_visibility = .verbose_only,
-            });
-        }
+    const mode = cliTestExecutionMode(opt);
+    switch (mode) {
+        .interpreter => try runInterpreterTestRoots(ctx, &lowered, root_runs, &results, &summary),
+        .dev, .llvm_size, .llvm_speed => try runCompiledTestRoots(ctx, mode, &lowered, root_runs, &results, &summary),
     }
     summary.modules_with_tests = 1;
 
@@ -5126,7 +5394,7 @@ fn runCheckedArtifactTests(
     return summary;
 }
 
-fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
+fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5173,15 +5441,15 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
     }
 
     build_env.discoverDependencies(args.path) catch |err| {
-        _ = build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr);
         return err;
     };
     build_env.compileDiscovered() catch |err| {
-        _ = build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr);
         return err;
     };
 
-    const diag = build_env.renderDiagnostics(stderr);
+    const diag = try build_env.renderDiagnostics(stderr);
     if (diag.errors > 0) return error.CompilationFailed;
 
     const modules = try build_env.getCompiledModules(ctx.gpa);
@@ -5210,6 +5478,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
         );
         total.passed += summary.passed;
         total.failed += summary.failed;
+        total.compiler_errors += summary.compiler_errors;
         total.modules_with_tests += summary.modules_with_tests;
         total.cached_modules += summary.cached_modules;
     }
@@ -5231,6 +5500,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
     defer stderr_body.deinit();
 
     try renderTestResultBodies(
+        ctx.gpa,
         &stdout_body.writer,
         &stderr_body.writer,
         module_results.items,
@@ -5238,14 +5508,14 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
     );
 
     // Report results
-    if (total.failed == 0) {
+    if (total.failed == 0 and total.compiler_errors == 0) {
         try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
         try stdout.writeAll(stdout_body.written());
         return;
     }
 
-    const total_tests = total.passed + total.failed;
-    try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, cached_suffix, elapsed_ms, total.passed, total.failed });
+    const total_tests = total.passed + total.failed + total.compiler_errors;
+    try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n    " ++ ansi_term.yellow ++ "{}" ++ ansi_term.reset ++ " compiler errors\n", .{ total_tests, cached_suffix, elapsed_ms, total.passed, total.failed, total.compiler_errors });
     try stdout.writeAll(stdout_body.written());
     try stderr.writeAll(stderr_body.written());
 
@@ -5253,16 +5523,17 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) !void {
 }
 
 /// Walk the per-module test results and write the per-test body output to
-/// the supplied writers. Verbose PASS lines go to `stdout_body`; FAIL
+/// the supplied writers. Verbose PASS lines go to `stdout_body`; problem
 /// blocks (and verbose PASS lines for partially-failing runs) go to
 /// `stderr_body`.
 fn renderTestResultBodies(
+    allocator: Allocator,
     stdout_body: *std.Io.Writer,
     stderr_body: *std.Io.Writer,
     module_results: []const CliModuleTestResult,
     verbose: bool,
-) !void {
-    // Verbose PASS lines go to stdout in every case; FAIL blocks go to
+) anyerror!void {
+    // Verbose PASS lines go to stdout in every case; problem blocks go to
     // stderr. This matches the pre-refactor layout.
     for (module_results) |module_result| {
         for (module_result.results) |result| {
@@ -5273,12 +5544,28 @@ fn renderTestResultBodies(
                     try stdout_body.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
                 },
                 .failed => {
-                    try printTestFailure(
+                    try printTestProblem(
+                        allocator,
                         stderr_body,
                         module_result.path,
                         module_result.env,
-                        result.region,
                         region_info,
+                        "FAIL",
+                        .runtime_error,
+                        result.failure_detail,
+                        result.failure_detail_visibility,
+                        verbose,
+                    );
+                },
+                .compiler_error => {
+                    try printTestProblem(
+                        allocator,
+                        stderr_body,
+                        module_result.path,
+                        module_result.env,
+                        region_info,
+                        "COMPILER_ERROR",
+                        .warning,
                         result.failure_detail,
                         result.failure_detail_visibility,
                         verbose,
@@ -5289,22 +5576,25 @@ fn renderTestResultBodies(
     }
 }
 
-/// Prints a formatted test failure to stderr, including the source snippet,
+/// Prints a formatted test problem to stderr, including the source snippet,
 /// an optional doc comment from the preceding line, and an optional error message.
-fn printTestFailure(
+fn printTestProblem(
+    allocator: Allocator,
     stderr: *std.Io.Writer,
     path: []const u8,
     env: *const ModuleEnv,
-    region: base.Region,
     region_info: base.RegionInfo,
+    label: []const u8,
+    severity: reporting.Severity,
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility,
     verbose: bool,
-) !void {
+) anyerror!void {
     const src = env.getSourceAll();
-    const error_src = src[region.start.offset..region.end.offset];
 
-    // Check if the previous line is a doc comment
+    var report = reporting.Report.init(allocator, label, severity);
+    defer report.deinit();
+
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
         const curr_line_start_idx = region_info.start_line_idx;
@@ -5316,35 +5606,11 @@ fn printTestFailure(
         }
         break :blk null;
     };
-
-    try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{path});
-
-    try stderr.print("\x1b[31m", .{});
-
-    // Calculate the width needed to right-align line numbers
-    const last_line_num: usize = region_info.end_line_idx + 1;
-    const num_width: usize = blk: {
-        var digits: usize = 0;
-        var n = last_line_num;
-        while (n > 0) : (n /= 10) digits += 1;
-        break :blk if (digits == 0) 1 else digits;
-    };
-
-    var line_num: usize = region_info.start_line_idx + 1;
-
     if (doc_comment) |comment| {
-        line_num -= 1;
-        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
-        try stderr.print("{s}", .{comment});
-        line_num += 1;
+        try report.document.addText(comment);
+        try report.document.addLineBreak();
     }
-
-    var lines = std.mem.splitScalar(u8, error_src, '\n');
-    while (lines.next()) |line| {
-        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
-        try stderr.print("{s}", .{line});
-        line_num += 1;
-    }
+    try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {
         .always => true,
@@ -5352,11 +5618,15 @@ fn printTestFailure(
     };
     if (should_print_detail) {
         if (failure_detail) |msg| {
-            try stderr.print("\x1b[31m - {s}", .{msg});
+            switch (severity) {
+                .warning => try report.addWarningMessage(msg),
+                else => try report.addErrorMessage(msg),
+            }
         }
     }
 
-    try stderr.print("\x1b[0m\n", .{});
+    try stderr.writeAll("\n");
+    try reporting.renderReportToTerminal(&report, stderr, reporting.ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
 }
 
 const ReplMode = enum {
@@ -5364,7 +5634,7 @@ const ReplMode = enum {
     batch,
 };
 
-fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) !void {
+fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
     const stdout = ctx.io.stdout();
     const backend_kind = repl_args.opt.toBackend();
     const stdin = std.Io.File.stdin();
@@ -5445,7 +5715,7 @@ fn processReplInput(
     report_config: reporting.ReportingConfig,
     mode: ReplMode,
     had_diagnostics: *bool,
-) !bool {
+) anyerror!bool {
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
@@ -5481,7 +5751,7 @@ fn processReplInput(
     return false;
 }
 
-fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMode) !reporting.ReportingConfig {
+fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMode) Allocator.Error!reporting.ReportingConfig {
     const stderr_is_tty = std.Io.File.stderr().isTty(ctx.io.std_io) catch false;
     const no_color_env = try envVarNonEmpty(ctx.gpa, "NO_COLOR");
     const force_color = try envVarNonEmpty(ctx.gpa, "FORCE_COLOR");
@@ -5498,14 +5768,14 @@ fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMod
     return config;
 }
 
-fn envVarNonEmpty(allocator: Allocator, name: []const u8) !bool {
-    const value = getEnvVar(allocator, name) orelse return false;
+fn envVarNonEmpty(allocator: Allocator, name: []const u8) Allocator.Error!bool {
+    const value = try getEnvVar(allocator, name) orelse return false;
     defer allocator.free(value);
     return value.len > 0;
 }
 
-fn envVarEquals(allocator: Allocator, name: []const u8, expected: []const u8) !bool {
-    const value = getEnvVar(allocator, name) orelse return false;
+fn envVarEquals(allocator: Allocator, name: []const u8, expected: []const u8) Allocator.Error!bool {
+    const value = try getEnvVar(allocator, name) orelse return false;
     defer allocator.free(value);
     return std.mem.eql(u8, value, expected);
 }
@@ -5521,13 +5791,12 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
-        .backend = args.opt.toBackend(),
     }, temp_dir, ctx.io.std_io);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) !void {
+fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5596,13 +5865,13 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) !void {
 }
 
 /// Helper function to format elapsed time, showing decimal milliseconds
-fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
+fn formatElapsedTime(writer: anytype, elapsed_ns: u64) error{WriteFailed}!void {
     const elapsed_ms_float = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
     try writer.print("{d:.1} ms", .{elapsed_ms_float});
 }
 
 /// Helper function to format elapsed time as rounded integer milliseconds (no decimals)
-fn formatElapsedTimeMs(writer: anytype, elapsed_ns: u64) !void {
+fn formatElapsedTimeMs(writer: anytype, elapsed_ns: u64) error{WriteFailed}!void {
     const elapsed_ms: u64 = (elapsed_ns + 500_000) / 1_000_000; // Round to nearest ms
     try writer.print("{}ms", .{elapsed_ms});
 }
@@ -5625,7 +5894,7 @@ fn nsToMs(ns: u64) u32 {
     return @intCast((ns + 500_000) / 1_000_000);
 }
 
-fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) !void {
+fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) anyerror!void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
@@ -5706,6 +5975,19 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
+fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
+    const abs_path = if (std.fs.path.isAbsolute(filepath))
+        try std.fs.path.resolve(gpa, &.{filepath})
+    else
+        try std.fs.path.resolve(gpa, &.{ cwd, filepath });
+    defer gpa.free(abs_path);
+
+    const compiler_builtin_path = try std.fs.path.resolve(gpa, &.{build_options.compiler_builtin_roc_path});
+    defer gpa.free(compiler_builtin_path);
+
+    return std.mem.eql(u8, abs_path, compiler_builtin_path);
+}
+
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
 fn checkFileWithBuildEnvPreserved(
     ctx: *CliCtx,
@@ -5713,7 +5995,7 @@ fn checkFileWithBuildEnvPreserved(
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
-) !CheckResultWithBuildEnv {
+) anyerror!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5725,6 +6007,9 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+        build_env.setRootModuleRole(.builtin);
+    }
 
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
@@ -5796,7 +6081,10 @@ fn checkFileWithBuildEnvPreserved(
                 const phase = package_env.modules.items[0].phase;
                 if (phase == .Done) break;
 
-                package_env.processModuleByName(module_name) catch break;
+                package_env.processModuleByName(module_name) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => break,
+                };
             }
         }
     }
@@ -5857,7 +6145,7 @@ fn checkFileWithBuildEnv(
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
-) !CheckResult {
+) anyerror!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -5999,7 +6287,7 @@ fn checkFileWithBuildEnv(
     };
 }
 
-fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) !void {
+fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6143,7 +6431,7 @@ fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
 ///
 /// Single-threaded blocking accept loop on 127.0.0.1:8080. GET-only.
 /// Files are streamed up to a 10 MB cap; anything larger returns 500.
-fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) !void {
+fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) anyerror!void {
     const stdout = ctx.io.stdout();
     const io = ctx.io.std_io;
 
@@ -6169,7 +6457,7 @@ fn serveDocumentation(ctx: *CliCtx, docs_dir: []const u8) !void {
 }
 
 /// Handle a single HTTP connection. Closes the stream before returning.
-fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) !void {
+fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u8) anyerror!void {
     const io = ctx.io.std_io;
     defer stream.close(io);
 
@@ -6221,7 +6509,7 @@ fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u
 
 /// Resolve the URL path against `docs_dir`, expanding directory paths to
 /// their `index.html`. Caller owns the returned slice.
-fn resolveFilePath(gpa: Allocator, docs_dir: []const u8, url_path: []const u8) ![]const u8 {
+fn resolveFilePath(gpa: Allocator, docs_dir: []const u8, url_path: []const u8) Allocator.Error![]const u8 {
     const clean_path = if (url_path.len > 0 and url_path[0] == '/')
         url_path[1..]
     else
@@ -6273,7 +6561,7 @@ fn sendResponse(
     status: []const u8,
     content_type: []const u8,
     body: []const u8,
-) !void {
+) (Allocator.Error || error{WriteFailed})!void {
     var write_buffer: [4096]u8 = undefined;
     var stream_writer = stream.writer(io, &write_buffer);
     const w = &stream_writer.interface;
@@ -6290,7 +6578,7 @@ fn sendResponse(
     try w.flush();
 }
 
-fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) !void {
+fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -6378,7 +6666,7 @@ fn generateDocs(
     build_env: *compile.BuildEnv,
     module_path: []const u8,
     base_output_dir: []const u8,
-) !void {
+) anyerror!void {
     const DocModel = docs.DocModel;
     const extract = docs.extract;
 
@@ -6441,7 +6729,7 @@ fn generateDocs(
             try ctx.gpa.dupe(u8, basename);
     };
 
-    const modules_slice = module_docs_list.toOwnedSlice(ctx.gpa) catch return;
+    const modules_slice = try module_docs_list.toOwnedSlice(ctx.gpa);
 
     var package_docs = DocModel.PackageDocs{
         .name = pkg_name,
@@ -6496,7 +6784,7 @@ test "appendWindowsQuotedArg" {
 
     // Helper to test the quoting function
     const testQuote = struct {
-        fn run(input: []const u8, expected: []const u8) !void {
+        fn run(input: []const u8, expected: []const u8) anyerror!void {
             var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
             defer cmd.deinit();
             try appendWindowsQuotedArg(&cmd, input);
@@ -6530,6 +6818,25 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
+}
+
+test "user project src/build/roc/Builtin.roc is not compiler-owned builtin" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const user_project_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
+    defer allocator.free(user_project_root);
+
+    const classified_as_compiler_builtin = try isCompilerOwnedBuiltinSourcePath(
+        allocator,
+        user_project_root,
+        "src/build/roc/Builtin.roc",
+    );
+
+    try testing.expect(!classified_as_compiler_builtin);
 }
 
 test "classifyNativeRunTermination preserves warning exit code" {

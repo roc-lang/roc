@@ -102,15 +102,6 @@ roc_linux_x86_64.tar.gz
 result
 build.zig.zon2json-lock
 
-# Only keep Cargo.lock dependencies for the main compiler.
-# Examples and test only crates should be fine to be unlocked.
-# This remove unnecessary lock file versioning.
-# It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
-/**/Cargo.lock
-!/Cargo.lock
-!/examples/static-site-gen/platform/Cargo.lock
-# static-site-gen exception is because of https://github.com/tkaitchuck/aHash/issues/195
-
 # snapshot tests temp file
 *.pending-snap
 
@@ -128,17 +119,8 @@ www/examples-main
 
 examples/static-site-gen/**/*.html
 
-# glue auto-generated fixture code
-crates/glue/tests/fixtures/*/Cargo.toml
-crates/glue/tests/fixtures/*/build.rs
-crates/glue/tests/fixtures/*/host.c
-crates/glue/tests/fixtures/*/src/main.rs
-crates/glue/tests/fixtures/*/test_glue/
-
 # ignore the zig glue files copied into test platforms
 **/*platform/glue/*
-crates/cli/tests/test-projects/test-platform-effects-zig/glue
-crates/cli/tests/test-projects/test-platform-simple-zig/glue
 
 src/fuzz-corpus/
 

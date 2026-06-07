@@ -1,7 +1,0 @@
-app "test" provides [main] to "./platform"
-
-main = when A "foo" is
-    A _ as a -> a
-    #           ^ [A Str]w_a
-    b -> b
-    #    ^ [A Str]w_a

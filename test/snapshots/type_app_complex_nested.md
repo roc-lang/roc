@@ -27,35 +27,13 @@ ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
-UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 UNDECLARED TYPE - type_app_complex_nested.md:4:27:4:32
 UNDECLARED TYPE - type_app_complex_nested.md:4:48:4:53
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
+UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
-**UNDECLARED TYPE**
-The type _Maybe_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:30:18:35:**
-```roc
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                             ^^^^^
-
-
-**UNDECLARED TYPE**
-The type _Error_ is not declared in this scope.
-
-This type is referenced here:
-**type_app_complex_nested.md:18:51:18:56:**
-```roc
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-```
-                                                  ^^^^^
-
-
 **UNDECLARED TYPE**
 The type _Maybe_ is not declared in this scope.
 
@@ -99,6 +77,28 @@ This type is referenced here:
 deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
 ```
              ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Maybe_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:18:30:18:35:**
+```roc
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                             ^^^^^
+
+
+**UNDECLARED TYPE**
+The type _Error_ is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:18:51:18:56:**
+```roc
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                                  ^^^^^
 
 
 # TOKENS
@@ -299,7 +299,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 227)
+			(e-call (constraint-fn-var 228)
 				(e-lookup-local
 					(p-assign (ident "processComplex")))
 				(e-tag (name "Ok")

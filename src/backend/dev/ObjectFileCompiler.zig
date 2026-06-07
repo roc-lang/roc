@@ -153,7 +153,7 @@ pub const ObjectFileCompiler = struct {
 /// just-created file open and return AccessDenied on a follow-up write from a
 /// sibling process. Retry a few times with exponential backoff. Other OSes
 /// pass through to a single writeFile call.
-pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8) !void {
+pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8) anyerror!void {
     if (comptime builtin.os.tag != .windows) {
         return CoreCtx.writeFileCwd(io, sub_path, data);
     }

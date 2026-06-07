@@ -49,7 +49,7 @@ pub const ScopeMap = struct {
     }
 
     /// Build scope map by traversing all CIR structures in the module.
-    pub fn build(self: *ScopeMap, module_env: *ModuleEnv) !void {
+    pub fn build(self: *ScopeMap, module_env: *ModuleEnv) Allocator.Error!void {
         // Process top-level definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {

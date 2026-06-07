@@ -214,6 +214,9 @@ expect {
 }
 ~~~
 # EXPECTED
+NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
+MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
+MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
 UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
 UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
@@ -224,9 +227,6 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
-MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
@@ -275,6 +275,47 @@ DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
+**NOT IMPLEMENTED**
+This feature is not yet implemented: malformed import module name contains invalid control characters
+
+**syntax_grab_bag.md:6:1:12:4:**
+```roc
+import # Comment after import keyword
+	pf # Comment after qualifier
+		.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+```
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**MODULE NOT FOUND**
+The module `BadName` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:16:1:16:27:**
+```roc
+import BadName as GoodName
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadNameMultiline` was not found in this Roc project.
+
+You're attempting to use this module here:
+**syntax_grab_bag.md:17:1:20:20:**
+```roc
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+```
+
+
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 
@@ -383,47 +424,6 @@ This type is referenced here:
 	bar : Something, # Another after pattern record field
 ```
 	      ^^^^^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: malformed import module name contains invalid control characters
-
-**syntax_grab_bag.md:6:1:12:4:**
-```roc
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-```
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**MODULE NOT FOUND**
-The module `BadName` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:16:1:16:27:**
-```roc
-import BadName as GoodName
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `BadNameMultiline` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:17:1:20:20:**
-```roc
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-```
 
 
 **UNDEFINED VARIABLE**
@@ -2257,7 +2257,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 2355)
+					(e-call (constraint-fn-var 2281)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2384,7 +2384,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3042)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2947)
 									(receiver
 										(e-match
 											(match
@@ -2409,7 +2409,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3037)
+										(e-dispatch-call (method "times") (constraint-fn-var 2942)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2424,18 +2424,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3150)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3055)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3115)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3020)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3250)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3155)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3215)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3120)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2450,11 +2450,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3360)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3265)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3355)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3260)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2469,12 +2469,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3426)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3331)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3393)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3298)
 																			(receiver
 																				(e-match
 																					(match
@@ -2626,6 +2626,23 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
+	(s-import (module "pf.Stdout")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
+	(s-import (module "#malformed_import_0")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
+	(s-import (module "pkg.Something")
+		(exposes
+			(exposed (name "func") (alias "function") (wildcard false))
+			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
+			(exposed (name "Custom") (wildcard true))))
+	(s-import (module "BadName")
+		(exposes))
+	(s-import (module "BadNameMultiline")
+		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2717,23 +2734,6 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-apply (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
-	(s-import (module "pf.Stdout")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import (module "#malformed_import_0")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import (module "pkg.Something")
-		(exposes
-			(exposed (name "func") (alias "function") (wildcard false))
-			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "BadName")
-		(exposes))
-	(s-import (module "BadNameMultiline")
-		(exposes))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs

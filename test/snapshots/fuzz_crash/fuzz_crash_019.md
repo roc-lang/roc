@@ -135,15 +135,15 @@ PARSE ERROR - fuzz_crash_019.md:60:16:60:16
 PARSE ERROR - fuzz_crash_019.md:62:5:62:5
 PARSE ERROR - fuzz_crash_019.md:63:7:63:7
 PARSE ERROR - fuzz_crash_019.md:66:12:66:12
+MODULE NOT FOUND - fuzz_crash_019.md:6:1:8:6
+MODULE NOT FOUND - fuzz_crash_019.md:10:1:10:19
+MODULE NOT FOUND - fuzz_crash_019.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_019.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:24:24:24:25
-MODULE NOT FOUND - fuzz_crash_019.md:6:1:8:6
-MODULE NOT FOUND - fuzz_crash_019.md:10:1:10:19
-MODULE NOT FOUND - fuzz_crash_019.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_019.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_019.md:42:4:42:5
 UNDEFINED VARIABLE - fuzz_crash_019.md:42:6:42:10
@@ -282,6 +282,40 @@ This is an unexpected parsing error. Please check your syntax.
 		         ^
 
 
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:6:1:8:6:**
+```roc
+import Stdot
+		exposing [ #tem
+Cust]
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:10:1:10:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_019.md:11:1:12:4:**
+```roc
+import
+	Ba
+```
+
+
 **UNDECLARED TYPE**
 The type _Lis_ is not declared in this scope.
 
@@ -354,40 +388,6 @@ This type variable is referenced here:
 Som : { foo : O, bar : g }
 ```
                        ^
-
-
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:6:1:8:6:**
-```roc
-import Stdot
-		exposing [ #tem
-Cust]
-```
-
-
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:10:1:10:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:11:1:12:4:**
-```roc
-import
-	Ba
-```
 
 
 **UNDECLARED TYPE**
@@ -1945,7 +1945,7 @@ expect {
 									(e-lookup-local
 										(p-assign (ident "er")))
 									(e-literal (string "")))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 1541)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1526)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2009,7 +2009,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1924)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1909)
 									(receiver
 										(e-match
 											(match
@@ -2043,18 +2043,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2032)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2017)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1997)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1982)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2132)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2117)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2097)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2082)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2069,7 +2069,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2210)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2195)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2083,12 +2083,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 2277)
+													(e-dispatch-call (method "ned") (constraint-fn-var 2262)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 2244)
+																		(e-dispatch-call (method "od") (constraint-fn-var 2229)
 																			(receiver
 																				(e-match
 																					(match
@@ -2205,6 +2205,16 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
+	(s-import (module "pf.Stdout")
+		(exposes
+			(exposed (name "line!") (wildcard false))))
+	(s-import (module "Stdot")
+		(exposes
+			(exposed (name "Cust") (wildcard false))))
+	(s-import (module "Bae")
+		(exposes))
+	(s-import (module "Ba")
+		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2252,16 +2262,6 @@ expect {
 			(ty-args
 				(ty-rigid-var (name "a"))))
 		(ty-tag-union))
-	(s-import (module "pf.Stdout")
-		(exposes
-			(exposed (name "line!") (wildcard false))))
-	(s-import (module "Stdot")
-		(exposes
-			(exposed (name "Cust") (wildcard false))))
-	(s-import (module "Bae")
-		(exposes))
-	(s-import (module "Ba")
-		(exposes))
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expect

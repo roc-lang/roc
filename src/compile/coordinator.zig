@@ -103,6 +103,8 @@ const threads_available = !is_freestanding;
 const Thread = threading.Thread;
 
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
+const CheckedArtifact = check.CheckedArtifact;
+const canonical = check.CanonicalNames;
 
 fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: bool) void {
     const allocator = artifact.canonical_names.allocator;
@@ -246,6 +248,9 @@ fn decodeCheckedModuleCacheEntry(
     return body;
 }
 
+/// Maximum scratch arena capacity retained by a worker after each task.
+const worker_scratch_retain_limit = 64 * 1024 * 1024;
+
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
@@ -274,9 +279,10 @@ pub const WorkerAllocators = struct {
         self.arena_impl.deinit();
     }
 
-    /// Reset arena between tasks (keeps capacity, frees memory)
+    /// Reset arena between tasks, retaining ordinary task capacity but trimming
+    /// unusually large scratch spikes so one wide module does not pin worker RSS.
     pub fn resetArena(self: *WorkerAllocators) void {
-        _ = self.arena_impl.reset(.retain_capacity);
+        _ = self.arena_impl.reset(.{ .retain_with_limit = worker_scratch_retain_limit });
     }
 
     pub fn taskAllocators(self: *WorkerAllocators) WorkerTaskAllocators {
@@ -312,6 +318,8 @@ pub const ModuleState = struct {
     path: []const u8,
     /// Source-relative import base override for materialized modules.
     source_dir_override: ?[]const u8 = null,
+    /// Compiler role assigned by the scheduler for this module.
+    module_role: ModuleEnv.ModuleRole = .user,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -325,6 +333,8 @@ pub const ModuleState = struct {
     external_imports: std.ArrayList([]const u8),
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
+    /// Transitive local imports known for this module.
+    reachable_local_imports: std.bit_set.DynamicBitSetUnmanaged,
     /// Diagnostic reports
     reports: std.ArrayList(Report),
     /// Minimum dependency depth from root
@@ -353,6 +363,7 @@ pub const ModuleState = struct {
             .imports = std.ArrayList(ModuleId).empty,
             .external_imports = std.ArrayList([]const u8).empty,
             .dependents = std.ArrayList(ModuleId).empty,
+            .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
             .visit_color = .white,
@@ -489,6 +500,7 @@ pub const ModuleState = struct {
         }
         self.external_imports.deinit(gpa);
         self.dependents.deinit(gpa);
+        self.reachable_local_imports.deinit(gpa);
         for (self.reports.items) |*rep| {
             rep.deinit();
         }
@@ -568,7 +580,7 @@ pub const PackageState = struct {
     }
 
     /// Ensure a module exists, creating it if necessary
-    pub fn ensureModule(self: *PackageState, gpa: Allocator, name: []const u8, path: []const u8) !ModuleId {
+    pub fn ensureModule(self: *PackageState, gpa: Allocator, name: []const u8, path: []const u8) Allocator.Error!ModuleId {
         if (self.module_names.get(name)) |id| {
             return id;
         }
@@ -610,48 +622,99 @@ pub const PackageState = struct {
         return mod.phase == .Done;
     }
 
-    pub fn findPath(self: *PackageState, gpa: Allocator, start: ModuleId, target: ModuleId) !?[]const ModuleId {
-        var visited = std.bit_set.DynamicBitSetUnmanaged{};
-        defer visited.deinit(gpa);
-        try visited.resize(gpa, self.modules.items.len, false);
+    pub fn moduleReaches(self: *const PackageState, from: ModuleId, target: ModuleId) bool {
+        const reachable = self.modules.items[from].reachable_local_imports;
+        return target < reachable.bit_length and reachable.isSet(target);
+    }
 
-        const Frame = struct { id: ModuleId, next_idx: usize };
-        var frames = std.ArrayList(Frame).empty;
-        defer frames.deinit(gpa);
+    fn addReachableLocalImport(
+        self: *PackageState,
+        gpa: Allocator,
+        module_id: ModuleId,
+        reachable_id: ModuleId,
+        delta: ?*std.ArrayList(ModuleId),
+    ) Allocator.Error!bool {
+        const reachable = &self.modules.items[module_id].reachable_local_imports;
+        const needed_len = @as(usize, reachable_id) + 1;
+        if (reachable.bit_length < needed_len) {
+            try reachable.resize(gpa, needed_len, false);
+        }
+        if (reachable.isSet(reachable_id)) return false;
 
-        var stack_ids = std.ArrayList(ModuleId).empty;
-        defer stack_ids.deinit(gpa);
+        reachable.set(reachable_id);
+        if (delta) |delta_list| try delta_list.append(gpa, reachable_id);
+        return true;
+    }
 
-        visited.set(start);
-        try frames.append(gpa, .{ .id = start, .next_idx = 0 });
-        try stack_ids.append(gpa, start);
+    pub fn recordLocalImportReachability(
+        self: *PackageState,
+        gpa: Allocator,
+        module_id: ModuleId,
+        imported_id: ModuleId,
+    ) Allocator.Error!void {
+        var initial_delta = std.ArrayList(ModuleId).empty;
+        defer initial_delta.deinit(gpa);
 
-        while (frames.items.len > 0) {
-            var top = &frames.items[frames.items.len - 1];
-            if (top.id == target) {
-                const out = try gpa.alloc(ModuleId, stack_ids.items.len);
-                std.mem.copyForwards(ModuleId, out, stack_ids.items);
-                return out;
-            }
+        _ = try self.addReachableLocalImport(gpa, module_id, imported_id, &initial_delta);
 
-            const st = &self.modules.items[top.id];
-            if (top.next_idx >= st.imports.items.len) {
-                visited.unset(top.id);
-                _ = stack_ids.pop();
-                _ = frames.pop();
-                continue;
-            }
-
-            const child = st.imports.items[top.next_idx];
-            top.next_idx += 1;
-
-            if (!visited.isSet(child)) {
-                visited.set(child);
-                try frames.append(gpa, .{ .id = child, .next_idx = 0 });
-                try stack_ids.append(gpa, child);
+        const imported_reachable = &self.modules.items[imported_id].reachable_local_imports;
+        if (imported_reachable.bit_length > 0) {
+            var iter = imported_reachable.iterator(.{});
+            while (iter.next()) |reachable| {
+                _ = try self.addReachableLocalImport(gpa, module_id, @intCast(reachable), &initial_delta);
             }
         }
-        return null;
+
+        if (initial_delta.items.len == 0) return;
+        try self.propagateReachabilityDelta(gpa, module_id, initial_delta.items);
+    }
+
+    fn propagateReachabilityDelta(
+        self: *PackageState,
+        gpa: Allocator,
+        module_id: ModuleId,
+        initial_delta: []const ModuleId,
+    ) Allocator.Error!void {
+        const WorkItem = struct {
+            module_id: ModuleId,
+            delta_start: usize,
+            delta_len: usize,
+        };
+
+        var all_delta = std.ArrayList(ModuleId).empty;
+        defer all_delta.deinit(gpa);
+        try all_delta.appendSlice(gpa, initial_delta);
+
+        var work = std.ArrayList(WorkItem).empty;
+        defer work.deinit(gpa);
+        try work.append(gpa, .{
+            .module_id = module_id,
+            .delta_start = 0,
+            .delta_len = initial_delta.len,
+        });
+
+        var work_index: usize = 0;
+        while (work_index < work.items.len) : (work_index += 1) {
+            const item = work.items[work_index];
+            const item_delta_end = item.delta_start + item.delta_len;
+            const dependents = self.modules.items[item.module_id].dependents.items;
+
+            for (dependents) |dependent_id| {
+                const new_delta_start = all_delta.items.len;
+                for (item.delta_start..item_delta_end) |delta_index| {
+                    const reachable_id = all_delta.items[delta_index];
+                    _ = try self.addReachableLocalImport(gpa, dependent_id, reachable_id, &all_delta);
+                }
+                const new_delta_len = all_delta.items.len - new_delta_start;
+                if (new_delta_len == 0) continue;
+
+                try work.append(gpa, .{
+                    .module_id = dependent_id,
+                    .delta_start = new_delta_start,
+                    .delta_len = new_delta_len,
+                });
+            }
+        }
     }
 };
 
@@ -686,6 +749,13 @@ pub const Coordinator = struct {
     /// Set by shutdown() to tell workers to stop promptly instead of draining
     /// remaining tasks from the channel.
     shutting_down: std.atomic.Value(bool),
+
+    /// Set by a worker thread when it runs out of memory while producing a
+    /// result (e.g. constructing a failure report). Worker threads have a
+    /// `void` signature and cannot return errors, so they record the OOM here;
+    /// the coordinator loop observes it and aborts the build with
+    /// `error.OutOfMemory` instead of hanging or silently dropping the failure.
+    worker_oom: std.atomic.Value(bool),
 
     /// Total modules remaining across all packages
     total_remaining: usize,
@@ -763,7 +833,7 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
         roc_ctx: CoreCtx,
-    ) !Coordinator {
+    ) Allocator.Error!Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
         // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
@@ -781,6 +851,7 @@ pub const Coordinator = struct {
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
+            .worker_oom = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
@@ -896,7 +967,7 @@ pub const Coordinator = struct {
     }
 
     /// Create or get a package
-    pub fn ensurePackage(self: *Coordinator, name: []const u8, root_dir: []const u8) !*PackageState {
+    pub fn ensurePackage(self: *Coordinator, name: []const u8, root_dir: []const u8) Allocator.Error!*PackageState {
         if (self.packages.get(name)) |pkg| {
             return pkg;
         }
@@ -1005,7 +1076,7 @@ pub const Coordinator = struct {
         platform_dir: []const u8,
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
-    ) !void {
+    ) Allocator.Error!void {
         const pf_pkg = try self.ensurePackage("pf", platform_dir);
 
         if (qualifier) |qual| {
@@ -1034,7 +1105,7 @@ pub const Coordinator = struct {
         package_root_dir: []const u8,
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
-    ) !*PackageState {
+    ) Allocator.Error!*PackageState {
         const pkg = try self.ensurePackage(package_name, package_root_dir);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
@@ -1101,25 +1172,39 @@ pub const Coordinator = struct {
         return try views.toOwnedSlice(allocator);
     }
 
-    fn collectAvailableArtifactViews(
+    fn collectTypecheckAvailableArtifactViews(
         self: *Coordinator,
         allocator: Allocator,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
-        try appendAvailableArtifactViewIfMissing(
-            &views,
-            allocator,
-            &self.builtin_modules.checked_artifact,
-        );
+        var pending = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
+        defer pending.deinit(allocator);
 
-        var pkg_iter = self.packages.iterator();
-        while (pkg_iter.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            for (pkg.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
-                try appendAvailableArtifactViewIfMissing(&views, allocator, artifact);
+        var seen = std.AutoHashMap(check.CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+        defer seen.deinit();
+
+        for (imported_artifacts) |imported| {
+            try pending.append(allocator, imported.view);
+        }
+
+        while (pending.pop()) |view| {
+            const entry = try seen.getOrPut(view.key);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = {};
+
+            try views.append(allocator, view);
+
+            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
+                    }
+                    unreachable;
+                };
+                try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
         }
 
@@ -1136,25 +1221,14 @@ pub const Coordinator = struct {
         return false;
     }
 
-    fn appendAvailableArtifactViewIfMissing(
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!void {
-        for (views.items) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &artifact.key.bytes)) return;
-        }
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-    }
-
     fn appendRelationClosureDependencyViews(
         self: *Coordinator,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
+        views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
         allocator: Allocator,
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error!void {
-        var keys = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifactKey).empty;
-        defer keys.deinit(allocator);
+        var relation_views = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        defer relation_views.deinit(allocator);
 
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const relation_artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
@@ -1163,19 +1237,452 @@ pub const Coordinator = struct {
                 }
                 unreachable;
             };
-            try check.CheckedArtifact.appendPlatformRelationDependencyArtifactKeys(
-                allocator,
-                &keys,
-                relation_artifact,
-                binding,
-            );
+            try appendImportedArtifactViewIfMissing(&relation_views, allocator, root_artifact.key, relation_artifact);
         }
 
-        for (keys.items) |key| {
-            if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) continue;
-            if (rootRelationContainsArtifact(root_artifact, key)) continue;
-            try self.appendPublicApiDependencyViewByKey(views, allocator, root_artifact, key);
+        var dependency_collector = RelationLoweringDependencyCollector.init(
+            self,
+            allocator,
+            root_artifact.key,
+            CheckedArtifact.importedView(root_artifact),
+            relation_views.items,
+            views,
+        );
+        defer dependency_collector.deinit();
+
+        for (root_artifact.platform_required_bindings.bindings) |binding| {
+            const relation_view = relationViewByKey(relation_views.items, binding.app_value.artifact) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("compile.coordinator invariant violated: platform relation view was not collected", .{});
+                }
+                unreachable;
+            };
+            try dependency_collector.appendPlatformRelationDependency(relation_view, binding);
         }
+    }
+
+    const RelationLoweringDependencyCollector = struct {
+        coordinator: *Coordinator,
+        allocator: Allocator,
+        root_key: CheckedArtifact.CheckedModuleArtifactKey,
+        root_view: ?CheckedArtifact.ImportedModuleView,
+        relation_artifacts: []const CheckedArtifact.ImportedModuleView,
+        views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
+        visited_public_api: std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+        visited_templates: std.AutoHashMap(canonical.ProcedureTemplateRef, void),
+        visited_consts: std.AutoHashMap(CheckedArtifact.ConstRef, void),
+        visited_callable_eval_templates: std.AutoHashMap(CheckedArtifact.ArtifactCallableEvalTemplateRef, void),
+
+        fn init(
+            coordinator: *Coordinator,
+            allocator: Allocator,
+            root_key: CheckedArtifact.CheckedModuleArtifactKey,
+            root_view: ?CheckedArtifact.ImportedModuleView,
+            relation_artifacts: []const CheckedArtifact.ImportedModuleView,
+            views: *std.ArrayList(CheckedArtifact.ImportedModuleView),
+        ) RelationLoweringDependencyCollector {
+            return .{
+                .coordinator = coordinator,
+                .allocator = allocator,
+                .root_key = root_key,
+                .root_view = root_view,
+                .relation_artifacts = relation_artifacts,
+                .views = views,
+                .visited_public_api = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator),
+                .visited_templates = std.AutoHashMap(canonical.ProcedureTemplateRef, void).init(allocator),
+                .visited_consts = std.AutoHashMap(CheckedArtifact.ConstRef, void).init(allocator),
+                .visited_callable_eval_templates = std.AutoHashMap(CheckedArtifact.ArtifactCallableEvalTemplateRef, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *RelationLoweringDependencyCollector) void {
+            self.visited_callable_eval_templates.deinit();
+            self.visited_consts.deinit();
+            self.visited_templates.deinit();
+            self.visited_public_api.deinit();
+        }
+
+        fn appendPlatformRelationDependency(
+            self: *RelationLoweringDependencyCollector,
+            relation_artifact: CheckedArtifact.ImportedModuleView,
+            binding: CheckedArtifact.PlatformRequiredBinding,
+        ) Allocator.Error!void {
+            switch (binding.value_use) {
+                .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
+                .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
+            }
+            try self.appendRelationArtifactExportedValueClosure(relation_artifact, binding);
+        }
+
+        fn appendClosure(
+            self: *RelationLoweringDependencyCollector,
+            closure: CheckedArtifact.ImportedTemplateClosureView,
+        ) Allocator.Error!void {
+            for (closure.checked_bodies) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_type_roots) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_type_schemes) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_callable_bodies) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_const_bodies) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.checked_procedure_templates) |value| try self.appendProcedureTemplateRef(value);
+            for (closure.callable_eval_templates) |value| try self.appendCallableEvalTemplateRef(value);
+            for (closure.const_templates) |value| try self.appendConstRef(value);
+            for (closure.nested_proc_sites) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.resolved_value_refs) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.static_dispatch_plans) |value| try self.appendArtifactKey(value.artifact);
+            for (closure.interface_capabilities) |value| try self.appendArtifactKey(value.artifact);
+        }
+
+        fn appendArtifactKey(
+            self: *RelationLoweringDependencyCollector,
+            key: CheckedArtifact.CheckedModuleArtifactKey,
+        ) Allocator.Error!void {
+            if (checkedArtifactKeyEql(key, self.root_key)) return;
+
+            const view = self.viewForKey(key);
+            if (!self.relationArtifactContainsKey(key)) {
+                try self.appendViewIfMissing(view);
+            }
+            try self.appendPublicApiDependenciesForView(view);
+        }
+
+        fn appendViewIfMissing(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+        ) Allocator.Error!void {
+            if (checkedArtifactKeyEql(view.key, self.root_key)) return;
+            if (self.relationArtifactContainsKey(view.key)) return;
+            if (importedArtifactViewExists(self.views.items, view.key)) return;
+            try self.views.append(self.allocator, view);
+        }
+
+        fn appendPublicApiDependenciesForView(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+        ) Allocator.Error!void {
+            const entry = try self.visited_public_api.getOrPut(view.key);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            for (view.public_api_dependencies.artifacts) |dependency_key| {
+                try self.appendArtifactKey(dependency_key);
+            }
+        }
+
+        fn appendProcedureTemplateRef(
+            self: *RelationLoweringDependencyCollector,
+            template_ref: canonical.ProcedureTemplateRef,
+        ) Allocator.Error!void {
+            const key = checkedArtifactKeyFromArtifactRef(template_ref.artifact);
+            try self.appendArtifactKey(key);
+
+            const entry = try self.visited_templates.getOrPut(template_ref);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            const view = self.viewForKey(key);
+            const index: usize = @intFromEnum(template_ref.template);
+            if (index >= view.checked_procedure_templates.templates.len) {
+                coordinatorInvariant("relation lowering dependency referenced missing checked procedure template", .{});
+            }
+            const template = view.checked_procedure_templates.get(template_ref.template);
+            if (template.proc_base != template_ref.proc_base) {
+                coordinatorInvariant("relation lowering dependency procedure template ref disagreed with template row", .{});
+            }
+            try self.appendResolvedValueRefs(view, template.resolved_value_refs);
+        }
+
+        fn appendCallableEvalTemplateRef(
+            self: *RelationLoweringDependencyCollector,
+            template_ref: CheckedArtifact.ArtifactCallableEvalTemplateRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(template_ref.artifact);
+
+            const entry = try self.visited_callable_eval_templates.getOrPut(template_ref);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            const view = self.viewForKey(template_ref.artifact);
+            const index: usize = @intFromEnum(template_ref.template);
+            if (index >= view.callable_eval_templates.templates.len) {
+                coordinatorInvariant("relation lowering dependency referenced missing callable-eval template", .{});
+            }
+            const template = view.callable_eval_templates.templates[index];
+            const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse {
+                coordinatorInvariant("relation lowering dependency callable-eval template had no entry wrapper", .{});
+            };
+            try self.appendProcedureTemplateRef(wrapper.template);
+        }
+
+        fn appendConstRef(
+            self: *RelationLoweringDependencyCollector,
+            const_ref: CheckedArtifact.ConstRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(const_ref.artifact);
+
+            const entry = try self.visited_consts.getOrPut(const_ref);
+            if (entry.found_existing) return;
+            entry.value_ptr.* = {};
+
+            const view = self.viewForKey(const_ref.artifact);
+            const template = view.const_templates.get(const_ref);
+            switch (template.state) {
+                .eval_template => |eval_template| {
+                    try self.appendResolvedValueRefs(view, eval_template.resolved_value_refs);
+                    try self.appendProcedureTemplateRef(eval_template.entry_template);
+                },
+                .stored_const => {},
+                .reserved => coordinatorInvariant("relation lowering dependency reached unsealed const template", .{}),
+            }
+        }
+
+        fn appendResolvedValueRefs(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+            table: CheckedArtifact.ResolvedValueRefTableRef,
+        ) Allocator.Error!void {
+            const end = table.start + table.len;
+            if (end > view.resolved_value_refs.template_refs.len) {
+                coordinatorInvariant("relation lowering dependency resolved-ref span was outside table", .{});
+            }
+            for (view.resolved_value_refs.template_refs[table.start..end]) |ref_id| {
+                const raw = @intFromEnum(ref_id);
+                if (raw >= view.resolved_value_refs.records.len) {
+                    coordinatorInvariant("relation lowering dependency resolved-ref id was outside table", .{});
+                }
+                try self.appendResolvedValueRef(view, view.resolved_value_refs.records[raw].ref);
+            }
+        }
+
+        fn appendResolvedValueRef(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+            ref: CheckedArtifact.ResolvedValueRef,
+        ) Allocator.Error!void {
+            switch (ref) {
+                .top_level_const,
+                .imported_const,
+                => |const_use| try self.appendConstRef(const_use.const_ref),
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                => |procedure| try self.appendProcedureUse(procedure),
+                .platform_required_const => |required| {
+                    try self.appendConstRef(required.const_use.const_ref);
+                    try self.appendPlatformRequiredBindingClosure(view, required.binding);
+                },
+                .platform_required_proc => |required| {
+                    try self.appendProcedureUse(required.procedure);
+                    try self.appendPlatformRequiredBindingClosure(view, required.binding);
+                },
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .platform_required_declaration,
+                => {},
+            }
+        }
+
+        fn appendProcedureUse(
+            self: *RelationLoweringDependencyCollector,
+            procedure: CheckedArtifact.ProcedureUseTemplate,
+        ) Allocator.Error!void {
+            switch (procedure.binding) {
+                .top_level => |top_level| try self.appendTopLevelProcedureBinding(top_level),
+                .imported => |imported| try self.appendImportedProcedureBinding(imported),
+                .hosted => |hosted| try self.appendProcedureTemplateRef(hosted.template),
+                .platform_required => |required| try self.appendArtifactKey(required.artifact),
+            }
+        }
+
+        fn appendTopLevelProcedureBinding(
+            self: *RelationLoweringDependencyCollector,
+            binding_ref: CheckedArtifact.ArtifactTopLevelProcedureBindingRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(binding_ref.artifact);
+            const view = self.viewForKey(binding_ref.artifact);
+            const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
+            try self.appendProcedureBindingBody(binding_ref.artifact, binding.body);
+        }
+
+        fn appendProcedureBindingBody(
+            self: *RelationLoweringDependencyCollector,
+            owner_key: CheckedArtifact.CheckedModuleArtifactKey,
+            body: CheckedArtifact.ProcedureBindingBody,
+        ) Allocator.Error!void {
+            switch (body) {
+                .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+                .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
+                    .artifact = owner_key,
+                    .template = template,
+                }),
+            }
+        }
+
+        fn appendCallableProcedureTemplateRef(
+            self: *RelationLoweringDependencyCollector,
+            template: canonical.CallableProcedureTemplateRef,
+        ) Allocator.Error!void {
+            switch (template) {
+                .checked => |checked| try self.appendProcedureTemplateRef(checked),
+                .synthetic => |synthetic| try self.appendProcedureTemplateRef(synthetic.template),
+                .lifted => coordinatorInvariant("relation lowering dependency reached lifted procedure template before mono", .{}),
+            }
+        }
+
+        fn appendImportedProcedureBinding(
+            self: *RelationLoweringDependencyCollector,
+            binding_ref: CheckedArtifact.ImportedProcedureBindingRef,
+        ) Allocator.Error!void {
+            try self.appendArtifactKey(binding_ref.artifact);
+            const view = self.viewForKey(binding_ref.artifact);
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.def != binding_ref.def or binding.binding.pattern != binding_ref.pattern) continue;
+                try self.appendClosure(binding.template_closure);
+                try self.appendImportedProcedureBindingBody(binding_ref.artifact, binding.body);
+                return;
+            }
+            coordinatorInvariant("relation lowering dependency imported procedure had no exported binding closure", .{});
+        }
+
+        fn appendImportedProcedureBindingBody(
+            self: *RelationLoweringDependencyCollector,
+            owner_key: CheckedArtifact.CheckedModuleArtifactKey,
+            body: CheckedArtifact.ImportedProcedureBindingBody,
+        ) Allocator.Error!void {
+            switch (body) {
+                .direct_template => |direct| try self.appendCallableProcedureTemplateRef(direct.template),
+                .callable_eval_template => |template| try self.appendCallableEvalTemplateRef(.{
+                    .artifact = owner_key,
+                    .template = template,
+                }),
+            }
+        }
+
+        fn appendPlatformRequiredBindingClosure(
+            self: *RelationLoweringDependencyCollector,
+            view: CheckedArtifact.ImportedModuleView,
+            binding_id: CheckedArtifact.PlatformRequiredBindingId,
+        ) Allocator.Error!void {
+            const binding = view.platform_required_bindings.lookupByBindingId(@intFromEnum(binding_id)) orelse {
+                coordinatorInvariant("relation lowering dependency referenced missing platform-required binding", .{});
+            };
+            switch (binding.value_use) {
+                .const_value => |const_use| try self.appendClosure(const_use.relation_template_closure),
+                .procedure_value => |procedure| try self.appendClosure(procedure.relation_template_closure),
+            }
+        }
+
+        fn appendRelationArtifactExportedValueClosure(
+            self: *RelationLoweringDependencyCollector,
+            relation_artifact: CheckedArtifact.ImportedModuleView,
+            binding: CheckedArtifact.PlatformRequiredBinding,
+        ) Allocator.Error!void {
+            switch (binding.value_use) {
+                .procedure_value => {
+                    var found = false;
+                    for (relation_artifact.exported_procedure_bindings.bindings) |exported| {
+                        if (exported.binding.pattern != binding.app_value.pattern) continue;
+                        found = true;
+                        try self.appendClosure(exported.template_closure);
+                        try self.appendImportedProcedureBindingBody(relation_artifact.key, exported.body);
+                        for (relation_artifact.exported_procedure_templates.templates) |template| {
+                            if (template.def != exported.binding.def) continue;
+                            try self.appendClosure(template.template_closure);
+                            try self.appendProcedureTemplateRef(template.template);
+                        }
+                    }
+                    if (!found) {
+                        coordinatorInvariant("relation lowering dependency could not find exported app procedure binding", .{});
+                    }
+                },
+                .const_value => |const_use| {
+                    var found = false;
+                    for (relation_artifact.exported_const_templates.templates) |template| {
+                        if (template.pattern != binding.app_value.pattern) continue;
+                        if (!std.meta.eql(template.const_ref, const_use.const_use.const_ref)) continue;
+                        found = true;
+                        try self.appendClosure(template.template_closure);
+                        try self.appendConstRef(template.const_ref);
+                    }
+                    if (!found) {
+                        coordinatorInvariant("relation lowering dependency could not find exported app const template", .{});
+                    }
+                },
+            }
+        }
+
+        fn viewForKey(
+            self: *RelationLoweringDependencyCollector,
+            key: CheckedArtifact.CheckedModuleArtifactKey,
+        ) CheckedArtifact.ImportedModuleView {
+            if (self.root_view) |view| {
+                if (checkedArtifactKeyEql(view.key, key)) return view;
+            }
+            if (relationViewByKey(self.relation_artifacts, key)) |view| return view;
+            for (self.views.items) |view| {
+                if (checkedArtifactKeyEql(view.key, key)) return view;
+            }
+            const artifact = self.coordinator.checkedArtifactByKey(key) orelse {
+                coordinatorInvariant("relation lowering dependency referenced unavailable checked module", .{});
+            };
+            return CheckedArtifact.importedView(artifact);
+        }
+
+        fn relationArtifactContainsKey(
+            self: *const RelationLoweringDependencyCollector,
+            key: CheckedArtifact.CheckedModuleArtifactKey,
+        ) bool {
+            return relationViewByKey(self.relation_artifacts, key) != null;
+        }
+    };
+
+    fn relationViewByKey(
+        relation_views: []const CheckedArtifact.ImportedModuleView,
+        key: CheckedArtifact.CheckedModuleArtifactKey,
+    ) ?CheckedArtifact.ImportedModuleView {
+        for (relation_views) |view| {
+            if (checkedArtifactKeyEql(view.key, key)) return view;
+        }
+        return null;
+    }
+
+    fn platformRequiredBindingFromRelationInput(
+        relation: CheckedArtifact.PlatformAppRelation,
+        input: CheckedArtifact.PlatformRequiredBindingInput,
+        index: usize,
+    ) CheckedArtifact.PlatformRequiredBinding {
+        return .{
+            .id = @enumFromInt(@as(u32, @intCast(index))),
+            .relation = relation.key,
+            .module_idx = relation.platform_module_idx,
+            .declaration = input.declaration,
+            .requires_idx = input.requires_idx,
+            .app_value = input.app_value,
+            .requested_source_ty = input.requested_source_ty,
+            .checked_relation = input.checked_relation,
+            .value_use = input.value_use,
+        };
+    }
+
+    fn checkedArtifactKeyFromArtifactRef(ref: canonical.ArtifactRef) CheckedArtifact.CheckedModuleArtifactKey {
+        return .{ .bytes = ref.bytes };
+    }
+
+    fn checkedArtifactKeyEql(
+        a: CheckedArtifact.CheckedModuleArtifactKey,
+        b: CheckedArtifact.CheckedModuleArtifactKey,
+    ) bool {
+        return std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("compile.coordinator invariant violated: " ++ message, args);
+        }
+        unreachable;
     }
 
     fn appendPublicApiDependencyViewByKey(
@@ -1216,7 +1723,7 @@ pub const Coordinator = struct {
     /// Must only be called after `coordinatorLoop` returns and after the
     /// caller has confirmed `hasUserErrors() == false`. Returns
     /// `error.HasUserErrors` if called while user-facing diagnostics exist.
-    pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
+    pub fn finalizeExecutableArtifacts(self: *Coordinator) anyerror!void {
         if (self.hasUserErrors()) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse {
@@ -1246,7 +1753,6 @@ pub const Coordinator = struct {
             }
             unreachable;
         };
-
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
             platform_declaration_artifact,
@@ -1284,7 +1790,7 @@ pub const Coordinator = struct {
         });
     }
 
-    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) !void {
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) anyerror!void {
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -1345,7 +1851,7 @@ pub const Coordinator = struct {
         app_mod: *ModuleState,
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
-    ) !void {
+    ) Allocator.Error!void {
         var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
         errdefer report.deinit();
 
@@ -1363,7 +1869,7 @@ pub const Coordinator = struct {
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
-    ) !void {
+    ) Allocator.Error!void {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
@@ -1499,7 +2005,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         publication: compile_package.ArtifactPublicationInputs,
-    ) !void {
+    ) anyerror!void {
         const env = mod.moduleEnv() orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env for {s}", .{mod.name});
@@ -1516,11 +2022,50 @@ pub const Coordinator = struct {
         defer self.gpa.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, self.gpa);
         defer self.gpa.free(imported_artifacts);
-        const available_artifacts = try self.collectAvailableArtifactViews(self.gpa);
+        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(self.gpa, imported_artifacts);
         defer self.gpa.free(available_artifacts);
 
         var publication_with_availability = publication;
-        publication_with_availability.available_artifacts = available_artifacts;
+        var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
+        var relation_available_artifacts_owned = false;
+        defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
+
+        if (publication.platform_app_relation) |relation| {
+            var extended_available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+            errdefer extended_available.deinit(self.gpa);
+            try extended_available.appendSlice(self.gpa, available_artifacts);
+
+            const root_key = if (mod.checkedArtifact()) |current| current.key else CheckedArtifact.CheckedModuleArtifactKey{};
+            for (publication.relation_artifacts) |relation_artifact| {
+                if (checkedArtifactKeyEql(relation_artifact.key, root_key)) continue;
+                if (importedArtifactViewExists(extended_available.items, relation_artifact.key)) continue;
+                try extended_available.append(self.gpa, relation_artifact);
+            }
+
+            var dependency_collector = RelationLoweringDependencyCollector.init(
+                self,
+                self.gpa,
+                root_key,
+                null,
+                publication.relation_artifacts,
+                &extended_available,
+            );
+            defer dependency_collector.deinit();
+
+            for (relation.bindings, 0..) |binding_input, i| {
+                const relation_view = relationViewByKey(publication.relation_artifacts, binding_input.app_value.artifact) orelse {
+                    coordinatorInvariant("platform/app relation publication missing relation checked module view", .{});
+                };
+                const binding = platformRequiredBindingFromRelationInput(relation, binding_input, i);
+                try dependency_collector.appendPlatformRelationDependency(relation_view, binding);
+            }
+
+            relation_available_artifacts = try extended_available.toOwnedSlice(self.gpa);
+            relation_available_artifacts_owned = true;
+            publication_with_availability.available_artifacts = relation_available_artifacts;
+        } else {
+            publication_with_availability.available_artifacts = available_artifacts;
+        }
 
         var artifact = try compile_package.PackageEnv.publishCheckedArtifactFromCheckedModuleWithStorage(
             self.gpa,
@@ -1655,7 +2200,7 @@ pub const Coordinator = struct {
     /// Start the coordinator and spawn worker threads (for multi-threaded mode).
     /// max_threads <= 1 is treated as single-threaded (inline execution); callers
     /// that want auto-detection should resolve 0 to the CPU count before init.
-    pub fn start(self: *Coordinator) !void {
+    pub fn start(self: *Coordinator) (Allocator.Error || std.Thread.SpawnError)!void {
         if (self.mode == .single_threaded or self.max_threads <= 1) return;
         if (comptime !is_freestanding) {
             const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
@@ -1692,7 +2237,7 @@ pub const Coordinator = struct {
     }
 
     /// Enqueue a task for processing
-    pub fn enqueueTask(self: *Coordinator, task: WorkerTask) !void {
+    pub fn enqueueTask(self: *Coordinator, task: WorkerTask) Allocator.Error!void {
         if (comptime trace_build) {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
@@ -1728,7 +2273,7 @@ pub const Coordinator = struct {
     }
 
     /// Enqueue a parse task for a module
-    pub fn enqueueParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) !void {
+    pub fn enqueueParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
         const pkg = self.packages.get(pkg_name) orelse return;
         const mod = pkg.getModule(module_id) orelse return;
 
@@ -1740,24 +2285,29 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .module_role = mod.module_role,
                 .depth = mod.depth,
             },
         });
     }
 
     /// Main coordinator loop - unified for single and multi-threaded modes
-    pub fn coordinatorLoop(self: *Coordinator) !void {
+    pub fn coordinatorLoop(self: *Coordinator) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         var inline_worker_allocs = WorkerAllocators.init(self.gpa);
         defer inline_worker_allocs.deinit();
         var iterations_without_progress: u32 = 0;
 
         while (!self.isComplete()) {
+            // A worker thread ran out of memory while producing a result. It
+            // cannot return the error itself, so it recorded the OOM here.
+            if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
+
             var made_progress = false;
 
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
-                    const result = self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
+                    const result = try self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
                     inline_worker_allocs.resetArena();
                     try self.handleResult(result);
                     made_progress = true;
@@ -1851,7 +2401,7 @@ pub const Coordinator = struct {
 
     /// Try to unblock all modules waiting on external imports
     /// Returns true if any module was unblocked
-    fn tryUnblockAllWaiting(self: *Coordinator) !bool {
+    fn tryUnblockAllWaiting(self: *Coordinator) Allocator.Error!bool {
         var any_unblocked = false;
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -1882,7 +2432,7 @@ pub const Coordinator = struct {
     }
 
     /// Execute a task inline with explicit worker allocators.
-    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) WorkerResult {
+    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         return switch (task) {
             .parse => |t| self.executeParse(t, allocators),
             .canonicalize => |t| self.executeCanonicalize(t, allocators),
@@ -1980,8 +2530,7 @@ pub const Coordinator = struct {
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var imported_source_count: usize = 0;
         for (imported_envs) |imported_env| {
-            if (std.mem.eql(u8, env.module_name, "Builtin") and
-                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
             imported_source_count += 1;
         }
 
@@ -1990,8 +2539,7 @@ pub const Coordinator = struct {
 
         var source_index: usize = 0;
         for (imported_envs) |imported_env| {
-            if (std.mem.eql(u8, env.module_name, "Builtin") and
-                std.mem.eql(u8, imported_env.module_name, "Builtin")) continue;
+            if (env.module_role == .builtin and imported_env.module_role == .builtin) continue;
             source_modules[source_index] = .{ .precompiled = imported_env };
             source_index += 1;
         }
@@ -2191,7 +2739,7 @@ pub const Coordinator = struct {
         return true;
     }
 
-    fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) !void {
+    fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
         const module_time = mod.compile_time_ns;
         if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
@@ -2223,7 +2771,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a result from a worker
-    fn handleResult(self: *Coordinator, result: WorkerResult) !void {
+    fn handleResult(self: *Coordinator, result: WorkerResult) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         // Make a mutable copy so we can deinit after handling
         var res = result;
         // Use worker allocator to match what workers used for allocation
@@ -2237,11 +2785,12 @@ pub const Coordinator = struct {
             .parse_failed => |*r| try self.handleParseFailed(r),
             .compile_failed => |*r| try self.handleCompileFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
+            .worker_oom => return error.OutOfMemory,
         }
     }
 
     /// Handle a successful parse result
-    fn handleParsed(self: *Coordinator, result: *ParsedResult) !void {
+    fn handleParsed(self: *Coordinator, result: *ParsedResult) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -2289,6 +2838,12 @@ pub const Coordinator = struct {
                 });
                 unreachable;
             };
+
+            if (child_id == result.module_id or pkg.moduleReaches(child_id, result.module_id)) {
+                try self.handleCycleInline(pkg, result.module_id, child_id);
+                return;
+            }
+
             try current_mod.imports.append(self.gpa, child_id);
 
             const child = pkg.getModule(child_id).?;
@@ -2298,10 +2853,7 @@ pub const Coordinator = struct {
                 child.depth = new_depth;
             }
 
-            if (child_id == result.module_id or (try pkg.findPath(self.gpa, child_id, result.module_id)) != null) {
-                try self.handleCycleInline(pkg, result.module_id, child_id);
-                return;
-            }
+            try pkg.recordLocalImportReachability(self.gpa, result.module_id, child_id);
 
             if (child.phase == .Parse) {
                 pkg.remaining_modules += 1;
@@ -2338,7 +2890,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a successful canonicalization result
-    fn handleCanonicalized(self: *Coordinator, result: *CanonicalizedResult) !void {
+    fn handleCanonicalized(self: *Coordinator, result: *CanonicalizedResult) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: pkg={s} module={s} result_reports={}\n", .{
                 result.package_name,
@@ -2416,7 +2968,7 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
-        const available_artifacts = try self.collectAvailableArtifactViews(task_payload_alloc);
+        const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
 
         if (mod.reports.items.len == 0 and
@@ -2446,7 +2998,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a successful type-check result
-    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) !void {
+    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -2537,7 +3089,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a parse failure
-    fn handleParseFailed(self: *Coordinator, result: *messages.ParseFailure) !void {
+    fn handleParseFailed(self: *Coordinator, result: *messages.ParseFailure) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -2583,7 +3135,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a non-parsing compilation failure.
-    fn handleCompileFailed(self: *Coordinator, result: *CompileFailure) !void {
+    fn handleCompileFailed(self: *Coordinator, result: *CompileFailure) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] COMPILE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -2623,7 +3175,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle cycle detection
-    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) !void {
+    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) Allocator.Error!void {
         const pkg = self.packages.get(result.package_name) orelse {
             self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
                 result.package_name, result.module_id,
@@ -2656,7 +3208,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle cycle detection inline during canonicalization result processing
-    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, child_id: ModuleId) !void {
+    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, child_id: ModuleId) Allocator.Error!void {
         const mod = pkg.getModule(module_id).?;
         const child = pkg.getModule(child_id).?;
 
@@ -2691,7 +3243,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
-    ) ![]const CanonicalizeImport {
+    ) Allocator.Error![]const CanonicalizeImport {
         var imports = std.ArrayList(CanonicalizeImport).empty;
         errdefer imports.deinit(allocator);
 
@@ -2724,7 +3276,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
-    ) ![]const *ModuleEnv {
+    ) Allocator.Error![]const *ModuleEnv {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
@@ -2737,7 +3289,7 @@ pub const Coordinator = struct {
             const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
             const import_name = mod.moduleEnv().?.getString(str_idx);
 
-            if (std.mem.eql(u8, import_name, "Builtin")) {
+            if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
                 mod.moduleEnv().?.imports.setResolvedModule(import_idx, 0);
                 continue;
             }
@@ -2777,7 +3329,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
-    ) ![]const check.CheckedArtifact.PublishImportArtifact {
+    ) Allocator.Error![]const check.CheckedArtifact.PublishImportArtifact {
         var imports = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
         errdefer imports.deinit(allocator);
 
@@ -2788,7 +3340,7 @@ pub const Coordinator = struct {
             const import_name = module_env.getString(str_idx);
             const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
 
-            if (std.mem.eql(u8, import_name, "Builtin")) {
+            if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) {
                 try imports.append(allocator, .{
                     .module_idx = resolved_module_idx,
                     .key = self.builtin_modules.checked_artifact.key,
@@ -2822,7 +3374,7 @@ pub const Coordinator = struct {
     }
 
     /// Try to unblock a module waiting on imports
-    fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) !void {
+    fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) Allocator.Error!void {
         const mod = pkg.getModule(module_id) orelse return;
         if (mod.phase != .WaitingOnImports) return;
 
@@ -2874,7 +3426,7 @@ pub const Coordinator = struct {
 
     /// Schedule an external import in its owning package
     /// Also registers the source module as a cross-package dependent of the target
-    pub fn scheduleExternalImport(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) !void {
+    pub fn scheduleExternalImport(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] SCHEDULE EXT IMPORT: from {s} importing {s}\n", .{ source_pkg, import_name });
         }
@@ -2928,7 +3480,7 @@ pub const Coordinator = struct {
         target_module_id: ModuleId,
         source_pkg: []const u8,
         source_module_id: ModuleId,
-    ) !void {
+    ) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] REGISTER CROSS-PKG DEP: {s}:{} depends on {s}:{}\n", .{ source_pkg, source_module_id, target_pkg, target_module_id });
         }
@@ -2953,7 +3505,7 @@ pub const Coordinator = struct {
     }
 
     /// Wake all cross-package dependents of a completed module
-    fn wakeCrossPackageDependents(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) !void {
+    fn wakeCrossPackageDependents(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
         // Build key
         var key_buf: [256]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{d}", .{ pkg_name, module_id }) catch return;
@@ -3036,12 +3588,12 @@ pub const Coordinator = struct {
     }
 
     /// Resolve a module name to a path
-    fn resolveModulePath(self: *Coordinator, root_dir: []const u8, mod_name: []const u8) ![]const u8 {
+    fn resolveModulePath(self: *Coordinator, root_dir: []const u8, mod_name: []const u8) Allocator.Error![]const u8 {
         return self.resolveModulePathWithAllocator(root_dir, mod_name, self.gpa);
     }
 
     /// Resolve a module name to a path using a specific allocator
-    fn resolveModulePathWithAllocator(_: *Coordinator, root_dir: []const u8, mod_name: []const u8, alloc: Allocator) ![]const u8 {
+    fn resolveModulePathWithAllocator(_: *Coordinator, root_dir: []const u8, mod_name: []const u8, alloc: Allocator) Allocator.Error![]const u8 {
         var buffer = std.ArrayList(u8).empty;
         defer buffer.deinit(alloc);
 
@@ -3061,25 +3613,30 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeParseFallible(task, allocators) catch |err| {
-            const title = switch (err) {
-                error.FileNotFound => "FILE NOT FOUND",
-                else => "PARSING FAILED",
-            };
-            return .{
-                .parse_failed = .{
+        return self.executeParseFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| blk: {
+                const title = switch (e) {
+                    error.FileNotFound => "FILE NOT FOUND",
+                    else => "PARSING FAILED",
+                };
+                break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, title, task.path, err),
+                    .reports = self.workerFailureReports(allocators.result, title, task.path, e),
                     .partial_env = null,
-                },
-            };
+                } };
+            },
         };
     }
 
-    fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
+    fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong, TooNested })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
         const src = try self.readModuleSource(task.path, task_allocs.module);
@@ -3107,6 +3664,7 @@ pub const Coordinator = struct {
         env.* = try ModuleEnv.init(module_alloc, src);
         env_initialized = true;
         try env.initCIRFields(task.module_name);
+        env.module_role = task.module_role;
 
         // Set qualified_module_ident to a package-qualified identifier (e.g., "app.main", "pf.Stdout")
         // to ensure module identity is unique across packages. Without this, two modules with
@@ -3146,7 +3704,7 @@ pub const Coordinator = struct {
             }
             discovered_local_imports.deinit(worker_alloc);
         }
-        const local_import_names = try module_discovery.extractImportsFromAST(parse_ast, task_allocs.scratch);
+        const local_import_names = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
         const module_dir = std.fs.path.dirname(task.path) orelse "";
         for (local_import_names) |module_name| {
             const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
@@ -3164,7 +3722,7 @@ pub const Coordinator = struct {
             for (discovered_external_imports.items) |imp| worker_alloc.free(imp.import_name);
             discovered_external_imports.deinit(worker_alloc);
         }
-        const qualified_import_names = try module_discovery.extractQualifiedImportsFromAST(parse_ast, task_allocs.scratch);
+        const qualified_import_names = try module_discovery.extractQualifiedImportsFromDeclIndex(parse_ast, task_allocs.scratch);
         for (qualified_import_names) |import_name| {
             const owned_name = try worker_alloc.dupe(u8, import_name);
             errdefer worker_alloc.free(owned_name);
@@ -3191,21 +3749,16 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeCanonicalizeFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+        return self.executeCanonicalizeFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
         };
     }
 
-    fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
+    fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
@@ -3215,7 +3768,7 @@ pub const Coordinator = struct {
 
         // Build KnownModule entries for qualified imports (e.g. platform-exposed
         // `pf.Stdout`) so canonicalization has explicit module names.
-        const qualified_imports = module_discovery.extractQualifiedImportsFromAST(ast, task_allocs.scratch) catch &[_][]const u8{};
+        const qualified_imports = try module_discovery.extractQualifiedImportsFromDeclIndex(ast, task_allocs.scratch);
         defer {
             for (qualified_imports) |qi| task_allocs.scratch.free(qi);
             task_allocs.scratch.free(qualified_imports);
@@ -3223,10 +3776,10 @@ pub const Coordinator = struct {
         var known_modules = std.ArrayList(compile_package.PackageEnv.KnownModule).empty;
         defer known_modules.deinit(task_allocs.scratch);
         for (qualified_imports) |qi| {
-            known_modules.append(task_allocs.scratch, .{
+            try known_modules.append(task_allocs.scratch, .{
                 .qualified_name = qi,
                 .import_name = qi,
-            }) catch {};
+            });
         }
 
         try compile_package.PackageEnv.canonicalizeModuleWithSiblings(
@@ -3275,21 +3828,24 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeTypeCheckFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+        return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| WorkerResult{ .compile_failed = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .path = task.path,
+                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .partial_env = task.module_env,
+            } },
         };
     }
 
-    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
+    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) anyerror!WorkerResult {
         var check_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
@@ -3362,7 +3918,7 @@ pub const Coordinator = struct {
     }
 
     /// Read module source using the Io abstraction.
-    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) ![]u8 {
+    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
         const data = try self.roc_ctx.readFile(path, module_alloc);
         errdefer module_alloc.free(data);
 
@@ -3391,8 +3947,15 @@ pub const Coordinator = struct {
             // is closed and drained.
             const t = self.task_channel.recv() orelse break;
 
-            // Execute task
-            const result = self.executeTaskInline(t, worker_allocs.taskAllocators());
+            // Execute task. On OOM we cannot return an error from this `void`
+            // thread entry point, so record it for the coordinator to observe
+            // and stop pulling work — the coordinator aborts the build.
+            const result = self.executeTaskInline(t, worker_allocs.taskAllocators()) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    self.worker_oom.store(true, .release);
+                    break;
+                },
+            };
 
             // Reset arena between tasks to reclaim temporary allocations
             worker_allocs.resetArena();
@@ -3412,7 +3975,7 @@ fn compileAppWithCheckedModuleCache(
     allocator: Allocator,
     cache_dir: []const u8,
     app_path: []const u8,
-) !CheckedModuleCacheRunStats {
+) anyerror!CheckedModuleCacheRunStats {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
@@ -3450,7 +4013,7 @@ fn compileAppWithCheckedModuleCache(
     };
 }
 
-fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) !usize {
+fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
     const io = std.testing.io;
     var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
     defer dir.close(io);
@@ -3635,6 +4198,7 @@ test "Coordinator task queue" {
             .module_name = "Main",
             .path = "/test/app/Main.roc",
             .depth = 0,
+            .module_role = .user,
         },
     });
 
@@ -3678,6 +4242,7 @@ test "Coordinator isComplete logic" {
             .module_name = "Test",
             .path = "/test.roc",
             .depth = 0,
+            .module_role = .user,
         },
     });
     try std.testing.expect(!coord.isComplete());
@@ -3720,6 +4285,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .module_name = "Test",
             .path = "/test.roc",
             .depth = 0,
+            .module_role = .user,
         },
     });
     try std.testing.expectEqual(@as(usize, 0), coord.inflight.load(.monotonic));
@@ -3758,6 +4324,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .module_name = "Mod",
                 .path = "/mod.roc",
                 .depth = 0,
+                .module_role = .user,
             },
         });
     }
@@ -3807,6 +4374,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .module_name = "Mod",
                 .path = "/mod.roc",
                 .depth = 0,
+                .module_role = .user,
             },
         });
     }

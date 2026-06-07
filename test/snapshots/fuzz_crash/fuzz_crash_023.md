@@ -219,6 +219,9 @@ PARSE ERROR - fuzz_crash_023.md:178:38:178:40
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:40:178:41
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_023.md:178:45:178:46
 PARSE ERROR - fuzz_crash_023.md:178:52:178:54
+NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
+MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
+MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDECLARED TYPE - fuzz_crash_023.md:36:8:36:11
 UNDECLARED TYPE - fuzz_crash_023.md:36:13:36:16
 UNDECLARED TYPE - fuzz_crash_023.md:39:2:39:5
@@ -229,9 +232,6 @@ UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:10
 UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
 UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
 UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
-NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
-MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
-MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
@@ -339,6 +339,47 @@ This is an unexpected parsing error. Please check your syntax.
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
 	                                                  ^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: malformed import module name contains invalid control characters
+
+**fuzz_crash_023.md:6:1:12:4:**
+```roc
+import # Comment after import keyword
+	pf # Comment after qualifier
+		.StdoutMultiline # Comment after ident
+		exposing [ # Comment after exposing open
+			line!, # Comment after exposed item
+			write!, # Another after exposed item
+		] # Comment after exposing close
+```
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**MODULE NOT FOUND**
+The module `BadName` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_023.md:16:1:16:27:**
+```roc
+import BadName as GoodName
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `BadNameMultiline` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_023.md:17:1:20:20:**
+```roc
+import
+	BadNameMultiline
+		as
+		GoodNameMultiline
+```
 
 
 **UNDECLARED TYPE**
@@ -449,47 +490,6 @@ This type is referenced here:
 	bar : Something, # Another after pattern record field
 ```
 	      ^^^^^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: malformed import module name contains invalid control characters
-
-**fuzz_crash_023.md:6:1:12:4:**
-```roc
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-```
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**MODULE NOT FOUND**
-The module `BadName` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:16:1:16:27:**
-```roc
-import BadName as GoodName
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `BadNameMultiline` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:17:1:20:20:**
-```roc
-import
-	BadNameMultiline
-		as
-		GoodNameMultiline
-```
 
 
 **UNDEFINED VARIABLE**
@@ -2386,7 +2386,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 2361)
+					(e-call (constraint-fn-var 2287)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2507,7 +2507,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3017)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2922)
 									(receiver
 										(e-match
 											(match
@@ -2532,7 +2532,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3012)
+										(e-dispatch-call (method "times") (constraint-fn-var 2917)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2547,18 +2547,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3125)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3030)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3090)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2995)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3225)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3130)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3190)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3095)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2573,11 +2573,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3335)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3240)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3330)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3235)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2592,12 +2592,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3401)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3306)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3368)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3273)
 																			(receiver
 																				(e-match
 																					(match
@@ -2749,6 +2749,23 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
+	(s-import (module "pf.Stdout")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
+	(s-import (module "#malformed_import_0")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "write!") (wildcard false))))
+	(s-import (module "pkg.Something")
+		(exposes
+			(exposed (name "func") (alias "function") (wildcard false))
+			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
+			(exposed (name "Custom") (wildcard true))))
+	(s-import (module "BadName")
+		(exposes))
+	(s-import (module "BadNameMultiline")
+		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2840,23 +2857,6 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-apply (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
-	(s-import (module "pf.Stdout")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import (module "#malformed_import_0")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "write!") (wildcard false))))
-	(s-import (module "pkg.Something")
-		(exposes
-			(exposed (name "func") (alias "function") (wildcard false))
-			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "BadName")
-		(exposes))
-	(s-import (module "BadNameMultiline")
-		(exposes))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs

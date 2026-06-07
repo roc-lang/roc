@@ -5,6 +5,7 @@
 //! proper deserialization of the written data.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const CompactWriter = @This();
 
@@ -36,7 +37,7 @@ pub fn writeGather(
     self: *@This(),
     file: anytype,
     io: anytype,
-) !void {
+) anyerror!void {
     var offset: u64 = 0;
     for (self.iovecs.items) |iovec| {
         const bytes = @as([*]const u8, @ptrCast(iovec.iov_base))[0..iovec.iov_len];
@@ -150,7 +151,7 @@ pub fn padToAlignment(self: *@This(), allocator: std.mem.Allocator, alignment: u
 pub fn writeToBuffer(
     self: *@This(),
     buffer: []u8,
-) ![]u8 {
+) error{BufferTooSmall}![]u8 {
     if (buffer.len < self.total_bytes) {
         return error.BufferTooSmall;
     }

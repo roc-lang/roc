@@ -144,7 +144,7 @@ pub fn defaultBuildOutputExtension(link_type: LinkType, target: RocTarget) []con
     };
 }
 
-fn expectSelected(result: SelectionResult) !SelectedTarget {
+fn expectSelected(result: SelectionResult) error{ExpectedSelectedTarget}!SelectedTarget {
     return switch (result) {
         .selected => |selected| selected,
         else => error.ExpectedSelectedTarget,

@@ -161,7 +161,7 @@ Remove or update any comments that mention filtering constructors from unions or
 
 Run the exhaustiveness tests:
 ```bash
-zig build test-check
+zig build run-test-zig-module-check
 ```
 
 Key tests in `src/check/test/exhaustiveness_test.zig`:

@@ -144,7 +144,7 @@ fn isMetadataMember(name: []const u8) bool {
         std.mem.eql(u8, name, "__.SYMDEF SORTED");
 }
 
-fn appendArchiveMember(bytes: *std.ArrayList(u8), name_field: []const u8, member_bytes: []const u8) !void {
+fn appendArchiveMember(bytes: *std.ArrayList(u8), name_field: []const u8, member_bytes: []const u8) (std.mem.Allocator.Error || error{NoSpaceLeft})!void {
     var header: [header_len]u8 = undefined;
     @memset(header[0..], ' ');
 

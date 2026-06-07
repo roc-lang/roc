@@ -99,16 +99,16 @@ def clean_old_data(root):
 
 
 def run_coverage(root):
-    """Run zig build coverage-eval."""
-    print("Running: zig build coverage-eval")
+    """Run zig build run-coverage-eval."""
+    print("Running: zig build run-coverage-eval")
     print("(This builds kcov, the eval test runner, then runs all eval tests")
     print(" single-threaded under kcov instrumentation. This takes a while.)\n")
     result = subprocess.run(
-        ["zig", "build", "coverage-eval"],
+        ["zig", "build", "run-coverage-eval"],
         cwd=root,
     )
     if result.returncode != 0:
-        print("\nzig build coverage-eval failed.", file=sys.stderr)
+        print("\nzig build run-coverage-eval failed.", file=sys.stderr)
         sys.exit(result.returncode)
     print()
 

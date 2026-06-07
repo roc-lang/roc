@@ -1,5 +1,6 @@
 ///! Platform host that tests effectful functions with open union error types.
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
@@ -271,7 +272,7 @@ fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) 
 }
 
 /// Platform host entrypoint
-fn platform_main(argc: c_int, argv: [*][*:0]u8) !c_int {
+fn platform_main(argc: c_int, argv: [*][*:0]u8) Allocator.Error!c_int {
     var host_env = HostEnv{
         .gpa = std.heap.DebugAllocator(.{ .thread_safe = false }){},
         .std_io = shim_io.io(),

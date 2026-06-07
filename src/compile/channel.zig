@@ -57,7 +57,7 @@ pub fn Channel(comptime T: type) type {
         std_io: std.Io,
 
         /// Initialize a channel with the given capacity
-        pub fn init(gpa: Allocator, cap_size: usize, std_io: std.Io) !Self {
+        pub fn init(gpa: Allocator, cap_size: usize, std_io: std.Io) Allocator.Error!Self {
             const cap = if (cap_size == 0) DEFAULT_CAPACITY else cap_size;
             const buffer = try gpa.alloc(T, cap);
             return .{

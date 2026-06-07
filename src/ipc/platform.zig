@@ -2,6 +2,7 @@
 //! Provides a unified interface for Windows and POSIX shared memory operations
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 /// Platform detection
@@ -142,7 +143,7 @@ pub const SharedMemoryError = error{
 };
 
 /// Get the system's page size at runtime
-pub fn getSystemPageSize() !usize {
+pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
     const page_size: usize = switch (builtin.os.tag) {
         .windows => blk: {
             var system_info: windows.SYSTEM_INFO = undefined;
@@ -317,6 +318,15 @@ pub fn openMapping(allocator: std.mem.Allocator, name: []const u8) SharedMemoryE
 
 /// Map shared memory into the process address space
 pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
+    return mapMemoryWithLogging(handle, size, base_addr, true);
+}
+
+/// Map shared memory without logging failures.
+pub fn mapMemoryNoLog(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemoryError!*anyopaque {
+    return mapMemoryWithLogging(handle, size, base_addr, false);
+}
+
+fn mapMemoryWithLogging(handle: Handle, size: usize, base_addr: ?*anyopaque, log_failure: bool) SharedMemoryError!*anyopaque {
     switch (builtin.os.tag) {
         .windows => {
             const ptr = if (base_addr) |addr|
@@ -339,7 +349,9 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
 
             if (ptr == null) {
                 const error_code = windows.GetLastError();
-                std.log.err("Windows: Failed to map shared memory view (size: {}, error: {})", .{ size, error_code });
+                if (log_failure) {
+                    std.log.err("Windows: Failed to map shared memory view (size: {}, error: {})", .{ size, error_code });
+                }
                 return error.MapViewOfFileFailed;
             }
 
@@ -357,7 +369,9 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
             // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
             if (ptr == posix.MAP_FAILED) {
                 const errno = std.c._errno().*;
-                std.log.err("POSIX: Failed to map shared memory (size: {}, fd: {}, errno: {})", .{ size, handle, errno });
+                if (log_failure) {
+                    std.log.err("POSIX: Failed to map shared memory (size: {}, fd: {}, errno: {})", .{ size, handle, errno });
+                }
                 return error.MmapFailed;
             }
             return ptr;

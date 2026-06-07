@@ -12,6 +12,7 @@
 //! order, and whether execution returned or terminated via crash.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const eval = @import("eval");
 const harness = @import("test_harness");
@@ -24,10 +25,6 @@ const backend = @import("backend");
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
 const collections = @import("collections");
-
-/// Process-wide `std.Io` initialized from `main(init)` and consumed by helpers
-/// that don't get an `io` parameter (e.g. pool worker callbacks).
-var app_io: std.Io = undefined;
 
 /// Public struct `TestCase`.
 pub const TestCase = struct {
@@ -157,7 +154,7 @@ fn appendEncodedRun(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged(u8),
     run: RuntimeHostEnv.RecordedRun,
-) !void {
+) Allocator.Error!void {
     const header: BackendRunHeader = .{
         .termination = @intFromEnum(run.termination),
         .event_count = @intCast(run.events.len),
@@ -315,7 +312,7 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
     return .{ .success = decoded };
 }
 
-fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
+fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -344,7 +341,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     return runtime_env.snapshot(allocator);
 }
 
-fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) !RuntimeHostEnv.RecordedRun {
+fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) anyerror!RuntimeHostEnv.RecordedRun {
     if (comptime !DEV_BACKEND_IMPLEMENTED) {
         return error.DevBackendUnavailable;
     } else {
@@ -433,8 +430,8 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
     return true;
 }
 
-fn runSingleTest(allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, app_io, tc.source_kind, tc.source, tc.imports) catch |err| {
+fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
+    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,
@@ -616,9 +613,9 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     };
 }
 
-fn runTestForPool(allocator: std.mem.Allocator, tc: TestCase, _: u64) TestResult {
+fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, _: u64) TestResult {
     var timer = Timer.start() catch unreachable;
-    const outcome = runSingleTest(allocator, tc);
+    const outcome = runSingleTest(io, allocator, tc);
     const duration_ns = timer.read();
     return .{
         .status = outcome.status,
@@ -705,8 +702,8 @@ fn printHelp() void {
         \\  - crashed
         \\
         \\USAGE:
-        \\  zig build test-eval-host-effects
-        \\  zig build test-eval-host-effects -- <OPTIONS>
+        \\  zig build run-test-eval-host-effects
+        \\  zig build run-test-eval-host-effects -- <OPTIONS>
         \\  ./zig-out/bin/eval-host-effects-runner [<OPTIONS>]
         \\
         \\OPTIONS:
@@ -842,14 +839,175 @@ fn writeFailureDetail(tc: TestCase, result: TestResult) void {
     }
 }
 
+fn statsStatus(status: TestOutcome.Status) []const u8 {
+    return switch (status) {
+        .pass => "pass",
+        .fail => "fail",
+        .crash => "crash",
+        .skip => "skip",
+        .timeout => "timeout",
+    };
+}
+
+fn backendStatsStatus(status: BackendStatus) []const u8 {
+    return switch (status) {
+        .pass => "pass",
+        .wrong, .fail => "fail",
+        .crash => "crash",
+        .skip, .not_implemented => "skip",
+    };
+}
+
+fn statsSummary(results: []const TestResult) harness.StatsSummary {
+    var summary: harness.StatsSummary = .{ .total = results.len };
+    for (results) |result| {
+        switch (result.status) {
+            .pass => summary.passed += 1,
+            .fail => summary.failed += 1,
+            .crash => summary.crashed += 1,
+            .skip => summary.skipped += 1,
+            .timeout => summary.timed_out += 1,
+        }
+    }
+    return summary;
+}
+
+fn recordedRunSummary(allocator: std.mem.Allocator, run: RuntimeHostEnv.RecordedRun) []const u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{s} live_allocations={d} events={d}",
+        .{ @tagName(run.termination), run.allocation_count, run.events.len },
+    ) catch "recorded run unavailable";
+}
+
+fn maybeStatsData(
+    allocator: std.mem.Allocator,
+    result: TestResult,
+) []const harness.StatsData {
+    if (result.status == .pass) return &.{};
+
+    var count: usize = 0;
+    if (result.message != null) count += 1;
+    for (result.backends) |backend_detail| {
+        if (backend_detail.message != null) count += 1;
+        if (backend_detail.run != null and backend_detail.status != .pass) count += 1;
+    }
+    if (count == 0) return &.{};
+
+    const data = allocator.alloc(harness.StatsData, count) catch return &.{};
+    var next: usize = 0;
+    if (result.message) |message| {
+        data[next] = .{ .key = "message", .value = message };
+        next += 1;
+    }
+    for (result.backends, 0..) |backend_detail, i| {
+        if (backend_detail.message) |message| {
+            data[next] = .{ .key = BACKEND_NAMES[i], .value = message };
+            next += 1;
+        }
+        if (backend_detail.run) |run| {
+            if (backend_detail.status != .pass) {
+                data[next] = .{ .key = BACKEND_NAMES[i], .value = recordedRunSummary(allocator, run) };
+                next += 1;
+            }
+        }
+    }
+    return data;
+}
+
+fn appendStatsEvent(
+    allocator: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    parent_id: ?[]const u8,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    data: []const harness.StatsData,
+) void {
+    events.append(allocator, .{
+        .id = id,
+        .parent_id = parent_id,
+        .kind = kind,
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .data = data,
+    }) catch {};
+}
+
+fn appendCaseStatsEvent(
+    allocator: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(allocator, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
+fn writeStatsJson(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    tests: []const TestCase,
+    results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
+) anyerror!void {
+    var stats_arena = std.heap.ArenaAllocator.init(allocator);
+    defer stats_arena.deinit();
+    const stats_allocator = stats_arena.allocator();
+
+    var events: std.ArrayListUnmanaged(harness.StatsEvent) = .empty;
+
+    for (tests, results, 0..) |tc, result, i| {
+        const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
+        const maybe_span = if (i < spans.len) spans[i] else null;
+        appendCaseStatsEvent(stats_allocator, &events, case_id, tc.name, statsStatus(result.status), result.duration_ns, maybe_span, maybeStatsData(stats_allocator, result));
+
+        var cursor: u64 = 0;
+        for (result.backends, 0..) |backend_detail, backend_i| {
+            if (backend_detail.duration_ns == 0 and backend_detail.status == .skip) continue;
+            const id = try std.fmt.allocPrint(stats_allocator, "case-{d}-backend-{s}", .{ i, BACKEND_NAMES[backend_i] });
+            const status = backendStatsStatus(backend_detail.status);
+            appendStatsEvent(stats_allocator, &events, id, case_id, "backend", BACKEND_NAMES[backend_i], status, cursor, cursor + backend_detail.duration_ns, &.{});
+            cursor += backend_detail.duration_ns;
+        }
+    }
+
+    try harness.writeRunnerStatsJson(stats_allocator, io, path, .{
+        .runner = "eval-host-effects",
+        .summary = statsSummary(results),
+        .events = events.items,
+    });
+}
+
 /// Public function `main`.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
     const io = init.io;
-    app_io = io;
 
     var args_arena = std.heap.ArenaAllocator.init(gpa);
     defer args_arena.deinit();
@@ -891,6 +1049,9 @@ pub fn main(init: std.process.Init) !void {
         gpa.free(results);
     }
     @memset(results, default_result);
+    const spans = try gpa.alloc(?harness.PoolSpan, tests.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     var wall_timer = Timer.start() catch unreachable;
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
@@ -903,7 +1064,7 @@ pub fn main(init: std.process.Init) !void {
     // worker_argv_template is null — this runner doesn't (yet) support
     // Windows Child-based parallelism; on Windows it falls through to
     // runSequential as before.
-    Pool.run(io, tests, results, max_children, hang_timeout_ms, gpa, null);
+    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, null);
 
     const wall_elapsed = wall_timer.read();
     var passed: usize = 0;
@@ -950,6 +1111,10 @@ pub fn main(init: std.process.Init) !void {
         "\n{d} passed, {d} failed, {d} crashed, {d} hung, {d} skipped ({d} total) in {d:.0}ms using {d} process(es)\n",
         .{ passed, failed, crashed, timed_out, skipped, tests.len, wall_ms, max_children },
     );
+
+    if (cli.stats_json_path) |path| {
+        try writeStatsJson(gpa, io, path, tests, results, spans);
+    }
 
     if (failed > 0 or crashed > 0 or timed_out > 0) std.process.exit(1);
 }

@@ -1,5 +1,0 @@
-app "test" provides [f] to "./platform"
-
-f : _ -> {}
-f = \_ -> f {}
-#^{-1} {} -[[f(0)]]-> {}

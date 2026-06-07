@@ -366,7 +366,7 @@ pub const Pattern = union(enum) {
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
-                if (std.mem.eql(u8, module_name, "Builtin")) {
+                if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("builtin");
                     const field_attrs = tree.beginNode();
@@ -416,9 +416,7 @@ pub const Pattern = union(enum) {
                     const rest_begin = tree.beginNode();
                     try tree.pushStaticAtom("rest-at");
 
-                    var index_buf: [32]u8 = undefined;
-                    const index_str = std.fmt.bufPrint(&index_buf, "{d}", .{rest.index}) catch "fmt_error";
-                    try tree.pushDynamicAtomPair("index", index_str);
+                    try tree.pushU64Pair("index", rest.index);
 
                     const rest_attrs = tree.beginNode();
                     if (rest.pattern) |rest_pattern_idx| {
@@ -451,9 +449,7 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-num");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [40]u8 = undefined;
-                const value_str = p.value.bufPrint(&value_buf) catch unreachable;
-                try tree.pushStringPair("value", value_str);
+                try p.value.pushStringPair(tree, "value");
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -477,9 +473,10 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac-f32");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [400]u8 = undefined;
-                const value_str = builtins.compiler_rt_128.f32_to_str(&value_buf, p.value);
-                try tree.pushStringPair("value", value_str);
+                const value_begin = try tree.reserveStringBuffer(400);
+                errdefer tree.discardReservedStringBuffer(value_begin);
+                const value_str = builtins.compiler_rt_128.f32_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
+                try tree.pushReservedStringPair("value", value_begin, value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -489,9 +486,10 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-frac-f64");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
-                var value_buf: [400]u8 = undefined;
-                const value_str = builtins.compiler_rt_128.f64_to_str(&value_buf, p.value);
-                try tree.pushStringPair("value", value_str);
+                const value_begin = try tree.reserveStringBuffer(400);
+                errdefer tree.discardReservedStringBuffer(value_begin);
+                const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
+                try tree.pushReservedStringPair("value", value_begin, value_str);
 
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

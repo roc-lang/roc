@@ -1,6 +1,7 @@
 //! Tests for Scopes
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("../CIR.zig");
@@ -20,7 +21,7 @@ const ScopeTestContext = struct {
     gpa: std.mem.Allocator,
     builtin_ctx: BuiltinTestContext,
 
-    fn init(gpa: std.mem.Allocator) !ScopeTestContext {
+    fn init(gpa: std.mem.Allocator) Allocator.Error!ScopeTestContext {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, "");

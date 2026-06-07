@@ -1,5 +1,6 @@
 //! Command line argument parsing for the CLI
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const mem = std.mem;
 
@@ -49,8 +50,8 @@ pub const ArgProblem = union(enum) {
 
 /// The optimization strategy for the compilation of a Roc program
 pub const OptLevel = enum {
-    size, // optimize for binary size
-    speed, // optimize for execution speed
+    size, // binary size (LLVM)
+    speed, // execution speed (LLVM)
     dev, // speed of compilation (dev backend)
     interpreter,
 
@@ -66,7 +67,8 @@ pub const OptLevel = enum {
     pub fn toBackend(self: OptLevel) @import("eval").EvalBackend {
         return switch (self) {
             .interpreter => .interpreter,
-            .dev, .size, .speed => .dev,
+            .dev => .dev,
+            .size, .speed => .llvm,
         };
     }
 };
@@ -174,11 +176,10 @@ pub const GlueArgs = struct {
     glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
     output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
     platform_path: []const u8, // path to the platform .roc file (default: main.roc)
-    opt: OptLevel = .dev,
 };
 
 /// Parse a list of arguments.
-pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) !CliArgs {
+pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) anyerror!CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
     // "run" is not a valid subcommand - give a helpful error
@@ -230,7 +231,7 @@ const main_help =
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
-    \\      --opt=<opt>                    Optimization level: dev (default, fast compilation), interpreter, size or speed (not implemented yet)
+    \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
@@ -518,7 +519,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
     } };
 }
 
-fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) !CliArgs {
+fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) anyerror!CliArgs {
     var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
 
     for (args) |arg| {
@@ -639,7 +640,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<opt>                     Optimization level: dev (default, fast compilation), interpreter, size or speed (not implemented yet)
+            \\      --opt=<opt>                     Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
             \\      --main <main>                   The .roc file of the main app/package module to resolve dependencies from
             \\      --verbose                       Enable verbose output showing individual test results
             \\      --no-cache                      Disable compilation caching, force re-run all tests
@@ -706,7 +707,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\      --opt=<opt>  Optimization level: dev (default, fast compilation), interpreter
+            \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
             \\      --no-color   Do not use ANSI color codes in REPL diagnostics
             \\  -h, --help       Print help
             \\
@@ -734,7 +735,6 @@ fn parseGlue(args: []const []const u8) CliArgs {
     var glue_spec: ?[]const u8 = null;
     var output_dir: ?[]const u8 = null;
     var platform_path: ?[]const u8 = null;
-    var opt: OptLevel = .dev;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -749,20 +749,11 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<opt>  Optimization level: dev (default, fast compilation), interpreter
-            \\  -h, --help       Print help
+            \\  -h, --help  Print help
             \\
             };
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    opt = level;
-                } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
-                }
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "glue", .arg = arg } } };
         } else {
             if (glue_spec == null) {
                 glue_spec = arg;
@@ -820,7 +811,6 @@ fn parseGlue(args: []const []const u8) CliArgs {
         .glue_spec = glue_spec.?,
         .output_dir = output_dir.?,
         .platform_path = platform_path orelse "main.roc",
-        .opt = opt,
     } };
 }
 
@@ -1501,6 +1491,33 @@ test "roc repl" {
         defer result.deinit(gpa);
         try testing.expectEqual(.repl, std.meta.activeTag(result));
         try testing.expect(result.repl.no_color);
+    }
+}
+
+test "roc glue" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "Glue.roc", "glue-out" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("Glue.roc", result.glue.glue_spec);
+        try testing.expectEqualStrings("glue-out", result.glue.output_dir);
+        try testing.expectEqualStrings("main.roc", result.glue.platform_path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "Glue.roc", "glue-out", "platform/main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("platform/main.roc", result.glue.platform_path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "--opt=interpreter", "Glue.roc", "glue-out" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("glue", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("--opt=interpreter", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
 

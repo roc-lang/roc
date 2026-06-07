@@ -4,6 +4,7 @@
 //! simultaneously computing BLAKE3 hashes for data integrity verification.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const c = @cImport({
     @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
@@ -31,7 +32,7 @@ pub const CompressingHashWriter = struct {
         output_writer: *std.Io.Writer,
         allocForZstd: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque,
         freeForZstd: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
-    ) !Self {
+    ) Allocator.Error!Self {
         const custom_mem = c.ZSTD_customMem{
             .customAlloc = allocForZstd,
             .customFree = freeForZstd,

@@ -1,5 +1,6 @@
 //! Helpers for loading the compiled Builtin module in canonicalize tests.
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
@@ -20,7 +21,7 @@ const LoadedModule = struct {
     }
 };
 
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
     const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
@@ -29,7 +30,7 @@ fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.
     return indices_ptr.*;
 }
 
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
     const CompactWriter = collections.CompactWriter;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
     @memcpy(buffer, bin_data);
@@ -50,9 +51,12 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .common = common,
         .types = serialized_ptr.types.deserializeInto(base_ptr, gpa),
         .module_kind = serialized_ptr.module_kind.decode(),
+        .module_role = serialized_ptr.module_role,
         .all_defs = serialized_ptr.all_defs,
         .global_value_defs = serialized_ptr.global_value_defs,
         .all_statements = serialized_ptr.all_statements,
+        .type_decls = serialized_ptr.type_decls,
+        .forward_type_decls = serialized_ptr.forward_type_decls,
         .exports = serialized_ptr.exports,
         .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
         .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
@@ -69,6 +73,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .import_mapping = @import("types").import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
+        .method_defs = serialized_ptr.method_defs.deserializeInto(base_ptr),
         .for_loop_dispatch_plans = serialized_ptr.for_loop_dispatch_plans.deserializeInto(base_ptr),
         .numeral_digit_bytes = serialized_ptr.numeral_digit_bytes.deserializeInto(base_ptr),
         .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
@@ -88,7 +93,7 @@ pub const BuiltinTestContext = struct {
     builtin_indices: CIR.BuiltinIndices,
     builtin_module: LoadedModule,
 
-    pub fn init(gpa: std.mem.Allocator) !BuiltinTestContext {
+    pub fn init(gpa: std.mem.Allocator) Allocator.Error!BuiltinTestContext {
         return .{
             .builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin),
             .builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source),

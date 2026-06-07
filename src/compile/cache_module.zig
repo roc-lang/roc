@@ -112,7 +112,7 @@ pub const CacheModule = struct {
         _: *const ModuleEnv, // ModuleEnv contains the canonical IR
         error_count: u32,
         warning_count: u32,
-    ) ![]align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+    ) Allocator.Error![]align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
         const CompactWriter = collections.CompactWriter;
 
         // Create CompactWriter
@@ -157,7 +157,7 @@ pub const CacheModule = struct {
     }
 
     /// Load a cache from memory-mapped data
-    pub fn fromMappedMemory(mapped_data: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8) !CacheModule {
+    pub fn fromMappedMemory(mapped_data: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8) (Allocator.Error || error{ BufferTooSmall, InvalidMagicNumber, CacheVersionHashMismatch })!CacheModule {
         if (mapped_data.len < @sizeOf(Header)) {
             return error.BufferTooSmall;
         }
@@ -189,7 +189,7 @@ pub const CacheModule = struct {
 
     /// Restore ModuleEnv from the cached data
     /// IMPORTANT: This expects source to remain valid for the lifetime of the restored ModuleEnv.
-    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) !*ModuleEnv {
+    pub fn restore(self: *const CacheModule, allocator: Allocator, module_name: []const u8, source: []const u8) (Allocator.Error || error{BufferTooSmall})!*ModuleEnv {
         // The entire data section contains the serialized ModuleEnv
         const serialized_data = self.data;
 
@@ -221,7 +221,7 @@ pub const CacheModule = struct {
     }
 
     /// Validate the cache structure and integrity
-    pub fn validate(self: *const CacheModule) !void {
+    pub fn validate(self: *const CacheModule) Allocator.Error!void {
         // Just validate that we have data
         if (self.data.len != self.header.data_size) {
             return error.DataSizeMismatch;
@@ -233,7 +233,7 @@ pub const CacheModule = struct {
         allocator: Allocator,
         file_path: []const u8,
         filesystem: anytype,
-    ) ![]align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+    ) Allocator.Error![]align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
         const file_data = try filesystem.readFile(file_path, allocator);
         defer allocator.free(file_data);
 
@@ -283,7 +283,7 @@ pub const CacheModule = struct {
         allocator: Allocator,
         file_path: []const u8,
         filesystem: anytype,
-    ) !CacheData {
+    ) Allocator.Error!CacheData {
         const data = try readFromFile(allocator, file_path, filesystem);
         return CacheData{ .allocated = data };
     }

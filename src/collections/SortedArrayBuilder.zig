@@ -12,6 +12,7 @@
 //! - Minimal memory overhead
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
@@ -31,24 +32,49 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             @typeInfo(K).@"struct".backing_integer.?
         else
             void;
+        const KeyHasOrder = switch (@typeInfo(K)) {
+            .@"struct", .@"enum", .@"union", .@"opaque" => @hasDecl(K, "order"),
+            else => false,
+        };
 
         pub const Entry = struct {
             key: K,
             value: V,
 
             fn lessThan(_: void, a: Entry, b: Entry) bool {
-                if (K == []const u8) {
-                    return std.mem.lessThan(u8, a.key, b.key);
-                } else if (@typeInfo(K) == .int or @typeInfo(K) == .@"enum") {
-                    return a.key < b.key;
-                } else if (KeyBackingInt != void) {
-                    // Packed struct backed by integer - compare as integers
-                    return @as(KeyBackingInt, @bitCast(a.key)) < @as(KeyBackingInt, @bitCast(b.key));
-                } else {
-                    @compileError("Unsupported key type for SortedArrayBuilder");
-                }
+                return keyOrder(a.key, b.key) == .lt;
             }
         };
+
+        fn keyOrder(a: K, b: K) std.math.Order {
+            if (K == []const u8) {
+                return std.mem.order(u8, a, b);
+            } else if (KeyHasOrder) {
+                return K.order(a, b);
+            } else if (@typeInfo(K) == .int or @typeInfo(K) == .@"enum") {
+                return if (a == b)
+                    .eq
+                else if (a < b)
+                    .lt
+                else
+                    .gt;
+            } else if (KeyBackingInt != void) {
+                const a_int = @as(KeyBackingInt, @bitCast(a));
+                const b_int = @as(KeyBackingInt, @bitCast(b));
+                return if (a_int == b_int)
+                    .eq
+                else if (a_int < b_int)
+                    .lt
+                else
+                    .gt;
+            } else {
+                @compileError("Unsupported key type for SortedArrayBuilder");
+            }
+        }
+
+        fn keyEql(a: K, b: K) bool {
+            return keyOrder(a, b) == .eq;
+        }
 
         pub fn init() Self {
             return .{};
@@ -65,7 +91,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Clone this builder into fresh owned memory.
-        pub fn clone(self: *const Self, allocator: Allocator) !Self {
+        pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
             var cloned = Self.init();
             errdefer cloned.deinit(allocator);
             try cloned.entries.ensureTotalCapacity(allocator, self.entries.items.len);
@@ -85,18 +111,13 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Add a key-value pair
-        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) !void {
+        pub fn put(self: *Self, allocator: Allocator, key: K, value: V) Allocator.Error!void {
             const new_key = if (K == []const u8) try allocator.dupe(u8, key) else key;
 
             // Check if we need to maintain sorted order
             if (self.sorted and self.entries.items.len > 0) {
                 const last = self.entries.items[self.entries.items.len - 1];
-                const is_less_than = if (K == []const u8)
-                    std.mem.lessThan(u8, last.key, new_key)
-                else if (KeyBackingInt != void)
-                    @as(KeyBackingInt, @bitCast(last.key)) < @as(KeyBackingInt, @bitCast(new_key))
-                else
-                    last.key < new_key;
+                const is_less_than = keyOrder(last.key, new_key) == .lt;
 
                 if (!is_less_than) {
                     self.sorted = false;
@@ -110,7 +131,16 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Get value by key (requires sorting first if not already sorted)
         pub fn get(self: *Self, allocator: Allocator, key: K) ?V {
             self.ensureSorted(allocator);
+            return self.getFinalized(key);
+        }
 
+        /// Get value by key without mutating. The builder must already be sorted
+        /// and deduplicated.
+        pub fn getFinalized(self: *const Self, key: K) ?V {
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.sorted);
+                std.debug.assert(self.deduplicated);
+            }
             var left: usize = 0;
             var right: usize = self.entries.items.len;
 
@@ -118,23 +148,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 const mid = left + (right - left) / 2;
                 const mid_key = self.entries.items[mid].key;
 
-                const cmp = if (K == []const u8)
-                    std.mem.order(u8, mid_key, key)
-                else if (KeyBackingInt != void) blk: {
-                    const mid_int = @as(KeyBackingInt, @bitCast(mid_key));
-                    const key_int = @as(KeyBackingInt, @bitCast(key));
-                    break :blk if (mid_int == key_int)
-                        std.math.Order.eq
-                    else if (mid_int < key_int)
-                        std.math.Order.lt
-                    else
-                        std.math.Order.gt;
-                } else if (mid_key == key)
-                    std.math.Order.eq
-                else if (mid_key < key)
-                    std.math.Order.lt
-                else
-                    std.math.Order.gt;
+                const cmp = keyOrder(mid_key, key);
 
                 switch (cmp) {
                     .eq => return self.entries.items[mid].value,
@@ -156,6 +170,27 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             if (!self.deduplicated) {
                 self.deduplicateAndReport(allocator);
             }
+        }
+
+        /// Ensure the array is sorted, and enforce that every key is unique.
+        /// This is for semantic tables where duplicate keys must have already
+        /// been rejected by the producing stage instead of being silently merged.
+        pub fn ensureSortedUnique(self: *Self) void {
+            if (!self.sorted) {
+                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
+                self.sorted = true;
+            }
+
+            var i: usize = 1;
+            while (i < self.entries.items.len) : (i += 1) {
+                if (!keyEql(self.entries.items[i - 1].key, self.entries.items[i].key)) continue;
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("SortedArrayBuilder invariant violated: duplicate key reached unique finalization", .{});
+                }
+                @trap();
+            }
+
+            self.deduplicated = true;
         }
 
         /// Check for duplicates, report them, and remove duplicates keeping the last occurrence.
@@ -181,10 +216,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     const next_index = read_index + 1;
                     if (next_index >= self.entries.items.len) break :blk false;
                     const next_entry = self.entries.items[next_index];
-                    break :blk if (K == []const u8)
-                        std.mem.eql(u8, entry.key, next_entry.key)
-                    else
-                        entry.key == next_entry.key;
+                    break :blk keyEql(entry.key, next_entry.key);
                 };
 
                 if (has_duplicate_after) {
@@ -207,7 +239,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         }
 
         /// Detect duplicates without modifying the array - returns list of duplicate keys
-        pub fn detectDuplicates(self: *Self, allocator: Allocator) ![]K {
+        pub fn detectDuplicates(self: *Self, allocator: Allocator) Allocator.Error![]K {
             var duplicates = std.array_list.Managed(K).init(allocator);
 
             if (self.entries.items.len <= 1) return duplicates.toOwnedSlice();
@@ -228,10 +260,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             while (i < self.entries.items.len) {
                 const prev_entry = self.entries.items[i - 1];
                 const curr_entry = self.entries.items[i];
-                const is_duplicate = if (K == []const u8)
-                    std.mem.eql(u8, prev_entry.key, curr_entry.key)
-                else
-                    prev_entry.key == curr_entry.key;
+                const is_duplicate = keyEql(prev_entry.key, curr_entry.key);
 
                 if (is_duplicate) {
                     // Report duplicate only once per unique key
@@ -297,12 +326,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             if (entries.len <= 1) return true;
 
             for (1..entries.len) |i| {
-                const is_duplicate = if (K == []const u8)
-                    std.mem.eql(u8, entries[i - 1].key, entries[i].key)
-                else
-                    entries[i - 1].key == entries[i].key;
-
-                if (is_duplicate) {
+                if (keyEql(entries[i - 1].key, entries[i].key)) {
                     return false;
                 }
             }

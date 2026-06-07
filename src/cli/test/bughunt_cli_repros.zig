@@ -1,9 +1,9 @@
 //! Opt-in CLI compiler-bug repros found during bug hunting.
 //!
 //! These tests assert the desired behavior for known bugs and are intentionally
-//! excluded from `zig build test-cli`. Run them explicitly with:
+//! excluded from `zig build run-test-cli`. Run them explicitly with:
 //!
-//!   zig build test-bughunt-cli -- --filter bughunt --threads 1 --timeout 5000
+//!   zig build run-test-cli-bughunt -- --filter bughunt --threads 1 --timeout 5000
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -197,6 +197,8 @@ const Status = enum(u8) {
 const WireHeader = extern struct {
     status: u8,
     duration_ns: u64,
+    setup_ns: u64,
+    command_ns: u64,
     exit_code: u32,
     stderr_len: u32,
     stdout_len: u32,
@@ -206,6 +208,8 @@ const WireHeader = extern struct {
 const TestResult = struct {
     status: Status = .crash,
     duration_ns: u64 = 0,
+    setup_ns: u64 = 0,
+    command_ns: u64 = 0,
     exit_code: u32 = 0,
     stderr_capture: ?[]const u8 = null,
     stdout_capture: ?[]const u8 = null,
@@ -2719,7 +2723,7 @@ fn currentProcessIdForFilename() u64 {
     return @intCast(std.c.getpid());
 }
 
-fn pathJoin(gpa: Allocator, parts: []const []const u8) ![]u8 {
+fn pathJoin(gpa: Allocator, parts: []const []const u8) anyerror![]u8 {
     return std.fs.path.join(gpa, parts);
 }
 
@@ -2729,7 +2733,7 @@ fn appendReplacing(
     input: []const u8,
     needle: []const u8,
     replacement: []const u8,
-) !void {
+) anyerror!void {
     var rest = input;
     while (std.mem.find(u8, rest, needle)) |idx| {
         try out.appendSlice(gpa, rest[0..idx]);
@@ -2739,7 +2743,7 @@ fn appendReplacing(
     try out.appendSlice(gpa, rest);
 }
 
-fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) anyerror![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [");
     for (0..65535) |i| {
@@ -2754,7 +2758,7 @@ fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) ![]const u
     return try out.toOwnedSlice(gpa);
 }
 
-fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) anyerror![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [main!] { pf: platform \"");
     try out.appendSlice(gpa, fx_platform);
@@ -2766,7 +2770,7 @@ fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
     return try out.toOwnedSlice(gpa);
 }
 
-fn generateWideRecordInspectApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateWideRecordInspectApp(gpa: Allocator, fx_platform: []const u8) anyerror![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [main!] { pf: platform \"");
     try out.appendSlice(gpa, fx_platform);
@@ -2788,7 +2792,7 @@ fn renderSource(
     str_platform: []const u8,
     glue_platform: []const u8,
     fx_open_platform: []const u8,
-) ![]const u8 {
+) anyerror![]const u8 {
     if (std.mem.eql(u8, input, "{GENERATE_TOO_MANY_EXPORTS_APP}")) {
         return generateTooManyExportsApp(gpa, fx_platform);
     }
@@ -2816,7 +2820,7 @@ fn renderSource(
     return try stage4.toOwnedSlice(gpa);
 }
 
-fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
+fn writeFiles(io: std.Io, gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) anyerror!void {
     const fx_platform = "../../../test/fx/platform/main.roc";
     const str_platform = "../../../test/str/platform/main.roc";
     const glue_platform = "../../../src/glue/platform/main.roc";
@@ -2827,13 +2831,13 @@ fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
         const full_path = try pathJoin(gpa, &.{ test_dir, file.path });
         defer gpa.free(full_path);
         if (std.fs.path.dirname(full_path)) |dir| {
-            try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
+            try std.Io.Dir.cwd().createDirPath(io, dir);
         }
-        try std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = rendered });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = full_path, .data = rendered });
     }
 }
 
-fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: []const u8, repo_root: []const u8) ![]const []const u8 {
+fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: []const u8, repo_root: []const u8) anyerror![]const []const u8 {
     switch (spec.command) {
         .check => return gpa.dupe([]const u8, &.{ roc_binary_path, "check", "--no-cache", main_path }),
         .docs => return gpa.dupe([]const u8, &.{ roc_binary_path, "docs", main_path }),
@@ -2877,7 +2881,7 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
 fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
         .exited => |code| @intCast(code),
-        .signal => |sig| @as(u32, sig) | 0x80000000,
+        .signal => |sig| @as(u32, @intFromEnum(sig)) | 0x80000000,
         else => 0xFFFFFFFF,
     };
 }
@@ -2886,13 +2890,16 @@ fn mismatchMessage(gpa: Allocator, prefix: []const u8, expected: []const u8, act
     return std.fmt.allocPrint(gpa, "{s}: expected '{s}', got '{s}'", .{ prefix, expected, actual }) catch prefix;
 }
 
-fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResult, timer: *harness.Timer) TestResult {
+fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResult, timer: *harness.Timer, setup_ns: u64) TestResult {
     const duration_ns = timer.read();
+    const command_ns = duration_ns -| setup_ns;
 
     if (hasMemoryErrors(result.stderr)) |msg| {
         return .{
             .status = .fail,
             .duration_ns = duration_ns,
+            .setup_ns = setup_ns,
+            .command_ns = command_ns,
             .exit_code = exitCode(result.term),
             .stderr_capture = result.stderr,
             .stdout_capture = result.stdout,
@@ -2905,6 +2912,8 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
             return .{
                 .status = .crash,
                 .duration_ns = duration_ns,
+                .setup_ns = setup_ns,
+                .command_ns = command_ns,
                 .exit_code = exitCode(result.term),
                 .stderr_capture = result.stderr,
                 .stdout_capture = result.stdout,
@@ -2920,10 +2929,12 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
                 .exited => |code| code == 0,
                 else => false,
             };
-            if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
+            if (ok) return .{ .status = .pass, .duration_ns = duration_ns, .setup_ns = setup_ns, .command_ns = command_ns };
             return .{
                 .status = .fail,
                 .duration_ns = duration_ns,
+                .setup_ns = setup_ns,
+                .command_ns = command_ns,
                 .exit_code = exitCode(result.term),
                 .stderr_capture = result.stderr,
                 .stdout_capture = result.stdout,
@@ -2935,7 +2946,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
                 .exited => |code| code == 0 and std.mem.eql(u8, result.stdout, expected_stdout),
                 else => false,
             };
-            if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
+            if (ok) return .{ .status = .pass, .duration_ns = duration_ns, .setup_ns = setup_ns, .command_ns = command_ns };
 
             const msg = if (switch (result.term) {
                 .exited => |code| code == 0,
@@ -2948,6 +2959,8 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
             return .{
                 .status = .fail,
                 .duration_ns = duration_ns,
+                .setup_ns = setup_ns,
+                .command_ns = command_ns,
                 .exit_code = exitCode(result.term),
                 .stderr_capture = result.stderr,
                 .stdout_capture = result.stdout,
@@ -2959,7 +2972,7 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
                 .exited => |code| code == 2 and std.mem.eql(u8, result.stdout, expected_stdout),
                 else => false,
             };
-            if (ok) return .{ .status = .pass, .duration_ns = duration_ns };
+            if (ok) return .{ .status = .pass, .duration_ns = duration_ns, .setup_ns = setup_ns, .command_ns = command_ns };
 
             const msg = if (switch (result.term) {
                 .exited => |code| code == 2,
@@ -2972,6 +2985,8 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
             return .{
                 .status = .fail,
                 .duration_ns = duration_ns,
+                .setup_ns = setup_ns,
+                .command_ns = command_ns,
                 .exit_code = exitCode(result.term),
                 .stderr_capture = result.stderr,
                 .stdout_capture = result.stdout,
@@ -2979,10 +2994,12 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
             };
         },
         .clean_failure => {
-            if (isCleanUserFailure(result)) return .{ .status = .pass, .duration_ns = duration_ns };
+            if (isCleanUserFailure(result)) return .{ .status = .pass, .duration_ns = duration_ns, .setup_ns = setup_ns, .command_ns = command_ns };
             return .{
                 .status = .fail,
                 .duration_ns = duration_ns,
+                .setup_ns = setup_ns,
+                .command_ns = command_ns,
                 .exit_code = exitCode(result.term),
                 .stderr_capture = result.stderr,
                 .stdout_capture = result.stdout,
@@ -2994,10 +3011,12 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
                 .exited => |code| code == 0,
                 else => false,
             };
-            if (ok or isCleanUserFailure(result)) return .{ .status = .pass, .duration_ns = duration_ns };
+            if (ok or isCleanUserFailure(result)) return .{ .status = .pass, .duration_ns = duration_ns, .setup_ns = setup_ns, .command_ns = command_ns };
             return .{
                 .status = .fail,
                 .duration_ns = duration_ns,
+                .setup_ns = setup_ns,
+                .command_ns = command_ns,
                 .exit_code = exitCode(result.term),
                 .stderr_capture = result.stderr,
                 .stdout_capture = result.stdout,
@@ -3007,13 +3026,13 @@ fn evaluateResult(gpa: Allocator, expected: Expect, result: std.process.RunResul
     }
 }
 
-fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
+fn runSingleTest(io: std.Io, gpa: Allocator, spec: CliBugSpec, timeout_ms: u64) TestResult {
     var timer = harness.Timer.start() catch return .{ .status = .crash, .message = "no clock" };
 
-    const repo_root = std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", gpa) catch
+    const repo_root = std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa) catch
         return .{ .status = .crash, .message = "failed to resolve repo root" };
 
-    const cache_dirs = util.createIsolatedTestCacheDirs(gpa) catch
+    const cache_dirs = util.createIsolatedTestCacheDirs(io, gpa) catch
         return .{ .status = .crash, .message = "failed to create cache dirs" };
     defer cache_dirs.deinit(gpa);
 
@@ -3021,13 +3040,13 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
         currentProcessIdForFilename(),
         spec.id,
     }) catch return .{ .status = .crash, .message = "OOM" };
-    std.Io.Dir.cwd().deleteTree(std.testing.io, test_dir) catch {};
-    std.Io.Dir.cwd().createDirPath(std.testing.io, test_dir) catch |err| {
+    std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(io, test_dir) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "failed to create temp dir: {}", .{err}) catch "failed to create temp dir";
         return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
     };
 
-    writeFiles(gpa, spec, test_dir) catch |err| {
+    writeFiles(io, gpa, spec, test_dir) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "failed to write source files: {}", .{err}) catch "failed to write source files";
         return .{ .status = .crash, .duration_ns = timer.read(), .message = msg };
     };
@@ -3038,7 +3057,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     const argv = buildArgv(gpa, spec, main_path, test_dir, repo_root) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to build argv" };
 
-    var env_map = util.buildIsolatedTestEnvMap(gpa, null) catch
+    var env_map = util.buildIsolatedTestEnvMap(io, gpa, null) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
@@ -3046,16 +3065,19 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set zig cache env" };
 
-    const child_result = util.runChildWithTimeout(gpa, argv, .{
+    const setup_ns = timer.read();
+    const child_result = util.runChildWithTimeout(io, gpa, argv, .{
         .cwd = repo_root,
         .env_map = &env_map,
         .max_output_bytes = 2 * 1024 * 1024,
+        .timeout_ms = timeout_ms,
     }) catch |err| {
         const msg = std.fmt.allocPrint(gpa, "spawn error: {}", .{err}) catch "spawn error";
-        return .{ .status = .fail, .duration_ns = timer.read(), .message = msg };
+        const duration_ns = timer.read();
+        return .{ .status = .fail, .duration_ns = duration_ns, .setup_ns = setup_ns, .command_ns = duration_ns -| setup_ns, .message = msg };
     };
 
-    return evaluateResult(gpa, spec.expect, child_result, &timer);
+    return evaluateResult(gpa, spec.expect, child_result, &timer, setup_ns);
 }
 
 fn serializeResult(fd: posix.fd_t, result: TestResult) void {
@@ -3071,6 +3093,8 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     const header = WireHeader{
         .status = @intFromEnum(result.status),
         .duration_ns = result.duration_ns,
+        .setup_ns = result.setup_ns,
+        .command_ns = result.command_ns,
         .exit_code = result.exit_code,
         .stderr_len = @intCast(stderr_out.len),
         .stdout_len = @intCast(stdout_out.len),
@@ -3092,6 +3116,8 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
     return .{
         .status = @enumFromInt(header.status),
         .duration_ns = header.duration_ns,
+        .setup_ns = header.setup_ns,
+        .command_ns = header.command_ns,
         .exit_code = header.exit_code,
         .stderr_capture = harness.readStr(buf, &offset, header.stderr_len, gpa),
         .stdout_capture = harness.readStr(buf, &offset, header.stdout_len, gpa),
@@ -3107,6 +3133,8 @@ fn stabilizeResult(gpa: Allocator, result: TestResult) TestResult {
     return .{
         .status = result.status,
         .duration_ns = result.duration_ns,
+        .setup_ns = result.setup_ns,
+        .command_ns = result.command_ns,
         .exit_code = result.exit_code,
         .stderr_capture = dupeOptional(gpa, result.stderr_capture),
         .stdout_capture = dupeOptional(gpa, result.stdout_capture),
@@ -3138,7 +3166,7 @@ fn matchesFilters(spec: CliBugSpec, filters: []const []const u8) bool {
     return false;
 }
 
-fn filteredTests(gpa: Allocator, filters: []const []const u8) ![]const CliBugSpec {
+fn filteredTests(gpa: Allocator, filters: []const []const u8) anyerror![]const CliBugSpec {
     var result: std.ArrayListUnmanaged(CliBugSpec) = .empty;
     for (tests) |spec| {
         if (matchesFilters(spec, filters)) try result.append(gpa, spec);
@@ -3186,7 +3214,7 @@ fn printResults(specs: []const CliBugSpec, results: []const TestResult, verbose:
                 if (result.exit_code != 0) std.debug.print("        exit 0x{x}\n", .{result.exit_code});
                 printCapturedOutput("stderr", result.stderr_capture);
                 printCapturedOutput("stdout", result.stdout_capture);
-                std.debug.print("        Repro: zig build test-bughunt-cli -- --filter {s}\n\n", .{spec.bug_id});
+                std.debug.print("        Repro: zig build run-test-cli-bughunt -- --filter {s}\n\n", .{spec.bug_id});
             },
             .crash => {
                 crashed += 1;
@@ -3194,12 +3222,12 @@ fn printResults(specs: []const CliBugSpec, results: []const TestResult, verbose:
                 if (result.message) |msg| std.debug.print("        {s}\n", .{msg});
                 printCapturedOutput("stderr", result.stderr_capture);
                 printCapturedOutput("stdout", result.stdout_capture);
-                std.debug.print("        Repro: zig build test-bughunt-cli -- --filter {s}\n\n", .{spec.bug_id});
+                std.debug.print("        Repro: zig build run-test-cli-bughunt -- --filter {s}\n\n", .{spec.bug_id});
             },
             .timeout => {
                 timed_out += 1;
                 std.debug.print("  HANG  {s}\n", .{spec.name});
-                std.debug.print("        Repro: zig build test-bughunt-cli -- --filter {s}\n\n", .{spec.bug_id});
+                std.debug.print("        Repro: zig build run-test-cli-bughunt -- --filter {s}\n\n", .{spec.bug_id});
             },
         }
     }
@@ -3212,6 +3240,146 @@ fn printResults(specs: []const CliBugSpec, results: []const TestResult, verbose:
         specs.len,
         harness.nsToMs(wall_ns),
         workers,
+    });
+}
+
+fn statsStatus(status: Status) []const u8 {
+    return switch (status) {
+        .pass => "pass",
+        .fail => "fail",
+        .crash => "crash",
+        .timeout => "timeout",
+    };
+}
+
+fn statsSummary(results: []const TestResult) harness.StatsSummary {
+    var summary: harness.StatsSummary = .{ .total = results.len };
+    for (results) |result| {
+        switch (result.status) {
+            .pass => summary.passed += 1,
+            .fail => summary.failed += 1,
+            .crash => summary.crashed += 1,
+            .timeout => summary.timed_out += 1,
+        }
+    }
+    return summary;
+}
+
+fn maybeStatsData(gpa: Allocator, result: TestResult) []const harness.StatsData {
+    if (result.status == .pass) return &.{};
+
+    var count: usize = 0;
+    if (result.message != null) count += 1;
+    if (result.stderr_capture != null) count += 1;
+    if (result.stdout_capture != null) count += 1;
+    if (result.exit_code != 0) count += 1;
+    if (count == 0) return &.{};
+
+    const data = gpa.alloc(harness.StatsData, count) catch return &.{};
+    var next: usize = 0;
+    if (result.message) |message| {
+        data[next] = .{ .key = "message", .value = message };
+        next += 1;
+    }
+    if (result.stderr_capture) |stderr| {
+        data[next] = .{ .key = "stderr", .value = stderr };
+        next += 1;
+    }
+    if (result.stdout_capture) |stdout| {
+        data[next] = .{ .key = "stdout", .value = stdout };
+        next += 1;
+    }
+    if (result.exit_code != 0) {
+        const exit_text = std.fmt.allocPrint(gpa, "{d}", .{result.exit_code}) catch "unknown";
+        data[next] = .{ .key = "exit_code", .value = exit_text };
+    }
+    return data;
+}
+
+fn appendStatsEvent(
+    gpa: Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    parent_id: ?[]const u8,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    data: []const harness.StatsData,
+) void {
+    events.append(gpa, .{
+        .id = id,
+        .parent_id = parent_id,
+        .kind = kind,
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .data = data,
+    }) catch {};
+}
+
+fn appendCaseStatsEvent(
+    gpa: Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    name: []const u8,
+    status: []const u8,
+    duration_ns: u64,
+    maybe_span: ?harness.PoolSpan,
+    data: []const harness.StatsData,
+) void {
+    const start_ns = if (maybe_span) |span| span.start_ns else 0;
+    const end_ns = if (maybe_span) |span| span.end_ns else duration_ns;
+    const worker_index = if (maybe_span) |span| span.worker_index else null;
+    events.append(gpa, .{
+        .id = id,
+        .parent_id = null,
+        .kind = "case",
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .worker_index = worker_index,
+        .data = data,
+    }) catch {};
+}
+
+fn writeStatsJson(
+    gpa: Allocator,
+    io: std.Io,
+    path: []const u8,
+    specs: []const CliBugSpec,
+    results: []const TestResult,
+    spans: []const ?harness.PoolSpan,
+) anyerror!void {
+    var stats_arena = std.heap.ArenaAllocator.init(gpa);
+    defer stats_arena.deinit();
+    const stats_allocator = stats_arena.allocator();
+
+    var events: std.ArrayListUnmanaged(harness.StatsEvent) = .empty;
+
+    for (specs, results, 0..) |spec, result, i| {
+        const case_id = try std.fmt.allocPrint(stats_allocator, "case-{d}", .{i});
+        const status = statsStatus(result.status);
+        const maybe_span = if (i < spans.len) spans[i] else null;
+        appendCaseStatsEvent(stats_allocator, &events, case_id, spec.name, status, result.duration_ns, maybe_span, maybeStatsData(stats_allocator, result));
+
+        if (result.setup_ns > 0) {
+            const setup_id = try std.fmt.allocPrint(stats_allocator, "case-{d}-setup", .{i});
+            appendStatsEvent(stats_allocator, &events, setup_id, case_id, "setup", "write sources", "pass", 0, result.setup_ns, &.{});
+        }
+        if (result.command_ns > 0) {
+            const command_id = try std.fmt.allocPrint(stats_allocator, "case-{d}-roc-command", .{i});
+            appendStatsEvent(stats_allocator, &events, command_id, case_id, "roc command", @tagName(spec.command), status, result.setup_ns, result.setup_ns + result.command_ns, &.{});
+        }
+    }
+
+    try harness.writeRunnerStatsJson(stats_allocator, io, path, .{
+        .runner = "cli-bughunt",
+        .summary = statsSummary(results),
+        .events = events.items,
     });
 }
 
@@ -3229,8 +3397,8 @@ fn printUsage() void {
 }
 
 /// Runs the CLI bughunt repro harness.
-pub fn main() !void {
-    var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+pub fn main(init: std.process.Init) anyerror!void {
+    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
@@ -3238,7 +3406,7 @@ pub fn main() !void {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    const args = try harness.parseStandardArgs(arena);
+    const args = try harness.parseStandardArgs(arena, init.minimal.args);
     if (args.help_requested) {
         printUsage();
         return;
@@ -3258,16 +3426,22 @@ pub fn main() !void {
     const results = try gpa.alloc(TestResult, specs.len);
     defer gpa.free(results);
     @memset(results, .{ .status = .crash });
+    const spans = try gpa.alloc(?harness.PoolSpan, specs.len);
+    defer gpa.free(spans);
+    @memset(spans, null);
 
     std.debug.print("=== Bughunt CLI Repros ===\n", .{});
     std.debug.print("{d} tests, {d} workers, {d}s timeout\n\n", .{ specs.len, workers, args.timeout_ms / 1000 });
 
-    const worker_argv_template: []const []const u8 = &.{};
     var wall_timer = harness.Timer.start() catch @panic("no clock");
-    Pool.run(specs, results, workers, args.timeout_ms, gpa, worker_argv_template);
+    Pool.runWithSpans(init.io, specs, results, spans, workers, args.timeout_ms, gpa, null);
     const wall_ns = wall_timer.read();
 
     printResults(specs, results, args.verbose, wall_ns, workers);
+
+    if (args.stats_json_path) |path| {
+        try writeStatsJson(gpa, init.io, path, specs, results, spans);
+    }
 
     for (results) |result| {
         if (result.stderr_capture) |stderr| gpa.free(stderr);

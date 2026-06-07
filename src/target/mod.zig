@@ -249,7 +249,7 @@ pub const RocTarget = enum {
     }
 
     /// Get the dynamic linker path for this target
-    pub fn getDynamicLinkerPath(self: RocTarget) ![]const u8 {
+    pub fn getDynamicLinkerPath(self: RocTarget) error{ StaticLinkingTarget, WindowsTarget, NoKnownLinkerPath, WebAssemblyTarget }![]const u8 {
         return switch (self) {
             // x64 glibc targets
             .x64glibc, .x64linux => "/lib64/ld-linux-x86-64.so.2",

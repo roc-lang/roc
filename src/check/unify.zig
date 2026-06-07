@@ -90,7 +90,11 @@ pub const Result = union(enum) {
     const Self = @This();
 
     ok,
+    /// A mismatch that WAS recorded as a diagnostic (the poison_to_err path).
     problem: Problem.Idx,
+    /// A mismatch detected under `write_no_report`: nothing recorded, nothing
+    /// poisoned. The caller decides whether/how to report it.
+    mismatch,
 
     pub fn isOk(self: Self) bool {
         return self == .ok;
@@ -99,19 +103,17 @@ pub const Result = union(enum) {
     pub fn isProblem(self: Self) bool {
         switch (self) {
             .ok => return false,
-            .problem => return true,
+            .problem, .mismatch => return true,
         }
     }
 };
 
-/// Unify two type variables
-///
-/// This function
-/// * Resolves type variables & compresses paths
-/// * Compares variable contents for equality
-/// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(
-    gpa: Allocator,
+/// Borrowed bundle of the stable dependencies every unification needs.
+/// All fields are borrowed; construct cheaply from the owner on each call.
+pub const Env = struct {
+    /// Allocator that owns `problems`; used to grow it. Must be the same
+    /// allocator that created the problem store (see `appendProblem` below).
+    problems_gpa: Allocator,
     ident_store: *const Ident.Store,
     qualified_module_ident: Ident.Idx,
     types: *types_mod.Store,
@@ -120,86 +122,63 @@ pub fn unify(
     type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    /// The "expected" variable
-    a: Var,
-    /// The "actual" variable
-    b: Var,
-) std.mem.Allocator.Error!Result {
-    return unifyInContext(
-        gpa,
-        ident_store,
-        qualified_module_ident,
-        types,
-        problems,
-        snapshots,
-        type_writer,
-        unify_scratch,
-        occurs_scratch,
-        a,
-        b,
-        Context.none,
-    );
-}
+};
 
-/// Unify two type variables
+/// Controls what a top-level type mismatch does to the two operands.
+pub const MismatchBehavior = enum {
+    /// Merge both operands into a single `.err` type. This is the default: it
+    /// stops the now-erroneous vars from producing cascading downstream errors
+    /// (anything unifies OK against `.err`).
+    poison_to_err,
+    /// Merge on success exactly like a normal unify, but on a top-level mismatch
+    /// record NOTHING and poison NOTHING — return `Result.mismatch`. The caller
+    /// owns the diagnostic (with correct expected/actual roles) and any
+    /// rollback. Used by the branch-vs-expected check.
+    write_no_report,
+};
+
+/// Per-call options. Both axes default to the common case.
+pub const Options = struct {
+    context: Context = .none,
+    on_mismatch: MismatchBehavior = .poison_to_err,
+};
+
+/// Unify two type variables.
 ///
-/// This function
 /// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-///
-/// This function accepts a context and optional constraint origin var (for better error reporting)
-pub fn unifyInContext(
-    gpa: Allocator,
-    ident_store: *const Ident.Store,
-    qualified_module_ident: Ident.Idx,
-    types: *types_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    type_writer: *types_mod.TypeWriter,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    /// The "expected" variable
-    a: Var,
-    /// The "actual" variable
-    b: Var,
-    context: Context,
-) std.mem.Allocator.Error!Result {
+pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.Error!Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // First reset the scratch store
-    unify_scratch.reset();
+    env.unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(ident_store, qualified_module_ident, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier.init(env.ident_store, env.qualified_module_ident, env.types, env.unify_scratch, env.occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
-        const problem: Problem = blk: {
-            switch (err) {
-                error.OutOfMemory => {
-                    return error.OutOfMemory;
-                },
-                error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeMismatch => {},
+        }
 
-                    break :blk .{ .type_mismatch = .{
-                        .types = .{
-                            .expected_var = a,
-                            .expected_snapshot = expected_snapshot,
-                            .actual_var = b,
-                            .actual_snapshot = actual_snapshot,
-                        },
-                        .context = context,
-                    } };
-                },
-            }
-        };
-        const problem_idx = try problems.appendProblem(gpa, problem);
-        types.union_(a, b, .{
-            .content = .err,
-            .rank = Rank.generalized,
-        });
+        // write_no_report: no record, no poison — the caller owns it.
+        if (opts.on_mismatch == .write_no_report) return Result.mismatch;
+
+        const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
+        const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
+        const problem_idx = try env.problems.appendProblem(env.problems_gpa, .{ .type_mismatch = .{
+            .types = .{
+                .expected_var = a,
+                .expected_snapshot = expected_snapshot,
+                .actual_var = b,
+                .actual_snapshot = actual_snapshot,
+            },
+            .context = opts.context,
+        } });
+        // Only `poison_to_err` reaches here (`write_no_report` returned above).
+        env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
         return Result{ .problem = problem_idx };
     };
 
@@ -534,9 +513,7 @@ const Unifier = struct {
             },
             .alias => |b_alias| {
                 const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-                if (a_alias.origin_module.eql(b_alias.origin_module) and
-                    a_alias.ident.ident_idx.eql(b_alias.ident.ident_idx))
-                {
+                if (sameAliasIdentity(a_alias, b_alias)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
                     try self.unifyGuarded(backing_var, b_backing_var);
@@ -600,7 +577,11 @@ const Unifier = struct {
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
         const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
         const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-        self.unifyGuarded(a_backing_var, b_backing_var) catch {};
+        self.unifyGuarded(a_backing_var, b_backing_var) catch |err| switch (err) {
+            // Don't report backing-var mismatches; they are surfaced from the argument types.
+            error.TypeMismatch => {},
+            else => return err,
+        };
 
         // Ensure the target variable has slots for the alias arguments
         self.merge(vars, vars.b.desc.content);
@@ -1034,9 +1015,7 @@ const Unifier = struct {
             return;
         }
 
-        if (!a_type.origin_module.eql(b_type.origin_module) or
-            !a_type.ident.ident_idx.eql(b_type.ident.ident_idx))
-        {
+        if (!sameNominalIdentity(a_type, b_type)) {
             return error.TypeMismatch;
         }
 
@@ -2780,6 +2759,24 @@ pub const Scratch = struct {
         return try self.gathered_tags.appendSlice(self.gpa, fields);
     }
 };
+
+fn sameAliasIdentity(a: Alias, b: Alias) bool {
+    if (!a.origin_module.eql(b.origin_module)) return false;
+    if (a.source_decl.present or b.source_decl.present) {
+        return a.source_decl.eql(b.source_decl);
+    }
+    return a.ident.ident_idx.eql(b.ident.ident_idx);
+}
+
+fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
+    if (!a.origin_module.eql(b.origin_module)) return false;
+    const a_source_decl = a.sourceDecl();
+    const b_source_decl = b.sourceDecl();
+    if (a_source_decl.present or b_source_decl.present) {
+        return a_source_decl.eql(b_source_decl);
+    }
+    return a.ident.ident_idx.eql(b.ident.ident_idx);
+}
 
 /// In-place merge of two sorted regions of record fields.
 /// Given an array [left_sorted | right_sorted], produces [merged_sorted].

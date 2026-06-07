@@ -77,7 +77,7 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
 /// Writes a `call` opcode followed by a 5-byte padded LEB128 operand.
 /// Records the relocation position relative to this function's code buffer so that
 /// `insertIntoModule` can compute the absolute offset later.
-pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex, provisional_func_idx: u32) !void {
+pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex, provisional_func_idx: u32) Allocator.Error!void {
     try self.code.append(allocator, WasmModule.Op.call);
     const code_pos: u32 = @intCast(self.code.items.len);
     try self.import_relocations.append(allocator, .{ .index = .{
@@ -95,7 +95,7 @@ pub fn addIndexRelocation(
     type_id: WasmLinking.IndexRelocType,
     code_pos: u32,
     symbol_idx: SymbolIndex,
-) !void {
+) Allocator.Error!void {
     try self.import_relocations.append(allocator, .{ .index = .{
         .type_id = type_id,
         .code_pos = code_pos,
@@ -111,7 +111,7 @@ pub fn addOffsetRelocation(
     code_pos: u32,
     symbol_idx: SymbolIndex,
     addend: i32,
-) !void {
+) Allocator.Error!void {
     try self.import_relocations.append(allocator, .{ .offset = .{
         .type_id = type_id,
         .code_pos = code_pos,
@@ -126,7 +126,7 @@ pub fn addOffsetRelocation(
 /// `code_bytes` (accounting for the LEB128 body-length prefix and preamble).
 /// Returns the byte offset where this function's body starts in `code_bytes`
 /// (i.e. the position of the body-length prefix).
-pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) !u32 {
+pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) Allocator.Error!u32 {
     const fn_offset: u32 = @intCast(module.code_bytes.items.len);
     try module.function_offsets.append(allocator, fn_offset);
 
@@ -178,7 +178,7 @@ pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) 
 /// Used for stack prologues and other code that must appear before the main
 /// instruction bytes but whose content isn't known until after code generation
 /// (e.g. because the stack frame size depends on what instructions were emitted).
-pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) !void {
+pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) Allocator.Error!void {
     if (prefix.len == 0) return;
     const prefix_len: u32 = @intCast(prefix.len);
     // Adjust relocation offsets to account for the prefix

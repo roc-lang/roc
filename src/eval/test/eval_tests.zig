@@ -2778,7 +2778,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
         \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {
-        \\    Skip({ count, rest }) => count == 1 and Iter.fold(rest, 0.I64, |acc, item| acc + item) == 2
+        \\    Skip({ rest }) => Iter.fold(rest, 0.I64, |acc, item| acc + item) == 2
         \\    _ => Bool.False
         \\}
         ,
@@ -2824,8 +2824,8 @@ const core_tests = [_]TestCase{
         .source =
         \\fib_iter : Iter(U64)
         \\fib_iter = {
-        \\    adv : ((U64, U64) -> Try((U64, Iter(U64)), [NoMore]))
-        \\    adv = |(a, b)| Try.Ok((a, Iter.custom((b, a + b), Unknown, adv)))
+        \\    adv : ((U64, U64) -> Try((U64, (U64, U64)), [NoMore]))
+        \\    adv = |(a, b)| Try.Ok((a, (b, a + b)))
         \\
         \\    Iter.custom(
         \\        (0.U64, 1.U64),
@@ -3130,6 +3130,47 @@ const core_tests = [_]TestCase{
         \\main = (read(Crate.Crate(5)), read(Count.Count(8)))
         ,
         .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: same-named block-local attached methods keep distinct nominal owners",
+        .source_kind = .module,
+        .source =
+        \\first = {
+        \\    Local := [First(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.First(n)| n
+        \\    }
+        \\
+        \\    Local.First(5).get()
+        \\}
+        \\
+        \\second = {
+        \\    Local := [Second(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.Second(n)| n + 100
+        \\    }
+        \\
+        \\    Local.Second(8).get()
+        \\}
+        \\
+        \\main = (first, second)
+        ,
+        .expected = .{ .inspect_str = "(5, 108)" },
+    },
+    .{
+        .name = "inspect: block-local associated bare forward reference preserves later sibling capture",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    captured = 41.U64
+        \\    Local := [Local].{
+        \\        first = second
+        \\        second = captured
+        \\    }
+        \\    Local.first
+        \\}
+        ,
+        .expected = .{ .inspect_str = "41" },
     },
     .{
         .name = "inspect: explicit where method constraint keeps owner generic",
