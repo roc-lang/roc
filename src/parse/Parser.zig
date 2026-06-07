@@ -2094,6 +2094,28 @@ const ExprLambdaBodyStack = struct {
     }
 };
 
+const PatternRootStack = struct {
+    current: ?PatternRootState = null,
+    stack: std.ArrayList(PatternRootState) = .empty,
+
+    fn deinit(self: *PatternRootStack, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    fn enter(self: *PatternRootStack, allocator: std.mem.Allocator, state: PatternRootState) Error!void {
+        if (self.current) |current| {
+            try self.stack.append(allocator, current);
+        }
+        self.current = state;
+    }
+
+    fn leave(self: *PatternRootStack) PatternRootState {
+        const state = self.current orelse unreachable;
+        self.current = self.stack.pop();
+        return state;
+    }
+};
+
 const ExprCollectionStack = struct {
     current: ?ExprCollectionState = null,
     stack: std.ArrayList(ExprCollectionState) = .empty,
@@ -2592,6 +2614,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var expr_blocks: ExprBlockStack = .{};
     defer expr_blocks.deinit(open_allocator);
     var pattern_root_state: PatternRootState = undefined;
+    var pattern_roots: PatternRootStack = .{};
+    defer pattern_roots.deinit(open_allocator);
     var pattern_tag_args_state: PatternTagArgsState = undefined;
     var pattern_list_state: PatternListState = undefined;
     var pattern_record_state: PatternRecordState = undefined;
@@ -2665,6 +2689,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &expr_for_after_body_state;
     _ = &expr_blocks;
     _ = &pattern_root_state;
+    _ = &pattern_roots;
     _ = &pattern_tag_args_state;
     _ = &pattern_list_state;
     _ = &pattern_record_state;
@@ -5899,7 +5924,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
                 else => {
-                    try open_syntax.push(open_allocator, .pattern_root, PatternRootState, pattern_root_state);
+                    try pattern_roots.enter(open_allocator, pattern_root_state);
+                    try open_syntax.pushMarker(open_allocator, .pattern_root);
                     pattern_alternatives = pattern_root_state.alternatives;
                     context = .pattern_prefix;
                     dispatch_token = self.peek();
@@ -5909,7 +5935,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .pattern_root_after_one => switch (dispatch_token) {
                 .OpBar,
                 => {
-                    const state = open_syntax.popPayload(.pattern_root, PatternRootState);
+                    open_syntax.popMarker(.pattern_root);
+                    const state = pattern_roots.leave();
                     const p = last_pattern orelse unreachable;
                     last_pattern = null;
                     if (state.alternatives == .alternatives_forbidden) {
@@ -5927,7 +5954,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
                 else => {
-                    const state = open_syntax.popPayload(.pattern_root, PatternRootState);
+                    open_syntax.popMarker(.pattern_root);
+                    const state = pattern_roots.leave();
                     const p = last_pattern orelse unreachable;
                     last_pattern = null;
                     if (state.alternatives == .alternatives_forbidden) {
