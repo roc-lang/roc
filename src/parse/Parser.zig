@@ -382,51 +382,54 @@ const OpenSyntaxKind = enum(u8) {
 };
 
 const OpenSyntaxStack = struct {
-    const Entry = struct {
-        kind: OpenSyntaxKind,
-        payload_start: u32,
-    };
-
-    entries: std.ArrayList(Entry) = .empty,
+    kinds: std.ArrayList(OpenSyntaxKind) = .empty,
+    payload_starts: std.ArrayList(u32) = .empty,
     payloads: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
-        self.entries.deinit(allocator);
+        self.kinds.deinit(allocator);
+        self.payload_starts.deinit(allocator);
         self.payloads.deinit(allocator);
     }
 
     fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.kinds.ensureUnusedCapacity(allocator, 1);
+        try self.payload_starts.ensureUnusedCapacity(allocator, 1);
         const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
         const end = start + @sizeOf(Payload);
         try self.payloads.resize(allocator, end);
         @memcpy(self.payloads.items[start..end], std.mem.asBytes(&payload));
-        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(start) });
+        self.kinds.appendAssumeCapacity(kind);
+        self.payload_starts.appendAssumeCapacity(@intCast(start));
     }
 
     fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
-        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
+        try self.kinds.ensureUnusedCapacity(allocator, 1);
+        try self.payload_starts.ensureUnusedCapacity(allocator, 1);
+        self.kinds.appendAssumeCapacity(kind);
+        self.payload_starts.appendAssumeCapacity(@intCast(self.payloads.items.len));
     }
 
     fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
-        if (self.entries.items.len == 0) return null;
-        return self.entries.items[self.entries.items.len - 1].kind;
+        if (self.kinds.items.len == 0) return null;
+        return self.kinds.items[self.kinds.items.len - 1];
     }
 
     fn depth(self: *const OpenSyntaxStack) usize {
-        return self.entries.items.len;
+        return self.kinds.items.len;
     }
 
     fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
-        for (self.entries.items) |entry| {
-            if (entry.kind == kind) return true;
+        for (self.kinds.items) |entry_kind| {
+            if (entry_kind == kind) return true;
         }
         return false;
     }
 
     fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
-        const entry = self.entries.pop() orelse unreachable;
-        std.debug.assert(entry.kind == expected);
-        const start: usize = @intCast(entry.payload_start);
+        const kind = self.kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        const start: usize = @intCast(self.payload_starts.pop() orelse unreachable);
         const end = start + @sizeOf(Payload);
         var payload: Payload = undefined;
         @memcpy(std.mem.asBytes(&payload), self.payloads.items[start..end]);
@@ -435,9 +438,9 @@ const OpenSyntaxStack = struct {
     }
 
     fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
-        const entry = self.entries.pop() orelse unreachable;
-        std.debug.assert(entry.kind == expected);
-        self.payloads.shrinkRetainingCapacity(@intCast(entry.payload_start));
+        const kind = self.kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        self.payloads.shrinkRetainingCapacity(@intCast(self.payload_starts.pop() orelse unreachable));
     }
 };
 
