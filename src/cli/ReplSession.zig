@@ -720,7 +720,7 @@ const testing = std.testing;
 /// The cli_test runner is single-threaded, so lazy init needs no locking.
 var shared_test_builtins: ?eval.BuiltinModules = null;
 
-fn sharedTestBuiltins() anyerror!*eval.BuiltinModules {
+fn sharedTestBuiltins() Allocator.Error!*eval.BuiltinModules {
     if (shared_test_builtins == null) {
         shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
     }
@@ -729,7 +729,7 @@ fn sharedTestBuiltins() anyerror!*eval.BuiltinModules {
 
 /// Build a test session that borrows the shared Builtin (see
 /// `shared_test_builtins`) instead of publishing its own.
-fn testRepl(backend_kind: eval.EvalBackend) anyerror!ReplSession {
+fn testRepl(backend_kind: eval.EvalBackend) Allocator.Error!ReplSession {
     return ReplSession.initBorrowingBuiltins(
         testing.allocator,
         std.testing.io,
@@ -777,7 +777,7 @@ fn expectInterpreter(expr: []const u8, expected: []const u8) anyerror!void {
 
 /// Build the wrapped module source (`<defs>\nmain = <expr>`) for `expr` and
 /// confirm it is an expression. Caller owns the returned source.
-fn replExprSource(repl: *ReplSession, expr: []const u8) anyerror![]u8 {
+fn replExprSource(repl: *ReplSession, expr: []const u8) Allocator.Error![]u8 {
     const line = std.mem.trim(u8, expr, " \t\r\n");
     const input_info = switch (try repl.inputStatus(line)) {
         .complete => |info| info,
@@ -795,7 +795,7 @@ fn replExprSource(repl: *ReplSession, expr: []const u8) anyerror![]u8 {
 /// both render `expected`. Only the native target is lowered — wasm coverage is
 /// exercised explicitly by `expectAllBackends` on a representative subset, so it
 /// is not re-run for every native assertion.
-fn expectAllNative(expr: []const u8, expected: []const u8) anyerror!void {
+fn expectAllNative(expr: []const u8, expected: []const u8) Allocator.Error!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
@@ -820,7 +820,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) anyerror!void {
 /// Evaluate `expr` on all backends — interpreter, dev, and wasm. Lowers both the
 /// native and wasm targets, so reserve this for a representative subset rather
 /// than every assertion.
-fn expectAllBackends(expr: []const u8, expected: []const u8) anyerror!void {
+fn expectAllBackends(expr: []const u8, expected: []const u8) Allocator.Error!void {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
@@ -1152,6 +1152,23 @@ test "Repl - variable redefinition" {
     try expectStateful(.wasm, steps);
 }
 
+test "Repl - invalid syntax preserves definitions" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const assigned = try repl.step("x = 42");
+    defer testing.allocator.free(assigned);
+    try testing.expectEqualStrings("assigned `x`", assigned);
+
+    const diagnostic = try repl.step("x +");
+    defer testing.allocator.free(diagnostic);
+    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED TOKEN") != null);
+
+    const result = try repl.step("x");
+    defer testing.allocator.free(result);
+    try testing.expectEqualStrings("42.0", result);
+}
+
 test "Repl - for loop over list" {
     const steps = &[_][2][]const u8{
         .{ "[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]" },
@@ -1325,9 +1342,12 @@ test "Repl - 4-arg lambda call (dev)" {
     try expectStateful(.wasm, steps);
 }
 
-fn expectSplit(input: []const u8, expected: []const []const u8) anyerror!void {
-    const slices = try splitInputIntoStatementsWithAllocator(testing.allocator, input);
-    defer freeStatementSlicesWithAllocator(testing.allocator, slices);
+fn expectSplit(input: []const u8, expected: []const []const u8) Allocator.Error!void {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const slices = try repl.splitInputIntoStatements(input);
+    defer repl.freeStatementSlices(slices);
 
     try testing.expectEqual(expected.len, slices.len);
     for (expected, slices) |want, got| {

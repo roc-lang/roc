@@ -25,11 +25,11 @@ When you are requested to add a test without a specific location, take some time
 
 ### Common Commands
 
-- Run all tests: `zig build test`. To run a specific test: `zig build test -- --test-filter "name of test"`. NEVER use the standard `zig test`, it does not work with our project.
+- Run all Zig unit tests: `zig build run-test-zig`. To run a specific test: `zig build run-test-zig -- --test-filter "name of test"`. NEVER use the standard `zig test`, it does not work with our project.
 - Generate or update all snapshots files: `zig build snapshot`
 - Generate or update specific snapshot file: `zig build snapshot -- <file_path>`
 - Update EXPECTED from PROBLEMS in snapshot file: `zig build update-expected -- <file_path>`
-- To generate (or update) AND test the snapshots: `zig build snapshot && zig build test`.
+- To validate snapshots and run Zig unit tests: `zig build run-check-snapshots && zig build run-test-zig`.
 
 ### Snapshot File Structure
 

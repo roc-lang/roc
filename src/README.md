@@ -51,19 +51,27 @@ Try it with `zig build -Dno-bin -fincremental --watch`
 
 ### Running Language Server (LSP) Tests
 
-To run only the LSP-related tests, use:
+The LSP tests are split into fast unit coverage and compiler-backed integration
+coverage.
 
 ```sh
-zig build test-lsp
+zig build run-test-zig-module-lsp_unit
+zig build run-test-zig-module-lsp_integration
 ```
 
 For faster iteration with incremental compilation and watch mode:
 
 ```sh
-zig build test-lsp -fincremental --watch
+zig build run-test-zig-module-lsp_unit -fincremental --watch
 ```
 
-This is useful when working on LSP features like syntax checking, completions, semantic tokens, etc.
+Use `lsp_unit` for protocol, transport, document store, token-only coloring,
+and handler routing work that does not need compiler checking. Use
+`lsp_integration` when changing syntax checking, completions, hover,
+definition, document symbols, diagnostics, or behavior that depends on real Roc
+source, compiled builtins, and platform/app checking. The integration command
+is a parallel harness; pass `-- --threads N` to cap workers or
+`-- --test-filter "case name"` to run matching integration cases.
 
 ### Expanding to ZLS
 
@@ -89,7 +97,7 @@ Make sure to check the logs if you aren't getting type failures.
 Sadly, this is not nearly as fast due to building binaries.
 One day, we will get dev zig backends, and it should be fast.
 
-Try it with `zig build test -fincremental --watch`
+Try it with `zig build run-test-zig -fincremental --watch`
 
 ## Overview
 

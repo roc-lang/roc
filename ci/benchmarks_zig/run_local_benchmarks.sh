@@ -223,8 +223,8 @@ main() {
     log "Building $BASE_BRANCH branch"
     git checkout "$BASE_BRANCH" --quiet
 
-    echo "  Running: zig build release"
-    if ! zig build release; then
+    echo "  Running: zig build build-release"
+    if ! zig build build-release; then
         error "Failed to build $BASE_BRANCH branch"
     fi
 
@@ -237,8 +237,8 @@ main() {
     log "Building $ORIGINAL_BRANCH branch"
     git checkout "$ORIGINAL_BRANCH" --quiet
 
-    echo "  Running: zig build release"
-    if ! zig build release; then
+    echo "  Running: zig build build-release"
+    if ! zig build build-release; then
         error "Failed to build $ORIGINAL_BRANCH branch"
     fi
 

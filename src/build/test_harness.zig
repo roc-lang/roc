@@ -20,46 +20,47 @@ pub const Timer = struct {
     pub const Error = error{UnsupportedClock};
 
     pub fn start() Error!Timer {
-        return .{ .start_ns = readMonotonicNs() };
+        return .{ .start_ns = monotonicNs() };
     }
 
     /// Returns elapsed nanoseconds since start.
     pub fn read(self: *Timer) u64 {
-        return readMonotonicNs() - self.start_ns;
+        return monotonicNs() - self.start_ns;
     }
 
     /// Returns elapsed nanoseconds and resets the timer.
     pub fn lap(self: *Timer) u64 {
-        const now = readMonotonicNs();
+        const now = monotonicNs();
         const elapsed = now - self.start_ns;
         self.start_ns = now;
         return elapsed;
     }
-
-    fn readMonotonicNs() u64 {
-        if (builtin.os.tag == .linux) {
-            var ts: std.os.linux.timespec = undefined;
-            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
-        } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
-            var ts: std.c.timespec = undefined;
-            _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
-        } else if (builtin.os.tag == .windows) {
-            const k32 = struct {
-                extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.winapi) std.os.windows.BOOL;
-                extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.winapi) std.os.windows.BOOL;
-            };
-            var counter: i64 = undefined;
-            var freq: i64 = undefined;
-            if (k32.QueryPerformanceCounter(&counter) == .FALSE) unreachable;
-            if (k32.QueryPerformanceFrequency(&freq) == .FALSE) unreachable;
-            return @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
-        } else {
-            @compileError("unsupported monotonic clock for test harness");
-        }
-    }
 };
+
+/// Returns a monotonic timestamp in nanoseconds.
+pub fn monotonicNs() u64 {
+    if (builtin.os.tag == .linux) {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    } else if (builtin.os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.winapi) std.os.windows.BOOL;
+            extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.winapi) std.os.windows.BOOL;
+        };
+        var counter: i64 = undefined;
+        var freq: i64 = undefined;
+        if (k32.QueryPerformanceCounter(&counter) == .FALSE) unreachable;
+        if (k32.QueryPerformanceFrequency(&freq) == .FALSE) unreachable;
+        return @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
+    } else {
+        @compileError("unsupported monotonic clock for test harness");
+    }
+}
 
 const non_tty_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
 
@@ -273,6 +274,13 @@ pub fn pipe() error{PipeFailed}![2]posix.fd_t {
 /// close: closes a file descriptor (ignores errors).
 pub fn closeFd(fd: posix.fd_t) void {
     _ = std.c.close(fd);
+}
+
+/// Mark a file descriptor as close-on-exec so subprocesses do not inherit it.
+pub fn setCloseOnExec(fd: posix.fd_t) void {
+    const flags = std.c.fcntl(fd, std.c.F.GETFD);
+    if (flags == -1) return;
+    _ = std.c.fcntl(fd, std.c.F.SETFD, flags | std.c.FD_CLOEXEC);
 }
 
 /// fork: wrapper around std.c.fork that returns pid_t or error.
@@ -499,102 +507,6 @@ pub fn printSlowestN(
     }
 }
 
-const timing_dir = ".zig-cache/roc-test-timings";
-const max_timing_file_bytes = 16 * 1024 * 1024;
-
-/// Per-runner timing history, keyed by stable test display name.
-///
-/// This is test-infrastructure scheduling data only. Missing or malformed
-/// entries do not affect test coverage; they only mean a runner falls back to
-/// its deterministic default ordering for that test.
-pub const TimingWeights = struct {
-    allocator: Allocator,
-    map: std.StringHashMap(u64),
-
-    pub fn init(allocator: Allocator) TimingWeights {
-        return .{
-            .allocator = allocator,
-            .map = std.StringHashMap(u64).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *TimingWeights) void {
-        var key_it = self.map.keyIterator();
-        while (key_it.next()) |key| {
-            self.allocator.free(key.*);
-        }
-        self.map.deinit();
-    }
-
-    pub fn load(self: *TimingWeights, io: std.Io, path: []const u8) void {
-        const contents = std.Io.Dir.cwd().readFileAlloc(
-            io,
-            path,
-            self.allocator,
-            .limited(max_timing_file_bytes),
-        ) catch return;
-        defer self.allocator.free(contents);
-
-        var lines = std.mem.splitScalar(u8, contents, '\n');
-        while (lines.next()) |line| {
-            if (line.len == 0) continue;
-            const tab = std.mem.findScalar(u8, line, '\t') orelse continue;
-            const duration_ns = std.fmt.parseUnsigned(u64, line[0..tab], 10) catch continue;
-            const name = line[tab + 1 ..];
-            if (name.len == 0) continue;
-
-            if (self.map.getPtr(name)) |existing| {
-                existing.* = duration_ns;
-                continue;
-            }
-
-            const owned_name = self.allocator.dupe(u8, name) catch continue;
-            self.map.put(owned_name, duration_ns) catch {
-                self.allocator.free(owned_name);
-                continue;
-            };
-        }
-    }
-
-    pub fn weight(self: *const TimingWeights, name: []const u8, default_weight: u64) u64 {
-        return self.map.get(name) orelse default_weight;
-    }
-};
-
-/// Return the default timing-history path for a named standalone test runner.
-pub fn defaultTimingPath(allocator: Allocator, runner_name: []const u8) Allocator.Error![]const u8 {
-    std.debug.assert(std.mem.findScalar(u8, runner_name, '/') == null);
-    std.debug.assert(std.mem.findScalar(u8, runner_name, '\\') == null);
-    return std.fmt.allocPrint(allocator, "{s}/{s}.tsv", .{ timing_dir, runner_name });
-}
-
-/// Persist test durations as timing-history weights keyed by test display name.
-pub fn writeTimingWeights(
-    comptime Spec: type,
-    io: std.Io,
-    allocator: Allocator,
-    path: []const u8,
-    specs: []const Spec,
-    durations: []const u64,
-    comptime getName: fn (Spec) []const u8,
-) void {
-    if (specs.len != durations.len) return;
-
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(allocator);
-
-    for (specs, durations) |spec, duration_ns| {
-        if (duration_ns == 0) continue;
-        buf.print(allocator, "{d}\t{s}\n", .{ duration_ns, getName(spec) }) catch return;
-    }
-
-    std.Io.Dir.cwd().createDirPath(io, timing_dir) catch return;
-    std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = path,
-        .data = buf.items,
-    }) catch {};
-}
-
 // CLI argument parsing
 
 /// Common CLI arguments shared across parallel test runners.
@@ -606,6 +518,7 @@ pub const StandardArgs = struct {
     verbose: bool = false,
     include_llvm: bool = false,
     help_requested: bool = false,
+    stats_json_path: ?[]const u8 = null,
     /// When set, the runner runs a single test (by index after filters) and
     /// serializes its result to stdout. Used by the Windows Child-based
     /// parallel executor in `ProcessPool.runChildPool` for Phase-2 retry.
@@ -622,7 +535,198 @@ pub const StandardArgs = struct {
     positional: []const []const u8 = &.{},
 };
 
-fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
+/// Aggregate status counts for one harness run.
+pub const StatsSummary = struct {
+    total: usize = 0,
+    passed: usize = 0,
+    failed: usize = 0,
+    skipped: usize = 0,
+    crashed: usize = 0,
+    timed_out: usize = 0,
+};
+
+/// Extra key/value detail attached to one stats event.
+pub const StatsData = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+/// Completed timing span emitted by a runner.
+pub const StatsEvent = struct {
+    id: []const u8,
+    parent_id: ?[]const u8 = null,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    worker_index: ?usize = null,
+    data: []const StatsData = &.{},
+
+    /// Returns the non-negative event duration in nanoseconds.
+    pub fn durationNs(self: StatsEvent) u64 {
+        return self.end_ns -| self.start_ns;
+    }
+};
+
+/// Top-level stats payload written by one runner.
+pub const RunnerStats = struct {
+    runner: []const u8,
+    summary: StatsSummary,
+    events: []const StatsEvent,
+};
+
+/// Parent-recorded execution span for one process-pool test.
+pub const PoolSpan = struct {
+    test_index: usize,
+    worker_index: usize,
+    start_ns: u64,
+    end_ns: u64,
+
+    pub fn durationNs(self: PoolSpan) u64 {
+        return self.end_ns -| self.start_ns;
+    }
+};
+
+/// Returns true when a stats status should be treated as failure detail.
+pub fn statusIsFailure(status: []const u8) bool {
+    return !std.mem.eql(u8, status, "pass") and
+        !std.mem.eql(u8, status, "passed") and
+        !std.mem.eql(u8, status, "skip") and
+        !std.mem.eql(u8, status, "skipped");
+}
+
+/// Returns true when a worker argv flag consumes the following value.
+pub fn workerTemplateArgConsumesValue(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--worker") or
+        std.mem.eql(u8, arg, "--worker-backend") or
+        std.mem.eql(u8, arg, "--stats-json");
+}
+
+/// Returns true when a worker argv flag should be removed by itself.
+pub fn workerTemplateDropsFlag(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--worker-stream");
+}
+
+/// Writes a self-contained runner stats JSON file.
+pub fn writeRunnerStatsJson(
+    allocator: Allocator,
+    io: std.Io,
+    path: []const u8,
+    stats: RunnerStats,
+) !void {
+    if (std.fs.path.dirname(path)) |dir| {
+        std.Io.Dir.cwd().access(io, dir, .{}) catch |err| switch (err) {
+            error.FileNotFound => try std.Io.Dir.cwd().createDirPath(io, dir),
+            else => return err,
+        };
+    }
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 1,\n  \"runner\": ");
+    try appendJsonString(&out, allocator, stats.runner);
+    try out.appendSlice(allocator, ",\n  \"summary\": {");
+    try appendSummaryField(&out, allocator, "total", stats.summary.total, true);
+    try appendSummaryField(&out, allocator, "passed", stats.summary.passed, false);
+    try appendSummaryField(&out, allocator, "failed", stats.summary.failed, false);
+    try appendSummaryField(&out, allocator, "skipped", stats.summary.skipped, false);
+    try appendSummaryField(&out, allocator, "crashed", stats.summary.crashed, false);
+    try appendSummaryField(&out, allocator, "timed_out", stats.summary.timed_out, false);
+    try out.appendSlice(allocator, "\n  },\n  \"events\": [\n");
+
+    for (stats.events, 0..) |event, i| {
+        if (i > 0) try out.appendSlice(allocator, ",\n");
+        try out.appendSlice(allocator, "    {\n      \"id\": ");
+        try appendJsonString(&out, allocator, event.id);
+        try out.appendSlice(allocator, ",\n      \"parent_id\": ");
+        if (event.parent_id) |parent_id| {
+            try appendJsonString(&out, allocator, parent_id);
+        } else {
+            try out.appendSlice(allocator, "null");
+        }
+        try out.appendSlice(allocator, ",\n      \"kind\": ");
+        try appendJsonString(&out, allocator, event.kind);
+        try out.appendSlice(allocator, ",\n      \"name\": ");
+        try appendJsonString(&out, allocator, event.name);
+        try out.appendSlice(allocator, ",\n      \"status\": ");
+        try appendJsonString(&out, allocator, event.status);
+        try appendNumberField(&out, allocator, "start_ns", event.start_ns);
+        try appendNumberField(&out, allocator, "end_ns", event.end_ns);
+        try appendNumberField(&out, allocator, "duration_ns", event.durationNs());
+        if (event.worker_index) |worker_index| {
+            try appendNumberField(&out, allocator, "worker_index", @intCast(worker_index));
+        }
+        if (event.data.len > 0) {
+            try out.appendSlice(allocator, ",\n      \"data\": {");
+            for (event.data, 0..) |data, data_i| {
+                if (data_i > 0) try out.appendSlice(allocator, ",");
+                try out.appendSlice(allocator, "\n        ");
+                try appendJsonString(&out, allocator, data.key);
+                try out.appendSlice(allocator, ": ");
+                try appendJsonString(&out, allocator, data.value);
+            }
+            try out.appendSlice(allocator, "\n      }");
+        }
+        try out.appendSlice(allocator, "\n    }");
+    }
+
+    try out.appendSlice(allocator, "\n  ]\n}\n");
+
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, out.items);
+}
+
+fn appendSummaryField(out: *std.ArrayList(u8), allocator: Allocator, name: []const u8, value: usize, first: bool) !void {
+    if (!first) try out.appendSlice(allocator, ",");
+    try out.appendSlice(allocator, "\n    ");
+    try appendJsonString(out, allocator, name);
+    try out.appendSlice(allocator, ": ");
+    try appendU64(out, allocator, @intCast(value));
+}
+
+fn appendNumberField(out: *std.ArrayList(u8), allocator: Allocator, name: []const u8, value: u64) !void {
+    try out.appendSlice(allocator, ",\n      ");
+    try appendJsonString(out, allocator, name);
+    try out.appendSlice(allocator, ": ");
+    try appendU64(out, allocator, value);
+}
+
+fn appendU64(out: *std.ArrayList(u8), allocator: Allocator, value: u64) !void {
+    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
+}
+
+fn appendJsonString(out: *std.ArrayList(u8), allocator: Allocator, value: []const u8) !void {
+    try out.append(allocator, '"');
+    for (value) |byte| {
+        switch (byte) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            0x08 => try out.appendSlice(allocator, "\\b"),
+            0x0c => try out.appendSlice(allocator, "\\f"),
+            else => {
+                if (byte < 0x20) {
+                    const escaped = try std.fmt.allocPrint(allocator, "\\u{x:0>4}", .{byte});
+                    defer allocator.free(escaped);
+                    try out.appendSlice(allocator, escaped);
+                } else {
+                    try out.append(allocator, byte);
+                }
+            },
+        }
+    }
+    try out.append(allocator, '"');
+}
+
+/// Parse standard harness flags from an argv-style slice.
+pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator) !StandardArgs {
     var filters: std.ArrayListUnmanaged([]const u8) = .empty;
     var positional: std.ArrayListUnmanaged([]const u8) = .empty;
     var args = StandardArgs{};
@@ -665,6 +769,11 @@ fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Allocator
             }
         } else if (std.mem.eql(u8, arg, "--worker-stream")) {
             args.worker_stream = true;
+        } else if (std.mem.eql(u8, arg, "--stats-json")) {
+            i += 1;
+            if (i < raw_args.len) {
+                args.stats_json_path = raw_args[i];
+            }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             args.help_requested = true;
         } else if (!std.mem.startsWith(u8, arg, "--")) {
@@ -758,6 +867,31 @@ test "parseStandardArgsFromSlice parses --worker and --worker-backend without po
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }
 
+test "parseStandardArgsFromSlice parses stats flags without polluting positional" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const args = try parseStandardArgsFromSlice(&.{
+        "runner",
+        "roc-binary",
+        "--stats-json",
+        "zig-out/minici/raw/eval.json",
+    }, arena.allocator());
+
+    try std.testing.expect(args.stats_json_path != null);
+    try std.testing.expectEqualStrings("zig-out/minici/raw/eval.json", args.stats_json_path.?);
+    try std.testing.expectEqual(@as(usize, 1), args.positional.len);
+    try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
+}
+
+test "worker template strips stats and worker flags" {
+    try std.testing.expect(workerTemplateArgConsumesValue("--worker"));
+    try std.testing.expect(workerTemplateArgConsumesValue("--worker-backend"));
+    try std.testing.expect(workerTemplateArgConsumesValue("--stats-json"));
+    try std.testing.expect(workerTemplateDropsFlag("--worker-stream"));
+    try std.testing.expect(!workerTemplateArgConsumesValue("--filter"));
+}
+
 // Process pool (comptime-generic)
 
 /// Configuration for the process pool. The runner provides type-specific
@@ -766,7 +900,7 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
     return struct {
         /// Run one test in the forked child. Called with an arena allocator
         /// and the same timeout budget enforced by the parent watchdog.
-        runTest: *const fn (Allocator, Spec, u64) Result,
+        runTest: *const fn (std.Io, Allocator, Spec, u64) Result,
         /// Serialize a result to the pipe fd.
         serialize: *const fn (posix.fd_t, Result) void,
         /// Deserialize a result from the accumulated pipe buffer.
@@ -803,12 +937,31 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             pid: posix.pid_t,
             pipe_fd: posix.fd_t,
             test_index: usize,
-            start_time_ns: u64,
+            worker_index: usize,
+            start_ns: u64,
+            start_time_ms: i64,
             buf: std.ArrayListUnmanaged(u8),
             timed_out: bool,
         };
 
         var global_slots: ?[]?ChildSlot = null;
+
+        fn recordSpan(
+            spans: ?[]?PoolSpan,
+            test_index: usize,
+            worker_index: usize,
+            start_ns: u64,
+            end_ns: u64,
+        ) void {
+            const target_spans = spans orelse return;
+            if (test_index >= target_spans.len) return;
+            target_spans[test_index] = .{
+                .test_index = test_index,
+                .worker_index = worker_index,
+                .start_ns = start_ns,
+                .end_ns = @max(start_ns, end_ns),
+            };
+        }
 
         fn sigintHandler(_: posix.SIG) callconv(.c) void {
             const slots = global_slots orelse return;
@@ -830,22 +983,37 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             _ = std.c.raise(posix.SIG.INT);
         }
 
-        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64, start_time_ns: u64) bool {
+        fn launchChild(
+            io: std.Io,
+            slot: *?ChildSlot,
+            specs: []const Spec,
+            test_idx: usize,
+            worker_index: usize,
+            timeout_ms: u64,
+            pool_start_ns: u64,
+            spans: ?[]?PoolSpan,
+        ) bool {
             if (comptime !has_fork) return false;
 
+            const start_ns = monotonicNs() -| pool_start_ns;
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
 
-            const pipe_fds = pipe() catch return false;
+            const pipe_fds = pipe() catch {
+                recordSpan(spans, test_idx, worker_index, start_ns, monotonicNs() -| pool_start_ns);
+                return false;
+            };
 
             const pid = fork() catch {
                 closeFd(pipe_fds[0]);
                 closeFd(pipe_fds[1]);
+                recordSpan(spans, test_idx, worker_index, start_ns, monotonicNs() -| pool_start_ns);
                 return false;
             };
 
             if (pid == 0) {
                 // === Child process ===
                 closeFd(pipe_fds[0]);
+                setCloseOnExec(pipe_fds[1]);
 
                 if (cfg.use_process_groups) {
                     _ = std.c.setsid();
@@ -854,7 +1022,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
                 const allocator = arena.allocator();
 
-                const result = cfg.runTest(allocator, specs[test_idx], timeout_ms);
+                const result = cfg.runTest(io, allocator, specs[test_idx], timeout_ms);
                 cfg.serialize(pipe_fds[1], result);
                 closeFd(pipe_fds[1]);
                 std.c._exit(0);
@@ -866,14 +1034,16 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .pid = pid,
                 .pipe_fd = pipe_fds[0],
                 .test_index = test_idx,
-                .start_time_ns = start_time_ns,
+                .worker_index = worker_index,
+                .start_ns = start_ns,
+                .start_time_ms = milliTimestamp(),
                 .buf = .empty,
                 .timed_out = false,
             };
             return true;
         }
 
-        fn reapChild(slot: *?ChildSlot, results: []Result, gpa: Allocator) void {
+        fn reapChild(slot: *?ChildSlot, results: []Result, gpa: Allocator, pool_start_ns: u64, spans: ?[]?PoolSpan) void {
             var s = slot.* orelse return;
             slot.* = null;
 
@@ -892,6 +1062,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     cfg.default_result;
             }
 
+            recordSpan(spans, s.test_index, s.worker_index, s.start_ns, monotonicNs() -| pool_start_ns);
             s.buf.deinit(std.heap.page_allocator);
         }
 
@@ -918,11 +1089,25 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             gpa: Allocator,
             worker_argv_template: ?[]const []const u8,
         ) void {
+            runWithSpans(io, specs, results, null, max_children, timeout_ms, gpa, worker_argv_template);
+        }
+
+        pub fn runWithSpans(
+            io: std.Io,
+            specs: []const Spec,
+            results: []Result,
+            spans: ?[]?PoolSpan,
+            max_children: usize,
+            timeout_ms: u64,
+            gpa: Allocator,
+            worker_argv_template: ?[]const []const u8,
+        ) void {
+            const pool_start_ns = monotonicNs();
             if (comptime !has_fork) {
                 if (worker_argv_template) |tmpl| {
-                    runChildPool(io, specs, results, max_children, timeout_ms, gpa, tmpl);
+                    runChildPool(io, specs, results, spans, max_children, timeout_ms, gpa, tmpl, pool_start_ns);
                 } else {
-                    runSequential(specs, results, gpa, timeout_ms);
+                    runSequential(io, specs, results, spans, gpa, timeout_ms, pool_start_ns);
                 }
                 return;
             }
@@ -961,9 +1146,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             var last_progress_ns: u64 = 0;
 
             // Fill initial slots
-            for (slots) |*slot| {
+            for (slots, 0..) |*slot, worker_index| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(slot, specs, next_test, timeout_ms, progress_timer.read())) {
+                if (!launchChild(io, slot, specs, next_test, worker_index, timeout_ms, pool_start_ns, spans)) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -1000,11 +1185,11 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         }
                     }
                     if (pfd.revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
-                        reapChild(&slots[slot_idx], results, gpa);
+                        reapChild(&slots[slot_idx], results, gpa, pool_start_ns, spans);
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms, progress_timer.read())) {
+                            if (!launchChild(io, &slots[slot_idx], specs, next_test, slot_idx, timeout_ms, pool_start_ns, spans)) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -1015,10 +1200,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 // Check timeouts
                 if (timeout_ms > 0) {
-                    const now_ns = progress_timer.read();
+                    const now = milliTimestamp();
                     for (slots) |*slot_opt| {
                         if (slot_opt.*) |*slot| {
-                            const elapsed = (now_ns - slot.start_time_ns) / std.time.ns_per_ms;
+                            const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
                             const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
                             if (elapsed > kill_after_ms and !slot.timed_out) {
                                 slot.timed_out = true;
@@ -1051,14 +1236,24 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
         /// Sequential fallback for platforms without fork (Windows).
         /// Effectively unused under the Child-based path; kept as defense in
         /// depth for callers that don't build a `worker_argv_template`.
-        fn runSequential(specs: []const Spec, results: []Result, gpa: Allocator, timeout_ms: u64) void {
+        fn runSequential(
+            io: std.Io,
+            specs: []const Spec,
+            results: []Result,
+            spans: ?[]?PoolSpan,
+            gpa: Allocator,
+            timeout_ms: u64,
+            pool_start_ns: u64,
+        ) void {
             var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer arena.deinit();
             for (specs, 0..) |spec, i| {
                 _ = arena.reset(.retain_capacity);
+                const start_ns = monotonicNs() -| pool_start_ns;
                 if (cfg.onTestStarted) |cb| cb(spec);
-                const unstable_result = cfg.runTest(arena.allocator(), spec, timeout_ms);
+                const unstable_result = cfg.runTest(io, arena.allocator(), spec, timeout_ms);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
+                recordSpan(spans, i, 0, start_ns, monotonicNs() -| pool_start_ns);
             }
         }
 
@@ -1076,6 +1271,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
         const ActiveChild = struct {
             child: *std.process.Child,
+            test_index: usize,
+            worker_index: usize,
+            start_ns: u64,
             start_ms: i64,
             timed_out: bool,
         };
@@ -1092,23 +1290,27 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             gpa: Allocator,
             specs: []const Spec,
             results: []Result,
+            spans: ?[]?PoolSpan,
+            pool_start_ns: u64,
         };
 
         fn runChildPool(
             io: std.Io,
             specs: []const Spec,
             results: []Result,
+            spans: ?[]?PoolSpan,
             max_children: usize,
             timeout_ms: u64,
             gpa: Allocator,
             template: []const []const u8,
+            pool_start_ns: u64,
         ) void {
             if (comptime builtin.os.tag != .windows) {
-                runSequential(specs, results, gpa, timeout_ms);
+                runSequential(io, specs, results, spans, gpa, timeout_ms, pool_start_ns);
                 return;
             }
             if (!cfg.windows_persistent_workers) {
-                runChildPoolSingleShot(io, specs, results, max_children, timeout_ms, gpa, template);
+                runChildPoolSingleShot(io, specs, results, spans, max_children, timeout_ms, gpa, template, pool_start_ns);
                 return;
             }
 
@@ -1134,6 +1336,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .gpa = gpa,
                 .specs = specs,
                 .results = results,
+                .spans = spans,
+                .pool_start_ns = pool_start_ns,
             };
 
             const threads = gpa.alloc(std.Thread, max_children) catch return;
@@ -1161,16 +1365,20 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             gpa: Allocator,
             specs: []const Spec,
             results: []Result,
+            spans: ?[]?PoolSpan,
+            pool_start_ns: u64,
         };
 
         fn runChildPoolSingleShot(
             io: std.Io,
             specs: []const Spec,
             results: []Result,
+            spans: ?[]?PoolSpan,
             max_children: usize,
             timeout_ms: u64,
             gpa: Allocator,
             template: []const []const u8,
+            pool_start_ns: u64,
         ) void {
             var state = SingleShotChildPoolState{
                 .io = io,
@@ -1180,25 +1388,28 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .gpa = gpa,
                 .specs = specs,
                 .results = results,
+                .spans = spans,
+                .pool_start_ns = pool_start_ns,
             };
 
             const threads = gpa.alloc(std.Thread, max_children) catch return;
             defer gpa.free(threads);
 
             var spawned: usize = 0;
-            for (threads) |*t| {
-                t.* = std.Thread.spawn(.{}, singleShotWorkerThread, .{&state}) catch break;
+            for (threads, 0..) |*t, worker_index| {
+                t.* = std.Thread.spawn(.{}, singleShotWorkerThread, .{ &state, worker_index }) catch break;
                 spawned += 1;
             }
 
             for (threads[0..spawned]) |t| t.join();
         }
 
-        fn singleShotWorkerThread(state: *SingleShotChildPoolState) void {
+        fn singleShotWorkerThread(state: *SingleShotChildPoolState, worker_index: usize) void {
             while (true) {
                 const idx = state.next_test.fetchAdd(1, .monotonic);
                 if (idx >= state.specs.len) return;
 
+                const start_ns = monotonicNs() -| state.pool_start_ns;
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
 
                 state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, idx, &.{}, state.timeout_ms)) {
@@ -1206,6 +1417,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     .timed_out => cfg.timeout_result,
                     .crashed => cfg.default_result,
                 };
+                recordSpan(state.spans, idx, worker_index, start_ns, monotonicNs() -| state.pool_start_ns);
             }
         }
 
@@ -1253,18 +1465,22 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 const idx = state.next_test.fetchAdd(1, .monotonic);
                 if (idx >= state.specs.len) return;
 
+                const start_ns = monotonicNs() -| state.pool_start_ns;
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
 
                 state.slots_mutex.lockUncancelable(io);
                 state.slots[slot_idx] = ActiveChild{
                     .child = &child,
+                    .test_index = idx,
+                    .worker_index = slot_idx,
+                    .start_ns = start_ns,
                     .start_ms = milliTimestamp(),
                     .timed_out = false,
                 };
                 state.slots_mutex.unlock(io);
 
                 const cmd = std.fmt.allocPrint(gpa, "{d}\n", .{idx}) catch {
-                    state.results[idx] = cfg.default_result;
+                    state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 };
                 defer gpa.free(cmd);
@@ -1274,7 +1490,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     return;
                 };
                 if (fileWriteAll(io, child_stdin, cmd)) |_| {} else |_| {
-                    state.results[idx] = cfg.default_result;
+                    state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 }
 
@@ -1290,7 +1506,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 const length = std.mem.readInt(u32, &length_bytes, .little);
 
                 const payload = gpa.alloc(u8, length) catch {
-                    state.results[idx] = cfg.default_result;
+                    state.results[idx] = handleReadFailure(state, slot_idx);
                     return;
                 };
                 defer gpa.free(payload);
@@ -1308,15 +1524,20 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     cfg.timeout_result
                 else
                     cfg.deserialize(payload, gpa) orelse cfg.default_result;
+                recordSpan(state.spans, idx, slot_idx, start_ns, monotonicNs() -| state.pool_start_ns);
             }
         }
 
         fn handleReadFailure(state: *ChildPoolState, slot_idx: usize) Result {
             const io = state.io;
             state.slots_mutex.lockUncancelable(io);
-            const timed_out = if (state.slots[slot_idx]) |s| s.timed_out else false;
+            const maybe_slot = state.slots[slot_idx];
+            const timed_out = if (maybe_slot) |s| s.timed_out else false;
             state.slots[slot_idx] = null;
             state.slots_mutex.unlock(io);
+            if (maybe_slot) |slot| {
+                recordSpan(state.spans, slot.test_index, slot.worker_index, slot.start_ns, monotonicNs() -| state.pool_start_ns);
+            }
             return if (timed_out) cfg.timeout_result else cfg.default_result;
         }
 

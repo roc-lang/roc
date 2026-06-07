@@ -39,7 +39,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
-        .lsp => &.{"lsp tests"},
+        .lsp_unit => &.{"lsp unit tests"},
         else => &.{},
     };
 }
@@ -173,6 +173,10 @@ fn collectAggregatorImports(
             search_index = cursor + 1;
             continue;
         };
+        if (!std.mem.endsWith(u8, import_rel, ".zig")) {
+            search_index = cursor + 1;
+            continue;
+        }
 
         const resolved = resolveImportPath(allocator, current_dir, import_rel) catch |err| {
             std.log.warn(
@@ -267,6 +271,7 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
 /// Represents a test module with its compilation and execution steps.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
+    run_step: *Step.Run,
 };
 
 /// Bundles the per-module test steps with accounting for forced passes (aggregators +
@@ -306,6 +311,8 @@ pub const ModuleType = enum {
     unbundle,
     base58,
     lsp,
+    lsp_unit,
+    lsp_integration,
     backend,
     lir_core,
     postcheck,
@@ -346,6 +353,7 @@ pub const ModuleType = enum {
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+            .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
             .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
             .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
@@ -387,6 +395,8 @@ pub const RocModules = struct {
     unbundle: *Module,
     base58: *Module,
     lsp: *Module,
+    lsp_unit: *Module,
+    lsp_integration: *Module,
     backend: *Module,
     lir_core: *Module,
     postcheck: *Module,
@@ -432,6 +442,8 @@ pub const RocModules = struct {
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
+            .lsp_unit = b.addModule("lsp_unit", .{ .root_source_file = b.path("src/lsp/test/unit.zig") }),
+            .lsp_integration = b.addModule("lsp_integration", .{ .root_source_file = b.path("src/lsp/test/integration.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
             .lir_core = b.addModule("lir_core", .{ .root_source_file = b.path("src/lir/core.zig") }),
             .postcheck = b.addModule("postcheck", .{ .root_source_file = b.path("src/postcheck/mod.zig") }),
@@ -483,6 +495,8 @@ pub const RocModules = struct {
             .unbundle,
             .base58,
             .lsp,
+            .lsp_unit,
+            .lsp_integration,
             .backend,
             .lir_core,
             .postcheck,
@@ -582,6 +596,8 @@ pub const RocModules = struct {
             .unbundle => self.unbundle,
             .base58 => self.base58,
             .lsp => self.lsp,
+            .lsp_unit => self.lsp_unit,
+            .lsp_integration => self.lsp_integration,
             .backend => self.backend,
             .lir_core => self.lir_core,
             .postcheck => self.postcheck,
@@ -611,7 +627,6 @@ pub const RocModules = struct {
         optimize: OptimizeMode,
         zstd: ?*Dependency,
         test_filters: []const []const u8,
-        test_runner: ?Step.Compile.TestRunner,
     ) ModuleTestsResult {
         const test_configs = [_]ModuleType{
             .collections,
@@ -633,7 +648,7 @@ pub const RocModules = struct {
             .bundle,
             .unbundle,
             .base58,
-            .lsp,
+            .lsp_unit,
             .backend,
             .lir_core,
             .postcheck,
@@ -671,7 +686,6 @@ pub const RocModules = struct {
                     .link_libc = true,
                 }),
                 .filters = filter_injection.filters,
-                .test_runner = test_runner,
             });
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
@@ -691,8 +705,11 @@ pub const RocModules = struct {
                 }
             }
 
+            const run_step = b.addRunArtifact(test_step);
+
             tests[i] = .{
                 .test_step = test_step,
+                .run_step = run_step,
             };
         }
 
