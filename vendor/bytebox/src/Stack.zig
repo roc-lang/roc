@@ -127,7 +127,7 @@ pub fn allocMemory(stack: *Stack, opts: AllocOpts) !void {
     const begin_labels = values_alloc_size;
     const begin_frames = values_alloc_size + labels_alloc_size;
 
-    stack.mem = try stack.allocator.alloc(u8, total_alloc_size);
+    stack.mem = try stack.allocator.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(alignment), total_alloc_size);
     stack.values.ptr = @as([*]StackVal, @alignCast(@ptrCast(stack.mem.ptr)));
     stack.values.len = opts.max_values;
     stack.labels.ptr = @as([*]Label, @alignCast(@ptrCast(stack.mem[begin_labels..].ptr)));

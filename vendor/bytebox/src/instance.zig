@@ -753,7 +753,7 @@ pub const VM = struct {
         const impl_alloc_size = std.mem.alignForward(usize, @sizeOf(T), alignment);
         const total_alloc_size = vm_alloc_size + impl_alloc_size;
 
-        var mem = try allocator.alloc(u8, total_alloc_size);
+        var mem = try allocator.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(alignment), total_alloc_size);
 
         var vm: *VM = @as(*VM, @ptrCast(@alignCast(mem.ptr)));
         const impl: *T = @as(*T, @ptrCast(@alignCast(mem[vm_alloc_size..].ptr)));
