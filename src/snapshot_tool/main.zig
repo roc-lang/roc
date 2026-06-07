@@ -87,21 +87,21 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
     }
 }
 
-/// Resolves a canonical absolute path, allocating the result.
-///
-/// Equivalent to `std.Io.Dir.cwd().realPathFileAlloc(...)` except the working
-/// buffer is zero-initialized before the syscall. The stdlib helper passes an
-/// `undefined` stack buffer to libc's `realpath`, then locates the null
-/// terminator with `indexOfScalar`. Valgrind has no interceptor for musl's
-/// `realpath`, so under our musl Linux builds it never marks the written bytes
-/// as defined; the scan then taints the returned length and every downstream
-/// allocator/free that touches the resulting slice. Pre-zeroing the buffer
-/// keeps the search reading only defined bytes, eliminating the cascade of
-/// false-positive `uninitialised value` reports.
-fn realPathFileAllocSafe(io: std.Io, sub_path: []const u8, allocator: Allocator) std.Io.Dir.RealPathFileAllocError![:0]u8 {
-    var buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
-    const n = try std.Io.Dir.cwd().realPathFile(io, sub_path, &buffer);
-    return allocator.dupeSentinel(u8, buffer[0..n], 0);
+/// Returns an absolute, normalized path without calling libc `realpath`.
+fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) anyerror![]u8 {
+    if (std.fs.path.isAbsolute(sub_path)) {
+        return std.fs.path.resolve(allocator, &.{sub_path});
+    }
+
+    const cwd = try currentPathAllocSafe(io, allocator);
+    defer allocator.free(cwd);
+    return std.fs.path.resolve(allocator, &.{ cwd, sub_path });
+}
+
+fn currentPathAllocSafe(io: std.Io, allocator: Allocator) anyerror![]u8 {
+    var buffer: [std.fs.max_path_bytes]u8 = @splat(0);
+    const n = try std.process.currentPath(io, &buffer);
+    return allocator.dupe(u8, buffer[0..n]);
 }
 
 /// Always logs a warning message.
@@ -133,7 +133,7 @@ fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []
     const temp_root_abs = if (std.fs.path.isAbsolute(temp_root))
         try allocator.dupe(u8, temp_root)
     else
-        try realPathFileAllocSafe(app_io, temp_root, allocator);
+        try absolutePathAlloc(app_io, temp_root, allocator);
     defer allocator.free(temp_root_abs);
 
     const counter = snapshot_temp_counter.fetchAdd(1, .monotonic);
@@ -752,7 +752,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.currentPathAlloc(app_io, gpa);
+    const cwd = try currentPathAllocSafe(app_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -810,7 +810,7 @@ fn checkSnapshotExpectations(gpa: Allocator) anyerror!bool {
     builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
     defer builtin_modules_ptr.deinit();
 
-    const cwd = try std.process.currentPathAlloc(app_io, gpa);
+    const cwd = try currentPathAllocSafe(app_io, gpa);
     defer gpa.free(cwd);
 
     const config = Config{
@@ -1538,8 +1538,8 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 }
 
 /// Stage 1: Walk directory tree and collect work items
-fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) (Allocator.Error || std.Io.Dir.Iterator.Error)!void {
-    const canonical_path = realPathFileAllocSafe(app_io, path, gpa) catch |err| {
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) anyerror!void {
+    const canonical_path = absolutePathAlloc(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
     };
@@ -2117,7 +2117,7 @@ fn generateExpectedSection(
                 std.debug.print("Mismatch in EXPECTED section for {s}\n", .{snapshot_path});
                 std.debug.print("Expected:\n{s}\n", .{expected_content.?});
                 std.debug.print("Generated:\n{s}\n", .{new_content});
-                std.debug.print("Hint: use `zig build snapshot -- --update-expected` to automatically update the expectations.\n", .{});
+                std.debug.print("Hint: use `zig build run-snapshot-tool -- --update-expected` to automatically update the expectations.\n", .{});
 
                 success = false;
             }
@@ -3704,7 +3704,7 @@ fn processDocsSnapshot(
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS mismatch in {s}\n\n", .{output_path});
                     std.debug.print("Expected:\n{s}\n\nActual:\n{s}\n", .{ existing_trimmed, new_trimmed });
-                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DOCS output.\n\n", .{});
+                    std.debug.print("\nHint: use `zig build run-snapshot-tool -- --update-expected` to update DOCS output.\n\n", .{});
                     success = false;
                 }
                 break :blk false;
@@ -3714,7 +3714,7 @@ fn processDocsSnapshot(
                 const new_trimmed = std.mem.trimEnd(u8, new_docs_text, " \t\r\n");
                 if (!std.mem.eql(u8, existing_trimmed, new_trimmed)) {
                     std.debug.print("\nDOCS warning: output changed in {s}\n", .{output_path});
-                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                    std.debug.print("Hint: use `zig build run-snapshot-tool -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
                 }
                 break :blk false;
             },
@@ -4254,7 +4254,7 @@ fn processDevObjectSnapshot(
                 if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
                     std.debug.print("\nDEV OUTPUT mismatch in {s}\n\n", .{output_path});
                     printHashMismatchTable(content.dev_output.?, new_hash_text);
-                    std.debug.print("\nHint: use `zig build snapshot -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
+                    std.debug.print("\nHint: use `zig build run-snapshot-tool -- --update-expected` to update DEV OUTPUT hashes.\n\n", .{});
                     success = false;
                 }
                 break :blk false;
@@ -4262,7 +4262,7 @@ fn processDevObjectSnapshot(
             .none => {
                 if (!hashTextMatches(content.dev_output.?, new_hash_text)) {
                     std.debug.print("\nDEV OUTPUT warning: hashes changed in {s}\n", .{output_path});
-                    std.debug.print("Hint: use `zig build snapshot -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
+                    std.debug.print("Hint: use `zig build run-snapshot-tool -- --check-expected` to see details, or `--update-expected` to update.\n\n", .{});
                 }
                 break :blk false;
             },

@@ -36,14 +36,12 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
-const EvalBackend = eval_mod.EvalBackend;
 
 /// Arguments for glue code generation.
 pub const GlueArgs = struct {
     glue_spec: []const u8,
     output_dir: []const u8,
     platform_path: []const u8,
-    backend: EvalBackend = .dev,
 };
 
 /// Error types for glue generation operations.

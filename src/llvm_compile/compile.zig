@@ -102,6 +102,8 @@ pub const CompileOptions = struct {
     function_sections: bool = true,
     /// Optimization level for code generation.
     opt_level: bindings.CodeGenOptLevel = .Default,
+    /// Prefer LLVM's size-optimized pipeline.
+    is_small: bool = false,
     /// Relocation model to use when emitting the object file.
     reloc_mode: bindings.RelocMode = .Default,
     /// Whether to use the module's native target triple instead of LLVM's default.
@@ -256,7 +258,7 @@ fn emitMergedBitcodeToObjectFile(
 
     const emit_options = bindings.TargetMachine.EmitOptions{
         .is_debug = options.opt_level == .None,
-        .is_small = false,
+        .is_small = options.is_small,
         .time_report_out = null,
         .tsan = false,
         .sancov = false,

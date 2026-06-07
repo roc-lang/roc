@@ -50,7 +50,7 @@ fn testRocCrashed(_: *const host_abi.RocCrashed, _: *anyopaque) callconv(.c) voi
 
 test "embedding API: full canonical sequence on simple_success app" {
     // Path is resolved relative to the cwd at test time, which is the repo
-    // root for `zig build test-compile`.
+    // root for `zig build run-test-zig-module-compile`.
     const app_path = "test/cli/simple_success.roc";
 
     const gpa = std.testing.allocator;

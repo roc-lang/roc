@@ -75,7 +75,7 @@ pub fn main() Allocator.Error!void {
     const wasm_path = "zig-out/lib/echo.wasm";
     const wasm_bytes = std.fs.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
         std.debug.print("FAIL: could not read {s}: {s}\n", .{ wasm_path, @errorName(err) });
-        std.debug.print("(Did you run `zig build playground` first?)\n", .{});
+        std.debug.print("(Did you run `zig build build-playground` first?)\n", .{});
         std.process.exit(2);
     };
 

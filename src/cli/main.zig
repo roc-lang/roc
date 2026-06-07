@@ -373,7 +373,7 @@ const legalDetailsFileContent = @embedFile("legal_details");
 ///
 /// On Windows, SEC_RESERVE on CreateFileMapping reserves address space without
 /// page file backing, but MapViewOfFile still appears to charge against the
-/// system commit limit. Under parallel test load (`zig build test` with several
+/// system commit limit. Under parallel test load (`zig build run-test-zig` with several
 /// workers each spawning `roc.exe`), four concurrent 2 TB reservations trip
 /// ERROR_COMMITMENT_LIMIT on CI runners (7 GB RAM + limited page file). 8 GB
 /// matches the macOS bound and leaves plenty of headroom for real programs.
@@ -3397,19 +3397,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     else
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
-    const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
-    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
@@ -3652,13 +3639,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| {
-        std.log.err("Failed to create compiler build cache dir {s}: {}", .{ build_cache_dir, err });
-        return err;
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    var cleanup_build_scratch_dir = true;
+    defer if (cleanup_build_scratch_dir) {
+        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), build_scratch_dir);
     };
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
     object_compiler.compileToObjectFileAndWrite(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -3674,6 +3664,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
 
     if (args.no_link) {
+        cleanup_build_scratch_dir = false;
         if (!args.suppress_build_status) {
             try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
         }
@@ -3682,7 +3673,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
         return error.BuiltinsExtractionFailed;
     };
@@ -3704,7 +3695,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_cache_dir,
+        .scratch_dir = build_scratch_dir,
     };
 
     if (args.z_dump_linker) {
@@ -4187,7 +4178,7 @@ const CopiedFile = struct {
 // Test cache blob format
 // Binary format for caching test results.
 
-const CliTestResult = enum { passed, failed };
+const CliTestResult = enum { passed, failed, compiler_error };
 
 const CliTestFailureDetailVisibility = enum(u8) {
     always = 0,
@@ -4212,11 +4203,12 @@ const CliModuleTestResult = struct {
 const CliTestRunSummary = struct {
     passed: u32 = 0,
     failed: u32 = 0,
+    compiler_errors: u32 = 0,
     modules_with_tests: u32 = 0,
     cached_modules: u32 = 0,
 };
 
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V3";
+const cli_test_cache_magic = "ROC_TEST_RESULTS_V4";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -4251,6 +4243,7 @@ fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
         switch (result.result) {
             .passed => summary.passed += 1,
             .failed => summary.failed += 1,
+            .compiler_error => summary.compiler_errors += 1,
         }
     }
     return summary;
@@ -4264,6 +4257,9 @@ fn storeCliTestResultsInCache(
     results: []const CliTestResultItem,
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
+    for (results) |result| {
+        if (result.result == .compiler_error) return;
+    }
 
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(ctx.gpa);
@@ -4274,6 +4270,7 @@ fn storeCliTestResultsInCache(
         try bytes.append(ctx.gpa, switch (result.result) {
             .passed => 0,
             .failed => 1,
+            .compiler_error => 2,
         });
         if (result.failure_detail) |message| {
             try bytes.append(ctx.gpa, 1);
@@ -4335,6 +4332,7 @@ fn appendCachedCliTestResults(
         const result: CliTestResult = switch (result_tag) {
             0 => .passed,
             1 => .failed,
+            2 => .compiler_error,
             else => return null,
         };
 
@@ -4430,6 +4428,103 @@ fn testRootByOrder(
     unreachable;
 }
 
+const CliTestExecutionMode = enum {
+    interpreter,
+    dev,
+    llvm_size,
+    llvm_speed,
+
+    fn displayName(self: CliTestExecutionMode) []const u8 {
+        return switch (self) {
+            .interpreter => "interpreter",
+            .dev => "dev",
+            .llvm_size => "LLVM size",
+            .llvm_speed => "LLVM speed",
+        };
+    }
+};
+
+fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
+    return switch (opt) {
+        .interpreter => .interpreter,
+        .dev => .dev,
+        .size => .llvm_size,
+        .speed => .llvm_speed,
+    };
+}
+
+const CliTestRootRun = struct {
+    root: check.CheckedArtifact.RootRequest,
+    root_proc: lir.LirProcSpecId,
+    region: base.Region,
+    arg_layouts: []const layout.Idx,
+    ret_layout: layout.Idx,
+    symbol_name: [:0]const u8,
+};
+
+fn deinitCliTestRootRuns(allocator: Allocator, runs: []CliTestRootRun) void {
+    for (runs) |run| {
+        allocator.free(run.arg_layouts);
+        allocator.free(run.symbol_name);
+    }
+    allocator.free(runs);
+}
+
+fn collectCliTestRootRuns(
+    ctx: *CliCtx,
+    module: BuildEnv.CompiledModuleInfo,
+    test_roots: []const check.CheckedArtifact.RootRequest,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) Allocator.Error![]CliTestRootRun {
+    var runs = std.ArrayList(CliTestRootRun).empty;
+    errdefer {
+        for (runs.items) |run| {
+            ctx.gpa.free(run.arg_layouts);
+            ctx.gpa.free(run.symbol_name);
+        }
+        runs.deinit(ctx.gpa);
+    }
+
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    if (root_procs.len != root_metadata.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("CLI test invariant violated: root proc count differs from root metadata count", .{});
+        }
+        unreachable;
+    }
+
+    for (root_procs, root_metadata) |root_proc, metadata| {
+        if (metadata.kind != .test_expect) continue;
+        const root = testRootByOrder(test_roots, metadata.order);
+        const proc = lowered.lir_result.store.getProcSpec(root_proc);
+        const arg_layouts = try argLayoutsForProc(ctx.gpa, &lowered.lir_result.store, root_proc);
+        errdefer ctx.gpa.free(arg_layouts);
+        const symbol_name = try std.fmt.allocPrintSentinel(ctx.gpa, "roc_test_expect_{d}", .{root.order}, 0);
+        errdefer ctx.gpa.free(symbol_name);
+        try runs.append(ctx.gpa, .{
+            .root = root,
+            .root_proc = root_proc,
+            .region = testRootRegion(module.semantic.env, root),
+            .arg_layouts = arg_layouts,
+            .ret_layout = proc.ret_layout,
+            .symbol_name = symbol_name,
+        });
+    }
+
+    if (runs.items.len != test_roots.len) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic(
+                "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
+                .{ runs.items.len, test_roots.len },
+            );
+        }
+        unreachable;
+    }
+
+    return try runs.toOwnedSlice(ctx.gpa);
+}
+
 fn interpreterTestFailureMessage(
     allocator: std.mem.Allocator,
     interpreter: *const eval.LirInterpreter,
@@ -4442,6 +4537,190 @@ fn interpreterTestFailureMessage(
         error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
     };
     return try allocator.dupe(u8, message);
+}
+
+fn appendFailedCliTestResult(
+    ctx: *CliCtx,
+    results: *std.ArrayList(CliTestResultItem),
+    run: CliTestRootRun,
+    result: CliTestResult,
+    message: []const u8,
+    visibility: CliTestFailureDetailVisibility,
+) Allocator.Error!void {
+    errdefer ctx.gpa.free(message);
+    try results.append(ctx.gpa, .{
+        .result = result,
+        .order = run.root.order,
+        .region = run.region,
+        .failure_detail = message,
+        .failure_detail_visibility = visibility,
+    });
+}
+
+fn runInterpreterTestRoots(
+    ctx: *CliCtx,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    root_runs: []const CliTestRootRun,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
+    var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
+    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
+    var interpreter = try eval.LirInterpreter.init(
+        ctx.gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &roc_ops,
+    );
+    defer interpreter.deinit();
+
+    for (root_runs) |run| {
+        const eval_result = interpreter.eval(.{
+            .proc_id = run.root_proc,
+            .arg_layouts = run.arg_layouts,
+            .ret_layout = run.ret_layout,
+        }) catch |err| {
+            summary.failed += 1;
+            try appendFailedCliTestResult(
+                ctx,
+                results,
+                run,
+                .failed,
+                try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
+                .always,
+            );
+            continue;
+        };
+
+        const passed = switch (eval_result) {
+            .value => |value| blk: {
+                const ok = value.read(u8) != 0;
+                interpreter.dropValue(value, run.ret_layout);
+                break :blk ok;
+            },
+        };
+
+        if (passed) {
+            summary.passed += 1;
+            try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
+        } else {
+            summary.failed += 1;
+            try appendFailedCliTestResult(
+                ctx,
+                results,
+                run,
+                .failed,
+                try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
+                .verbose_only,
+            );
+        }
+    }
+}
+
+fn appendCompilerErrorsForRuns(
+    ctx: *CliCtx,
+    mode: CliTestExecutionMode,
+    err: anyerror,
+    root_runs: []const CliTestRootRun,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    for (root_runs) |run| {
+        summary.compiler_errors += 1;
+        try appendFailedCliTestResult(
+            ctx,
+            results,
+            run,
+            .compiler_error,
+            try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
+            .always,
+        );
+    }
+}
+
+fn runCompiledTestRoots(
+    ctx: *CliCtx,
+    mode: CliTestExecutionMode,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    root_runs: []const CliTestRootRun,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
+    defer ctx.gpa.free(bool_roots);
+
+    for (root_runs, 0..) |run, i| {
+        bool_roots[i] = .{
+            .symbol_name = run.symbol_name,
+            .proc = run.root_proc,
+            .arg_layouts = run.arg_layouts,
+            .ret_layout = run.ret_layout,
+        };
+    }
+
+    const eval_results = switch (mode) {
+        .dev => eval.test_helpers.devEvalBoolRoots(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            bool_roots,
+        ),
+        .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            bool_roots,
+            .size,
+        ),
+        .llvm_speed => eval.test_helpers.llvmEvalBoolRoots(
+            ctx.gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            bool_roots,
+            .speed,
+        ),
+        .interpreter => unreachable,
+    } catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            try appendCompilerErrorsForRuns(ctx, mode, err, root_runs, results, summary);
+            return;
+        },
+    };
+    defer eval.test_helpers.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+
+    for (root_runs, eval_results) |run, eval_result| {
+        switch (eval_result) {
+            .passed => |passed| {
+                if (passed) {
+                    summary.passed += 1;
+                    try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .failure_detail = null });
+                } else {
+                    summary.failed += 1;
+                    try appendFailedCliTestResult(
+                        ctx,
+                        results,
+                        run,
+                        .failed,
+                        try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
+                        .verbose_only,
+                    );
+                }
+            },
+            .crashed => |message| {
+                summary.failed += 1;
+                try appendFailedCliTestResult(
+                    ctx,
+                    results,
+                    run,
+                    .failed,
+                    try ctx.gpa.dupe(u8, message),
+                    .always,
+                );
+            },
+        }
+    }
 }
 
 fn runCheckedArtifactTests(
@@ -4487,16 +4766,8 @@ fn runCheckedArtifactTests(
     );
     defer lowered.deinit();
 
-    var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
-    var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
-    var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
-    var interpreter = try eval.LirInterpreter.init(
-        ctx.gpa,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        &roc_ops,
-    );
-    defer interpreter.deinit();
+    const root_runs = try collectCliTestRootRuns(ctx, module, test_roots, &lowered);
+    defer deinitCliTestRootRuns(ctx.gpa, root_runs);
 
     var results = std.ArrayList(CliTestResultItem).empty;
     errdefer {
@@ -4507,53 +4778,10 @@ fn runCheckedArtifactTests(
     }
 
     var summary = CliTestRunSummary{};
-    const root_procs = lowered.lir_result.root_procs.items;
-    const root_metadata = lowered.lir_result.root_metadata.items;
-    for (root_procs, root_metadata) |root_proc, metadata| {
-        if (metadata.kind != .test_expect) continue;
-        const root = testRootByOrder(test_roots, metadata.order);
-        const region = testRootRegion(module.semantic.env, root);
-        const proc = lowered.lir_result.store.getProcSpec(root_proc);
-        const arg_layouts = try argLayoutsForProc(ctx.gpa, &lowered.lir_result.store, root_proc);
-        defer ctx.gpa.free(arg_layouts);
-
-        const eval_result = interpreter.eval(.{
-            .proc_id = root_proc,
-            .arg_layouts = arg_layouts,
-            .ret_layout = proc.ret_layout,
-        }) catch |err| {
-            summary.failed += 1;
-            try results.append(ctx.gpa, .{
-                .result = .failed,
-                .order = root.order,
-                .region = region,
-                .failure_detail = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
-                .failure_detail_visibility = .always,
-            });
-            continue;
-        };
-
-        const passed = switch (eval_result) {
-            .value => |value| blk: {
-                const ok = value.read(u8) != 0;
-                interpreter.dropValue(value, proc.ret_layout);
-                break :blk ok;
-            },
-        };
-
-        if (passed) {
-            summary.passed += 1;
-            try results.append(ctx.gpa, .{ .result = .passed, .order = root.order, .region = region, .failure_detail = null });
-        } else {
-            summary.failed += 1;
-            try results.append(ctx.gpa, .{
-                .result = .failed,
-                .order = root.order,
-                .region = region,
-                .failure_detail = try ctx.gpa.dupe(u8, "TEST FAILURE: expect failed"),
-                .failure_detail_visibility = .verbose_only,
-            });
-        }
+    const mode = cliTestExecutionMode(opt);
+    switch (mode) {
+        .interpreter => try runInterpreterTestRoots(ctx, &lowered, root_runs, &results, &summary),
+        .dev, .llvm_size, .llvm_speed => try runCompiledTestRoots(ctx, mode, &lowered, root_runs, &results, &summary),
     }
     summary.modules_with_tests = 1;
 
@@ -4654,6 +4882,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
         );
         total.passed += summary.passed;
         total.failed += summary.failed;
+        total.compiler_errors += summary.compiler_errors;
         total.modules_with_tests += summary.modules_with_tests;
         total.cached_modules += summary.cached_modules;
     }
@@ -4675,6 +4904,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
     defer stderr_body.deinit();
 
     try renderTestResultBodies(
+        ctx.gpa,
         &stdout_body.writer,
         &stderr_body.writer,
         module_results.items,
@@ -4682,14 +4912,14 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
     );
 
     // Report results
-    if (total.failed == 0) {
+    if (total.failed == 0 and total.compiler_errors == 0) {
         try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
         try stdout.writeAll(stdout_body.written());
         return;
     }
 
-    const total_tests = total.passed + total.failed;
-    try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n", .{ total_tests, cached_suffix, elapsed_ms, total.passed, total.failed });
+    const total_tests = total.passed + total.failed + total.compiler_errors;
+    try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    " ++ ansi_term.green ++ "{}" ++ ansi_term.reset ++ " passed\n    " ++ ansi_term.red ++ "{}" ++ ansi_term.reset ++ " failed\n    " ++ ansi_term.yellow ++ "{}" ++ ansi_term.reset ++ " compiler errors\n", .{ total_tests, cached_suffix, elapsed_ms, total.passed, total.failed, total.compiler_errors });
     try stdout.writeAll(stdout_body.written());
     try stderr.writeAll(stderr_body.written());
 
@@ -4697,16 +4927,17 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
 }
 
 /// Walk the per-module test results and write the per-test body output to
-/// the supplied writers. Verbose PASS lines go to `stdout_body`; FAIL
+/// the supplied writers. Verbose PASS lines go to `stdout_body`; problem
 /// blocks (and verbose PASS lines for partially-failing runs) go to
 /// `stderr_body`.
 fn renderTestResultBodies(
+    allocator: Allocator,
     stdout_body: *std.Io.Writer,
     stderr_body: *std.Io.Writer,
     module_results: []const CliModuleTestResult,
     verbose: bool,
-) error{WriteFailed}!void {
-    // Verbose PASS lines go to stdout in every case; FAIL blocks go to
+) anyerror!void {
+    // Verbose PASS lines go to stdout in every case; problem blocks go to
     // stderr. This matches the pre-refactor layout.
     for (module_results) |module_result| {
         for (module_result.results) |result| {
@@ -4717,12 +4948,28 @@ fn renderTestResultBodies(
                     try stdout_body.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ module_result.path, region_info.start_line_idx + 1 });
                 },
                 .failed => {
-                    try printTestFailure(
+                    try printTestProblem(
+                        allocator,
                         stderr_body,
                         module_result.path,
                         module_result.env,
-                        result.region,
                         region_info,
+                        "FAIL",
+                        .runtime_error,
+                        result.failure_detail,
+                        result.failure_detail_visibility,
+                        verbose,
+                    );
+                },
+                .compiler_error => {
+                    try printTestProblem(
+                        allocator,
+                        stderr_body,
+                        module_result.path,
+                        module_result.env,
+                        region_info,
+                        "COMPILER_ERROR",
+                        .warning,
                         result.failure_detail,
                         result.failure_detail_visibility,
                         verbose,
@@ -4733,22 +4980,25 @@ fn renderTestResultBodies(
     }
 }
 
-/// Prints a formatted test failure to stderr, including the source snippet,
+/// Prints a formatted test problem to stderr, including the source snippet,
 /// an optional doc comment from the preceding line, and an optional error message.
-fn printTestFailure(
+fn printTestProblem(
+    allocator: Allocator,
     stderr: *std.Io.Writer,
     path: []const u8,
     env: *const ModuleEnv,
-    region: base.Region,
     region_info: base.RegionInfo,
+    label: []const u8,
+    severity: reporting.Severity,
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility,
     verbose: bool,
-) error{WriteFailed}!void {
+) anyerror!void {
     const src = env.getSourceAll();
-    const error_src = src[region.start.offset..region.end.offset];
 
-    // Check if the previous line is a doc comment
+    var report = reporting.Report.init(allocator, label, severity);
+    defer report.deinit();
+
     const doc_comment: ?[]const u8 = blk: {
         const line_starts = env.getLineStarts();
         const curr_line_start_idx = region_info.start_line_idx;
@@ -4760,35 +5010,11 @@ fn printTestFailure(
         }
         break :blk null;
     };
-
-    try stderr.print("\n\x1b[31mFAIL\x1b[0m: {s}", .{path});
-
-    try stderr.print("\x1b[31m", .{});
-
-    // Calculate the width needed to right-align line numbers
-    const last_line_num: usize = region_info.end_line_idx + 1;
-    const num_width: usize = blk: {
-        var digits: usize = 0;
-        var n = last_line_num;
-        while (n > 0) : (n /= 10) digits += 1;
-        break :blk if (digits == 0) 1 else digits;
-    };
-
-    var line_num: usize = region_info.start_line_idx + 1;
-
     if (doc_comment) |comment| {
-        line_num -= 1;
-        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
-        try stderr.print("{s}", .{comment});
-        line_num += 1;
+        try report.document.addText(comment);
+        try report.document.addLineBreak();
     }
-
-    var lines = std.mem.splitScalar(u8, error_src, '\n');
-    while (lines.next()) |line| {
-        try stderr.print("\n{d:[num_width]} \u{2502} ", .{ .d = line_num, .num_width = num_width });
-        try stderr.print("{s}", .{line});
-        line_num += 1;
-    }
+    try report.addSourceContext(region_info, path, src, env.getLineStarts());
 
     const should_print_detail = switch (failure_detail_visibility) {
         .always => true,
@@ -4796,11 +5022,15 @@ fn printTestFailure(
     };
     if (should_print_detail) {
         if (failure_detail) |msg| {
-            try stderr.print("\x1b[31m - {s}", .{msg});
+            switch (severity) {
+                .warning => try report.addWarningMessage(msg),
+                else => try report.addErrorMessage(msg),
+            }
         }
     }
 
-    try stderr.print("\x1b[0m\n", .{});
+    try stderr.writeAll("\n");
+    try reporting.renderReportToTerminal(&report, stderr, reporting.ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
 }
 
 const ReplMode = enum {
@@ -4965,7 +5195,6 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
         .glue_spec = args.glue_spec,
         .output_dir = args.output_dir,
         .platform_path = args.platform_path,
-        .backend = args.opt.toBackend(),
     }, temp_dir, ctx.io.std_io);
 }
 

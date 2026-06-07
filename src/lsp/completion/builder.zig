@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
-const DebugFlags = @import("../syntax.zig").DebugFlags;
+const DebugFlags = @import("../debug.zig").DebugFlags;
 
 const CompletionItem = completion_handler.CompletionItem;
 const CompletionItemKind = completion_handler.CompletionItemKind;

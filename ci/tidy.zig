@@ -689,6 +689,7 @@ fn tidyAst(
     }
 }
 
+
 /// Forbid inferred error set return types (`fn foo() !T`). Every fallible
 /// compiler function must spell out its error set explicitly (e.g.
 /// `Allocator.Error!T`), so the error cases are visible at the signature.

@@ -40,7 +40,7 @@ Generate a seed corpus from the snapshot tests:
 
 ```bash
 mkdir -p /tmp/corpus
-zig build snapshot -- --fuzz-corpus /tmp/corpus
+zig build run-snapshot-tool -- --fuzz-corpus /tmp/corpus
 ```
 
 This extracts source code from all snapshot tests. For REPL snapshots, it strips the `»` delimiters and creates separate corpus files for each expression.
@@ -108,7 +108,7 @@ Keep your corpus between sessions for incremental improvement:
 
 ```bash
 # First run - generate initial corpus
-zig build snapshot -- --fuzz-corpus ~/roc-fuzz-corpus
+zig build run-snapshot-tool -- --fuzz-corpus ~/roc-fuzz-corpus
 
 # Subsequent runs - AFL++ will add new interesting inputs
 afl-fuzz -i ~/roc-fuzz-corpus -o /tmp/parse-out zig-out/bin/fuzz-parse

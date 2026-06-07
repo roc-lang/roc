@@ -17,6 +17,9 @@ pub const BuildEnvHandle = struct {
     ref_count: usize = 0,
     debug: bool = false,
     owners: std.StringHashMapUnmanaged(usize) = .{},
+    document_path: ?[]const u8 = null,
+    document_hash: ?[32]u8 = null,
+    document_has_reports: bool = true,
 
     /// Create a new handle with a single owner.
     pub fn create(allocator: Allocator, env: BuildEnv, owner: []const u8, debug: bool) Allocator.Error!*BuildEnvHandle {
@@ -37,6 +40,27 @@ pub const BuildEnvHandle = struct {
     /// Get a stable pointer to the underlying BuildEnv.
     pub fn envPtr(self: *BuildEnvHandle) *BuildEnv {
         return &self.env;
+    }
+
+    /// Record the source document used for this build environment.
+    pub fn setDocumentContent(self: *BuildEnvHandle, path: []const u8, hash: [32]u8, has_reports: bool) Allocator.Error!void {
+        const owned_path = try self.allocator.dupe(u8, path);
+        if (self.document_path) |old_path| {
+            self.allocator.free(old_path);
+        }
+        self.document_path = owned_path;
+        self.document_hash = hash;
+        self.document_has_reports = has_reports;
+    }
+
+    pub fn matchesDocumentContent(self: *const BuildEnvHandle, path: []const u8, hash: [32]u8) bool {
+        const stored_path = self.document_path orelse return false;
+        const stored_hash = self.document_hash orelse return false;
+        return std.mem.eql(u8, stored_path, path) and std.mem.eql(u8, &stored_hash, &hash);
+    }
+
+    pub fn hasDocumentReports(self: *const BuildEnvHandle) bool {
+        return self.document_has_reports;
     }
 
     /// Retain the handle for an additional owner.
@@ -62,6 +86,9 @@ pub const BuildEnvHandle = struct {
             if (self.debug) {
                 // In debug mode, all owner counts should be fully released.
                 std.debug.assert(self.owners.count() == 0);
+            }
+            if (self.document_path) |path| {
+                self.allocator.free(path);
             }
             self.owners.deinit(self.allocator);
             self.env.deinit();

@@ -6,7 +6,7 @@
 //! - Reports isVisibleAt correctly for various offsets
 
 const std = @import("std");
-const scope_map = @import("../scope_map.zig");
+const scope_map = @import("lsp").scope_map;
 const base = @import("base");
 
 const ScopeMap = scope_map.ScopeMap;

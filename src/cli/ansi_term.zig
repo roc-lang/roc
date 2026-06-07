@@ -8,6 +8,8 @@ const CSI = "\x1B[";
 pub const green = "\x1B[32m";
 /// ANSI escape sequence to set foreground color to red.
 pub const red = "\x1B[31m";
+/// ANSI escape sequence to set foreground color to yellow.
+pub const yellow = "\x1B[33m";
 /// ANSI escape sequence to reset all text attributes.
 pub const reset = "\x1B[0m";
 

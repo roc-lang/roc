@@ -1,8 +1,8 @@
 //! Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
 //!
 //! To run:
-//!  1. zig build fuzz-parse
-//!  2. zig build snapshot -- --fuzz-corpus /tmp/corpus
+//!  1. zig build build-fuzz-parse
+//!  2. zig build run-snapshot-tool -- --fuzz-corpus /tmp/corpus
 //!  3. ./zig-out/AFLplusplus/bin/afl-fuzz -i /tmp/corpus -o /tmp/parse-out/ zig-out/bin/fuzz-parse
 //!
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`

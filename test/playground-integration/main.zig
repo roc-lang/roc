@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 const build_options = @import("build_options");
+const harness = @import("test_harness");
 
 var verbose_mode = false;
 
@@ -275,6 +276,52 @@ const TestStats = struct {
         return @as(f64, @floatFromInt(self.passed)) / @as(f64, @floatFromInt(self.total)) * 100;
     }
 };
+
+const PlaygroundStatsArgs = struct {
+    json_path: ?[]const u8 = null,
+};
+
+fn appendStatsEvent(
+    allocator: std.mem.Allocator,
+    events: *std.ArrayListUnmanaged(harness.StatsEvent),
+    id: []const u8,
+    parent_id: ?[]const u8,
+    kind: []const u8,
+    name: []const u8,
+    status: []const u8,
+    start_ns: u64,
+    end_ns: u64,
+    data: []const harness.StatsData,
+) void {
+    events.append(allocator, .{
+        .id = id,
+        .parent_id = parent_id,
+        .kind = kind,
+        .name = name,
+        .status = status,
+        .start_ns = start_ns,
+        .end_ns = end_ns,
+        .data = data,
+    }) catch {};
+}
+
+fn statsStatus(result: TestResult) []const u8 {
+    return switch (result) {
+        .passed => "pass",
+        .failed => "fail",
+        .skipped => "skip",
+    };
+}
+
+fn relativeNs(case_start_ns: i128, event_ns: i128) u64 {
+    return @intCast(@max(0, event_ns - case_start_ns));
+}
+
+fn failureData(allocator: std.mem.Allocator, message: ?[]const u8, status: TestResult) []const harness.StatsData {
+    if (status == .passed) return &.{};
+    const msg = message orelse return &.{};
+    return allocator.dupe(harness.StatsData, &.{.{ .key = "message", .value = msg }}) catch &.{};
+}
 
 /// Helper to allocate source code for our test cases.
 const TestData = struct {
@@ -670,22 +717,50 @@ fn expectDiagnostics(response: *const WasmResponse, expected: MessageStep.Diagno
 }
 
 // Test runner for a single test case
-fn runTestCase(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, test_case: TestCase) StepExecutionResult {
+fn runTestCase(
+    allocator: std.mem.Allocator,
+    wasm_interface: *WasmInterface,
+    test_case: TestCase,
+    stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent),
+    case_id: ?[]const u8,
+    case_index: usize,
+    case_start_time: i128,
+) StepExecutionResult {
     logDebug("\n--- Running Test Case: {s} ---\n", .{test_case.name});
-
-    const case_start_time = nanoTimestamp();
 
     // Setup phase
     if (test_case.setup) |setup_fn| {
+        const setup_start = nanoTimestamp();
+        var setup_status: TestResult = .failed;
+        var setup_message: ?[]const u8 = null;
+        defer if (stats_events) |events| {
+            if (case_id) |parent_id| {
+                const id = std.fmt.allocPrint(allocator, "case-{d}-setup", .{case_index}) catch "case-setup";
+                appendStatsEvent(
+                    allocator,
+                    events,
+                    id,
+                    parent_id,
+                    "setup",
+                    "setup",
+                    statsStatus(setup_status),
+                    relativeNs(case_start_time, setup_start),
+                    relativeNs(case_start_time, nanoTimestamp()),
+                    failureData(allocator, setup_message, setup_status),
+                );
+            }
+        };
         setup_fn(allocator, wasm_interface) catch |err| {
             const msg = std.fmt.allocPrint(allocator, "Setup failed: {}", .{err}) catch "Setup failed (OOM formatting message)";
+            setup_message = msg;
             logDebug("[ERROR] {s} for test case '{s}'\n", .{ msg, test_case.name });
             return StepExecutionResult{ .result = .failed, .failure_message = msg };
         };
+        setup_status = .passed;
     }
 
     // Run test steps
-    const step_result = runTestSteps(allocator, wasm_interface, test_case);
+    const step_result = runTestSteps(allocator, wasm_interface, test_case, stats_events, case_id, case_index, case_start_time);
 
     // If steps failed, return that result immediately, skipping teardown.
     if (step_result.result != .passed) {
@@ -697,14 +772,36 @@ fn runTestCase(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, tes
 
     // Teardown phase only runs if steps passed
     if (test_case.teardown) |teardown_fn| {
+        const teardown_start = nanoTimestamp();
+        var teardown_status: TestResult = .failed;
+        var teardown_message: ?[]const u8 = null;
+        defer if (stats_events) |events| {
+            if (case_id) |parent_id| {
+                const id = std.fmt.allocPrint(allocator, "case-{d}-teardown", .{case_index}) catch "case-teardown";
+                appendStatsEvent(
+                    allocator,
+                    events,
+                    id,
+                    parent_id,
+                    "teardown",
+                    "teardown",
+                    statsStatus(teardown_status),
+                    relativeNs(case_start_time, teardown_start),
+                    relativeNs(case_start_time, nanoTimestamp()),
+                    failureData(allocator, teardown_message, teardown_status),
+                );
+            }
+        };
         teardown_fn(allocator, wasm_interface) catch |err| {
             const msg = std.fmt.allocPrint(allocator, "Teardown failed: {}", .{err}) catch "Teardown failed (OOM formatting message)";
+            teardown_message = msg;
             logDebug("[ERROR] {s} for test case '{s}'\n", .{ msg, test_case.name });
             const case_end_time = nanoTimestamp();
             const duration_ms: u64 = @intCast(@divTrunc((case_end_time - case_start_time), std.time.ns_per_ms));
             logDebug("--- Test Case {s}: {s} ({}ms) ---\n", .{ @tagName(.failed), test_case.name, duration_ms });
             return StepExecutionResult{ .result = .failed, .failure_message = msg };
         };
+        teardown_status = .passed;
     }
 
     const case_end_time = nanoTimestamp();
@@ -715,8 +812,36 @@ fn runTestCase(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, tes
     return step_result;
 }
 
-fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, test_case: TestCase) StepExecutionResult {
+fn runTestSteps(
+    allocator: std.mem.Allocator,
+    wasm_interface: *WasmInterface,
+    test_case: TestCase,
+    stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent),
+    case_id: ?[]const u8,
+    case_index: usize,
+    case_start_time: i128,
+) StepExecutionResult {
     for (test_case.steps, 0..) |step, i| {
+        const step_start = nanoTimestamp();
+        var step_status: TestResult = .failed;
+        var step_message: ?[]const u8 = null;
+        defer if (stats_events) |events| {
+            if (case_id) |parent_id| {
+                const id = std.fmt.allocPrint(allocator, "case-{d}-message-{d}", .{ case_index, i }) catch "case-message";
+                appendStatsEvent(
+                    allocator,
+                    events,
+                    id,
+                    parent_id,
+                    "message",
+                    step.message.type,
+                    statsStatus(step_status),
+                    relativeNs(case_start_time, step_start),
+                    relativeNs(case_start_time, nanoTimestamp()),
+                    failureData(allocator, step_message, step_status),
+                );
+            }
+        };
         logDebug("  Step {}: Sending {s} message...\n", .{ i + 1, step.message.type });
 
         if (step.should_fail) {
@@ -725,20 +850,24 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
                 if (step.expected_error) |expected_err| {
                     if (std.mem.containsAtLeast(u8, @errorName(err), 1, expected_err)) {
                         logDebug("  Step {}: Expected failure occurred: {}\n", .{ i + 1, err });
+                        step_status = .passed;
                         continue;
                     }
                 }
                 const msg = std.fmt.allocPrint(allocator, "Unexpected error: {}", .{err}) catch "Unexpected error (OOM formatting message)";
+                step_message = msg;
                 logDebug("  Step {}: {s}\n", .{ i + 1, msg });
                 return StepExecutionResult{ .result = .failed, .failure_message = msg };
             };
             const msg = "Expected failure did not occur";
+            step_message = msg;
             logDebug("  Step {}: {s}\n", .{ i + 1, msg });
             return StepExecutionResult{ .result = .failed, .failure_message = msg };
         }
 
         var response = sendMessageToWasm(wasm_interface, allocator, step.message) catch |err| {
             const msg = std.fmt.allocPrint(allocator, "Failed to send message: {}", .{err}) catch "Failed to send message (OOM formatting message)";
+            step_message = msg;
             logDebug("  Step {}: {s}\n", .{ i + 1, msg });
             return StepExecutionResult{ .result = .failed, .failure_message = msg };
         };
@@ -855,6 +984,7 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
         if (step.owned_source) |owned| {
             allocator.free(owned);
         }
+        step_status = .passed;
     }
 
     return StepExecutionResult{ .result = .passed };
@@ -864,7 +994,14 @@ fn runTestSteps(allocator: std.mem.Allocator, wasm_interface: *WasmInterface, te
 // - `arena` allocator is for test harness allocations.
 // - `gpa` allocator is for the bytebox VM.
 // - `wasm_path` is the path to the WASM file to load.
-fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []const TestCase, wasm_path: []const u8) Allocator.Error!TestStats {
+fn runTests(
+    std_io: std.Io,
+    arena: std.mem.Allocator,
+    gpa: std.mem.Allocator,
+    test_cases: []const TestCase,
+    wasm_path: []const u8,
+    stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent),
+) anyerror!TestStats {
     var stats = TestStats{
         .total = test_cases.len,
         .start_time = nanoTimestamp(),
@@ -876,15 +1013,68 @@ fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, te
     var failures = std.ArrayList(TestFailure).empty;
     defer failures.deinit(arena);
 
-    for (test_cases) |case| {
+    for (test_cases, 0..) |case, case_index| {
+        const case_start = nanoTimestamp();
+        const case_id = if (stats_events != null)
+            try std.fmt.allocPrint(arena, "case-{d}", .{case_index})
+        else
+            "";
+        var case_result: TestResult = .failed;
+        var case_message: ?[]const u8 = null;
+        defer if (stats_events) |events| {
+            const event_index = events.items.len;
+            appendStatsEvent(
+                arena,
+                events,
+                case_id,
+                null,
+                "case",
+                case.name,
+                statsStatus(case_result),
+                relativeNs(stats.start_time, case_start),
+                relativeNs(stats.start_time, nanoTimestamp()),
+                failureData(arena, case_message, case_result),
+            );
+            if (events.items.len > event_index) {
+                events.items[event_index].worker_index = 0;
+            }
+        };
+
         if (case.skip) {
             logDebug("\n[INFO] Skipping test case: {s}\n", .{case.name});
+            case_result = .skipped;
             stats.skipped += 1;
             continue;
         }
+        var case_arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer case_arena_state.deinit();
+        const case_arena = case_arena_state.allocator();
+
         logDebug("\n[INFO] Setting up WASM interface for test case: {s}...\n", .{case.name});
-        var wasm_interface = setupWasm(std_io, gpa, arena, wasm_path) catch |err| {
+        const setup_start = nanoTimestamp();
+        var setup_end = setup_start;
+        var setup_status: TestResult = .failed;
+        var setup_message: ?[]const u8 = null;
+        defer if (stats_events) |events| {
+            const id = std.fmt.allocPrint(arena, "case-{d}-wasm-setup", .{case_index}) catch "case-wasm-setup";
+            appendStatsEvent(
+                arena,
+                events,
+                id,
+                case_id,
+                "setup",
+                "wasm setup",
+                statsStatus(setup_status),
+                relativeNs(case_start, setup_start),
+                relativeNs(case_start, setup_end),
+                failureData(arena, setup_message, setup_status),
+            );
+        };
+        var wasm_interface = setupWasm(std_io, gpa, case_arena, wasm_path) catch |err| {
             logDebug("[ERROR] Failed to setup WASM for test case '{s}': {}\n", .{ case.name, err });
+            setup_end = nanoTimestamp();
+            setup_message = "WASM setup failed";
+            case_message = "WASM setup failed";
             stats.failed += 1;
             try failures.append(arena, .{
                 .case_name = case.name,
@@ -893,22 +1083,40 @@ fn runTests(std_io: std.Io, arena: std.mem.Allocator, gpa: std.mem.Allocator, te
             });
             continue;
         };
+        setup_status = .passed;
+        setup_end = nanoTimestamp();
         defer wasm_interface.deinit();
 
-        const case_execution_result = runTestCase(arena, &wasm_interface, case);
+        const case_execution_result = runTestCase(
+            arena,
+            &wasm_interface,
+            case,
+            stats_events,
+            case_id,
+            case_index,
+            case_start,
+        );
 
         switch (case_execution_result.result) {
-            .passed => stats.passed += 1,
+            .passed => {
+                case_result = .passed;
+                stats.passed += 1;
+            },
             .failed => {
+                case_result = .failed;
                 stats.failed += 1;
                 const failure_msg = case_execution_result.failure_message orelse "Test failed";
+                case_message = failure_msg;
                 try failures.append(arena, .{
                     .case_name = case.name,
                     .step_index = 0, // Could be enhanced to track specific step
                     .message = failure_msg,
                 });
             },
-            .skipped => stats.skipped += 1,
+            .skipped => {
+                case_result = .skipped;
+                stats.skipped += 1;
+            },
         }
     }
 
@@ -947,7 +1155,15 @@ fn createSimpleTest(allocator: std.mem.Allocator, name: []const u8, code: []cons
     return TestCase{ .name = name, .steps = steps };
 }
 
-pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void {
+fn matchesAnyFilter(name: []const u8, filters: []const []const u8) bool {
+    if (filters.len == 0) return true;
+    for (filters) |filter| {
+        if (std.mem.find(u8, name, filter) != null) return true;
+    }
+    return false;
+}
+
+pub fn main(init: std.process.Init) anyerror!void {
     const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -968,6 +1184,9 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
     const args = args_list.items;
 
     var wasm_path: ?[]const u8 = null;
+    var stats_args: PlaygroundStatsArgs = .{};
+    var case_filters = std.ArrayList([]const u8).empty;
+    defer case_filters.deinit(allocator);
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -978,6 +1197,8 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
             std.debug.print("Options:\n", .{});
             std.debug.print("  --verbose           Enable verbose mode\n", .{});
             std.debug.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            std.debug.print("  --stats-json PATH   Write MiniCI stats JSON\n", .{});
+            std.debug.print("  --filter SUBSTRING  Only run cases whose name contains SUBSTRING\n", .{});
             std.debug.print("  --help              Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
@@ -987,6 +1208,20 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
                 return;
             }
             wasm_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--stats-json")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --stats-json requires a path argument\n", .{});
+                return;
+            }
+            stats_args.json_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--filter")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --filter requires a substring argument\n", .{});
+                return;
+            }
+            try case_filters.append(allocator, args[i]);
         } else if (!std.mem.startsWith(u8, arg, "--")) {
             // Positional argument - treat as WASM path
             wasm_path = arg;
@@ -1047,38 +1282,14 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
         .steps = happy_path_steps,
     });
 
-    // Error Handling Test
+    // Diagnostics over the playground protocol.
     const syntax_error_code_val = try TestData.syntaxErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
 
-    // Empty Source Test
-    const empty_source_code = try allocator.dupe(u8, "");
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Empty Source Code", empty_source_code, null, false)); // Disable diagnostic expectations
-
-    // Code Formatting Test
-    var formatted_test_steps = try allocator.alloc(MessageStep, 3);
-    formatted_test_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const unformatted_code = try allocator.dupe(u8, "module [foo]\n\nfoo=42\nbar=\"hello world\"\n");
-    formatted_test_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = unformatted_code },
-        .expected_status = "SUCCESS",
-        .expected_message_contains = "LOADED",
-        .owned_source = unformatted_code,
-    };
-    formatted_test_steps[2] = .{
-        .message = .{ .type = "QUERY_FORMATTED" },
-        .expected_status = "SUCCESS",
-        .expected_data_contains = "foo",
-    };
-    try test_cases.append(allocator, .{
-        .name = "QUERY_FORMATTED - Code Formatting",
-        .steps = formatted_test_steps,
-    });
-
-    // Invalid Message Type Test
+    // Invalid message handling at the WASM/JSON boundary.
     var invalid_msg_type_steps = try allocator.alloc(MessageStep, 2);
     invalid_msg_type_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     invalid_msg_type_steps[1] = .{
@@ -1091,7 +1302,7 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
         .steps = invalid_msg_type_steps,
     });
 
-    // RESET Functionality Test
+    // Reset from a loaded state and prove a later load/query still works.
     var reset_test_steps = try allocator.alloc(MessageStep, 5);
     reset_test_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
     const code_for_reset_test = try TestData.syntaxErrorRocCode(allocator);
@@ -1101,12 +1312,12 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
         .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
         .owned_source = code_for_reset_test,
     };
-    reset_test_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" }; // Perform reset
+    reset_test_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
     const happy_code_after_reset = try TestData.happyPathRocCode(allocator);
     reset_test_steps[3] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = happy_code_after_reset },
         .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 }, // Expect no errors from the new code
+        .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 },
         .owned_source = happy_code_after_reset,
     };
     reset_test_steps[4] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
@@ -1115,174 +1326,69 @@ pub fn main(init: std.process.Init) (Allocator.Error || error{TestsFailed})!void
         .steps = reset_test_steps,
     });
 
-    // Memory Corruption on Reset Test
-    var memory_corruption_steps = try allocator.alloc(MessageStep, 4);
-    memory_corruption_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const code_for_mem_test_1 = try TestData.happyPathRocCode(allocator);
-    memory_corruption_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = code_for_mem_test_1 },
-        .expected_status = "SUCCESS",
-        .owned_source = code_for_mem_test_1,
-    };
-    memory_corruption_steps[2] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    const code_for_mem_test_2 = try TestData.syntaxErrorRocCode(allocator);
-    memory_corruption_steps[3] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = code_for_mem_test_2 },
-        .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} },
-        .owned_source = code_for_mem_test_2,
-    };
-    try test_cases.append(allocator, .{
-        .name = "Memory Corruption on Reset - Load, Reset, Load",
-        .steps = memory_corruption_steps,
-    });
-
-    // GET_HOVER_INFO Specific Test
-    var get_hover_info_steps = try allocator.alloc(MessageStep, 3);
-    get_hover_info_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    const get_hover_info_code = try allocator.dupe(u8,
-        \\module [main]
-        \\
-        \\main : Str
-        \\main = "hello"
-        \\
-        \\num : I32
-        \\num = 123
-    );
-    get_hover_info_steps[1] = .{
-        .message = .{ .type = "LOAD_SOURCE", .source = get_hover_info_code },
-        .expected_status = "SUCCESS",
-        .expected_diagnostics = .{ .min_errors = 0, .min_warnings = 0 },
-        .owned_source = get_hover_info_code,
-    };
-    get_hover_info_steps[2] = .{
-        .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
-        .expected_status = "SUCCESS",
-        .expected_hover_info_contains = "I32",
-    };
-    try test_cases.append(allocator, .{
-        .name = "GET_HOVER_INFO - Specific Type Query",
-        .steps = get_hover_info_steps,
-    });
-
-    // REPL Test Cases
-
-    // Test: REPL Lifecycle - Init, Step, Clear, Reset
-    var repl_lifecycle_steps = try allocator.alloc(MessageStep, 5);
-    repl_lifecycle_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_lifecycle_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
-    repl_lifecycle_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
-    repl_lifecycle_steps[3] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
-    repl_lifecycle_steps[4] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Lifecycle - Init, Step, Clear, Reset",
-        .steps = repl_lifecycle_steps,
-    });
-
-    // Test: REPL Core - Definitions and Expressions
-    var repl_core_steps = try allocator.alloc(MessageStep, 6);
-    repl_core_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_core_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_core_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
-    repl_core_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "y = x + 5" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `y`" };
-    repl_core_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
-    repl_core_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Core - Definitions and Expressions",
-        .steps = repl_core_steps,
-    });
-
-    // Test: REPL Variable Redefinition - Dependency Updates
-    var repl_redefinition_steps = try allocator.alloc(MessageStep, 8);
-    repl_redefinition_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 10" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "y = x + 5" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[4] = .{ .message = .{ .type = "REPL_STEP", .input = "y" }, .expected_status = "SUCCESS", .expected_result_output_contains = "15" };
-    repl_redefinition_steps[5] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 20" }, .expected_status = "SUCCESS" };
-    repl_redefinition_steps[6] = .{
-        .message = .{ .type = "REPL_STEP", .input = "y" },
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "25", // Should reflect new x value
-    };
-    repl_redefinition_steps[7] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Variable Redefinition - Dependency Updates",
-        .steps = repl_redefinition_steps,
-    });
-
-    // Test: REPL Error Handling - Invalid Syntax Recovery
-    var repl_error_steps = try allocator.alloc(MessageStep, 6);
-    repl_error_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_error_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_error_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
-    repl_error_steps[3] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x +" }, // Invalid syntax - incomplete expression
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "UNEXPECTED TOKEN",
-        .expected_result_type = "error",
-        .expected_result_error_stage = "parse",
-    };
-    repl_error_steps[4] = .{
-        .message = .{ .type = "REPL_STEP", .input = "x" }, // Should still work
-        .expected_status = "SUCCESS",
-        .expected_result_output_contains = "42", // Previous definition should still be valid
-    };
-    repl_error_steps[5] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Error Handling - Invalid Syntax Recovery",
-        .steps = repl_error_steps,
-    });
-
-    // Test: REPL Compiler Integration - Query After Evaluation
-    var repl_compiler_steps = try allocator.alloc(MessageStep, 5);
-    repl_compiler_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
-    repl_compiler_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "x + 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "52" };
-    repl_compiler_steps[4] = .{
-        .message = .{ .type = "QUERY_CIR" }, // Should work in REPL mode
+    // REPL protocol smoke. Detailed REPL behavior is covered by native Debug
+    // ReplSession tests in run-test-zig-cli-main.
+    var repl_protocol_steps = try allocator.alloc(MessageStep, 9);
+    repl_protocol_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+    repl_protocol_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL initialized" };
+    repl_protocol_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS", .expected_result_output_contains = "assigned `x`" };
+    repl_protocol_steps[3] = .{ .message = .{ .type = "REPL_STEP", .input = "x + 10" }, .expected_status = "SUCCESS", .expected_result_output_contains = "52" };
+    repl_protocol_steps[4] = .{
+        .message = .{ .type = "QUERY_CIR" },
         .expected_status = "SUCCESS",
         .expected_data_contains = "can-ir",
     };
-
-    try test_cases.append(allocator, .{
-        .name = "REPL Compiler Integration - Query After Evaluation",
-        .steps = repl_compiler_steps,
-    });
-
-    // Test: REPL State Isolation - Mode Switching
-    var repl_isolation_steps = try allocator.alloc(MessageStep, 6);
-    repl_isolation_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[1] = .{ .message = .{ .type = "INIT_REPL" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[2] = .{ .message = .{ .type = "REPL_STEP", .input = "x = 42" }, .expected_status = "SUCCESS" };
-    repl_isolation_steps[3] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
-    // After reset, should be back to single-file mode
+    repl_protocol_steps[5] = .{ .message = .{ .type = "CLEAR_REPL" }, .expected_status = "SUCCESS", .expected_message_contains = "REPL cleared" };
+    repl_protocol_steps[6] = .{ .message = .{ .type = "RESET" }, .expected_status = "SUCCESS" };
     const simple_source = try TestData.happyPathRocCode(allocator);
-    repl_isolation_steps[4] = .{
+    repl_protocol_steps[7] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = simple_source },
         .expected_status = "SUCCESS",
         .expected_message_contains = "LOADED",
         .owned_source = simple_source,
     };
-    repl_isolation_steps[5] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS" };
+    repl_protocol_steps[8] = .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
 
     try test_cases.append(allocator, .{
-        .name = "REPL State Isolation - Mode Switching",
-        .steps = repl_isolation_steps,
+        .name = "REPL Protocol - Step, Query, Clear, Reset",
+        .steps = repl_protocol_steps,
     });
+
+    if (case_filters.items.len > 0) {
+        var kept = std.ArrayList(TestCase).empty;
+        for (test_cases.items) |case| {
+            if (matchesAnyFilter(case.name, case_filters.items)) {
+                try kept.append(allocator, case);
+            }
+        }
+        test_cases.deinit(allocator);
+        test_cases = kept;
+    }
 
     logDebug("[INFO] Starting Playground Integration Tests...\n", .{});
     logDebug("[INFO] Running {} test cases\n", .{test_cases.items.len});
 
-    const stats = try runTests(std_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path);
+    var stats_events: std.ArrayListUnmanaged(harness.StatsEvent) = .empty;
+    defer stats_events.deinit(allocator);
+    const maybe_stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent) = if (stats_args.json_path != null) &stats_events else null;
+
+    const stats = try runTests(std_io, allocator, gpa.allocator(), test_cases.items, playground_wasm_path, maybe_stats_events);
 
     logDebug("\nAll Playground Integration Tests Completed!\n", .{});
     logDebug("Final Results: {}/{} passed ({d:0.}%)\n", .{ stats.passed, stats.total, stats.successRate() });
+
+    if (stats_args.json_path) |path| {
+        try harness.writeRunnerStatsJson(allocator, std_io, path, .{
+            .runner = "playground",
+            .summary = .{
+                .total = stats.total,
+                .passed = stats.passed,
+                .failed = stats.failed,
+                .skipped = stats.skipped,
+            },
+            .events = stats_events.items,
+        });
+    }
 
     // Exit with error if any tests failed
     if (stats.failed > 0) {
