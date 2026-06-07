@@ -248,12 +248,9 @@ const DirectContext = enum(u16) {
     expr_suffix,
     expr_complete,
     expr_after_unary,
-    expr_after_apply_args,
-    expr_after_method_args,
     expr_after_binary_rhs,
     expr_arrow_after_inner,
     expr_arrow_app_next,
-    expr_arrow_app_after_args,
     expr_collection_next,
     expr_collection_after_item,
     expr_string_next,
@@ -1945,9 +1942,6 @@ const StatementAssociatedStatementState = struct {
 const RootExprParent = union(enum) {
     none,
     expr_collection_item,
-    expr_apply_args,
-    expr_method_args,
-    expr_arrow_app_args,
     statement_expect: Token.Idx,
     statement_for_expr: StatementForExprState,
     statement_for_body: StatementForBodyState,
@@ -1965,9 +1959,6 @@ const RootExprParent = union(enum) {
         return switch (self) {
             .none => null,
             .expr_collection_item => .expr_collection_after_item,
-            .expr_apply_args => .expr_after_apply_args,
-            .expr_method_args => .expr_after_method_args,
-            .expr_arrow_app_args => .expr_arrow_app_after_args,
             .statement_expect => .statement_expect_after_expr,
             .statement_for_expr => .statement_for_after_expr,
             .statement_for_body => .statement_for_after_body,
@@ -2097,30 +2088,6 @@ const ExprCollectionStack = struct {
     }
 };
 
-fn StateStack(comptime State: type) type {
-    return struct {
-        current: ?State = null,
-        stack: std.ArrayList(State) = .empty,
-
-        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-            self.stack.deinit(allocator);
-        }
-
-        fn enter(self: *@This(), allocator: std.mem.Allocator, state: State) Error!void {
-            if (self.current) |current| {
-                try self.stack.append(allocator, current);
-            }
-            self.current = state;
-        }
-
-        fn leave(self: *@This()) State {
-            const state = self.current orelse unreachable;
-            self.current = self.stack.pop();
-            return state;
-        }
-    };
-}
-
 const PatternRootState = struct {
     outer_start: Token.Idx,
     scratch_top: u32,
@@ -2179,10 +2146,12 @@ const ExprAfterUnaryState = struct {
     operator: Token.Idx,
 };
 
-const ExprCollectionResult = enum {
+const ExprCollectionResult = union(enum) {
     list,
     tuple,
-    apply_args,
+    apply: ExprAfterApplyArgsState,
+    method_apply: ExprAfterMethodArgsState,
+    arrow_apply: ExprArrowAppAfterArgsState,
 };
 
 const ExprCollectionState = struct {
@@ -2570,18 +2539,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var expr_after_unary_state: ExprAfterUnaryState = undefined;
     var expr_collections: ExprCollectionStack = .{};
     defer expr_collections.deinit(open_allocator);
-    var expr_apply_args_stack: StateStack(ExprAfterApplyArgsState) = .{};
-    defer expr_apply_args_stack.deinit(open_allocator);
-    var expr_method_args_stack: StateStack(ExprAfterMethodArgsState) = .{};
-    defer expr_method_args_stack.deinit(open_allocator);
-    var expr_after_apply_args_state: ExprAfterApplyArgsState = undefined;
-    var expr_after_method_args_state: ExprAfterMethodArgsState = undefined;
     var expr_after_binary_rhs_state: ExprAfterBinaryRhsState = undefined;
     var expr_arrow_after_inner_state: ExprArrowAfterInnerState = undefined;
     var expr_arrow_app_state: ExprArrowAppState = undefined;
-    var expr_arrow_app_args_stack: StateStack(ExprArrowAppAfterArgsState) = .{};
-    defer expr_arrow_app_args_stack.deinit(open_allocator);
-    var expr_arrow_app_after_args_state: ExprArrowAppAfterArgsState = undefined;
     var expr_string_state: ExprStringState = undefined;
     var expr_record_ext_state: ExprRecordExtState = undefined;
     var expr_record_state: ExprRecordState = undefined;
@@ -2653,15 +2613,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &expr_finish_state;
     _ = &expr_after_unary_state;
     _ = &expr_collections;
-    _ = &expr_apply_args_stack;
-    _ = &expr_method_args_stack;
-    _ = &expr_after_apply_args_state;
-    _ = &expr_after_method_args_state;
     _ = &expr_after_binary_rhs_state;
     _ = &expr_arrow_after_inner_state;
     _ = &expr_arrow_app_state;
-    _ = &expr_arrow_app_args_stack;
-    _ = &expr_arrow_app_after_args_state;
     _ = &expr_string_state;
     _ = &expr_record_ext_state;
     _ = &expr_record_state;
@@ -4383,18 +4337,16 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 .NoSpaceOpenRound,
                 => {
                     self.advance();
-                    try expr_apply_args_stack.enter(open_allocator, .{
-                        .start = expr_finish_state.start,
-                        .min_bp = expr_finish_state.min_bp,
-                        .function = expr_finish_state.expr,
-                    });
-                    try root_expr_parents.set(open_allocator, .expr_apply_args, open_syntax.depth());
                     try expr_collections.enter(open_allocator, .{
                         .start = expr_finish_state.start,
                         .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
                         .end_token = .CloseRound,
-                        .result = .apply_args,
+                        .result = .{ .apply = .{
+                            .start = expr_finish_state.start,
+                            .min_bp = expr_finish_state.min_bp,
+                            .function = expr_finish_state.expr,
+                        } },
                         .close_error = .expected_expr_apply_close_round,
                     });
                     context = .expr_collection_next;
@@ -4438,19 +4390,17 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     } });
                     if (self.peek() == .NoSpaceOpenRound) {
                         self.advance();
-                        try expr_method_args_stack.enter(open_allocator, .{
-                            .start = expr_finish_state.start,
-                            .min_bp = expr_finish_state.min_bp,
-                            .receiver = expr_finish_state.expr,
-                            .method_token = s,
-                        });
-                        try root_expr_parents.set(open_allocator, .expr_method_args, open_syntax.depth());
                         try expr_collections.enter(open_allocator, .{
                             .start = s,
                             .min_bp = null,
                             .scratch_top = self.store.scratchExprTop(),
                             .end_token = .CloseRound,
-                            .result = .apply_args,
+                            .result = .{ .method_apply = .{
+                                .start = expr_finish_state.start,
+                                .min_bp = expr_finish_state.min_bp,
+                                .receiver = expr_finish_state.expr,
+                                .method_token = s,
+                            } },
                             .close_error = .expected_expr_apply_close_round,
                         });
                         context = .expr_collection_next;
@@ -4713,142 +4663,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
             },
-            .expr_after_apply_args => switch (dispatch_token) {
-                .CloseRound,
-                => {
-                    _ = root_expr_parents.take().expr_apply_args;
-                    expr_after_apply_args_state = expr_apply_args_stack.leave();
-                    const tuple_expr = last_expr orelse unreachable;
-                    last_expr = null;
-                    const tuple = self.store.getExpr(tuple_expr);
-                    const args = switch (tuple) {
-                        .tuple => |t| t.items,
-                        .malformed => {
-                            expr_finish_state = .{ .start = expr_after_apply_args_state.start, .min_bp = expr_after_apply_args_state.min_bp, .expr = tuple_expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                        else => {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, expr_after_apply_args_state.start);
-                            expr_finish_state = .{ .start = expr_after_apply_args_state.start, .min_bp = expr_after_apply_args_state.min_bp, .expr = malformed };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                    };
-                    const expr = try self.store.addExpr(.{ .apply = .{
-                        .args = args,
-                        .@"fn" = expr_after_apply_args_state.function,
-                        .region = .{ .start = expr_after_apply_args_state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = expr_after_apply_args_state.start, .min_bp = expr_after_apply_args_state.min_bp, .expr = expr };
-                    context = .expr_suffix;
-                    dispatch_token = self.peek();
-                    continue :dispatch;
-                },
-                else => {
-                    _ = root_expr_parents.take().expr_apply_args;
-                    expr_after_apply_args_state = expr_apply_args_stack.leave();
-                    const tuple_expr = last_expr orelse unreachable;
-                    last_expr = null;
-                    const tuple = self.store.getExpr(tuple_expr);
-                    const args = switch (tuple) {
-                        .tuple => |t| t.items,
-                        .malformed => {
-                            expr_finish_state = .{ .start = expr_after_apply_args_state.start, .min_bp = expr_after_apply_args_state.min_bp, .expr = tuple_expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                        else => {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, expr_after_apply_args_state.start);
-                            expr_finish_state = .{ .start = expr_after_apply_args_state.start, .min_bp = expr_after_apply_args_state.min_bp, .expr = malformed };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                    };
-                    const expr = try self.store.addExpr(.{ .apply = .{
-                        .args = args,
-                        .@"fn" = expr_after_apply_args_state.function,
-                        .region = .{ .start = expr_after_apply_args_state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = expr_after_apply_args_state.start, .min_bp = expr_after_apply_args_state.min_bp, .expr = expr };
-                    context = .expr_suffix;
-                    dispatch_token = self.peek();
-                    continue :dispatch;
-                },
-            },
-            .expr_after_method_args => switch (dispatch_token) {
-                .CloseRound,
-                => {
-                    _ = root_expr_parents.take().expr_method_args;
-                    expr_after_method_args_state = expr_method_args_stack.leave();
-                    const tuple_expr = last_expr orelse unreachable;
-                    last_expr = null;
-                    const tuple = self.store.getExpr(tuple_expr);
-                    const args = switch (tuple) {
-                        .tuple => |t| t.items,
-                        .malformed => {
-                            expr_finish_state = .{ .start = expr_after_method_args_state.start, .min_bp = expr_after_method_args_state.min_bp, .expr = tuple_expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                        else => {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, expr_after_method_args_state.start);
-                            expr_finish_state = .{ .start = expr_after_method_args_state.start, .min_bp = expr_after_method_args_state.min_bp, .expr = malformed };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                    };
-                    const expr = try self.store.addExpr(.{ .method_call = .{
-                        .receiver = expr_after_method_args_state.receiver,
-                        .method_token = expr_after_method_args_state.method_token,
-                        .args = args,
-                        .region = .{ .start = expr_after_method_args_state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = expr_after_method_args_state.start, .min_bp = expr_after_method_args_state.min_bp, .expr = expr };
-                    context = .expr_suffix;
-                    dispatch_token = self.peek();
-                    continue :dispatch;
-                },
-                else => {
-                    _ = root_expr_parents.take().expr_method_args;
-                    expr_after_method_args_state = expr_method_args_stack.leave();
-                    const tuple_expr = last_expr orelse unreachable;
-                    last_expr = null;
-                    const tuple = self.store.getExpr(tuple_expr);
-                    const args = switch (tuple) {
-                        .tuple => |t| t.items,
-                        .malformed => {
-                            expr_finish_state = .{ .start = expr_after_method_args_state.start, .min_bp = expr_after_method_args_state.min_bp, .expr = tuple_expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                        else => {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, expr_after_method_args_state.start);
-                            expr_finish_state = .{ .start = expr_after_method_args_state.start, .min_bp = expr_after_method_args_state.min_bp, .expr = malformed };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                    };
-                    const expr = try self.store.addExpr(.{ .method_call = .{
-                        .receiver = expr_after_method_args_state.receiver,
-                        .method_token = expr_after_method_args_state.method_token,
-                        .args = args,
-                        .region = .{ .start = expr_after_method_args_state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = expr_after_method_args_state.start, .min_bp = expr_after_method_args_state.min_bp, .expr = expr };
-                    context = .expr_suffix;
-                    dispatch_token = self.peek();
-                    continue :dispatch;
-                },
-            },
             .expr_after_binary_rhs => switch (dispatch_token) {
                 .EndOfFile,
                 => {
@@ -4928,20 +4742,18 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 .NoSpaceOpenRound,
                 => {
                     self.advance();
-                    try expr_arrow_app_args_stack.enter(open_allocator, .{
-                        .start = expr_arrow_app_state.start,
-                        .min_bp = expr_arrow_app_state.min_bp,
-                        .left = expr_arrow_app_state.left,
-                        .operator = expr_arrow_app_state.operator,
-                        .function = expr_arrow_app_state.rhs,
-                    });
-                    try root_expr_parents.set(open_allocator, .expr_arrow_app_args, open_syntax.depth());
                     try expr_collections.enter(open_allocator, .{
                         .start = expr_arrow_app_state.operator,
                         .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
                         .end_token = .CloseRound,
-                        .result = .apply_args,
+                        .result = .{ .arrow_apply = .{
+                            .start = expr_arrow_app_state.start,
+                            .min_bp = expr_arrow_app_state.min_bp,
+                            .left = expr_arrow_app_state.left,
+                            .operator = expr_arrow_app_state.operator,
+                            .function = expr_arrow_app_state.rhs,
+                        } },
                         .close_error = .expected_expr_apply_close_round,
                     });
                     context = .expr_collection_next;
@@ -4961,97 +4773,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
             },
-            .expr_arrow_app_after_args => switch (dispatch_token) {
-                .CloseRound,
-                => {
-                    _ = root_expr_parents.take().expr_arrow_app_args;
-                    expr_arrow_app_after_args_state = expr_arrow_app_args_stack.leave();
-                    const tuple_expr = last_expr orelse unreachable;
-                    last_expr = null;
-                    const tuple = self.store.getExpr(tuple_expr);
-                    const args = switch (tuple) {
-                        .tuple => |t| t.items,
-                        .malformed => {
-                            const expr = try self.store.addExpr(.{ .arrow_call = .{
-                                .region = .{ .start = expr_arrow_app_after_args_state.start, .end = self.pos },
-                                .operator = expr_arrow_app_after_args_state.operator,
-                                .left = expr_arrow_app_after_args_state.left,
-                                .right = tuple_expr,
-                            } });
-                            expr_finish_state = .{ .start = expr_arrow_app_after_args_state.start, .min_bp = expr_arrow_app_after_args_state.min_bp, .expr = expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                        else => {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, expr_arrow_app_after_args_state.start);
-                            expr_finish_state = .{ .start = expr_arrow_app_after_args_state.start, .min_bp = expr_arrow_app_after_args_state.min_bp, .expr = malformed };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                    };
-                    const rhs = try self.store.addExpr(.{ .apply = .{
-                        .args = args,
-                        .@"fn" = expr_arrow_app_after_args_state.function,
-                        .region = .{ .start = expr_arrow_app_after_args_state.operator, .end = self.pos },
-                    } });
-                    expr_arrow_app_state = .{
-                        .start = expr_arrow_app_after_args_state.start,
-                        .min_bp = expr_arrow_app_after_args_state.min_bp,
-                        .left = expr_arrow_app_after_args_state.left,
-                        .operator = expr_arrow_app_after_args_state.operator,
-                        .rhs = rhs,
-                    };
-                    context = .expr_arrow_app_next;
-                    dispatch_token = self.peek();
-                    continue :dispatch;
-                },
-                else => {
-                    _ = root_expr_parents.take().expr_arrow_app_args;
-                    expr_arrow_app_after_args_state = expr_arrow_app_args_stack.leave();
-                    const tuple_expr = last_expr orelse unreachable;
-                    last_expr = null;
-                    const tuple = self.store.getExpr(tuple_expr);
-                    const args = switch (tuple) {
-                        .tuple => |t| t.items,
-                        .malformed => {
-                            const expr = try self.store.addExpr(.{ .arrow_call = .{
-                                .region = .{ .start = expr_arrow_app_after_args_state.start, .end = self.pos },
-                                .operator = expr_arrow_app_after_args_state.operator,
-                                .left = expr_arrow_app_after_args_state.left,
-                                .right = tuple_expr,
-                            } });
-                            expr_finish_state = .{ .start = expr_arrow_app_after_args_state.start, .min_bp = expr_arrow_app_after_args_state.min_bp, .expr = expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                        else => {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, expr_arrow_app_after_args_state.start);
-                            expr_finish_state = .{ .start = expr_arrow_app_after_args_state.start, .min_bp = expr_arrow_app_after_args_state.min_bp, .expr = malformed };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        },
-                    };
-                    const rhs = try self.store.addExpr(.{ .apply = .{
-                        .args = args,
-                        .@"fn" = expr_arrow_app_after_args_state.function,
-                        .region = .{ .start = expr_arrow_app_after_args_state.operator, .end = self.pos },
-                    } });
-                    expr_arrow_app_state = .{
-                        .start = expr_arrow_app_after_args_state.start,
-                        .min_bp = expr_arrow_app_after_args_state.min_bp,
-                        .left = expr_arrow_app_after_args_state.left,
-                        .operator = expr_arrow_app_after_args_state.operator,
-                        .rhs = rhs,
-                    };
-                    context = .expr_arrow_app_next;
-                    dispatch_token = self.peek();
-                    continue :dispatch;
-                },
-            },
             .expr_collection_next => switch (dispatch_token) {
                 .CloseRound,
                 .CloseSquare,
@@ -5061,32 +4782,71 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         self.advance();
                         const expr_collection_state = expr_collections.leave();
                         const span = try self.store.exprSpanFrom(expr_collection_state.scratch_top);
-                        const expr = switch (expr_collection_state.result) {
-                            .list => try self.store.addExpr(.{ .list = .{ .items = span, .region = .{ .start = expr_collection_state.start, .end = self.pos } } }),
-                            .tuple, .apply_args => try self.store.addExpr(.{ .tuple = .{ .items = span, .region = .{ .start = expr_collection_state.start, .end = self.pos } } }),
-                        };
-                        if (expr_collection_state.min_bp) |min_bp| {
-                            expr_finish_state = .{ .start = expr_collection_state.start, .min_bp = min_bp, .expr = expr };
-                            context = .expr_suffix;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
+                        switch (expr_collection_state.result) {
+                            .list => {
+                                const expr = try self.store.addExpr(.{ .list = .{ .items = span, .region = .{ .start = expr_collection_state.start, .end = self.pos } } });
+                                expr_finish_state = .{ .start = expr_collection_state.start, .min_bp = expr_collection_state.min_bp orelse 0, .expr = expr };
+                                context = .expr_suffix;
+                                dispatch_token = self.peek();
+                                continue :dispatch;
+                            },
+                            .tuple => {
+                                const expr = try self.store.addExpr(.{ .tuple = .{ .items = span, .region = .{ .start = expr_collection_state.start, .end = self.pos } } });
+                                if (expr_collection_state.min_bp) |min_bp| {
+                                    expr_finish_state = .{ .start = expr_collection_state.start, .min_bp = min_bp, .expr = expr };
+                                    context = .expr_suffix;
+                                    dispatch_token = self.peek();
+                                    continue :dispatch;
+                                }
+                                last_expr = expr;
+                                if (root_expr_parents.activeContext(open_syntax.depth())) |after| {
+                                    context = after;
+                                    dispatch_token = self.peek();
+                                    continue :dispatch;
+                                }
+                                return .{ .expr = expr };
+                            },
+                            .apply => |state| {
+                                const expr = try self.store.addExpr(.{ .apply = .{
+                                    .args = span,
+                                    .@"fn" = state.function,
+                                    .region = .{ .start = state.start, .end = self.pos },
+                                } });
+                                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                                context = .expr_suffix;
+                                dispatch_token = self.peek();
+                                continue :dispatch;
+                            },
+                            .method_apply => |state| {
+                                const expr = try self.store.addExpr(.{ .method_call = .{
+                                    .receiver = state.receiver,
+                                    .method_token = state.method_token,
+                                    .args = span,
+                                    .region = .{ .start = state.start, .end = self.pos },
+                                } });
+                                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                                context = .expr_suffix;
+                                dispatch_token = self.peek();
+                                continue :dispatch;
+                            },
+                            .arrow_apply => |state| {
+                                const rhs = try self.store.addExpr(.{ .apply = .{
+                                    .args = span,
+                                    .@"fn" = state.function,
+                                    .region = .{ .start = state.operator, .end = self.pos },
+                                } });
+                                expr_arrow_app_state = .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .left = state.left,
+                                    .operator = state.operator,
+                                    .rhs = rhs,
+                                };
+                                context = .expr_arrow_app_next;
+                                dispatch_token = self.peek();
+                                continue :dispatch;
+                            },
                         }
-                        last_expr = expr;
-                        if (root_expr_parents.activeContext(open_syntax.depth())) |after| {
-                            context = after;
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        }
-                        if (open_syntax.peekKind()) |kind| {
-                            context = switch (kind) {
-                                else => {
-                                    unreachable;
-                                },
-                            };
-                            dispatch_token = self.peek();
-                            continue :dispatch;
-                        }
-                        return .{ .expr = expr };
                     }
                     const expr_collection_state = expr_collections.leave();
                     const expr = try self.pushMalformed(AST.Expr.Idx, expr_collection_state.close_error, self.pos);
