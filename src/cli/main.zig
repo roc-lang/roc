@@ -3644,7 +3644,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
     var cleanup_build_scratch_dir = true;
     defer if (cleanup_build_scratch_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), build_scratch_dir);
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
     };
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
