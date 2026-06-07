@@ -113,7 +113,8 @@ pub fn init(allocator: std.mem.Allocator) Stack {
 
 pub fn deinit(stack: *Stack) void {
     if (stack.mem.len > 0) {
-        stack.allocator.free(stack.mem);
+        const alignment = @max(@alignOf(StackVal), @alignOf(Label), @alignOf(CallFrame));
+        stack.allocator.rawFree(stack.mem, comptime std.mem.Alignment.fromByteUnits(alignment), @returnAddress());
     }
 }
 
