@@ -1210,6 +1210,13 @@ const ExposedCollectionResult = union(enum) {
     malformed: struct { tag: AST.Diagnostic.Tag, pos: Token.Idx },
 };
 
+const ExposedCollectionContext = enum {
+    open,
+    item_or_close,
+    after_item,
+    finish,
+};
+
 fn parseExposedCollectionTokens(
     self: *Parser,
     open_error: AST.Diagnostic.Tag,
@@ -1217,33 +1224,61 @@ fn parseExposedCollectionTokens(
     malformed_close_error: AST.Diagnostic.Tag,
 ) Error!ExposedCollectionResult {
     const exposes_start = self.pos;
-    self.expect(.OpenSquare) catch {
-        return .{ .malformed = .{ .tag = open_error, .pos = self.pos } };
-    };
-    const scratch_top = self.store.scratchExposedItemTop();
-    self.parseDelimitedTokens(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItemTokens) catch |err| switch (err) {
-        error.ExpectedNotFound => {
-            const error_pos = self.pos;
-            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+    var scratch_top: u32 = undefined;
+    var span: AST.ExposedItem.Span = undefined;
+
+    dispatch: switch (ExposedCollectionContext.open) {
+        .open => switch (self.peek()) {
+            .OpenSquare => {
+                scratch_top = self.store.scratchExposedItemTop();
                 self.advance();
-            }
-            self.expect(.CloseSquare) catch {
+                continue :dispatch .item_or_close;
+            },
+            else => return .{ .malformed = .{ .tag = open_error, .pos = self.pos } },
+        },
+        .item_or_close => switch (self.peek()) {
+            .CloseSquare => {
+                self.advance();
+                span = try self.store.exposedItemSpanFrom(scratch_top);
+                continue :dispatch .finish;
+            },
+            .EndOfFile => {
+                self.store.clearScratchExposedItemsFrom(scratch_top);
+                return .{ .malformed = .{ .tag = close_error, .pos = self.pos } };
+            },
+            else => {
+                try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
+                continue :dispatch .after_item;
+            },
+        },
+        .after_item => switch (self.peek()) {
+            .Comma => {
+                self.advance();
+                continue :dispatch .item_or_close;
+            },
+            .CloseSquare => continue :dispatch .item_or_close,
+            else => {
+                const error_pos = self.pos;
+                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                if (self.peek() == .CloseSquare) {
+                    self.advance();
+                    self.store.clearScratchExposedItemsFrom(scratch_top);
+                    return .{ .malformed = .{ .tag = malformed_close_error, .pos = error_pos } };
+                }
                 self.store.clearScratchExposedItemsFrom(scratch_top);
                 return .{ .malformed = .{ .tag = close_error, .pos = error_pos } };
-            };
-            self.store.clearScratchExposedItemsFrom(scratch_top);
-            return .{ .malformed = .{ .tag = malformed_close_error, .pos = error_pos } };
+            },
         },
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    const span = try self.store.exposedItemSpanFrom(scratch_top);
-    return .{ .ok = .{
-        .collection = try self.store.addCollection(.collection_exposed, .{
-            .span = span.span,
-            .region = .{ .start = exposes_start, .end = self.pos },
-        }),
-        .span = span,
-    } };
+        .finish => return .{ .ok = .{
+            .collection = try self.store.addCollection(.collection_exposed, .{
+                .span = span.span,
+                .region = .{ .start = exposes_start, .end = self.pos },
+            }),
+            .span = span,
+        } },
+    }
 }
 
 fn parseRecordFieldCollectionTokens(
