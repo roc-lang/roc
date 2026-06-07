@@ -421,6 +421,12 @@ const OpenSyntaxStack = struct {
         try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(start) });
     }
 
+    fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
+        instrumentation_counters.pushes += 1;
+        instrumentation_counters.pushes_by_kind[@intFromEnum(kind)] += 1;
+        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
+    }
+
     fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
         if (self.entries.items.len == 0) return null;
         return self.entries.items[self.entries.items.len - 1].kind;
@@ -450,6 +456,14 @@ const OpenSyntaxStack = struct {
         @memcpy(std.mem.asBytes(&payload), self.payloads.items[start..end]);
         self.payloads.shrinkRetainingCapacity(start);
         return payload;
+    }
+
+    fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
+        instrumentation_counters.pops += 1;
+        const entry = self.entries.pop() orelse unreachable;
+        std.debug.assert(entry.kind == expected);
+        instrumentation_counters.pops_by_kind[@intFromEnum(entry.kind)] += 1;
+        self.payloads.shrinkRetainingCapacity(@intCast(entry.payload_start));
     }
 };
 
@@ -2062,6 +2076,28 @@ const ExprBlockStack = struct {
     }
 };
 
+const ExprBinaryRhsStack = struct {
+    current: ?ExprAfterBinaryRhsState = null,
+    stack: std.ArrayList(ExprAfterBinaryRhsState) = .empty,
+
+    fn deinit(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState) Error!void {
+        if (self.current) |current| {
+            try self.stack.append(allocator, current);
+        }
+        self.current = state;
+    }
+
+    fn leave(self: *ExprBinaryRhsStack) ExprAfterBinaryRhsState {
+        const state = self.current orelse unreachable;
+        self.current = self.stack.pop();
+        return state;
+    }
+};
+
 const ExprCollectionStack = struct {
     current: ?ExprCollectionState = null,
     stack: std.ArrayList(ExprCollectionState) = .empty,
@@ -2539,7 +2575,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var expr_after_unary_state: ExprAfterUnaryState = undefined;
     var expr_collections: ExprCollectionStack = .{};
     defer expr_collections.deinit(open_allocator);
-    var expr_after_binary_rhs_state: ExprAfterBinaryRhsState = undefined;
+    var expr_binary_rhs_stack: ExprBinaryRhsStack = .{};
+    defer expr_binary_rhs_stack.deinit(open_allocator);
     var expr_arrow_after_inner_state: ExprArrowAfterInnerState = undefined;
     var expr_arrow_app_state: ExprArrowAppState = undefined;
     var expr_string_state: ExprStringState = undefined;
@@ -2613,7 +2650,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &expr_finish_state;
     _ = &expr_after_unary_state;
     _ = &expr_collections;
-    _ = &expr_after_binary_rhs_state;
+    _ = &expr_binary_rhs_stack;
     _ = &expr_arrow_after_inner_state;
     _ = &expr_arrow_app_state;
     _ = &expr_string_state;
@@ -4444,12 +4481,13 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         if (bp.left >= expr_finish_state.min_bp) {
                             const op_pos = self.pos;
                             self.advance();
-                            try open_syntax.push(open_allocator, .expr_binary_rhs, ExprAfterBinaryRhsState, .{
+                            try expr_binary_rhs_stack.enter(open_allocator, .{
                                 .start = expr_finish_state.start,
                                 .min_bp = expr_finish_state.min_bp,
                                 .left = expr_finish_state.expr,
                                 .operator = op_pos,
                             });
+                            try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
                             expr_state = .{ .start = self.pos, .min_bp = bp.right };
                             context = .expr_prefix;
                             dispatch_token = self.peek();
@@ -4565,12 +4603,13 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         if (bp.left >= expr_finish_state.min_bp) {
                             const op_pos = self.pos;
                             self.advance();
-                            try open_syntax.push(open_allocator, .expr_binary_rhs, ExprAfterBinaryRhsState, .{
+                            try expr_binary_rhs_stack.enter(open_allocator, .{
                                 .start = expr_finish_state.start,
                                 .min_bp = expr_finish_state.min_bp,
                                 .left = expr_finish_state.expr,
                                 .operator = op_pos,
                             });
+                            try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
                             expr_state = .{ .start = self.pos, .min_bp = bp.right };
                             context = .expr_prefix;
                             dispatch_token = self.peek();
@@ -4666,7 +4705,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .expr_after_binary_rhs => switch (dispatch_token) {
                 .EndOfFile,
                 => {
-                    expr_after_binary_rhs_state = open_syntax.popPayload(.expr_binary_rhs, ExprAfterBinaryRhsState);
+                    open_syntax.popMarker(.expr_binary_rhs);
+                    const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
                     const rhs = last_expr orelse unreachable;
                     last_expr = null;
                     const expr = try self.store.addExpr(.{ .bin_op = .{
@@ -4681,7 +4721,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
                 else => {
-                    expr_after_binary_rhs_state = open_syntax.popPayload(.expr_binary_rhs, ExprAfterBinaryRhsState);
+                    open_syntax.popMarker(.expr_binary_rhs);
+                    const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
                     const rhs = last_expr orelse unreachable;
                     last_expr = null;
                     const expr = try self.store.addExpr(.{ .bin_op = .{
