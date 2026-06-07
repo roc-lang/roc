@@ -51,7 +51,7 @@ fn matchesFilters(spec_name: []const u8, filters: []const []const u8) bool {
     return false;
 }
 
-fn buildSpecs(allocator: Allocator, filters: []const []const u8) ![]const integration.Spec {
+fn buildSpecs(allocator: Allocator, filters: []const []const u8) anyerror![]const integration.Spec {
     var selected: std.ArrayListUnmanaged(integration.Spec) = .empty;
     for (&integration.specs) |spec| {
         if (matchesFilters(spec.name, filters)) {
@@ -317,7 +317,7 @@ fn writeStatsJson(
     specs: []const integration.Spec,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) !void {
+) anyerror!void {
     var stats_arena = std.heap.ArenaAllocator.init(allocator);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
@@ -348,7 +348,7 @@ fn writeStatsJson(
     });
 }
 
-fn buildWorkerArgvTemplate(io: std.Io, allocator: Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildWorkerArgvTemplate(io: std.Io, allocator: Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path_len = try std.process.executablePath(io, &self_path_buf);
     const self_path = try allocator.dupe(u8, self_path_buf[0..self_path_len]);
@@ -390,7 +390,7 @@ fn printUsage() void {
 }
 
 /// Runs the parallel LSP integration harness or one worker process.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

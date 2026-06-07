@@ -11,7 +11,7 @@ pub const specs = [_]integration_spec.Spec{
 };
 
 /// Verifies parser failures are returned as concrete LSP diagnostics.
-pub fn parseErrorsAreReportedAsDiagnostics() !void {
+pub fn parseErrorsAreReportedAsDiagnostics() anyerror!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();

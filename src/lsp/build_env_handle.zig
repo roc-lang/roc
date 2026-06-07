@@ -43,7 +43,7 @@ pub const BuildEnvHandle = struct {
     }
 
     /// Record the source document used for this build environment.
-    pub fn setDocumentContent(self: *BuildEnvHandle, path: []const u8, hash: [32]u8, has_reports: bool) !void {
+    pub fn setDocumentContent(self: *BuildEnvHandle, path: []const u8, hash: [32]u8, has_reports: bool) Allocator.Error!void {
         const owned_path = try self.allocator.dupe(u8, path);
         if (self.document_path) |old_path| {
             self.allocator.free(old_path);

@@ -67,11 +67,11 @@ pub fn getSystemPageSize() error{ SysctlFailed, UnsupportedPlatform }!usize {
 }
 
 /// Creates a new anonymous shared memory region with the given size
-pub fn create(io: std.Io, size: usize, page_size: usize) !SharedMemoryAllocator {
+pub fn create(io: std.Io, size: usize, page_size: usize) platform.SharedMemoryError!SharedMemoryAllocator {
     return createWithMapFailureLogging(io, size, page_size, true);
 }
 
-fn createWithMapFailureLogging(io: std.Io, size: usize, page_size: usize, log_map_failure: bool) !SharedMemoryAllocator {
+fn createWithMapFailureLogging(io: std.Io, size: usize, page_size: usize, log_map_failure: bool) platform.SharedMemoryError!SharedMemoryAllocator {
     const aligned_size = std.mem.alignForward(usize, size, page_size);
 
     // Create the shared memory mapping

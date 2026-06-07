@@ -2723,7 +2723,7 @@ fn currentProcessIdForFilename() u64 {
     return @intCast(std.c.getpid());
 }
 
-fn pathJoin(gpa: Allocator, parts: []const []const u8) ![]u8 {
+fn pathJoin(gpa: Allocator, parts: []const []const u8) anyerror![]u8 {
     return std.fs.path.join(gpa, parts);
 }
 
@@ -2733,7 +2733,7 @@ fn appendReplacing(
     input: []const u8,
     needle: []const u8,
     replacement: []const u8,
-) !void {
+) anyerror!void {
     var rest = input;
     while (std.mem.find(u8, rest, needle)) |idx| {
         try out.appendSlice(gpa, rest[0..idx]);
@@ -2743,7 +2743,7 @@ fn appendReplacing(
     try out.appendSlice(gpa, rest);
 }
 
-fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) anyerror![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [");
     for (0..65535) |i| {
@@ -2758,7 +2758,7 @@ fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) ![]const u
     return try out.toOwnedSlice(gpa);
 }
 
-fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) anyerror![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [main!] { pf: platform \"");
     try out.appendSlice(gpa, fx_platform);
@@ -2770,7 +2770,7 @@ fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
     return try out.toOwnedSlice(gpa);
 }
 
-fn generateWideRecordInspectApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateWideRecordInspectApp(gpa: Allocator, fx_platform: []const u8) anyerror![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [main!] { pf: platform \"");
     try out.appendSlice(gpa, fx_platform);
@@ -2792,7 +2792,7 @@ fn renderSource(
     str_platform: []const u8,
     glue_platform: []const u8,
     fx_open_platform: []const u8,
-) ![]const u8 {
+) anyerror![]const u8 {
     if (std.mem.eql(u8, input, "{GENERATE_TOO_MANY_EXPORTS_APP}")) {
         return generateTooManyExportsApp(gpa, fx_platform);
     }
@@ -2820,7 +2820,7 @@ fn renderSource(
     return try stage4.toOwnedSlice(gpa);
 }
 
-fn writeFiles(io: std.Io, gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
+fn writeFiles(io: std.Io, gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) anyerror!void {
     const fx_platform = "../../../test/fx/platform/main.roc";
     const str_platform = "../../../test/str/platform/main.roc";
     const glue_platform = "../../../src/glue/platform/main.roc";
@@ -2837,7 +2837,7 @@ fn writeFiles(io: std.Io, gpa: Allocator, spec: CliBugSpec, test_dir: []const u8
     }
 }
 
-fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: []const u8, repo_root: []const u8) ![]const []const u8 {
+fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: []const u8, repo_root: []const u8) anyerror![]const []const u8 {
     switch (spec.command) {
         .check => return gpa.dupe([]const u8, &.{ roc_binary_path, "check", "--no-cache", main_path }),
         .docs => return gpa.dupe([]const u8, &.{ roc_binary_path, "docs", main_path }),
@@ -3166,7 +3166,7 @@ fn matchesFilters(spec: CliBugSpec, filters: []const []const u8) bool {
     return false;
 }
 
-fn filteredTests(gpa: Allocator, filters: []const []const u8) ![]const CliBugSpec {
+fn filteredTests(gpa: Allocator, filters: []const []const u8) anyerror![]const CliBugSpec {
     var result: std.ArrayListUnmanaged(CliBugSpec) = .empty;
     for (tests) |spec| {
         if (matchesFilters(spec, filters)) try result.append(gpa, spec);
@@ -3353,7 +3353,7 @@ fn writeStatsJson(
     specs: []const CliBugSpec,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) !void {
+) anyerror!void {
     var stats_arena = std.heap.ArenaAllocator.init(gpa);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
@@ -3397,7 +3397,7 @@ fn printUsage() void {
 }
 
 /// Runs the CLI bughunt repro harness.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

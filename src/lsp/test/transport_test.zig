@@ -3,7 +3,7 @@
 const std = @import("std");
 const transport_module = @import("lsp").transport;
 
-fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+fn frame(allocator: std.mem.Allocator, body: []const u8) anyerror![]u8 {
     return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }
 

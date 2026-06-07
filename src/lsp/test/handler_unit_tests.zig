@@ -23,7 +23,7 @@ const RunResult = struct {
     document_symbol_calls: usize,
 };
 
-fn tempFileUri(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, filename: []const u8) ![]u8 {
+fn tempFileUri(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir, filename: []const u8) anyerror![]u8 {
     const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(tmp_path);
     const file_path = try std.fs.path.join(allocator, &.{ tmp_path, filename });
@@ -36,7 +36,7 @@ fn requestInput(
     file_uri: []const u8,
     open_text_json: []const u8,
     request_body: []const u8,
-) ![]u8 {
+) anyerror![]u8 {
     const init_body =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
@@ -64,7 +64,7 @@ fn requestInput(
     });
 }
 
-fn runUnitServer(allocator: std.mem.Allocator, input: []const u8, writer_buffer: []u8) !RunResult {
+fn runUnitServer(allocator: std.mem.Allocator, input: []const u8, writer_buffer: []u8) anyerror!RunResult {
     const reader_stream: std.Io.Reader = .fixed(input);
     const writer_stream: std.Io.Writer = .fixed(writer_buffer);
 
@@ -86,7 +86,7 @@ fn freeRun(allocator: std.mem.Allocator, result: RunResult) void {
     helpers.freeResponses(allocator, result.responses);
 }
 
-fn responseWithId(allocator: std.mem.Allocator, responses: [][]u8, wanted_id: i64) ![]const u8 {
+fn responseWithId(allocator: std.mem.Allocator, responses: [][]u8, wanted_id: i64) anyerror![]const u8 {
     for (responses) |response| {
         var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
         defer parsed.deinit();

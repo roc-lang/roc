@@ -88,7 +88,7 @@ fn log(comptime fmt_str: []const u8, args: anytype) void {
 }
 
 /// Returns an absolute, normalized path without calling libc `realpath`.
-fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) ![]u8 {
+fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) anyerror![]u8 {
     if (std.fs.path.isAbsolute(sub_path)) {
         return std.fs.path.resolve(allocator, &.{sub_path});
     }
@@ -98,7 +98,7 @@ fn absolutePathAlloc(io: std.Io, sub_path: []const u8, allocator: Allocator) ![]
     return std.fs.path.resolve(allocator, &.{ cwd, sub_path });
 }
 
-fn currentPathAllocSafe(io: std.Io, allocator: Allocator) ![]u8 {
+fn currentPathAllocSafe(io: std.Io, allocator: Allocator) anyerror![]u8 {
     var buffer: [std.fs.max_path_bytes]u8 = @splat(0);
     const n = try std.process.currentPath(io, &buffer);
     return allocator.dupe(u8, buffer[0..n]);
@@ -1538,7 +1538,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 }
 
 /// Stage 1: Walk directory tree and collect work items
-fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) anyerror!void {
     const canonical_path = absolutePathAlloc(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;

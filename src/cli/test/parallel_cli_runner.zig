@@ -223,7 +223,7 @@ const CliCase = struct {
 
 // Spec generation
 
-fn buildCases(allocator: Allocator, filters: []const []const u8, include_llvm: bool, suites: SuiteSelection) ![]const CliCase {
+fn buildCases(allocator: Allocator, filters: []const []const u8, include_llvm: bool, suites: SuiteSelection) anyerror![]const CliCase {
     var cases: std.ArrayListUnmanaged(CliCase) = .empty;
 
     if (suites.includes(.platforms)) {
@@ -257,7 +257,7 @@ fn appendStaticCases(
     cases: *std.ArrayListUnmanaged(CliCase),
     source: []const CliCase,
     filters: []const []const u8,
-) !void {
+) anyerror!void {
     for (source) |source_case| {
         if (!matchesFilters(source_case, filters)) continue;
         var case = source_case;
@@ -272,7 +272,7 @@ fn appendPlatformSpecs(
     platform: platform_config.PlatformConfig,
     opt: OptMode,
     filters: []const []const u8,
-) !void {
+) anyerror!void {
     switch (platform.test_apps) {
         .single => |app_name| {
             const roc_file = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ platform.base_dir, app_name });
@@ -340,7 +340,7 @@ fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
     return spec.skip_on_windows and builtin.os.tag == .windows;
 }
 
-fn fmtTestName(allocator: Allocator, roc_file: []const u8, opt: OptMode) ![]const u8 {
+fn fmtTestName(allocator: Allocator, roc_file: []const u8, opt: OptMode) anyerror![]const u8 {
     return std.fmt.allocPrint(allocator, "{s} [{s}]", .{ roc_file, opt.cliName() });
 }
 
@@ -738,7 +738,7 @@ const CaseEnv = struct {
     }
 };
 
-fn buildCaseEnv(io: std.Io, allocator: Allocator) !CaseEnv {
+fn buildCaseEnv(io: std.Io, allocator: Allocator) anyerror!CaseEnv {
     const dirs = try util.createIsolatedTestDirs(io, allocator);
     errdefer dirs.deinit(allocator);
 
@@ -760,14 +760,14 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) !CaseEnv {
     };
 }
 
-fn deleteIfExists(io: std.Io, path: []const u8) !void {
+fn deleteIfExists(io: std.Io, path: []const u8) anyerror!void {
     std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
 }
 
-fn deleteOutputArtifacts(io: std.Io, allocator: Allocator, output_name: []const u8) !void {
+fn deleteOutputArtifacts(io: std.Io, allocator: Allocator, output_name: []const u8) anyerror!void {
     try deleteIfExists(io, output_name);
 
     if (comptime builtin.os.tag == .windows) {
@@ -781,7 +781,7 @@ fn deleteOutputArtifacts(io: std.Io, allocator: Allocator, output_name: []const 
     }
 }
 
-fn absoluteFromProjectRoot(allocator: Allocator, path: []const u8) ![]u8 {
+fn absoluteFromProjectRoot(allocator: Allocator, path: []const u8) anyerror![]u8 {
     if (std.fs.path.isAbsolute(path)) {
         return allocator.dupe(u8, path);
     }
@@ -1176,7 +1176,7 @@ fn runRocInEnv(
     file_path_mode: FilePathMode,
     stdin: ?[]const u8,
     timeout_ms: u64,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     const argv = try buildRocArgv(allocator, args, roc_file, file_path_mode);
     return util.runChildWithTimeout(io, allocator, argv, .{
         .cwd = project_root_path,
@@ -1195,7 +1195,7 @@ fn runRawInEnv(
     cwd: []const u8,
     stdin: ?[]const u8,
     timeout_ms: u64,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     return util.runChildWithTimeout(io, allocator, argv, .{
         .cwd = cwd,
         .env_map = &env.env_map,
@@ -1210,7 +1210,7 @@ fn buildRocArgv(
     args: []const []const u8,
     roc_file: ?[]const u8,
     file_path_mode: FilePathMode,
-) ![]const []const u8 {
+) anyerror![]const []const u8 {
     var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     try argv.append(allocator, roc_binary_path);
     try argv.appendSlice(allocator, args);
@@ -1462,15 +1462,15 @@ fn runRawAndCheck(
     return null;
 }
 
-fn backendOptArg(allocator: Allocator, backend: OptMode) ![]const u8 {
+fn backendOptArg(allocator: Allocator, backend: OptMode) anyerror![]const u8 {
     return std.fmt.allocPrint(allocator, "--opt={s}", .{backend.cliName()});
 }
 
-fn outputArg(allocator: Allocator, path: []const u8) ![]const u8 {
+fn outputArg(allocator: Allocator, path: []const u8) anyerror![]const u8 {
     return std.fmt.allocPrint(allocator, "--output={s}", .{path});
 }
 
-fn fileExistsWithSize(io: std.Io, path: []const u8) !u64 {
+fn fileExistsWithSize(io: std.Io, path: []const u8) anyerror!u64 {
     const stat = try std.Io.Dir.cwd().statFile(io, path, .{});
     return stat.size;
 }
@@ -1538,7 +1538,7 @@ fn writeGeneratedModuleGraphProject(
     allocator: Allocator,
     dir_path: []const u8,
     config: GeneratedModuleGraphConfig,
-) ![]const u8 {
+) anyerror![]const u8 {
     if (config.roc_file_count == 0 or config.symbols_per_file == 0) return error.InvalidGeneratedGraphConfig;
 
     var dir = try std.Io.Dir.openDirAbsolute(io, dir_path, .{});
@@ -1554,7 +1554,7 @@ fn writeGeneratedModuleGraphProject(
     return try std.fs.path.join(allocator, &.{ dir_path, "main.roc" });
 }
 
-fn writeGeneratedPackageModule(io: std.Io, dir: std.Io.Dir, config: GeneratedModuleGraphConfig) !void {
+fn writeGeneratedPackageModule(io: std.Io, dir: std.Io.Dir, config: GeneratedModuleGraphConfig) anyerror!void {
     var file = try dir.createFile(io, "main.roc", .{});
     defer file.close(io);
 
@@ -1598,7 +1598,7 @@ fn writeGeneratedTypeModule(
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
     module_idx: usize,
-) !void {
+) anyerror!void {
     const file_name = try std.fmt.allocPrint(allocator, "T{d}.roc", .{module_idx});
     var file = try dir.createFile(io, file_name, .{});
     defer file.close(io);
@@ -1629,7 +1629,7 @@ fn writeGeneratedTypeModule(
     try out.flush();
 }
 
-fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8) !usize {
+fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8) anyerror!usize {
     var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return 0,
         else => return err,
@@ -1925,7 +1925,7 @@ fn customBundleComplexPackage(io: std.Io, allocator: Allocator, env: *const Case
     return null;
 }
 
-fn createWorkSubdir(io: std.Io, allocator: Allocator, env: *const CaseEnv, name: []const u8) ![]const u8 {
+fn createWorkSubdir(io: std.Io, allocator: Allocator, env: *const CaseEnv, name: []const u8) anyerror![]const u8 {
     const path = try std.fs.path.join(allocator, &.{ env.dirs.work_dir, name });
     try std.Io.Dir.cwd().createDirPath(io, path);
     return path;
@@ -2046,7 +2046,7 @@ fn customGlueCTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
 /// duplication when the harness appends `--worker <idx>` per spawn).
-fn buildCliWorkerArgvTemplate(io: std.Io, arena: Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildCliWorkerArgvTemplate(io: std.Io, arena: Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path_len = try std.process.executablePath(io, &self_path_buf);
     const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
@@ -2391,7 +2391,7 @@ fn writeStatsJson(
     tests: []const CliCase,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) !void {
+) anyerror!void {
     var stats_arena = std.heap.ArenaAllocator.init(gpa);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
@@ -2463,7 +2463,7 @@ fn parseSuiteName(value: []const u8) ?Suite {
     return null;
 }
 
-fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) !ParsedRunnerArgs {
+fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) anyerror!ParsedRunnerArgs {
     const raw_z = try process_args.toSlice(allocator);
     const raw_args: []const []const u8 = @ptrCast(raw_z);
 
@@ -2507,7 +2507,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) !Parsed
 }
 
 /// Entry point for the parallel CLI test runner.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

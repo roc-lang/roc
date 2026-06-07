@@ -103,7 +103,7 @@ const HostContext = struct {
 var global_host_context: HostContext = .{};
 
 /// Initialize WASM module from file.
-fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8) !WasmInterface {
+fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8) anyerror!WasmInterface {
     const wasm_data = std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
@@ -147,7 +147,7 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_
 }
 
 /// Call wasm_main() and get the result string.
-fn callWasmMain(wasm: *const WasmInterface) ![]const u8 {
+fn callWasmMain(wasm: *const WasmInterface) anyerror![]const u8 {
     // Call wasm_main() which returns a pointer to the result string
     var params_main: [0]bytebox.Val = undefined;
     var returns_main: [1]bytebox.Val = undefined;
@@ -212,7 +212,7 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
     }
 }
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

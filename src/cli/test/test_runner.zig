@@ -63,7 +63,7 @@ const Args = struct {
 };
 
 /// Entry point for the unified test platform runner.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -153,7 +153,7 @@ fn runCrossCompileTests(
     args: Args,
     platform: PlatformConfig,
     stats: *TestStats,
-) !void {
+) anyerror!void {
     runner_core.printHeader("Cross-compilation tests", .{});
 
     // First verify platform files exist
@@ -301,7 +301,7 @@ fn runNativeTests(
     args: Args,
     platform: PlatformConfig,
     stats: *TestStats,
-) !void {
+) anyerror!void {
     // Check if native target is filtered out
     if (args.target_filter) |filter| {
         if (!std.mem.eql(u8, filter, "native")) {
@@ -435,7 +435,7 @@ fn runValgrindTests(
     args: Args,
     platform: PlatformConfig,
     stats: *TestStats,
-) !void {
+) anyerror!void {
     // Valgrind only works on Linux x86_64
     if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) {
         std.debug.print("Skipping valgrind tests (requires Linux x86_64)\n", .{});
@@ -510,7 +510,7 @@ fn runValgrindTests(
     }
 }
 
-fn parseArgs(process_args: std.process.Args, gpa: std.mem.Allocator) !Args {
+fn parseArgs(process_args: std.process.Args, gpa: std.mem.Allocator) anyerror!Args {
     var iter = try process_args.iterateAllocator(gpa);
 
     // Skip argv[0] (program name)

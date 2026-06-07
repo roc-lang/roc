@@ -972,7 +972,7 @@ fn writeStatsJson(
     tests: []const TestCase,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) !void {
+) anyerror!void {
     var stats_arena = std.heap.ArenaAllocator.init(allocator);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();

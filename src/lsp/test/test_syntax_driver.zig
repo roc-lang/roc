@@ -63,12 +63,12 @@ pub const TestSyntaxDriver = struct {
         _: []const u8,
         _: ?[]const u8,
         _: ?[]const u8,
-    ) ![]Diagnostics.PublishDiagnostics {
+    ) anyerror![]Diagnostics.PublishDiagnostics {
         self.check_calls += 1;
         return try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
     }
 
-    pub fn getImportedModuleEnvs(self: *TestSyntaxDriver, _: []const u8) !?[]*can.ModuleEnv {
+    pub fn getImportedModuleEnvs(self: *TestSyntaxDriver, _: []const u8) std.mem.Allocator.Error!?[]*can.ModuleEnv {
         self.imported_module_calls += 1;
         return null;
     }
@@ -79,7 +79,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) !?HoverResult {
+    ) anyerror!?HoverResult {
         self.hover_calls += 1;
         return null;
     }
@@ -90,7 +90,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) !?DefinitionResult {
+    ) anyerror!?DefinitionResult {
         self.definition_calls += 1;
         return null;
     }
@@ -101,7 +101,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) !?HighlightResult {
+    ) anyerror!?HighlightResult {
         self.highlight_calls += 1;
         return null;
     }
@@ -122,7 +122,7 @@ pub const TestSyntaxDriver = struct {
         _: ?[]const u8,
         _: u32,
         _: u32,
-    ) !?completion_handler.CompletionResult {
+    ) anyerror!?completion_handler.CompletionResult {
         self.completion_calls += 1;
         return null;
     }

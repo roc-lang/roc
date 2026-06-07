@@ -471,7 +471,7 @@ fn forkAndEval(
 const LlvmEvalPermit = struct {
     file: std.Io.File,
 
-    fn acquire(io: std.Io) !LlvmEvalPermit {
+    fn acquire(io: std.Io) anyerror!LlvmEvalPermit {
         var queue_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const queue_path = try llvmEvalQueueLockPath(&queue_path_buf);
         var queue_file = try openLlvmEvalLockFile(io, queue_path);
@@ -494,7 +494,7 @@ const LlvmEvalPermit = struct {
     }
 };
 
-fn acquireLlvmEvalSlot(io: std.Io) !?LlvmEvalPermit {
+fn acquireLlvmEvalSlot(io: std.Io) anyerror!?LlvmEvalPermit {
     for (0..llvm_eval_slot_count) |slot| {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const path = try llvmEvalSlotLockPath(&path_buf, slot);
@@ -511,7 +511,7 @@ fn acquireLlvmEvalSlot(io: std.Io) !?LlvmEvalPermit {
     return null;
 }
 
-fn openLlvmEvalLockFile(io: std.Io, path: []const u8) !std.Io.File {
+fn openLlvmEvalLockFile(io: std.Io, path: []const u8) anyerror!std.Io.File {
     return std.Io.Dir.createFileAbsolute(io, path, .{
         .read = true,
         .truncate = false,
@@ -525,11 +525,11 @@ fn llvmEvalLockPrefix() []const u8 {
         "/tmp/roc_eval_llvm_";
 }
 
-fn llvmEvalSlotLockPath(buf: *[std.fs.max_path_bytes]u8, slot: usize) ![]const u8 {
+fn llvmEvalSlotLockPath(buf: *[std.fs.max_path_bytes]u8, slot: usize) anyerror![]const u8 {
     return std.fmt.bufPrint(buf, "{s}slot_{d}.lock", .{ llvmEvalLockPrefix(), slot });
 }
 
-fn llvmEvalQueueLockPath(buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
+fn llvmEvalQueueLockPath(buf: *[std.fs.max_path_bytes]u8) anyerror![]const u8 {
     return std.fmt.bufPrint(buf, "{s}queue.lock", .{llvmEvalLockPrefix()});
 }
 
@@ -544,7 +544,7 @@ fn runBackendEval(
     eval_fn: BackendEvalFn,
     lowered: *const LoweredProgram,
     timeout_ms: u64,
-) !ForkResult {
+) anyerror!ForkResult {
     if (index == LLVM_BACKEND_INDEX) {
         var permit = try LlvmEvalPermit.acquire(io);
         defer permit.release(io);
@@ -822,7 +822,7 @@ fn backendTimeoutBudgetMs(io: std.Io, index: usize, standard_deadline_ms: ?i64) 
     return remainingBackendBudgetMs(io, standard_deadline_ms);
 }
 
-fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, deadline_ms: ?i64) !TestOutcome {
+fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, deadline_ms: ?i64) anyerror!TestOutcome {
     return switch (tc.expected) {
         .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
@@ -840,7 +840,7 @@ fn runAllocationTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.AllocationExpectation,
     skip: TestCase.Skip,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var compiled = try helpers.compileProgram(allocator, io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
@@ -975,7 +975,7 @@ fn runInspectTest(
     expected: TestCase.Expected,
     skip: TestCase.Skip,
     deadline_ms: ?i64,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
@@ -1104,7 +1104,7 @@ fn runTestProblem(
     source_kind: helpers.SourceKind,
     src: []const u8,
     imports: []const helpers.ModuleSource,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var timer = Timer.start() catch unreachable;
     var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
         // Parse or canonicalize error means a problem was found — that's a pass.
@@ -1154,7 +1154,7 @@ fn runCrashTest(
     skip: TestCase.Skip,
     require_problems: bool,
     deadline_ms: ?i64,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
@@ -1334,7 +1334,7 @@ fn serializeOutcomeToBuffer(
     gpa: std.mem.Allocator,
     outcome: TestOutcome,
     duration_ns: u64,
-) !void {
+) anyerror!void {
     var header: WireHeader = .{
         .status = @intFromEnum(outcome.status),
         .backend_statuses = undefined,
@@ -1476,7 +1476,7 @@ fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
 /// per-worker; we strip any pre-existing instance so we don't double-add).
-fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
     // std.fs.selfExePath was removed in Zig 0.16; use std.process.executablePathAlloc instead.
     const self_path = try std.process.executablePathAlloc(io, arena);
 
@@ -1977,7 +1977,7 @@ fn appendPhaseEvent(
     phase: []const u8,
     start_ns: *u64,
     duration_ns: u64,
-) !void {
+) anyerror!void {
     if (duration_ns == 0) return;
     const id = try std.fmt.allocPrint(gpa, "case-{d}-{s}", .{ case_index, phase });
     appendStatsEvent(gpa, events, id, case_id, phase, phase, "pass", start_ns.*, start_ns.* + duration_ns, &.{});
@@ -1991,7 +1991,7 @@ fn writeStatsJson(
     tests: []const TestCase,
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
-) !void {
+) anyerror!void {
     var stats_arena = std.heap.ArenaAllocator.init(gpa);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
@@ -2041,7 +2041,7 @@ fn writeStatsJson(
 const nsToMs = harness.nsToMs;
 const computeTimingStats = harness.computeTimingStats;
 
-fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, results: []const TestResult) !void {
+fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, results: []const TestResult) anyerror!void {
     // Collect per-phase timing arrays (only include tests that ran that phase, i.e. ns > 0)
     var parse_times: std.ArrayListUnmanaged(u64) = .empty;
     defer parse_times.deinit(gpa);
@@ -2164,7 +2164,7 @@ fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
 }
 
 /// Entry point for the parallel eval test runner.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     const io = init.io;
     var trace_worker = WorkerTrace.init(io);
     trace_worker.stamp("main entry");

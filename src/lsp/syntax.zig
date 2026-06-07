@@ -146,7 +146,7 @@ pub const SyntaxChecker = struct {
         self.dependency_graph.deinit();
     }
 
-    fn documentIdentityFromText(self: *SyntaxChecker, uri: []const u8, text: []const u8) !DocumentIdentity {
+    fn documentIdentityFromText(self: *SyntaxChecker, uri: []const u8, text: []const u8) Allocator.Error!DocumentIdentity {
         const path = try uri_util.uriToPath(self.allocator, uri);
         defer self.allocator.free(path);
 
@@ -191,7 +191,7 @@ pub const SyntaxChecker = struct {
         return false;
     }
 
-    fn prepareDocumentBuild(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8) !DocumentBuild {
+    fn prepareDocumentBuild(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8) anyerror!DocumentBuild {
         var identity: ?DocumentIdentity = if (override_text) |text|
             try self.documentIdentityFromText(uri, text)
         else

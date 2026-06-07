@@ -4452,7 +4452,7 @@ fn collectCliTestRootRuns(
     module: BuildEnv.CompiledModuleInfo,
     test_roots: []const check.CheckedArtifact.RootRequest,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) ![]CliTestRootRun {
+) Allocator.Error![]CliTestRootRun {
     var runs = std.ArrayList(CliTestRootRun).empty;
     errdefer {
         for (runs.items) |run| {
@@ -4523,7 +4523,7 @@ fn appendFailedCliTestResult(
     result: CliTestResult,
     message: []const u8,
     visibility: CliTestFailureDetailVisibility,
-) !void {
+) Allocator.Error!void {
     errdefer ctx.gpa.free(message);
     try results.append(ctx.gpa, .{
         .result = result,
@@ -4540,7 +4540,7 @@ fn runInterpreterTestRoots(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
-) !void {
+) Allocator.Error!void {
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
@@ -4602,7 +4602,7 @@ fn appendCompilerErrorsForRuns(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
-) !void {
+) Allocator.Error!void {
     for (root_runs) |run| {
         summary.compiler_errors += 1;
         try appendFailedCliTestResult(
@@ -4623,7 +4623,7 @@ fn runCompiledTestRoots(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
-) !void {
+) Allocator.Error!void {
     var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
 
@@ -4913,7 +4913,7 @@ fn renderTestResultBodies(
     stderr_body: *std.Io.Writer,
     module_results: []const CliModuleTestResult,
     verbose: bool,
-) !void {
+) anyerror!void {
     // Verbose PASS lines go to stdout in every case; problem blocks go to
     // stderr. This matches the pre-refactor layout.
     for (module_results) |module_result| {
@@ -4970,7 +4970,7 @@ fn printTestProblem(
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility,
     verbose: bool,
-) !void {
+) anyerror!void {
     const src = env.getSourceAll();
 
     var report = reporting.Report.init(allocator, label, severity);

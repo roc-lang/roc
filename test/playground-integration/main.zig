@@ -1001,7 +1001,7 @@ fn runTests(
     test_cases: []const TestCase,
     wasm_path: []const u8,
     stats_events: ?*std.ArrayListUnmanaged(harness.StatsEvent),
-) !TestStats {
+) anyerror!TestStats {
     var stats = TestStats{
         .total = test_cases.len,
         .start_time = nanoTimestamp(),
@@ -1163,7 +1163,7 @@ fn matchesAnyFilter(name: []const u8, filters: []const []const u8) bool {
     return false;
 }
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
     var gpa = std.heap.DebugAllocator(.{}){};
