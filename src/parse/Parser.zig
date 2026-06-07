@@ -2098,6 +2098,28 @@ const ExprBinaryRhsStack = struct {
     }
 };
 
+const ExprLambdaBodyStack = struct {
+    current: ?ExprLambdaAfterBodyState = null,
+    stack: std.ArrayList(ExprLambdaAfterBodyState) = .empty,
+
+    fn deinit(self: *ExprLambdaBodyStack, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    fn enter(self: *ExprLambdaBodyStack, allocator: std.mem.Allocator, state: ExprLambdaAfterBodyState) Error!void {
+        if (self.current) |current| {
+            try self.stack.append(allocator, current);
+        }
+        self.current = state;
+    }
+
+    fn leave(self: *ExprLambdaBodyStack) ExprLambdaAfterBodyState {
+        const state = self.current orelse unreachable;
+        self.current = self.stack.pop();
+        return state;
+    }
+};
+
 const ExprCollectionStack = struct {
     current: ?ExprCollectionState = null,
     stack: std.ArrayList(ExprCollectionState) = .empty,
@@ -2584,7 +2606,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var expr_record_state: ExprRecordState = undefined;
     var expr_record_field_state: ExprRecordFieldState = undefined;
     var expr_lambda_args_state: ExprLambdaArgsState = undefined;
-    var expr_lambda_after_body_state: ExprLambdaAfterBodyState = undefined;
+    var expr_lambda_body_stack: ExprLambdaBodyStack = .{};
+    defer expr_lambda_body_stack.deinit(open_allocator);
     var expr_after_expr_state: ExprAfterExprState = undefined;
     var expr_if_after_then_state: ExprIfAfterThenState = undefined;
     var expr_if_after_else_state: ExprIfAfterElseState = undefined;
@@ -2658,7 +2681,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &expr_record_state;
     _ = &expr_record_field_state;
     _ = &expr_lambda_args_state;
-    _ = &expr_lambda_after_body_state;
+    _ = &expr_lambda_body_stack;
     _ = &expr_after_expr_state;
     _ = &expr_if_after_then_state;
     _ = &expr_if_after_else_state;
@@ -5279,11 +5302,12 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     self.advance();
                     const args = try self.store.patternSpanFrom(expr_lambda_args_state.scratch_top);
-                    try open_syntax.push(open_allocator, .expr_lambda_body, ExprLambdaAfterBodyState, .{
+                    try expr_lambda_body_stack.enter(open_allocator, .{
                         .start = expr_lambda_args_state.start,
                         .min_bp = expr_lambda_args_state.min_bp,
                         .args = args,
                     });
+                    try open_syntax.pushMarker(open_allocator, .expr_lambda_body);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     context = .expr_prefix;
                     dispatch_token = self.peek();
@@ -5321,7 +5345,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .expr_lambda_after_body => switch (dispatch_token) {
                 .EndOfFile,
                 => {
-                    expr_lambda_after_body_state = open_syntax.popPayload(.expr_lambda_body, ExprLambdaAfterBodyState);
+                    open_syntax.popMarker(.expr_lambda_body);
+                    const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
                     const body = last_expr orelse unreachable;
                     last_expr = null;
                     const expr = try self.store.addExpr(.{ .lambda = .{
@@ -5335,7 +5360,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
                 else => {
-                    expr_lambda_after_body_state = open_syntax.popPayload(.expr_lambda_body, ExprLambdaAfterBodyState);
+                    open_syntax.popMarker(.expr_lambda_body);
+                    const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
                     const body = last_expr orelse unreachable;
                     last_expr = null;
                     const expr = try self.store.addExpr(.{ .lambda = .{
