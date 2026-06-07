@@ -190,7 +190,36 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error;
 
-fn PackedStepStack(comptime Step: type) type {
+const DirectContext = enum(u16) {
+    expr_prefix,
+    expr_suffix,
+    statement_top_level,
+    statement_body,
+    statement_associated,
+    type_prefix,
+    pattern_prefix,
+};
+
+const DirectKey = u32;
+const token_tag_space: DirectKey = std.math.maxInt(u8) + 1;
+
+inline fn directKey(comptime context: DirectContext, comptime tag: Token.Tag) DirectKey {
+    return @as(DirectKey, @intFromEnum(context)) * token_tag_space + @as(DirectKey, @intFromEnum(tag));
+}
+
+inline fn directKeyRuntime(context: DirectContext, tag: Token.Tag) DirectKey {
+    return @as(DirectKey, @intFromEnum(context)) * token_tag_space + @as(DirectKey, @intFromEnum(tag));
+}
+
+inline fn statementContext(statement_type: StatementType) DirectContext {
+    return switch (statement_type) {
+        .top_level => .statement_top_level,
+        .in_body => .statement_body,
+        .in_associated_block => .statement_associated,
+    };
+}
+
+fn PackedContinuationStack(comptime Step: type) type {
     return struct {
         const Self = @This();
         const Tag = std.meta.Tag(Step);
@@ -1687,7 +1716,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const result = try self.runVm(.{ .statement = .{ .parse = statementType } });
+    const result = try self.runDirectDispatch(.{ .statement = .{ .parse = statementType } });
     return switch (result) {
         .statement => |statement| statement,
         else => try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos),
@@ -1944,7 +1973,7 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
-const PatternStep = union(enum) {
+const PatternAction = union(enum) {
     root_next: struct {
         outer_start: Token.Idx,
         scratch_top: u32,
@@ -2011,7 +2040,7 @@ const PatternStep = union(enum) {
     string_after_expr: Token.Idx,
 };
 
-/// Run the token VM with a pattern goal and return the completed pattern.
+/// Run the direct token dispatch with a pattern goal and return the completed pattern.
 pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -2020,7 +2049,7 @@ pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.I
     const patterns_scratch_top = self.store.scratchPatternTop();
     errdefer self.store.clearScratchPatternsFrom(patterns_scratch_top);
 
-    const result = try self.runVm(.{ .pattern = .{ .root_next = .{
+    const result = try self.runDirectDispatch(.{ .pattern = .{ .root_next = .{
         .outer_start = outer_start,
         .scratch_top = patterns_scratch_top,
         .alternatives = alternatives,
@@ -2053,68 +2082,13 @@ fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Id
     return p;
 }
 
-/// todo
-pub fn readPatternRecordField(self: *Parser, alternatives: Alternatives) Error!AST.PatternRecordField.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const field_start = self.pos;
-    if (self.peek() == .DoubleDot) {
-        self.advance();
-        var name: u32 = 0;
-        if (self.peek() == .LowerIdent) {
-            name = self.pos;
-            self.advance();
-        }
-        return try self.store.addPatternRecordField(.{
-            .name = name,
-            .value = null,
-            .rest = true,
-            .region = .{ .start = field_start, .end = self.pos },
-        });
-    }
-    if (self.peek() != .LowerIdent) {
-        while (self.peek() != .EndOfFile) {
-            if (self.peek() == .CloseCurly) {
-                break;
-            }
-            self.advance();
-        }
-        return try self.pushMalformed(AST.PatternRecordField.Idx, .expected_lower_ident_pat_field_name, field_start);
-    }
-    const name = self.pos;
-    self.advance();
-    var value: ?AST.Pattern.Idx = null;
-    // With shorthand the next token is a Comma or the ending CloseCurly
-    if (self.peek() != .Comma and self.peek() != .CloseCurly) {
-        // Otherwise we should see an OpColon to introduce the value
-        if (self.peek() != .OpColon) {
-            while (self.peek() != .EndOfFile) {
-                if (self.peek() == .CloseCurly) break;
-                self.advance();
-            }
-            return try self.pushMalformed(AST.PatternRecordField.Idx, .expected_colon_after_pat_field_name, field_start);
-        }
-        self.advance();
-        const patt = try self.runPattern(alternatives);
-        value = patt;
-    }
-
-    return try self.store.addPatternRecordField(.{
-        .name = name,
-        .value = value,
-        .rest = false,
-        .region = .{ .start = field_start, .end = self.pos },
-    });
-}
-
 const QualificationResult = struct {
     qualifiers: Token.Span,
     final_token: Token.Idx,
     is_upper: bool,
 };
 
-const VmStep = union(enum) {
+const ParseAction = union(enum) {
     parse: u8,
     finish: struct {
         start: Token.Idx,
@@ -2332,9 +2306,9 @@ const VmStep = union(enum) {
         scratch_top: u32,
         previous_type_path_visible_start: usize,
     },
-    statement: StatementStep,
-    pattern: PatternStep,
-    type_anno: TypeStep,
+    statement: StatementAction,
+    pattern: PatternAction,
+    type_anno: TypeAction,
 };
 
 const ExprCollectionResult = enum {
@@ -2343,7 +2317,7 @@ const ExprCollectionResult = enum {
     apply_args,
 };
 
-const VmResult = union(enum) {
+const DispatchResult = union(enum) {
     expr: AST.Expr.Idx,
     pattern: AST.Pattern.Idx,
     type_anno: AST.TypeAnno.Idx,
@@ -2377,7 +2351,7 @@ const TypeDeclAnnoProgress = struct {
     was_collecting_type_dependencies: bool,
 };
 
-const StatementStep = union(enum) {
+const StatementAction = union(enum) {
     parse: StatementType,
     after_for_pattern: Token.Idx,
     after_expect: Token.Idx,
@@ -2441,28 +2415,28 @@ const StatementStep = union(enum) {
 };
 
 fn pushExprPatternRoot(
-    frames: *PackedStepStack(VmStep),
+    continuations: *PackedContinuationStack(ParseAction),
     allocator: std.mem.Allocator,
     outer_start: Token.Idx,
     scratch_top: u32,
     alternatives: Alternatives,
 ) Error!void {
-    try frames.push(allocator, .{ .pattern = .{ .root_next = .{
+    try continuations.push(allocator, .{ .pattern = .{ .root_next = .{
         .outer_start = outer_start,
         .scratch_top = scratch_top,
         .alternatives = alternatives,
     } } });
 }
 
-fn handleExprPatternStep(
+fn handleExprPatternAction(
     self: *Parser,
-    frame: PatternStep,
-    frames: *PackedStepStack(VmStep),
+    action: PatternAction,
+    continuations: *PackedContinuationStack(ParseAction),
     allocator: std.mem.Allocator,
     last_expr: *?AST.Expr.Idx,
     last_pattern: *?AST.Pattern.Idx,
 ) Error!void {
-    switch (frame) {
+    switch (action) {
         .root_next => |state| {
             if (self.peek() == .EndOfFile) {
                 const pattern_count = self.store.scratchPatternTop() - state.scratch_top;
@@ -2483,12 +2457,12 @@ fn handleExprPatternStep(
                 } });
                 return;
             }
-            try frames.push(allocator, .{ .pattern = .{ .root_after_one = .{
+            try continuations.push(allocator, .{ .pattern = .{ .root_after_one = .{
                 .outer_start = state.outer_start,
                 .scratch_top = state.scratch_top,
                 .alternatives = state.alternatives,
             } } });
-            try frames.push(allocator, .{ .pattern = .{ .parse_one = state.alternatives } });
+            try continuations.push(allocator, .{ .pattern = .{ .parse_one = state.alternatives } });
         },
         .root_after_one => |state| {
             const p = last_pattern.* orelse unreachable;
@@ -2513,7 +2487,7 @@ fn handleExprPatternStep(
             }
             try self.store.addScratchPattern(p);
             self.advance();
-            try frames.push(allocator, .{ .pattern = .{ .root_next = .{
+            try continuations.push(allocator, .{ .pattern = .{ .root_next = .{
                 .outer_start = state.outer_start,
                 .scratch_top = state.scratch_top,
                 .alternatives = state.alternatives,
@@ -2521,15 +2495,15 @@ fn handleExprPatternStep(
         },
         .parse_one => |alts| {
             const start = self.pos;
-            switch (self.peek()) {
-                .LowerIdent => {
+            switch (directKeyRuntime(.pattern_prefix, self.peek())) {
+                directKey(.pattern_prefix, .LowerIdent) => {
                     self.advance();
                     last_pattern.* = try self.store.addPattern(.{ .ident = .{
                         .ident_tok = start,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                 },
-                .KwVar => {
+                directKey(.pattern_prefix, .KwVar) => {
                     self.advance();
                     if (self.peek() != .LowerIdent) {
                         last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
@@ -2542,14 +2516,14 @@ fn handleExprPatternStep(
                         .region = .{ .start = start, .end = self.pos },
                     } });
                 },
-                .NamedUnderscore => {
+                directKey(.pattern_prefix, .NamedUnderscore) => {
                     self.advance();
                     last_pattern.* = try self.store.addPattern(.{ .ident = .{
                         .ident_tok = start,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                 },
-                .UpperIdent => {
+                directKey(.pattern_prefix, .UpperIdent) => {
                     const qual_result = try self.readQualificationChain();
                     self.pos = qual_result.final_token + 1;
                     if (!qual_result.is_upper) {
@@ -2558,7 +2532,7 @@ fn handleExprPatternStep(
                     }
                     if (self.peek() == .NoSpaceOpenRound) {
                         self.advance();
-                        try frames.push(allocator, .{ .pattern = .{ .tag_args_next = .{
+                        try continuations.push(allocator, .{ .pattern = .{ .tag_args_next = .{
                             .start = start,
                             .final_token = qual_result.final_token,
                             .qualifiers = qual_result.qualifiers,
@@ -2573,24 +2547,24 @@ fn handleExprPatternStep(
                         } });
                     }
                 },
-                .StringStart => {
+                directKey(.pattern_prefix, .StringStart) => {
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .string_after_expr = start } });
-                    try frames.push(allocator, .{ .string_next = .{
+                    try continuations.push(allocator, .{ .pattern = .{ .string_after_expr = start } });
+                    try continuations.push(allocator, .{ .string_next = .{
                         .start = start,
                         .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
                         .multiline = false,
                     } });
                 },
-                .SingleQuote => {
+                directKey(.pattern_prefix, .SingleQuote) => {
                     self.advance();
                     last_pattern.* = try self.store.addPattern(.{ .single_quote = .{
                         .token = start,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                 },
-                .Int => {
+                directKey(.pattern_prefix, .Int) => {
                     self.advance();
                     const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
                     const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
@@ -2624,7 +2598,7 @@ fn handleExprPatternStep(
                         } });
                     }
                 },
-                .Float => {
+                directKey(.pattern_prefix, .Float) => {
                     self.advance();
                     const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
                     const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
@@ -2658,22 +2632,22 @@ fn handleExprPatternStep(
                         } });
                     }
                 },
-                .OpenSquare => {
+                directKey(.pattern_prefix, .OpenSquare) => {
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .list_next = .{
+                    try continuations.push(allocator, .{ .pattern = .{ .list_next = .{
                         .start = start,
                         .scratch_top = self.store.scratchPatternTop(),
                     } } });
                 },
-                .OpenCurly => {
+                directKey(.pattern_prefix, .OpenCurly) => {
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .record_next = .{
+                    try continuations.push(allocator, .{ .pattern = .{ .record_next = .{
                         .start = start,
                         .scratch_top = self.store.scratchPatternRecordFieldTop(),
                         .alternatives = alts,
                     } } });
                 },
-                .DoubleDot => {
+                directKey(.pattern_prefix, .DoubleDot) => {
                     var name: ?Token.Idx = null;
                     self.advance();
                     if (self.peek() == .KwAs) {
@@ -2693,15 +2667,15 @@ fn handleExprPatternStep(
                         .name = name,
                     } });
                 },
-                .Underscore => {
+                directKey(.pattern_prefix, .Underscore) => {
                     self.advance();
                     last_pattern.* = try self.store.addPattern(.{ .underscore = .{
                         .region = .{ .start = start, .end = self.pos },
                     } });
                 },
-                .OpenRound, .NoSpaceOpenRound => {
+                directKey(.pattern_prefix, .OpenRound), directKey(.pattern_prefix, .NoSpaceOpenRound) => {
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .tuple_next = .{
+                    try continuations.push(allocator, .{ .pattern = .{ .tuple_next = .{
                         .start = start,
                         .scratch_top = self.store.scratchPatternTop(),
                     } } });
@@ -2725,13 +2699,13 @@ fn handleExprPatternStep(
                 self.store.clearScratchPatternsFrom(state.scratch_top);
                 last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
             } else {
-                try frames.push(allocator, .{ .pattern = .{ .tag_args_after_item = .{
+                try continuations.push(allocator, .{ .pattern = .{ .tag_args_after_item = .{
                     .start = state.start,
                     .final_token = state.final_token,
                     .qualifiers = state.qualifiers,
                     .scratch_top = state.scratch_top,
                 } } });
-                try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
+                try pushExprPatternRoot(continuations, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
             }
         },
         .tag_args_after_item => |state| {
@@ -2740,14 +2714,14 @@ fn handleExprPatternStep(
             try self.store.addScratchPattern(item);
             if (self.peek() == .Comma) {
                 self.advance();
-                try frames.push(allocator, .{ .pattern = .{ .tag_args_next = .{
+                try continuations.push(allocator, .{ .pattern = .{ .tag_args_next = .{
                     .start = state.start,
                     .final_token = state.final_token,
                     .qualifiers = state.qualifiers,
                     .scratch_top = state.scratch_top,
                 } } });
             } else if (self.peek() == .CloseRound) {
-                try frames.push(allocator, .{ .pattern = .{ .tag_args_next = .{
+                try continuations.push(allocator, .{ .pattern = .{ .tag_args_next = .{
                     .start = state.start,
                     .final_token = state.final_token,
                     .qualifiers = state.qualifiers,
@@ -2760,7 +2734,7 @@ fn handleExprPatternStep(
         },
         .list_next => |state| {
             if (self.peek() == .CloseSquare) {
-                try frames.push(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             } else if (self.peek() == .EndOfFile) {
                 self.store.clearScratchPatternsFrom(state.scratch_top);
                 last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
@@ -2786,16 +2760,16 @@ fn handleExprPatternStep(
                 try self.store.addScratchPattern(rest_pattern);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .list_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                    try continuations.push(allocator, .{ .pattern = .{ .list_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
                 } else {
-                    try frames.push(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                    try continuations.push(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
                 }
             } else {
-                try frames.push(allocator, .{ .pattern = .{ .list_after_item = .{
+                try continuations.push(allocator, .{ .pattern = .{ .list_after_item = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                 } } });
-                try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
+                try pushExprPatternRoot(continuations, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
             }
         },
         .list_after_item => |state| {
@@ -2804,9 +2778,9 @@ fn handleExprPatternStep(
             try self.store.addScratchPattern(item);
             if (self.peek() == .Comma) {
                 self.advance();
-                try frames.push(allocator, .{ .pattern = .{ .list_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .list_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             } else {
-                try frames.push(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             }
         },
         .list_finish => |state| {
@@ -2825,7 +2799,7 @@ fn handleExprPatternStep(
         },
         .record_next => |state| {
             if (self.peek() == .CloseCurly) {
-                try frames.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             } else if (self.peek() == .EndOfFile) {
                 self.store.clearScratchPatternRecordFieldsFrom(state.scratch_top);
                 last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
@@ -2846,13 +2820,13 @@ fn handleExprPatternStep(
                 try self.store.addScratchPatternRecordField(field);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .record_next = .{
+                    try continuations.push(allocator, .{ .pattern = .{ .record_next = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .alternatives = state.alternatives,
                     } } });
                 } else {
-                    try frames.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                    try continuations.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
                 }
             } else {
                 const field_start = self.pos;
@@ -2875,13 +2849,13 @@ fn handleExprPatternStep(
                     try self.store.addScratchPatternRecordField(field);
                     if (self.peek() == .Comma) {
                         self.advance();
-                        try frames.push(allocator, .{ .pattern = .{ .record_next = .{
+                        try continuations.push(allocator, .{ .pattern = .{ .record_next = .{
                             .start = state.start,
                             .scratch_top = state.scratch_top,
                             .alternatives = state.alternatives,
                         } } });
                     } else {
-                        try frames.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                        try continuations.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
                     }
                 } else {
                     if (self.peek() != .OpColon) {
@@ -2893,14 +2867,14 @@ fn handleExprPatternStep(
                         return;
                     }
                     self.advance();
-                    try frames.push(allocator, .{ .pattern = .{ .record_field_after_value = .{
+                    try continuations.push(allocator, .{ .pattern = .{ .record_field_after_value = .{
                         .record_start = state.start,
                         .scratch_top = state.scratch_top,
                         .alternatives = state.alternatives,
                         .field_start = field_start,
                         .name = name,
                     } } });
-                    try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), state.alternatives);
+                    try pushExprPatternRoot(continuations, allocator, self.pos, self.store.scratchPatternTop(), state.alternatives);
                 }
             }
         },
@@ -2916,13 +2890,13 @@ fn handleExprPatternStep(
             try self.store.addScratchPatternRecordField(field);
             if (self.peek() == .Comma) {
                 self.advance();
-                try frames.push(allocator, .{ .pattern = .{ .record_next = .{
+                try continuations.push(allocator, .{ .pattern = .{ .record_next = .{
                     .start = state.record_start,
                     .scratch_top = state.scratch_top,
                     .alternatives = state.alternatives,
                 } } });
             } else {
-                try frames.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.record_start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.record_start, .scratch_top = state.scratch_top } } });
             }
         },
         .record_finish => |state| {
@@ -2939,16 +2913,16 @@ fn handleExprPatternStep(
         },
         .tuple_next => |state| {
             if (self.peek() == .CloseRound) {
-                try frames.push(allocator, .{ .pattern = .{ .tuple_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .tuple_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             } else if (self.peek() == .EndOfFile) {
                 self.store.clearScratchPatternsFrom(state.scratch_top);
                 last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
             } else {
-                try frames.push(allocator, .{ .pattern = .{ .tuple_after_item = .{
+                try continuations.push(allocator, .{ .pattern = .{ .tuple_after_item = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                 } } });
-                try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
+                try pushExprPatternRoot(continuations, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
             }
         },
         .tuple_after_item => |state| {
@@ -2957,9 +2931,9 @@ fn handleExprPatternStep(
             try self.store.addScratchPattern(item);
             if (self.peek() == .Comma) {
                 self.advance();
-                try frames.push(allocator, .{ .pattern = .{ .tuple_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .tuple_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             } else if (self.peek() == .CloseRound) {
-                try frames.push(allocator, .{ .pattern = .{ .tuple_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                try continuations.push(allocator, .{ .pattern = .{ .tuple_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
             } else {
                 self.store.clearScratchPatternsFrom(state.scratch_top);
                 last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
@@ -3043,21 +3017,21 @@ pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const result = try self.runVm(.{ .parse = min_bp });
+    const result = try self.runDirectDispatch(.{ .parse = min_bp });
     return switch (result) {
         .expr => |expr| expr,
         else => try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = self.pos, .end = self.pos }),
     };
 }
 
-fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
+fn runDirectDispatch(self: *Parser, initial: ParseAction) Error!DispatchResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var frame_allocator_state = std.heap.stackFallback(8192, self.gpa);
-    const frame_allocator = frame_allocator_state.get();
-    var frames: PackedStepStack(VmStep) = .{};
-    defer frames.deinit(frame_allocator);
+    var continuation_allocator_state = std.heap.stackFallback(8192, self.gpa);
+    const continuation_allocator = continuation_allocator_state.get();
+    var continuations: PackedContinuationStack(ParseAction) = .{};
+    defer continuations.deinit(continuation_allocator);
     const type_path_stack_top = self.type_path_stack.items.len;
     const type_path_stack_visible_start = self.type_path_stack_visible_start;
     const collect_type_dependencies_start = self.collect_type_dependencies;
@@ -3071,14 +3045,13 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
     var last_type_anno: ?AST.TypeAnno.Idx = null;
     var last_statement: ?AST.Statement.Idx = null;
     var last_associated: ?AST.Associated = null;
-    try frames.push(frame_allocator, initial);
-
-    while (frames.pop()) |initial_frame| {
-        frame: switch (initial_frame) {
-            .parse => |frame_min_bp| {
+    var next_action: ?ParseAction = initial;
+    while (next_action) |initial_action| : (next_action = continuations.pop()) {
+        dispatch: switch (initial_action) {
+            .parse => |min_bp| {
                 const start = self.pos;
-                switch (self.peek()) {
-                    .UpperIdent => {
+                switch (directKeyRuntime(.expr_prefix, self.peek())) {
+                    directKey(.expr_prefix, .UpperIdent) => {
                         const qual_result = try self.readQualificationChain();
                         self.pos = qual_result.final_token + 1;
                         const expr = if (qual_result.is_upper)
@@ -3093,9 +3066,9 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 .qualifiers = qual_result.qualifiers,
                                 .region = .{ .start = start, .end = self.pos },
                             } });
-                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = start, .min_bp = min_bp, .expr = expr } };
                     },
-                    .LowerIdent, .NamedUnderscore => {
+                    directKey(.expr_prefix, .LowerIdent), directKey(.expr_prefix, .NamedUnderscore) => {
                         self.advance();
                         const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
                         const expr = try self.store.addExpr(.{ .ident = .{
@@ -3103,9 +3076,9 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             .qualifiers = empty_qualifiers,
                             .region = .{ .start = start, .end = self.pos },
                         } });
-                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = start, .min_bp = min_bp, .expr = expr } };
                     },
-                    .Int => {
+                    directKey(.expr_prefix, .Int) => {
                         self.advance();
                         const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
                         const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
@@ -3142,9 +3115,9 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             .literal = literal,
                             .region = deprecated_region,
                         } });
-                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = start, .min_bp = min_bp, .expr = expr } };
                     },
-                    .Float => {
+                    directKey(.expr_prefix, .Float) => {
                         self.advance();
                         const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
                         const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
@@ -3176,62 +3149,62 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             .literal = literal,
                             .region = deprecated_region,
                         } });
-                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = start, .min_bp = min_bp, .expr = expr } };
                     },
-                    .SingleQuote => {
+                    directKey(.expr_prefix, .SingleQuote) => {
                         self.advance();
                         const expr = try self.store.addExpr(.{ .single_quote = .{
                             .token = start,
                             .region = .{ .start = start, .end = self.pos },
                         } });
-                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = start, .min_bp = min_bp, .expr = expr } };
                     },
-                    .StringStart, .MultilineStringStart => {
+                    directKey(.expr_prefix, .StringStart), directKey(.expr_prefix, .MultilineStringStart) => {
                         const multiline = self.peek() == .MultilineStringStart;
                         self.advance();
-                        continue :frame .{ .string_next = .{
+                        continue :dispatch .{ .string_next = .{
                             .start = start,
-                            .min_bp = frame_min_bp,
+                            .min_bp = min_bp,
                             .scratch_top = self.store.scratchExprTop(),
                             .multiline = multiline,
                         } };
                     },
-                    .OpenSquare => {
+                    directKey(.expr_prefix, .OpenSquare) => {
                         self.advance();
-                        continue :frame .{ .expr_collection_next = .{
+                        continue :dispatch .{ .expr_collection_next = .{
                             .start = start,
-                            .min_bp = frame_min_bp,
+                            .min_bp = min_bp,
                             .scratch_top = self.store.scratchExprTop(),
                             .end_token = .CloseSquare,
                             .result = .list,
                             .close_error = .expected_expr_close_square_or_comma,
                         } };
                     },
-                    .NoSpaceOpenRound, .OpenRound => {
+                    directKey(.expr_prefix, .NoSpaceOpenRound), directKey(.expr_prefix, .OpenRound) => {
                         self.advance();
-                        continue :frame .{ .expr_collection_next = .{
+                        continue :dispatch .{ .expr_collection_next = .{
                             .start = start,
-                            .min_bp = frame_min_bp,
+                            .min_bp = min_bp,
                             .scratch_top = self.store.scratchExprTop(),
                             .end_token = .CloseRound,
                             .result = .tuple,
                             .close_error = .expected_expr_close_round_or_comma,
                         } };
                     },
-                    .OpenCurly => {
+                    directKey(.expr_prefix, .OpenCurly) => {
                         self.advance();
 
                         if (self.peek() == .CloseCurly) {
-                            continue :frame .{ .record_finish = .{
+                            continue :dispatch .{ .record_finish = .{
                                 .start = start,
-                                .min_bp = frame_min_bp,
+                                .min_bp = min_bp,
                                 .scratch_top = self.store.scratchRecordFieldTop(),
                                 .ext = null,
                             } };
                         } else if (self.peek() == .DoubleDot) {
                             self.advance();
-                            try frames.push(frame_allocator, .{ .record_ext_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
-                            continue :frame .{ .parse = 0 };
+                            try continuations.push(continuation_allocator, .{ .record_ext_after_expr = .{ .start = start, .min_bp = min_bp } });
+                            continue :dispatch .{ .parse = 0 };
                         } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
                             var is_block = false;
                             if (self.peekNext() == .OpColon) {
@@ -3256,23 +3229,23 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 }
                             }
                             if (is_block) {
-                                continue :frame .{ .block_begin = .{ .start = start, .min_bp = frame_min_bp } };
+                                continue :dispatch .{ .block_begin = .{ .start = start, .min_bp = min_bp } };
                             } else {
-                                continue :frame .{ .record_fields_next = .{
+                                continue :dispatch .{ .record_fields_next = .{
                                     .start = start,
-                                    .min_bp = frame_min_bp,
+                                    .min_bp = min_bp,
                                     .scratch_top = self.store.scratchRecordFieldTop(),
                                     .ext = null,
                                 } };
                             }
                         } else {
-                            continue :frame .{ .block_begin = .{ .start = start, .min_bp = frame_min_bp } };
+                            continue :dispatch .{ .block_begin = .{ .start = start, .min_bp = min_bp } };
                         }
                     },
-                    .OpBar => {
+                    directKey(.expr_prefix, .OpBar) => {
                         self.advance();
-                        try frames.push(frame_allocator, .{ .lambda_after_args = .{ .start = start, .min_bp = frame_min_bp } });
-                        continue :frame .{ .pattern_collection_next = .{
+                        try continuations.push(continuation_allocator, .{ .lambda_after_args = .{ .start = start, .min_bp = min_bp } });
+                        continue :dispatch .{ .pattern_collection_next = .{
                             .start = start,
                             .scratch_top = self.store.scratchPatternTop(),
                             .end_token = .OpBar,
@@ -3280,40 +3253,40 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             .close_error = .expected_expr_bar,
                         } };
                     },
-                    .KwIf => {
+                    directKey(.expr_prefix, .KwIf) => {
                         self.advance();
-                        try frames.push(frame_allocator, .{ .if_after_condition = .{ .start = start, .min_bp = frame_min_bp } });
-                        continue :frame .{ .parse = 0 };
+                        try continuations.push(continuation_allocator, .{ .if_after_condition = .{ .start = start, .min_bp = min_bp } });
+                        continue :dispatch .{ .parse = 0 };
                     },
-                    .KwMatch => {
+                    directKey(.expr_prefix, .KwMatch) => {
                         self.advance();
-                        try frames.push(frame_allocator, .{ .match_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
-                        continue :frame .{ .parse = 0 };
+                        try continuations.push(continuation_allocator, .{ .match_after_expr = .{ .start = start, .min_bp = min_bp } });
+                        continue :dispatch .{ .parse = 0 };
                     },
-                    .KwDbg => {
+                    directKey(.expr_prefix, .KwDbg) => {
                         self.advance();
-                        try frames.push(frame_allocator, .{ .dbg_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
-                        continue :frame .{ .parse = 0 };
+                        try continuations.push(continuation_allocator, .{ .dbg_after_expr = .{ .start = start, .min_bp = min_bp } });
+                        continue :dispatch .{ .parse = 0 };
                     },
-                    .KwFor => {
+                    directKey(.expr_prefix, .KwFor) => {
                         self.advance();
-                        try frames.push(frame_allocator, .{ .for_after_pattern = .{ .start = start, .min_bp = frame_min_bp } });
-                        try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
+                        try continuations.push(continuation_allocator, .{ .for_after_pattern = .{ .start = start, .min_bp = min_bp } });
+                        try pushExprPatternRoot(&continuations, continuation_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
                     },
-                    .TripleDot => {
+                    directKey(.expr_prefix, .TripleDot) => {
                         const expr = try self.store.addExpr(.{ .ellipsis = .{
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         self.advance();
-                        continue :frame .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = start, .min_bp = min_bp, .expr = expr } };
                     },
-                    .OpUnaryMinus, .OpBang => {
+                    directKey(.expr_prefix, .OpUnaryMinus), directKey(.expr_prefix, .OpBang) => {
                         const operator_token = start;
                         self.advance();
-                        try frames.push(frame_allocator, .{ .after_unary = .{ .start = start, .min_bp = frame_min_bp, .operator = operator_token } });
-                        continue :frame .{ .parse = 100 };
+                        try continuations.push(continuation_allocator, .{ .after_unary = .{ .start = start, .min_bp = min_bp, .operator = operator_token } });
+                        continue :dispatch .{ .parse = 100 };
                     },
-                    .KwReturn => {
+                    directKey(.expr_prefix, .KwReturn) => {
                         last = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
                         continue;
                     },
@@ -3327,15 +3300,15 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 var expression = state.expr;
                 last = null;
                 while (true) {
-                    switch (self.peek()) {
-                        .NoSpaceOpenRound => {
+                    switch (directKeyRuntime(.expr_suffix, self.peek())) {
+                        directKey(.expr_suffix, .NoSpaceOpenRound) => {
                             self.advance();
-                            try frames.push(frame_allocator, .{ .after_apply_args = .{
+                            try continuations.push(continuation_allocator, .{ .after_apply_args = .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .function = expression,
                             } });
-                            continue :frame .{ .expr_collection_next = .{
+                            continue :dispatch .{ .expr_collection_next = .{
                                 .start = state.start,
                                 .min_bp = null,
                                 .scratch_top = self.store.scratchExprTop(),
@@ -3344,7 +3317,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 .close_error = .expected_expr_apply_close_round,
                             } };
                         },
-                        .NoSpaceOpQuestion => {
+                        directKey(.expr_suffix, .NoSpaceOpQuestion) => {
                             self.advance();
                             expression = try self.store.addExpr(.{ .suffix_single_question = .{
                                 .expr = expression,
@@ -3352,7 +3325,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 .region = .{ .start = state.start, .end = self.pos },
                             } });
                         },
-                        .NoSpaceDotInt, .DotInt => {
+                        directKey(.expr_suffix, .NoSpaceDotInt), directKey(.expr_suffix, .DotInt) => {
                             const elem_token = self.pos;
                             self.advance();
                             expression = try self.store.addExpr(.{ .tuple_access = .{
@@ -3361,7 +3334,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 .region = .{ .start = state.start, .end = self.pos },
                             } });
                         },
-                        .NoSpaceDotLowerIdent, .DotLowerIdent => {
+                        directKey(.expr_suffix, .NoSpaceDotLowerIdent), directKey(.expr_suffix, .DotLowerIdent) => {
                             const s = self.pos;
                             self.advance();
                             const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
@@ -3372,13 +3345,13 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             } });
                             if (self.peek() == .NoSpaceOpenRound) {
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .after_method_args = .{
+                                try continuations.push(continuation_allocator, .{ .after_method_args = .{
                                     .start = state.start,
                                     .min_bp = state.min_bp,
                                     .receiver = expression,
                                     .method_token = s,
                                 } });
-                                continue :frame .{ .expr_collection_next = .{
+                                continue :dispatch .{ .expr_collection_next = .{
                                     .start = s,
                                     .min_bp = null,
                                     .scratch_top = self.store.scratchExprTop(),
@@ -3395,7 +3368,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 } });
                             }
                         },
-                        .OpArrow => {
+                        directKey(.expr_suffix, .OpArrow) => {
                             const s = self.pos;
                             self.advance();
                             const first_token_tag = self.peek();
@@ -3419,7 +3392,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                         .token = qual_result.final_token,
                                         .qualifiers = qual_result.qualifiers,
                                     } });
-                                continue :frame .{ .arrow_app_next = .{
+                                continue :dispatch .{ .arrow_app_next = .{
                                     .start = state.start,
                                     .min_bp = state.min_bp,
                                     .left = expression,
@@ -3428,13 +3401,13 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 } };
                             } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .arrow_after_inner = .{
+                                try continuations.push(continuation_allocator, .{ .arrow_after_inner = .{
                                     .start = state.start,
                                     .min_bp = state.min_bp,
                                     .left = expression,
                                     .operator = s,
                                 } });
-                                continue :frame .{ .parse = 0 };
+                                continue :dispatch .{ .parse = 0 };
                             } else {
                                 last = try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
                                 continue;
@@ -3445,13 +3418,13 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 if (bp.left >= state.min_bp) {
                                     const op_pos = self.pos;
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .after_binary_rhs = .{
+                                    try continuations.push(continuation_allocator, .{ .after_binary_rhs = .{
                                         .start = state.start,
                                         .min_bp = state.min_bp,
                                         .left = expression,
                                         .operator = op_pos,
                                     } });
-                                    continue :frame .{ .parse = bp.right };
+                                    continue :dispatch .{ .parse = bp.right };
                                 }
                             }
                             last = expression;
@@ -3468,7 +3441,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .expr = operand,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .expr_collection_next => |state| {
                 if (self.peek() == state.end_token) {
@@ -3493,14 +3466,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     if (state.min_bp) |min_bp| {
                         const expr = last orelse unreachable;
                         last = null;
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = min_bp, .expr = expr } };
                     }
                 } else if (self.peek() == .EndOfFile) {
                     self.store.clearScratchExprsFrom(state.scratch_top);
                     last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
                     continue;
                 } else {
-                    try frames.push(frame_allocator, .{ .expr_collection_after_item = .{
+                    try continuations.push(continuation_allocator, .{ .expr_collection_after_item = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
@@ -3508,7 +3481,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .result = state.result,
                         .close_error = state.close_error,
                     } });
-                    continue :frame .{ .parse = 0 };
+                    continue :dispatch .{ .parse = 0 };
                 }
             },
             .expr_collection_after_item => |state| {
@@ -3517,7 +3490,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 try self.store.addScratchExpr(item);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    continue :frame .{ .expr_collection_next = .{
+                    continue :dispatch .{ .expr_collection_next = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
@@ -3526,7 +3499,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .close_error = state.close_error,
                     } };
                 } else if (self.peek() == state.end_token) {
-                    continue :frame .{ .expr_collection_next = .{
+                    continue :dispatch .{ .expr_collection_next = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
@@ -3556,14 +3529,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
                     continue;
                 } else {
-                    try frames.push(frame_allocator, .{ .pattern_collection_after_item = .{
+                    try continuations.push(continuation_allocator, .{ .pattern_collection_after_item = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
                         .alternatives = state.alternatives,
                         .close_error = state.close_error,
                     } });
-                    try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), state.alternatives);
+                    try pushExprPatternRoot(&continuations, continuation_allocator, self.pos, self.store.scratchPatternTop(), state.alternatives);
                 }
             },
             .pattern_collection_after_item => |state| {
@@ -3572,7 +3545,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 try self.store.addScratchPattern(item);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    continue :frame .{ .pattern_collection_next = .{
+                    continue :dispatch .{ .pattern_collection_next = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
@@ -3580,7 +3553,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .close_error = state.close_error,
                     } };
                 } else if (self.peek() == state.end_token) {
-                    continue :frame .{ .pattern_collection_next = .{
+                    continue :dispatch .{ .pattern_collection_next = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .end_token = state.end_token,
@@ -3600,7 +3573,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 const args = switch (tuple) {
                     .tuple => |t| t.items,
                     .malformed => {
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } };
                     },
                     else => {
                         last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
@@ -3612,7 +3585,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .@"fn" = state.function,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .after_method_args => |state| {
                 const tuple_expr = last orelse unreachable;
@@ -3621,7 +3594,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 const args = switch (tuple) {
                     .tuple => |t| t.items,
                     .malformed => {
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } };
                     },
                     else => {
                         last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
@@ -3634,7 +3607,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .args = args,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .after_binary_rhs => |state| {
                 const rhs = last orelse unreachable;
@@ -3645,7 +3618,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .operator = state.operator,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .arrow_after_inner => |state| {
                 const inner = last orelse unreachable;
@@ -3655,7 +3628,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     continue;
                 }
                 self.advance();
-                continue :frame .{ .arrow_app_next = .{
+                continue :dispatch .{ .arrow_app_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .left = state.left,
@@ -3666,14 +3639,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
             .arrow_app_next => |state| {
                 if (self.peek() == .NoSpaceOpenRound) {
                     self.advance();
-                    try frames.push(frame_allocator, .{ .arrow_app_after_args = .{
+                    try continuations.push(continuation_allocator, .{ .arrow_app_after_args = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .left = state.left,
                         .operator = state.operator,
                         .function = state.rhs,
                     } });
-                    continue :frame .{ .expr_collection_next = .{
+                    continue :dispatch .{ .expr_collection_next = .{
                         .start = state.operator,
                         .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
@@ -3688,7 +3661,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .left = state.left,
                         .right = state.rhs,
                     } });
-                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                    continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 }
             },
             .arrow_app_after_args => |state| {
@@ -3704,7 +3677,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             .left = state.left,
                             .right = tuple_expr,
                         } });
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                     },
                     else => {
                         last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
@@ -3716,7 +3689,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .@"fn" = state.function,
                     .region = .{ .start = state.operator, .end = self.pos },
                 } });
-                continue :frame .{ .arrow_app_next = .{
+                continue :dispatch .{ .arrow_app_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .left = state.left,
@@ -3753,13 +3726,13 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         },
                         .OpenStringInterpolation => {
                             self.advance();
-                            try frames.push(frame_allocator, .{ .string_after_interp = .{
+                            try continuations.push(continuation_allocator, .{ .string_after_interp = .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .scratch_top = state.scratch_top,
                                 .multiline = state.multiline,
                             } });
-                            continue :frame .{ .parse = 0 };
+                            continue :dispatch .{ .parse = 0 };
                         },
                         .MalformedStringPart => {
                             self.advance();
@@ -3807,7 +3780,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 if (last) |expr| {
                     if (state.min_bp) |min_bp| {
                         last = null;
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = min_bp, .expr = expr } };
                     }
                 }
             },
@@ -3820,7 +3793,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     continue;
                 }
                 self.advance();
-                continue :frame .{ .string_next = .{
+                continue :dispatch .{ .string_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .scratch_top = state.scratch_top,
@@ -3835,7 +3808,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     continue;
                 }
                 self.advance();
-                continue :frame .{ .record_fields_next = .{
+                continue :dispatch .{ .record_fields_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .scratch_top = self.store.scratchRecordFieldTop(),
@@ -3844,7 +3817,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
             },
             .record_fields_next => |state| {
                 if (self.peek() == .CloseCurly) {
-                    continue :frame .{ .record_finish = .{
+                    continue :dispatch .{ .record_finish = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
@@ -3865,7 +3838,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     const name = field_start;
                     if (self.peek() == .OpColon) {
                         self.advance();
-                        try frames.push(frame_allocator, .{ .record_field_after_value = .{
+                        try continuations.push(continuation_allocator, .{ .record_field_after_value = .{
                             .start = state.start,
                             .min_bp = state.min_bp,
                             .scratch_top = state.scratch_top,
@@ -3873,7 +3846,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             .field_start = field_start,
                             .name = name,
                         } });
-                        continue :frame .{ .parse = 0 };
+                        continue :dispatch .{ .parse = 0 };
                     } else {
                         const field = try self.store.addRecordField(.{
                             .name = name,
@@ -3883,14 +3856,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         try self.store.addScratchRecordField(field);
                         if (self.peek() == .Comma) {
                             self.advance();
-                            continue :frame .{ .record_fields_next = .{
+                            continue :dispatch .{ .record_fields_next = .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .scratch_top = state.scratch_top,
                                 .ext = state.ext,
                             } };
                         } else {
-                            continue :frame .{ .record_finish = .{
+                            continue :dispatch .{ .record_finish = .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .scratch_top = state.scratch_top,
@@ -3911,14 +3884,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 try self.store.addScratchRecordField(field);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    continue :frame .{ .record_fields_next = .{
+                    continue :dispatch .{ .record_fields_next = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
                         .ext = state.ext,
                     } };
                 } else {
-                    continue :frame .{ .record_finish = .{
+                    continue :dispatch .{ .record_finish = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scratch_top = state.scratch_top,
@@ -3934,7 +3907,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 };
                 const fields = try self.store.recordFieldSpanFrom(state.scratch_top);
                 const expr = try self.finishRecordExpr(state.start, fields, state.ext);
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .lambda_after_body => |state| {
                 const body = last orelse unreachable;
@@ -3944,39 +3917,39 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .args = state.args,
                     .region = .{ .start = state.start, .end = self.pos },
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .lambda_after_args => |state| {
                 const args = last_pattern_span orelse unreachable;
                 last_pattern_span = null;
-                try frames.push(frame_allocator, .{ .lambda_after_body = .{ .start = state.start, .min_bp = state.min_bp, .args = args } });
-                continue :frame .{ .parse = 0 };
+                try continuations.push(continuation_allocator, .{ .lambda_after_body = .{ .start = state.start, .min_bp = state.min_bp, .args = args } });
+                continue :dispatch .{ .parse = 0 };
             },
             .if_after_condition => |state| {
                 const condition = last orelse unreachable;
                 last = null;
-                try frames.push(frame_allocator, .{ .if_after_then = .{ .start = state.start, .min_bp = state.min_bp, .condition = condition } });
-                continue :frame .{ .parse = 0 };
+                try continuations.push(continuation_allocator, .{ .if_after_then = .{ .start = state.start, .min_bp = state.min_bp, .condition = condition } });
+                continue :dispatch .{ .parse = 0 };
             },
             .if_after_then => |state| {
                 const then = last orelse unreachable;
                 last = null;
                 if (self.peek() == .KwElse) {
                     self.advance();
-                    try frames.push(frame_allocator, .{ .if_after_else = .{
+                    try continuations.push(continuation_allocator, .{ .if_after_else = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .condition = state.condition,
                         .then = then,
                     } });
-                    continue :frame .{ .parse = 0 };
+                    continue :dispatch .{ .parse = 0 };
                 } else {
                     const expr = try self.store.addExpr(.{ .if_without_else = .{
                         .region = .{ .start = state.start, .end = self.pos },
                         .condition = state.condition,
                         .then = then,
                     } });
-                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                    continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 }
             },
             .if_after_else => |state| {
@@ -3988,16 +3961,16 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .then = state.then,
                     .@"else" = else_idx,
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .match_after_expr => |state| {
                 const e = last orelse unreachable;
                 last = null;
                 self.expect(.OpenCurly) catch {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
-                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                    continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 };
-                continue :frame .{ .match_branch_next = .{
+                continue :dispatch .{ .match_branch_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .matched = e,
@@ -4009,11 +3982,11 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     const branches = try self.store.matchBranchSpanFrom(state.scratch_top);
                     if (branches.span.len == 0) {
                         const expr = try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, state.start);
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                     }
                     if (self.peek() != .CloseCurly) {
                         const expr = try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
-                        continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                        continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                     }
                     self.advance();
                     const expr = try self.store.addExpr(.{ .match = .{
@@ -4021,17 +3994,17 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .expr = state.matched,
                         .branches = branches,
                     } });
-                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                    continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 } else {
                     const branch_start = self.pos;
-                    try frames.push(frame_allocator, .{ .match_branch_after_pattern = .{
+                    try continuations.push(continuation_allocator, .{ .match_branch_after_pattern = .{
                         .match_start = state.start,
                         .min_bp = state.min_bp,
                         .matched = state.matched,
                         .scratch_top = state.scratch_top,
                         .branch_start = branch_start,
                     } });
-                    try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
+                    try pushExprPatternRoot(&continuations, continuation_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
                 }
             },
             .match_branch_after_pattern => |state| {
@@ -4039,7 +4012,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 last_pattern = null;
                 if (self.peek() == .KwIf) {
                     self.advance();
-                    try frames.push(frame_allocator, .{ .match_branch_after_guard = .{
+                    try continuations.push(continuation_allocator, .{ .match_branch_after_guard = .{
                         .match_start = state.match_start,
                         .min_bp = state.min_bp,
                         .matched = state.matched,
@@ -4048,9 +4021,9 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .pattern = pattern,
                         .guard = null,
                     } });
-                    continue :frame .{ .parse = 0 };
+                    continue :dispatch .{ .parse = 0 };
                 } else {
-                    continue :frame .{ .match_branch_after_guard = .{
+                    continue :dispatch .{ .match_branch_after_guard = .{
                         .match_start = state.match_start,
                         .min_bp = state.min_bp,
                         .matched = state.matched,
@@ -4075,7 +4048,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 } else {
                     try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
                 }
-                try frames.push(frame_allocator, .{ .match_branch_after_body = .{
+                try continuations.push(continuation_allocator, .{ .match_branch_after_body = .{
                     .match_start = state.match_start,
                     .min_bp = state.min_bp,
                     .matched = state.matched,
@@ -4084,7 +4057,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .pattern = state.pattern,
                     .guard = guard,
                 } });
-                continue :frame .{ .parse = 0 };
+                continue :dispatch .{ .parse = 0 };
             },
             .match_branch_after_body => |state| {
                 const body = last orelse unreachable;
@@ -4099,7 +4072,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 if (self.peek() == .Comma) {
                     self.advance();
                 }
-                continue :frame .{ .match_branch_next = .{
+                continue :dispatch .{ .match_branch_next = .{
                     .start = state.match_start,
                     .min_bp = state.min_bp,
                     .matched = state.matched,
@@ -4113,29 +4086,29 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .region = .{ .start = state.start, .end = self.pos },
                     .expr = e,
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .for_after_pattern => |state| {
                 const pattern = last_pattern orelse unreachable;
                 last_pattern = null;
                 if (self.peek() != .KwIn) {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
-                    continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                    continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
                 }
                 self.advance();
-                try frames.push(frame_allocator, .{ .for_after_list = .{ .start = state.start, .min_bp = state.min_bp, .pattern = pattern } });
-                continue :frame .{ .parse = 0 };
+                try continuations.push(continuation_allocator, .{ .for_after_list = .{ .start = state.start, .min_bp = state.min_bp, .pattern = pattern } });
+                continue :dispatch .{ .parse = 0 };
             },
             .for_after_list => |state| {
                 const list_expr = last orelse unreachable;
                 last = null;
-                try frames.push(frame_allocator, .{ .for_after_body = .{
+                try continuations.push(continuation_allocator, .{ .for_after_body = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .pattern = state.pattern,
                     .list_expr = list_expr,
                 } });
-                continue :frame .{ .parse = 0 };
+                continue :dispatch .{ .parse = 0 };
             },
             .for_after_body => |state| {
                 const body = last orelse unreachable;
@@ -4146,13 +4119,13 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .expr = state.list_expr,
                     .body = body,
                 } });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } };
             },
             .block_begin => |state| {
                 const previous_type_path_visible_start = self.type_path_stack_visible_start;
                 self.type_path_stack_visible_start = self.type_path_stack.items.len;
                 const block_scope = try self.enterDeclScope(.block, .none, .{ .start = state.start, .end = state.start });
-                continue :frame .{ .block_next = .{
+                continue :dispatch .{ .block_next = .{
                     .start = state.start,
                     .min_bp = state.min_bp,
                     .scope = block_scope,
@@ -4162,7 +4135,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
             },
             .block_next => |state| {
                 if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    continue :frame .{ .block_finish = .{
+                    continue :dispatch .{ .block_finish = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scope = state.scope,
@@ -4170,14 +4143,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
                     } };
                 } else {
-                    try frames.push(frame_allocator, .{ .block_after_statement = .{
+                    try continuations.push(continuation_allocator, .{ .block_after_statement = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scope = state.scope,
                         .scratch_top = state.scratch_top,
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
                     } });
-                    continue :frame .{ .statement = .{ .parse = .in_body } };
+                    continue :dispatch .{ .statement = .{ .parse = .in_body } };
                 }
             },
             .block_after_statement => |state| {
@@ -4185,7 +4158,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                 last_statement = null;
                 try self.store.addScratchStatement(statement);
                 if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    continue :frame .{ .block_finish = .{
+                    continue :dispatch .{ .block_finish = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scope = state.scope,
@@ -4193,7 +4166,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                         .previous_type_path_visible_start = state.previous_type_path_visible_start,
                     } };
                 } else {
-                    continue :frame .{ .block_next = .{
+                    continue :dispatch .{ .block_next = .{
                         .start = state.start,
                         .min_bp = state.min_bp,
                         .scope = state.scope,
@@ -4220,62 +4193,86 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .region = block_region,
                 } });
                 self.decl_index.setScopeOwner(state.scope, .{ .expr = @intFromEnum(expr_idx) });
-                continue :frame .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr_idx } };
+                continue :dispatch .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr_idx } };
             },
-            .pattern => |pattern_frame| {
-                try self.handleExprPatternStep(pattern_frame, &frames, frame_allocator, &last, &last_pattern);
+            .pattern => |pattern_action| {
+                try self.handleExprPatternAction(pattern_action, &continuations, continuation_allocator, &last, &last_pattern);
             },
             .type_anno => |type_step| {
-                try self.handleTypeStep(type_step, &frames, frame_allocator, &last_type_anno);
+                try self.handleTypeAction(type_step, &continuations, continuation_allocator, &last_type_anno);
             },
-            .statement => |stmt_frame| {
-                switch (stmt_frame) {
+            .statement => |statement_action| {
+                switch (statement_action) {
                     .parse => |statementType| {
-                        switch (self.peek()) {
-                            .KwImport => {
+                        switch (directKeyRuntime(statementContext(statementType), self.peek())) {
+                            directKey(.statement_top_level, .KwImport),
+                            directKey(.statement_body, .KwImport),
+                            directKey(.statement_associated, .KwImport),
+                            => {
                                 if (statementType == .top_level) {
                                     last_statement = try self.runImportStatement();
                                 } else {
                                     last_statement = try self.pushMalformed(AST.Statement.Idx, .import_must_be_top_level, self.pos);
                                 }
                             },
-                            .KwExpect => {
+                            directKey(.statement_top_level, .KwExpect),
+                            directKey(.statement_body, .KwExpect),
+                            directKey(.statement_associated, .KwExpect),
+                            => {
                                 const start = self.pos;
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .statement = .{ .after_expect = start } });
-                                continue :frame .{ .parse = 0 };
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .after_expect = start } });
+                                continue :dispatch .{ .parse = 0 };
                             },
-                            .KwFor => {
+                            directKey(.statement_top_level, .KwFor),
+                            directKey(.statement_body, .KwFor),
+                            directKey(.statement_associated, .KwFor),
+                            => {
                                 const start = self.pos;
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .statement = .{ .after_for_pattern = start } });
-                                try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .after_for_pattern = start } });
+                                try pushExprPatternRoot(&continuations, continuation_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
                             },
-                            .KwWhile => {
+                            directKey(.statement_top_level, .KwWhile),
+                            directKey(.statement_body, .KwWhile),
+                            directKey(.statement_associated, .KwWhile),
+                            => {
                                 const start = self.pos;
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .statement = .{ .after_while_cond = start } });
-                                continue :frame .{ .parse = 0 };
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .after_while_cond = start } });
+                                continue :dispatch .{ .parse = 0 };
                             },
-                            .KwCrash => {
+                            directKey(.statement_top_level, .KwCrash),
+                            directKey(.statement_body, .KwCrash),
+                            directKey(.statement_associated, .KwCrash),
+                            => {
                                 const start = self.pos;
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .statement = .{ .after_crash = start } });
-                                continue :frame .{ .parse = 0 };
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .after_crash = start } });
+                                continue :dispatch .{ .parse = 0 };
                             },
-                            .KwDbg => {
+                            directKey(.statement_top_level, .KwDbg),
+                            directKey(.statement_body, .KwDbg),
+                            directKey(.statement_associated, .KwDbg),
+                            => {
                                 const start = self.pos;
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .statement = .{ .after_dbg = start } });
-                                continue :frame .{ .parse = 0 };
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .after_dbg = start } });
+                                continue :dispatch .{ .parse = 0 };
                             },
-                            .KwReturn => {
+                            directKey(.statement_top_level, .KwReturn),
+                            directKey(.statement_body, .KwReturn),
+                            directKey(.statement_associated, .KwReturn),
+                            => {
                                 const start = self.pos;
                                 self.advance();
-                                try frames.push(frame_allocator, .{ .statement = .{ .after_return = start } });
-                                continue :frame .{ .parse = 0 };
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .after_return = start } });
+                                continue :dispatch .{ .parse = 0 };
                             },
-                            .KwVar => {
+                            directKey(.statement_top_level, .KwVar),
+                            directKey(.statement_body, .KwVar),
+                            directKey(.statement_associated, .KwVar),
+                            => {
                                 const start = self.pos;
                                 if (statementType != .in_body) {
                                     last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
@@ -4290,29 +4287,35 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 self.advance();
                                 if (self.peek() == .OpColon) {
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_type_anno = .{
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_type_anno = .{
                                         .start = start,
                                         .name = name,
                                         .is_var = true,
                                     } } });
-                                    continue :frame .{ .type_anno = .{ .parse = .not_looking_for_args } };
+                                    continue :dispatch .{ .type_anno = .{ .parse = .not_looking_for_args } };
                                 } else {
                                     self.expect(.OpAssign) catch {
                                         last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
                                         continue;
                                     };
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_var_body = .{ .start = start, .name = name } } });
-                                    continue :frame .{ .parse = 0 };
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_var_body = .{ .start = start, .name = name } } });
+                                    continue :dispatch .{ .parse = 0 };
                                 }
                             },
-                            .KwBreak => {
+                            directKey(.statement_top_level, .KwBreak),
+                            directKey(.statement_body, .KwBreak),
+                            directKey(.statement_associated, .KwBreak),
+                            => {
                                 const start = self.pos;
                                 self.advance();
                                 last_statement = try self.addStatement(.{ .@"break" = .{
                                     .region = .{ .start = start, .end = self.pos },
                                 } });
                             },
-                            .LowerIdent => {
+                            directKey(.statement_top_level, .LowerIdent),
+                            directKey(.statement_body, .LowerIdent),
+                            directKey(.statement_associated, .LowerIdent),
+                            => {
                                 const start = self.pos;
                                 if (self.peekNext() == .OpAssign) {
                                     self.advance();
@@ -4321,8 +4324,8 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                         .region = .{ .start = start, .end = self.pos },
                                     } });
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    continue :frame .{ .parse = 0 };
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
+                                    continue :dispatch .{ .parse = 0 };
                                 } else if (self.peekNext() == .OpColon) {
                                     if (self.isVarIdent(start)) {
                                         last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
@@ -4330,22 +4333,25 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                     }
                                     self.advance();
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_type_anno = .{
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_type_anno = .{
                                         .start = start,
                                         .name = start,
                                         .is_var = false,
                                     } } });
-                                    continue :frame .{ .type_anno = .{ .parse = .not_looking_for_args } };
+                                    continue :dispatch .{ .type_anno = .{ .parse = .not_looking_for_args } };
                                 } else {
                                     if (statementType == .top_level) {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
-                                        try frames.push(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        continue :frame .{ .parse = 0 };
+                                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_final_expr = start } });
+                                        continue :dispatch .{ .parse = 0 };
                                     }
                                 }
                             },
-                            .NamedUnderscore => {
+                            directKey(.statement_top_level, .NamedUnderscore),
+                            directKey(.statement_body, .NamedUnderscore),
+                            directKey(.statement_associated, .NamedUnderscore),
+                            => {
                                 const start = self.pos;
                                 if (self.peekNext() == .OpAssign) {
                                     self.advance();
@@ -4354,27 +4360,30 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                         .region = .{ .start = start, .end = self.pos },
                                     } });
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    continue :frame .{ .parse = 0 };
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
+                                    continue :dispatch .{ .parse = 0 };
                                 } else if (self.peekNext() == .OpColon) {
                                     self.advance();
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_type_anno = .{
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_type_anno = .{
                                         .start = start,
                                         .name = start,
                                         .is_var = false,
                                     } } });
-                                    continue :frame .{ .type_anno = .{ .parse = .not_looking_for_args } };
+                                    continue :dispatch .{ .type_anno = .{ .parse = .not_looking_for_args } };
                                 } else {
                                     if (statementType == .top_level) {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
-                                        try frames.push(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        continue :frame .{ .parse = 0 };
+                                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_final_expr = start } });
+                                        continue :dispatch .{ .parse = 0 };
                                     }
                                 }
                             },
-                            .Underscore => {
+                            directKey(.statement_top_level, .Underscore),
+                            directKey(.statement_body, .Underscore),
+                            directKey(.statement_associated, .Underscore),
+                            => {
                                 const start = self.pos;
                                 if (self.peekNext() == .OpAssign) {
                                     self.advance();
@@ -4382,18 +4391,21 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                         .region = .{ .start = start, .end = self.pos },
                                     } });
                                     self.advance();
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    continue :frame .{ .parse = 0 };
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
+                                    continue :dispatch .{ .parse = 0 };
                                 } else {
                                     if (statementType == .top_level) {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
-                                        try frames.push(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        continue :frame .{ .parse = 0 };
+                                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_final_expr = start } });
+                                        continue :dispatch .{ .parse = 0 };
                                     }
                                 }
                             },
-                            .UpperIdent => {
+                            directKey(.statement_top_level, .UpperIdent),
+                            directKey(.statement_body, .UpperIdent),
+                            directKey(.statement_associated, .UpperIdent),
+                            => {
                                 const start = self.pos;
                                 const is_type_decl_context = statementType == .top_level or
                                     statementType == .in_associated_block or
@@ -4402,8 +4414,8 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                     if (statementType == .top_level) {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
-                                        try frames.push(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        continue :frame .{ .parse = 0 };
+                                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_final_expr = start } });
+                                        continue :dispatch .{ .parse = 0 };
                                     }
                                     continue;
                                 }
@@ -4435,7 +4447,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 const type_dependencies_start = self.decl_index.typeDependencyTop();
                                 const was_collecting_type_dependencies = self.collect_type_dependencies;
                                 self.collect_type_dependencies = true;
-                                try frames.push(frame_allocator, .{ .statement = .{ .type_decl_after_anno = .{
+                                try continuations.push(continuation_allocator, .{ .statement = .{ .type_decl_after_anno = .{
                                     .start = start,
                                     .header = header,
                                     .kind = kind,
@@ -4443,9 +4455,15 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                     .type_dependencies_start = type_dependencies_start,
                                     .was_collecting_type_dependencies = was_collecting_type_dependencies,
                                 } } });
-                                continue :frame .{ .type_anno = .{ .parse = .not_looking_for_args } };
+                                continue :dispatch .{ .type_anno = .{ .parse = .not_looking_for_args } };
                             },
-                            .OpenCurly, .OpenRound => {
+                            directKey(.statement_top_level, .OpenCurly),
+                            directKey(.statement_body, .OpenCurly),
+                            directKey(.statement_associated, .OpenCurly),
+                            directKey(.statement_top_level, .OpenRound),
+                            directKey(.statement_body, .OpenRound),
+                            directKey(.statement_associated, .OpenRound),
+                            => {
                                 const isCurly = self.peek() == .OpenCurly;
                                 const start = self.pos;
                                 var is_destructure = false;
@@ -4470,14 +4488,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                     lookahead_pos += 1;
                                 }
                                 if (is_destructure) {
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_destructure_pattern = start } });
-                                    try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_destructure_pattern = start } });
+                                    try pushExprPatternRoot(&continuations, continuation_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
                                 } else {
                                     if (statementType == .top_level) {
                                         last_statement = try self.addTopLevelUnexpectedStatement();
                                     } else {
-                                        try frames.push(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        continue :frame .{ .parse = 0 };
+                                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_final_expr = start } });
+                                        continue :dispatch .{ .parse = 0 };
                                     }
                                 }
                             },
@@ -4485,8 +4503,8 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 if (statementType == .top_level) {
                                     last_statement = try self.addTopLevelUnexpectedStatement();
                                 } else {
-                                    try frames.push(frame_allocator, .{ .statement = .{ .after_final_expr = self.pos } });
-                                    continue :frame .{ .parse = 0 };
+                                    try continuations.push(continuation_allocator, .{ .statement = .{ .after_final_expr = self.pos } });
+                                    continue :dispatch .{ .parse = 0 };
                                 }
                             },
                         }
@@ -4517,19 +4535,19 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
                         } else {
                             self.advance();
-                            try frames.push(frame_allocator, .{ .statement = .{ .after_for_expr = .{ .start = start, .patt = patt } } });
-                            continue :frame .{ .parse = 0 };
+                            try continuations.push(continuation_allocator, .{ .statement = .{ .after_for_expr = .{ .start = start, .patt = patt } } });
+                            continue :dispatch .{ .parse = 0 };
                         }
                     },
                     .after_for_expr => |state| {
                         const expr = last orelse unreachable;
                         last = null;
-                        try frames.push(frame_allocator, .{ .statement = .{ .after_for_body = .{
+                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_for_body = .{
                             .start = state.start,
                             .patt = state.patt,
                             .expr = expr,
                         } } });
-                        continue :frame .{ .parse = 0 };
+                        continue :dispatch .{ .parse = 0 };
                     },
                     .after_for_body => |state| {
                         const body = last orelse unreachable;
@@ -4544,8 +4562,8 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     .after_while_cond => |start| {
                         const cond = last orelse unreachable;
                         last = null;
-                        try frames.push(frame_allocator, .{ .statement = .{ .after_while_body = .{ .start = start, .cond = cond } } });
-                        continue :frame .{ .parse = 0 };
+                        try continuations.push(continuation_allocator, .{ .statement = .{ .after_while_body = .{ .start = start, .cond = cond } } });
+                        continue :dispatch .{ .parse = 0 };
                     },
                     .after_while_body => |state| {
                         const body = last orelse unreachable;
@@ -4605,8 +4623,8 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
                         } else {
                             self.advance();
-                            try frames.push(frame_allocator, .{ .statement = .{ .after_destructure_body = .{ .start = start, .pattern = pattern } } });
-                            continue :frame .{ .parse = 0 };
+                            try continuations.push(continuation_allocator, .{ .statement = .{ .after_destructure_body = .{ .start = start, .pattern = pattern } } });
+                            continue :dispatch .{ .parse = 0 };
                         }
                     },
                     .after_destructure_body => |state| {
@@ -4633,7 +4651,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             pushed_type_path = true;
                         }
                         const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = state.start, .end = state.start });
-                        continue :frame .{ .statement = .{ .associated_block_next = .{
+                        continue :dispatch .{ .statement = .{ .associated_block_next = .{
                             .start = state.start,
                             .scope = assoc_scope,
                             .scratch_top = self.store.scratchStatementTop(),
@@ -4642,7 +4660,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                     },
                     .associated_block_next => |state| {
                         if (self.peek() == .EndOfFile or self.peek() == .CloseCurly) {
-                            continue :frame .{ .statement = .{ .associated_block_finish = .{
+                            continue :dispatch .{ .statement = .{ .associated_block_finish = .{
                                 .start = state.start,
                                 .scope = state.scope,
                                 .scratch_top = state.scratch_top,
@@ -4650,14 +4668,14 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             } } };
                         } else {
                             const statement_pos = self.pos;
-                            try frames.push(frame_allocator, .{ .statement = .{ .associated_block_after_statement = .{
+                            try continuations.push(continuation_allocator, .{ .statement = .{ .associated_block_after_statement = .{
                                 .start = state.start,
                                 .scope = state.scope,
                                 .scratch_top = state.scratch_top,
                                 .pushed_type_path = state.pushed_type_path,
                                 .statement_pos = statement_pos,
                             } } });
-                            continue :frame .{ .statement = .{ .parse = .in_associated_block } };
+                            continue :dispatch .{ .statement = .{ .parse = .in_associated_block } };
                         }
                     },
                     .associated_block_after_statement => |state| {
@@ -4671,7 +4689,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             });
                         }
                         try self.store.addScratchStatement(statement);
-                        continue :frame .{ .statement = .{ .associated_block_next = .{
+                        continue :dispatch .{ .statement = .{ .associated_block_next = .{
                             .start = state.start,
                             .scope = state.scope,
                             .scratch_top = state.scratch_top,
@@ -4715,7 +4733,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                             self.advance();
                             self.advance();
                             const associated_start = self.pos - 1;
-                            try frames.push(frame_allocator, .{ .statement = .{ .type_decl_after_associated = .{
+                            try continuations.push(continuation_allocator, .{ .statement = .{ .type_decl_after_associated = .{
                                 .start = state.start,
                                 .header = state.header,
                                 .anno = anno,
@@ -4725,7 +4743,7 @@ fn runVm(self: *Parser, initial: VmStep) Error!VmResult {
                                 .type_path = state.type_path,
                                 .dot_pos = dot_pos,
                             } } });
-                            continue :frame .{ .statement = .{ .associated_block_begin = .{
+                            continue :dispatch .{ .statement = .{ .associated_block_begin = .{
                                 .start = associated_start,
                                 .owner_type_path = state.type_path,
                             } } };
@@ -4797,103 +4815,12 @@ pub fn readRecordField(self: *Parser) Error!AST.RecordField.Idx {
     });
 }
 
-/// todo
-pub fn readBranch(self: *Parser) Error!AST.MatchBranch.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    const p = try self.runPattern(.alternatives_allowed);
-
-    // Parse optional guard: `if <expr>`
-    const guard: ?AST.Expr.Idx = if (self.peek() == .KwIf) blk: {
-        self.advance(); // consume `if`
-        break :blk try self.runExpr();
-    } else null;
-
-    if (self.peek() == .OpFatArrow) {
-        self.advance();
-    } else if (self.peek() == .OpArrow) {
-        // Add diagnostic for wrong arrow
-        try self.pushDiagnostic(.match_branch_wrong_arrow, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-
-        self.advance();
-    } else {
-        // Add diagnostic for missing arrow
-        try self.pushDiagnostic(.match_branch_missing_arrow, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-    }
-    const b = try self.runExpr();
-    return try self.store.addMatchBranch(.{
-        .region = .{ .start = start, .end = self.pos },
-        .pattern = p,
-        .body = b,
-        .guard = guard,
-    });
-}
-
 /// Parse a multiline string expression with optional interpolations
 pub fn runMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
     std.debug.assert(self.peek() == .MultilineStringStart);
-    const start = self.pos;
-    self.advance();
-    const scratch_top = self.store.scratchExprTop();
-    while (self.peek() != .EndOfFile) {
-        switch (self.peek()) {
-            .MultilineStringStart => {
-                self.advance();
-            },
-            .StringPart => {
-                const part_start = self.pos;
-                self.advance(); // Advance past the StringPart
-                const index = try self.store.addExpr(.{ .string_part = .{
-                    .token = part_start,
-                    .region = .{ .start = part_start, .end = self.pos },
-                } });
-                try self.store.addScratchExpr(index);
-            },
-            .OpenStringInterpolation => {
-                self.advance(); // Advance past OpenStringInterpolation
-                const ex = try self.runExpr();
-                try self.store.addScratchExpr(ex);
-                if (self.peek() != .CloseStringInterpolation) {
-                    return try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
-                }
-                self.advance(); // Advance past the CloseString Interpolation
-            },
-            .MalformedStringPart => {
-                self.advance();
-                try self.pushDiagnostic(.string_unexpected_token, .{
-                    .start = self.pos,
-                    .end = self.pos,
-                });
-            },
-            else => {
-                // Multi line strings just end
-                break;
-            },
-        }
-    }
-
-    const parts = try self.store.exprSpanFrom(scratch_top);
-    const expr = try self.store.addExpr(.{
-        .multiline_string = .{
-            .token = start,
-            .parts = parts,
-            .region = .{
-                .start = start,
-                .end = self.pos,
-            },
-        },
-    });
-    return expr;
+    return self.runExpr();
 }
 
 /// todo
@@ -4902,81 +4829,7 @@ pub fn runStringExpr(self: *Parser) Error!AST.Expr.Idx {
     defer trace.end();
 
     std.debug.assert(self.peek() == .StringStart);
-    const start = self.pos;
-    // Start parsing string with possible interpolations
-    // e.g.:
-    // StringStart, StringPart, OpenStringInterpolation, <expr>, CloseStringInterpolation, StringPart, StringEnd
-    self.advance();
-    const scratch_top = self.store.scratchExprTop();
-    while (self.peek() != .EndOfFile) {
-        switch (self.peek()) {
-            .StringEnd => {
-                break;
-            },
-            .StringPart => {
-                const part_start = self.pos;
-                self.advance(); // Advance past the StringPart
-                const index = try self.store.addExpr(.{ .string_part = .{
-                    .token = part_start,
-                    .region = .{ .start = part_start, .end = self.pos },
-                } });
-                try self.store.addScratchExpr(index);
-            },
-            .OpenStringInterpolation => {
-                self.advance(); // Advance past OpenStringInterpolation
-                const ex = try self.runExpr();
-                try self.store.addScratchExpr(ex);
-                if (self.peek() != .CloseStringInterpolation) {
-                    return try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
-                }
-                self.advance(); // Advance past the CloseString Interpolation
-            },
-            .MalformedStringPart => {
-                // Don't create a parser diagnostic - the tokenizer already created
-                // a more precise diagnostic with the exact error location
-                self.advance();
-            },
-            else => {
-                // Something is broken in the tokenizer if we get here!
-                return try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
-            },
-        }
-    }
-
-    self.expect(.StringEnd) catch {
-        try self.pushDiagnostic(.string_unclosed, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-    };
-
-    const parts = try self.store.exprSpanFrom(scratch_top);
-    const expr = try self.store.addExpr(.{
-        .string = .{
-            .token = start,
-            .parts = parts,
-            .region = .{
-                .start = start,
-                .end = self.pos,
-            },
-        },
-    });
-    return expr;
-}
-
-/// todo
-pub fn runStringPattern(self: *Parser) Error!AST.Pattern.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    const inner = try runStringExpr(self);
-    const patt_idx = try self.store.addPattern(.{ .string = .{
-        .string_tok = start,
-        .region = .{ .start = start, .end = self.pos },
-        .expr = inner,
-    } });
-    return patt_idx;
+    return self.runExpr();
 }
 
 /// todo
@@ -5045,7 +4898,7 @@ const TyFnArgs = enum {
     looking_for_type_arg,
 };
 
-const TypeStep = union(enum) {
+const TypeAction = union(enum) {
     parse: TyFnArgs,
     after_primary: struct {
         start: Token.Idx,
@@ -5155,27 +5008,27 @@ const TypeStep = union(enum) {
     },
 };
 
-/// Run the token VM with a type-annotation goal and return the completed type.
+/// Run the direct token dispatch with a type-annotation goal and return the completed type.
 pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     const start = self.pos;
-    const result = try self.runVm(.{ .type_anno = .{ .parse = looking_for_args } });
+    const result = try self.runDirectDispatch(.{ .type_anno = .{ .parse = looking_for_args } });
     return switch (result) {
         .type_anno => |anno| anno,
         else => try self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = start, .end = self.pos }),
     };
 }
 
-fn pushTypeStep(frames: *PackedStepStack(VmStep), allocator: std.mem.Allocator, step: TypeStep) Error!void {
-    try frames.push(allocator, .{ .type_anno = step });
+fn pushTypeAction(continuations: *PackedContinuationStack(ParseAction), allocator: std.mem.Allocator, step: TypeAction) Error!void {
+    try continuations.push(allocator, .{ .type_anno = step });
 }
 
-fn handleTypeStep(
+fn handleTypeAction(
     self: *Parser,
-    step: TypeStep,
-    frames: *PackedStepStack(VmStep),
+    step: TypeAction,
+    continuations: *PackedContinuationStack(ParseAction),
     allocator: std.mem.Allocator,
     last_type: *?AST.TypeAnno.Idx,
 ) Error!void {
@@ -5183,8 +5036,8 @@ fn handleTypeStep(
         .parse => |mode| {
             const start = self.pos;
             const first_token_tag = self.peek();
-            switch (first_token_tag) {
-                .UpperIdent, .LowerIdent => {
+            switch (directKeyRuntime(.type_prefix, first_token_tag)) {
+                directKey(.type_prefix, .UpperIdent), directKey(.type_prefix, .LowerIdent) => {
                     const qual_result = try self.readQualificationChain();
                     self.pos = qual_result.final_token + 1;
 
@@ -5210,23 +5063,23 @@ fn handleTypeStep(
                         self.advance();
                         const scratch_top = self.store.scratchTypeAnnoTop();
                         try self.store.addScratchTypeAnno(base_anno);
-                        try pushTypeStep(frames, allocator, .{ .apply_next = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = mode } });
+                        try pushTypeAction(continuations, allocator, .{ .apply_next = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = mode } });
                     } else {
                         last_type.* = base_anno;
-                        try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
+                        try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
                     }
                 },
-                .NamedUnderscore => {
+                directKey(.type_prefix, .NamedUnderscore) => {
                     last_type.* = try self.store.addTypeAnno(.{ .underscore_type_var = .{
                         .tok = self.pos,
                         .region = .{ .start = start, .end = self.pos + 1 },
                     } });
                     self.advance();
-                    try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
+                    try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
                 },
-                .NoSpaceOpenRound, .OpenRound => {
+                directKey(.type_prefix, .NoSpaceOpenRound), directKey(.type_prefix, .OpenRound) => {
                     self.advance();
-                    try pushTypeStep(frames, allocator, .{ .paren_next = .{
+                    try pushTypeAction(continuations, allocator, .{ .paren_next = .{
                         .start = start,
                         .after_round = self.pos,
                         .scratch_top = self.store.scratchTypeAnnoTop(),
@@ -5235,30 +5088,30 @@ fn handleTypeStep(
                         .looking_for_args = mode,
                     } });
                 },
-                .OpenCurly => {
+                directKey(.type_prefix, .OpenCurly) => {
                     self.advance();
-                    try pushTypeStep(frames, allocator, .{ .record_next = .{
+                    try pushTypeAction(continuations, allocator, .{ .record_next = .{
                         .start = start,
                         .scratch_top = self.store.scratchAnnoRecordFieldTop(),
                         .ext = .closed,
                         .looking_for_args = mode,
                     } });
                 },
-                .OpenSquare => {
+                directKey(.type_prefix, .OpenSquare) => {
                     self.advance();
-                    try pushTypeStep(frames, allocator, .{ .tag_union_next = .{
+                    try pushTypeAction(continuations, allocator, .{ .tag_union_next = .{
                         .start = start,
                         .scratch_top = self.store.scratchTypeAnnoTop(),
                         .ext = .closed,
                         .looking_for_args = mode,
                     } });
                 },
-                .Underscore => {
+                directKey(.type_prefix, .Underscore) => {
                     last_type.* = try self.store.addTypeAnno(.{ .underscore = .{
                         .region = .{ .start = start, .end = self.pos },
                     } });
                     self.advance();
-                    try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
+                    try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
                 },
                 else => {
                     last_type.* = try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
@@ -5297,7 +5150,7 @@ fn handleTypeStep(
                 const scratch_top = self.store.scratchTypeAnnoTop();
                 try self.store.addScratchTypeAnno(an);
                 last_type.* = null;
-                try pushTypeStep(frames, allocator, .{ .fn_args_next = .{ .start = state.start, .scratch_top = scratch_top } });
+                try pushTypeAction(continuations, allocator, .{ .fn_args_next = .{ .start = state.start, .scratch_top = scratch_top } });
             } else {
                 last_type.* = an;
             }
@@ -5309,18 +5162,18 @@ fn handleTypeStep(
                     .region = .{ .start = state.start, .end = self.pos },
                     .args = try self.store.typeAnnoSpanFrom(state.scratch_top),
                 } });
-                try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+                try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
             } else if (self.peek() == .EndOfFile) {
                 self.store.clearScratchTypeAnnosFrom(state.scratch_top);
                 last_type.* = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, state.start);
                 return;
             } else {
-                try pushTypeStep(frames, allocator, .{ .apply_after_item = .{
+                try pushTypeAction(continuations, allocator, .{ .apply_after_item = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .looking_for_args = state.looking_for_args,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .looking_for_type_arg });
+                try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_type_arg });
             }
         },
         .apply_after_item => |state| {
@@ -5329,13 +5182,13 @@ fn handleTypeStep(
             try self.store.addScratchTypeAnno(item);
             if (self.peek() == .Comma) {
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .apply_next = .{
+                try pushTypeAction(continuations, allocator, .{ .apply_next = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .looking_for_args = state.looking_for_args,
                 } });
             } else if (self.peek() == .CloseRound) {
-                try pushTypeStep(frames, allocator, .{ .apply_next = .{
+                try pushTypeAction(continuations, allocator, .{ .apply_next = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .looking_for_args = state.looking_for_args,
@@ -5351,7 +5204,7 @@ fn handleTypeStep(
                 const args = try self.store.typeAnnoSpanFrom(state.scratch_top);
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .paren_fn_after_ret = .{
+                try pushTypeAction(continuations, allocator, .{ .paren_fn_after_ret = .{
                     .start = state.start,
                     .after_round = state.after_round,
                     .scratch_top = state.scratch_top,
@@ -5359,21 +5212,21 @@ fn handleTypeStep(
                     .effectful = effectful,
                     .looking_for_args = state.looking_for_args,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
             } else if (self.peek() == .CloseRound) {
                 const args = try self.store.typeAnnoSpanFrom(state.scratch_top);
                 if ((self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and args.span.len == 0) {
                     self.advance();
                     const effectful = self.peek() == .OpFatArrow;
                     self.advance();
-                    try pushTypeStep(frames, allocator, .{ .zero_arg_fn_after_ret = .{
+                    try pushTypeAction(continuations, allocator, .{ .zero_arg_fn_after_ret = .{
                         .start = state.start,
                         .after_round = state.after_round,
                         .effectful = effectful,
                         .args = args,
                         .looking_for_args = state.looking_for_args,
                     } });
-                    try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                    try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
                 } else {
                     self.advance();
                     const annos = args;
@@ -5388,21 +5241,21 @@ fn handleTypeStep(
                             .annos = annos,
                         } });
                     }
-                    try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+                    try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
                 }
             } else if (self.peek() == .EndOfFile or state.expect_close) {
                 self.store.clearScratchTypeAnnosFrom(state.scratch_top);
                 last_type.* = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
                 return;
             } else {
-                try pushTypeStep(frames, allocator, .{ .paren_after_item = .{
+                try pushTypeAction(continuations, allocator, .{ .paren_after_item = .{
                     .start = state.start,
                     .after_round = state.after_round,
                     .scratch_top = state.scratch_top,
                     .saw_comma = state.saw_comma,
                     .looking_for_args = state.looking_for_args,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
             }
         },
         .paren_after_item => |state| {
@@ -5411,7 +5264,7 @@ fn handleTypeStep(
             try self.store.addScratchTypeAnno(item);
             if (self.peek() == .Comma) {
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .paren_next = .{
+                try pushTypeAction(continuations, allocator, .{ .paren_next = .{
                     .start = state.start,
                     .after_round = state.after_round,
                     .scratch_top = state.scratch_top,
@@ -5420,7 +5273,7 @@ fn handleTypeStep(
                     .looking_for_args = state.looking_for_args,
                 } });
             } else {
-                try pushTypeStep(frames, allocator, .{ .paren_next = .{
+                try pushTypeAction(continuations, allocator, .{ .paren_next = .{
                     .start = state.start,
                     .after_round = state.after_round,
                     .scratch_top = state.scratch_top,
@@ -5449,7 +5302,7 @@ fn handleTypeStep(
                 .anno = function,
                 .region = .{ .start = state.start, .end = self.pos },
             } });
-            try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+            try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
         },
         .zero_arg_fn_after_ret => |state| {
             const ret = last_type.* orelse unreachable;
@@ -5459,11 +5312,11 @@ fn handleTypeStep(
                 .effectful = state.effectful,
                 .region = .{ .start = state.after_round, .end = self.pos },
             } });
-            try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+            try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
         },
         .record_next => |state| {
             if (self.peek() == .CloseCurly) {
-                try pushTypeStep(frames, allocator, .{ .record_finish = .{
+                try pushTypeAction(continuations, allocator, .{ .record_finish = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
@@ -5477,15 +5330,15 @@ fn handleTypeStep(
                 const double_dot_start = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
-                    try pushTypeStep(frames, allocator, .{ .record_after_named_ext = .{
+                    try pushTypeAction(continuations, allocator, .{ .record_after_named_ext = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .looking_for_args = state.looking_for_args,
                     } });
-                    try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                    try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
                 } else {
                     self.expect(.Comma) catch {};
-                    try pushTypeStep(frames, allocator, .{ .record_finish = .{
+                    try pushTypeAction(continuations, allocator, .{ .record_finish = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .ext = .{ .open = double_dot_start },
@@ -5514,7 +5367,7 @@ fn handleTypeStep(
                     return;
                 }
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .record_field_after_ty = .{
+                try pushTypeAction(continuations, allocator, .{ .record_field_after_ty = .{
                     .record_start = state.start,
                     .scratch_top = state.scratch_top,
                     .field_start = field_start,
@@ -5522,7 +5375,7 @@ fn handleTypeStep(
                     .ext = state.ext,
                     .looking_for_args = state.looking_for_args,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .not_looking_for_args });
+                try pushTypeAction(continuations, allocator, .{ .parse = .not_looking_for_args });
             }
         },
         .record_after_named_ext => |state| {
@@ -5530,7 +5383,7 @@ fn handleTypeStep(
             last_type.* = null;
             const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
             self.expect(.Comma) catch {};
-            try pushTypeStep(frames, allocator, .{ .record_finish = .{
+            try pushTypeAction(continuations, allocator, .{ .record_finish = .{
                 .start = state.start,
                 .scratch_top = state.scratch_top,
                 .ext = .{ .named = .{ .anno = named_anno, .region = anno_region } },
@@ -5548,14 +5401,14 @@ fn handleTypeStep(
             try self.store.addScratchAnnoRecordField(field);
             if (self.peek() == .Comma) {
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .record_next = .{
+                try pushTypeAction(continuations, allocator, .{ .record_next = .{
                     .start = state.record_start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
                     .looking_for_args = state.looking_for_args,
                 } });
             } else {
-                try pushTypeStep(frames, allocator, .{ .record_finish = .{
+                try pushTypeAction(continuations, allocator, .{ .record_finish = .{
                     .start = state.record_start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
@@ -5575,11 +5428,11 @@ fn handleTypeStep(
                 .fields = fields,
                 .ext = state.ext,
             } });
-            try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+            try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
         },
         .tag_union_next => |state| {
             if (self.peek() == .CloseSquare) {
-                try pushTypeStep(frames, allocator, .{ .tag_union_finish = .{
+                try pushTypeAction(continuations, allocator, .{ .tag_union_finish = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
@@ -5593,15 +5446,15 @@ fn handleTypeStep(
                 const double_dot_pos = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
-                    try pushTypeStep(frames, allocator, .{ .tag_union_after_named_ext = .{
+                    try pushTypeAction(continuations, allocator, .{ .tag_union_after_named_ext = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .looking_for_args = state.looking_for_args,
                     } });
-                    try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                    try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
                 } else {
                     self.expect(.Comma) catch {};
-                    try pushTypeStep(frames, allocator, .{ .tag_union_finish = .{
+                    try pushTypeAction(continuations, allocator, .{ .tag_union_finish = .{
                         .start = state.start,
                         .scratch_top = state.scratch_top,
                         .ext = .{ .open = double_dot_pos },
@@ -5611,14 +5464,14 @@ fn handleTypeStep(
             } else {
                 const was_collecting = self.collect_type_dependencies;
                 self.collect_type_dependencies = false;
-                try pushTypeStep(frames, allocator, .{ .tag_union_after_item = .{
+                try pushTypeAction(continuations, allocator, .{ .tag_union_after_item = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
                     .was_collecting = was_collecting,
                     .looking_for_args = state.looking_for_args,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .looking_for_type_arg });
+                try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_type_arg });
             }
         },
         .tag_union_after_named_ext => |state| {
@@ -5626,7 +5479,7 @@ fn handleTypeStep(
             last_type.* = null;
             const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
             self.expect(.Comma) catch {};
-            try pushTypeStep(frames, allocator, .{ .tag_union_finish = .{
+            try pushTypeAction(continuations, allocator, .{ .tag_union_finish = .{
                 .start = state.start,
                 .scratch_top = state.scratch_top,
                 .ext = .{ .named = .{ .anno = named_anno, .region = anno_region } },
@@ -5643,14 +5496,14 @@ fn handleTypeStep(
             try self.store.addScratchTypeAnno(tag);
             if (self.peek() == .Comma) {
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .tag_union_next = .{
+                try pushTypeAction(continuations, allocator, .{ .tag_union_next = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
                     .looking_for_args = state.looking_for_args,
                 } });
             } else {
-                try pushTypeStep(frames, allocator, .{ .tag_union_finish = .{
+                try pushTypeAction(continuations, allocator, .{ .tag_union_finish = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                     .ext = state.ext,
@@ -5670,26 +5523,26 @@ fn handleTypeStep(
                 .ext = state.ext,
                 .tags = tags,
             } });
-            try pushTypeStep(frames, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+            try pushTypeAction(continuations, allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
         },
         .fn_args_next => |state| {
             if (self.peek() == .Comma) {
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .fn_after_arg = .{
+                try pushTypeAction(continuations, allocator, .{ .fn_after_arg = .{
                     .start = state.start,
                     .scratch_top = state.scratch_top,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
             } else if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
                 const args = try self.store.typeAnnoSpanFrom(state.scratch_top);
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance();
-                try pushTypeStep(frames, allocator, .{ .fn_after_ret = .{
+                try pushTypeAction(continuations, allocator, .{ .fn_after_ret = .{
                     .start = state.start,
                     .args = args,
                     .effectful = effectful,
                 } });
-                try pushTypeStep(frames, allocator, .{ .parse = .looking_for_args });
+                try pushTypeAction(continuations, allocator, .{ .parse = .looking_for_args });
             } else {
                 self.store.clearScratchTypeAnnosFrom(state.scratch_top);
                 last_type.* = try self.pushMalformed(AST.TypeAnno.Idx, .expected_arrow, state.start);
@@ -5700,7 +5553,7 @@ fn handleTypeStep(
             const arg = last_type.* orelse unreachable;
             last_type.* = null;
             try self.store.addScratchTypeAnno(arg);
-            try pushTypeStep(frames, allocator, .{ .fn_args_next = .{
+            try pushTypeAction(continuations, allocator, .{ .fn_args_next = .{
                 .start = state.start,
                 .scratch_top = state.scratch_top,
             } });
@@ -5715,14 +5568,6 @@ fn handleTypeStep(
             } });
         },
     }
-}
-
-/// todo
-pub fn runTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.runTypeAnno(.looking_for_type_arg);
 }
 
 fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
@@ -5849,36 +5694,6 @@ fn recordTypeDependencyFromQualifiedTokens(
     try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
 }
 
-/// todo
-pub fn readAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const field_start = self.pos;
-    if (self.peek() != .LowerIdent) {
-        while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
-            self.advance(); // Advance until we end this field or the record
-        }
-        return try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_type_field_name, field_start);
-    }
-    const name = self.pos;
-    self.advance(); // Advance past LowerIdent
-    if (self.peek() != .OpColon) {
-        while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
-            self.advance(); // Advance until we end this field or the record
-        }
-        return try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_colon_after_type_field_name, field_start);
-    }
-    self.advance(); // Advance past OpColon
-    const ty = try self.runTypeAnno(.not_looking_for_args);
-
-    return try self.store.addAnnoRecordField(.{
-        .region = .{ .start = field_start, .end = self.pos },
-        .name = name,
-        .ty = ty,
-    });
-}
-
 /// Parse a where clause
 ///
 /// e.g. `a.hash : a -> U64`
@@ -5972,48 +5787,6 @@ pub fn readWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
     }
 }
 
-/// Parse a block of statements.
-/// Check runStatement to see how statements are parsed.
-/// {
-///     <stmt1>
-///     ...
-///     <stmtN>
-/// }
-pub fn runBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
-    const previous_type_path_visible_start = self.type_path_stack_visible_start;
-    self.type_path_stack_visible_start = self.type_path_stack.items.len;
-    defer self.type_path_stack_visible_start = previous_type_path_visible_start;
-
-    const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
-    const scratch_top = self.store.scratchStatementTop();
-
-    while (self.peek() != .EndOfFile) {
-        const statement = try self.runStatement();
-        try self.store.addScratchStatement(statement);
-        if (self.peek() == .CloseCurly) {
-            break;
-        }
-    }
-
-    self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_expr_close_curly, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-    };
-
-    const block_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-    try self.exitDeclScope(block_scope, block_region);
-    const statements = try self.store.statementSpanFrom(scratch_top);
-    const expr_idx = try self.store.addExpr(.{ .block = .{
-        .statements = statements,
-        .scope = block_scope,
-        .region = block_region,
-    } });
-    self.decl_index.setScopeOwner(block_scope, .{ .expr = @intFromEnum(expr_idx) });
-    return expr_idx;
-}
-
 /// Parse a block that contains only statements, no ending expression.
 /// This is used for nominal type associated items like `Foo := [A, B].{ x = 5 }`
 /// {
@@ -6022,7 +5795,7 @@ pub fn runBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    const result = try self.runVm(.{ .statement = .{ .associated_block_begin = .{
+    const result = try self.runDirectDispatch(.{ .statement = .{ .associated_block_begin = .{
         .start = start,
         .owner_type_path = owner_type_path,
     } } });

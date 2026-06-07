@@ -32,7 +32,7 @@ pub const NumericLiteral = @import("NumericLiteral.zig");
 pub const AST = @import("AST.zig");
 
 /// Internal parsing implementation.
-fn runTokenVm(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
+fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) Parser.Error!u32) Parser.Error!*AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -76,7 +76,7 @@ fn runTokenVm(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Parser) P
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn file(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runTokenVm(gpa, env, fileRootNode);
+    return try runTokenDispatch(gpa, env, fileRootNode);
 }
 
 fn fileRootNode(parser: *Parser) Parser.Error!u32 {
@@ -94,7 +94,7 @@ fn exprRootNode(parser: *Parser) Parser.Error!u32 {
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn expr(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runTokenVm(gpa, env, exprRootNode);
+    return try runTokenDispatch(gpa, env, exprRootNode);
 }
 
 fn headerRootNode(parser: *Parser) Parser.Error!u32 {
@@ -107,7 +107,7 @@ fn headerRootNode(parser: *Parser) Parser.Error!u32 {
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn header(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runTokenVm(gpa, env, headerRootNode);
+    return try runTokenDispatch(gpa, env, headerRootNode);
 }
 
 fn statementRootNode(parser: *Parser) Parser.Error!u32 {
@@ -120,7 +120,7 @@ fn statementRootNode(parser: *Parser) Parser.Error!u32 {
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn statement(gpa: Allocator, env: *CommonEnv) Parser.Error!*AST {
-    return try runTokenVm(gpa, env, statementRootNode);
+    return try runTokenDispatch(gpa, env, statementRootNode);
 }
 
 test "parser tests" {
