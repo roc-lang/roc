@@ -123,26 +123,29 @@ control flow instead of recursive calls or an instruction interpreter. This
 mirrors simdjson stage 2: tokenization does the linear input discovery, and the
 parser proper is a stack-safe token walker with explicit parser-owned state.
 
-Nested Roc syntax uses explicit continuation stacks only where the grammar
-really needs to return from a nested construct. A continuation stack entry
-contains a narrow return target and compact indexes into side storage. The
+Nested Roc syntax uses explicit open-syntax state, like simdjson's open
+container depth. This state records concrete syntax currently being parsed:
+open lists, records, strings, blocks, matches, type applications, and similar
+constructs. It is not a parser instruction stream and must not store "execute
+this parser operation next" entries. When a syntactic construct closes, the
+parser inspects the parent open syntax and jumps directly to that parent's next
+token branch.
+
+Open-syntax state is stored compactly. The hot state records syntax kind and
+indexes into syntax-specific side storage when payload is unavoidable. The
 parser must not store wide tagged unions as call records for grammar work, and
 must not push generic parser instructions just to decide what token to inspect
-next. Any state that needs payload data stores that data in domain side arrays,
-and the continuation entry stores the side-array index. This keeps the hot stack
-contiguous and predictable: tags are byte-sized where possible, payload arrays
-are naturally aligned by their element type, and no push or pop copies the
-largest payload for every state.
+next. Leaf token cases that do not open nested syntax must not push state.
 
 The parser owns a small set of result registers. Expression, pattern, type,
 statement, associated-item, header, collection, and token-span results are
-written to registers as states finish. A continuation documents which register
-it expects the callee to produce. Returning from nested syntax means popping the
-next continuation and jumping to its state, not returning through a Zig call
-stack. Leaf helpers may exist for non-grammar work such as token inspection,
-literal decoding, declaration indexing, scratch-span construction, and
-diagnostic output, but they must not parse nested Roc grammar by calling another
-grammar entrypoint.
+written to registers as syntax closes. The parent open syntax documents which
+register it consumes. Closing nested syntax means jumping to the parent's token
+branch, not returning through a Zig call stack and not interpreting a queued
+parser action. Leaf helpers may exist for non-grammar work such as token
+inspection, literal decoding, declaration indexing, scratch-span construction,
+and diagnostic output, but they must not parse nested Roc grammar by calling
+another grammar entrypoint.
 
 `NodeStore` is the parser's output builder. The parser may accumulate children
 in parser-owned scratch spans while a syntactic collection is open, then commit
@@ -153,7 +156,7 @@ stages consume explicit parser output rather than inspecting source syntax.
 
 Error recovery is part of parsing and error reporting. Recovery states are also
 iterative token states: they advance to a known delimiter, line boundary, or
-collection close token and then jump to the next documented continuation.
+collection close token and then jump to the next documented open-syntax branch.
 Recovery may use parser-local heuristics because parsing and error reporting are
 the only compiler stages allowed to do so. Recovery must still output explicit
 malformed AST nodes and diagnostics; later stages must not recover missing
