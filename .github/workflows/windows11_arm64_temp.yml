@@ -4,28 +4,32 @@ on: [pull_request]
 
 # Temporary workflow to root-cause the zig-0.16 win11-arm64 build failure.
 #
-# Run 1 (graph/localization) established:
-#   * `zig build -Dfuzz ... -Doptimize=ReleaseFast` fails: 13/218 steps ok, 84 failed.
-#   * Pervasive `warning(zcu): unexpected EOF reading cached ZIR for <file>` across
-#     build_runner.zig, options.zig, the test platform hosts and builtins.
-#   * One hard `LLVM ERROR: Broken module found ... PHINode should have one entry
-#     for each predecessor` while compiling the `fmt` module test (ReleaseFast).
-#   * Subprocess exit codes 5 / 9 / 116; parallel runs hard-crashed (0xC0000005)
-#     while the serial (-j1) run failed gracefully with exit 1.
+# Run 1 (localization): `zig build ... -Doptimize=ReleaseFast` -> 13/218 steps ok.
+# Run 2 (classification), from a fresh-cache serial build, established:
+#   * `error: process exited with error code 5` crashes hit EVERYTHING:
+#       - zstd  (pure C, via zig's bundled clang)            -> code 5
+#       - builtin_compiler (-ODebug, self-hosted backend)    -> code 5
+#       - roc_builtins_bc  (-fllvm, LLVM backend)            -> code 5
+#       - native + cross (aarch64/x86_64-linux) + wasm32     -> code 5
+#   * base58 (-OReleaseFast, compile only) SUCCEEDS (exit=0) -> zig not wholly broken.
+#   * `unexpected EOF reading cached ZIR` is FALLOUT: static_lib.zig crashes as
+#     wasm32 (code 5) and truncates its cache, so the native recompile then warns.
+#   * The 2h timeout was a HANG right after launching the `interpreter_layout`
+#     test compile (likely a crashed process stuck in Windows Error Reporting).
 #
-# Run 2 (this file) CLASSIFIES the failures with isolated, single-process,
-# fresh-cache reproductions so we can tell apart:
-#   (a) ReleaseFast codegen crash on minimal input   -> base58 compile-only
-#   (b) compile-time vs run-time failure             -> base58 --test-no-exec vs exec
-#   (c) ReleaseFast-specific vs general              -> base58 Debug
-#   (d) the fmt LLVM "broken module" codegen bug      -> zig build test-fmt
-#   (e) is "unexpected EOF ZIR" a real cache-write bug or just fallout from
-#       killed parallel processes?                    -> fresh-cache serial build
+# Because the build system runs compiles in `--listen=-` server mode, the actual
+# crash output is swallowed and we only ever see "error code 5". Run 3 (this file)
+# runs the failing compiles DIRECTLY on the CLI (no build system, no --listen) to
+# capture the real panic / stack trace, with minimal/fast inputs:
+#   * trivial C   compile  -> is zig's clang/C path itself crashing?
+#   * trivial zig compile  -> is basic zig codegen crashing?
+#   * base58 Debug vs RF   -> backend-specific (self-hosted vs LLVM)?
+#   * roc_builtins obj      -> a real failing unit, reconstructed w/o --listen.
 
 jobs:
   debug:
     runs-on: windows-11-arm
-    timeout-minutes: 120
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
@@ -34,94 +38,95 @@ jobs:
           version: 0.16.0
           use-cache: false
 
+      # Stop crashed processes from hanging in the WerFault dialog (suspected
+      # cause of the run-2 timeout). Makes access-violations exit promptly.
+      - name: Disable Windows Error Reporting UI
+        shell: pwsh
+        run: |
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v DontShowUI /t REG_DWORD /d 1 /f
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v Disabled  /t REG_DWORD /d 1 /f
+
       - name: Environment info
         shell: pwsh
         run: |
           zig version
           zig env
           Write-Host "PROCESSOR_ARCHITECTURE = $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "Logical CPUs = $env:NUMBER_OF_PROCESSORS"
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object @{n='FreeMemMB';e={[math]::Round($_.FreePhysicalMemory/1024)}},
+                          @{n='TotalMemMB';e={[math]::Round($_.TotalVisibleMemorySize/1024)}} |
+            Format-List
 
-      # (a)+(b) Minimal standalone module (base58 has NO module deps), compiled
-      # in ReleaseFast WITHOUT running it, in a private fresh cache. This is the
-      # smallest possible repro of a ReleaseFast codegen crash. Raw stderr is
-      # captured directly (no build-system masking).
-      - name: base58 -- ReleaseFast, compile only (--test-no-exec), fresh cache
+      # --- trivial C: isolates zig's bundled clang / C compilation path ---
+      - name: trivial C -- build-exe, ReleaseFast and Debug
         shell: bash
         continue-on-error: true
         run: |
-          set -o pipefail
-          rm -rf .zig-cache-a
-          zig test -OReleaseFast src/base58/mod.zig -lc --test-no-exec \
-            --cache-dir .zig-cache-a --global-cache-dir .zig-cache-a 2>&1 | tee a-base58-rf-compile.log
-          code=${PIPESTATUS[0]}
-          echo "exit=$code" | tee -a a-base58-rf-compile.log
+          printf 'int main(void){return 0;}\n' > t.c
+          rm -rf .zig-cache-cc
+          { zig build-exe t.c -lc -OReleaseFast -femit-bin=t_c_rf.exe \
+              --cache-dir .zig-cache-cc --global-cache-dir .zig-cache-cc; \
+            echo "exit_rf=$?"; \
+            zig build-exe t.c -lc -femit-bin=t_c_dbg.exe \
+              --cache-dir .zig-cache-cc --global-cache-dir .zig-cache-cc; \
+            echo "exit_dbg=$?"; } 2>&1 | tee trivial-c.log
 
-      # (c) Same minimal module in Debug (and self-hosted backend). If Debug
-      # compiles but ReleaseFast crashes, the bug is optimizer/backend specific.
-      - name: base58 -- Debug, compile only (--test-no-exec), fresh cache
+      # --- trivial zig: isolates basic zig codegen (no C, no roc) ---
+      - name: trivial zig -- build-exe, ReleaseFast and Debug
         shell: bash
         continue-on-error: true
         run: |
-          set -o pipefail
-          rm -rf .zig-cache-b
-          zig test src/base58/mod.zig -lc --test-no-exec \
-            --cache-dir .zig-cache-b --global-cache-dir .zig-cache-b 2>&1 | tee b-base58-debug-compile.log
-          code=${PIPESTATUS[0]}
-          echo "exit=$code" | tee -a b-base58-debug-compile.log
+          printf 'pub fn main() void {}\n' > t.zig
+          rm -rf .zig-cache-zz
+          { zig build-exe t.zig -OReleaseFast -femit-bin=t_zig_rf.exe \
+              --cache-dir .zig-cache-zz --global-cache-dir .zig-cache-zz; \
+            echo "exit_rf=$?"; \
+            zig build-exe t.zig -femit-bin=t_zig_dbg.exe \
+              --cache-dir .zig-cache-zz --global-cache-dir .zig-cache-zz; \
+            echo "exit_dbg=$?"; } 2>&1 | tee trivial-zig.log
 
-      # (b) Now actually compile AND run the ReleaseFast test binary. If (a)
-      # compiled clean but this fails, the failure is at run time (miscompiled
-      # binary or a real test failure), not at compile time.
-      - name: base58 -- ReleaseFast, compile AND run, fresh cache
+      # --- base58 (no module deps): RF (LLVM) succeeded in run 2; does Debug
+      #     (self-hosted backend) crash? Run directly to capture the trace. ---
+      - name: base58 -- Debug then ReleaseFast, compile only, direct CLI
         shell: bash
         continue-on-error: true
         run: |
-          set -o pipefail
-          rm -rf .zig-cache-c
-          zig test -OReleaseFast src/base58/mod.zig -lc \
-            --cache-dir .zig-cache-c --global-cache-dir .zig-cache-c 2>&1 | tee c-base58-rf-run.log
-          code=${PIPESTATUS[0]}
-          echo "exit=$code" | tee -a c-base58-rf-run.log
+          rm -rf .zig-cache-b58
+          { zig test src/base58/mod.zig -lc --test-no-exec -femit-bin=b58_dbg.exe \
+              --cache-dir .zig-cache-b58 --global-cache-dir .zig-cache-b58; \
+            echo "exit_debug=$?"; \
+            zig test -OReleaseFast src/base58/mod.zig -lc --test-no-exec -femit-bin=b58_rf.exe \
+              --cache-dir .zig-cache-b58 --global-cache-dir .zig-cache-b58; \
+            echo "exit_rf=$?"; } 2>&1 | tee base58-direct.log
 
-      # (d) Reproduce the fmt LLVM "broken module" bug in isolation via the build
-      # system (fmt has many module deps, so we let build.zig wire them up).
-      # Fresh cache + single-threaded so output is clean and ordered.
-      - name: test-fmt -- ReleaseFast, fresh cache, serial
+      # --- A real failing unit (roc_builtins obj, code 5 in run 2),
+      #     reconstructed WITHOUT --listen so the compiler prints its crash. ---
+      - name: roc_builtins obj -- ReleaseFast then Debug, direct CLI
         shell: bash
         continue-on-error: true
         run: |
-          set -o pipefail
-          rm -rf .zig-cache
-          zig build test-fmt -Doptimize=ReleaseFast --verbose -j1 2>&1 | tee d-test-fmt.log
-          code=${PIPESTATUS[0]}
-          echo "exit=$code" | tee -a d-test-fmt.log
-          echo "--- ZIR-EOF warnings in this fresh-cache serial run: ---"
-          grep -c "unexpected EOF reading cached ZIR" d-test-fmt.log || true
-
-      # (e) Definitive ZIR-cache test: fresh cache + strictly serial full
-      # ReleaseFast build. If "unexpected EOF reading cached ZIR" STILL appears
-      # here (no parallelism, no prior crash to truncate files), it is a genuine
-      # cache-write bug. If it is gone, those warnings were fallout from killed
-      # parallel processes and the real bug is codegen.
-      - name: full build -- ReleaseFast, fresh cache, serial
-        shell: bash
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          rm -rf .zig-cache
-          zig build -Doptimize=ReleaseFast -j1 --verbose 2>&1 | tee e-full-serial.log
-          code=${PIPESTATUS[0]}
-          echo "exit=$code" | tee -a e-full-serial.log
-          echo "--- ZIR-EOF warning count on fresh serial build: ---"
-          grep -c "unexpected EOF reading cached ZIR" e-full-serial.log || true
-          echo "--- distinct compiler diagnostics: ---"
-          grep -iE "LLVM ERROR|PHINode|panic|unreachable|Broken module|Build Summary" e-full-serial.log || true
+          rm -rf .zig-cache-rb
+          { zig build-obj -fstrip -fPIC -OReleaseFast --dep tracy --dep shim_io \
+              -Mroot=src/builtins/static_lib.zig \
+              -Mtracy=src/builtins/tracy_stub.zig \
+              -Mshim_io=src/shim_io.zig \
+              --name roc_builtins -fno-compiler-rt -femit-bin=roc_builtins_rf.o \
+              --cache-dir .zig-cache-rb --global-cache-dir .zig-cache-rb; \
+            echo "exit_rf=$?"; \
+            zig build-obj -fstrip -fPIC --dep tracy --dep shim_io \
+              -Mroot=src/builtins/static_lib.zig \
+              -Mtracy=src/builtins/tracy_stub.zig \
+              -Mshim_io=src/shim_io.zig \
+              --name roc_builtins -fno-compiler-rt -femit-bin=roc_builtins_dbg.o \
+              --cache-dir .zig-cache-rb --global-cache-dir .zig-cache-rb; \
+            echo "exit_dbg=$?"; } 2>&1 | tee roc-builtins-direct.log
 
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4.6.2
         with:
-          name: win11-arm64-debug-logs-run2
+          name: win11-arm64-debug-logs-run3
           path: |
             *.log
           if-no-files-found: warn
