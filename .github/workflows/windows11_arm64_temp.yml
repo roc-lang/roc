@@ -4,32 +4,25 @@ on: [pull_request]
 
 # Temporary workflow to root-cause the zig-0.16 win11-arm64 build failure.
 #
-# Run 1 (localization): `zig build ... -Doptimize=ReleaseFast` -> 13/218 steps ok.
-# Run 2 (classification), from a fresh-cache serial build, established:
-#   * `error: process exited with error code 5` crashes hit EVERYTHING:
-#       - zstd  (pure C, via zig's bundled clang)            -> code 5
-#       - builtin_compiler (-ODebug, self-hosted backend)    -> code 5
-#       - roc_builtins_bc  (-fllvm, LLVM backend)            -> code 5
-#       - native + cross (aarch64/x86_64-linux) + wasm32     -> code 5
-#   * base58 (-OReleaseFast, compile only) SUCCEEDS (exit=0) -> zig not wholly broken.
-#   * `unexpected EOF reading cached ZIR` is FALLOUT: static_lib.zig crashes as
-#     wasm32 (code 5) and truncates its cache, so the native recompile then warns.
-#   * The 2h timeout was a HANG right after launching the `interpreter_layout`
-#     test compile (likely a crashed process stuck in Windows Error Reporting).
+# Run 1 (localization): `zig build ... -Doptimize=ReleaseFast` -> 13/218 ok.
+# Run 2 (classification): crashes ("error code 5") hit C/clang, Debug self-hosted,
+#   and LLVM alike; "unexpected EOF ZIR" is just fallout from those crashes.
+# Run 3 (direct CLI) NAILED the discriminator:
+#     zig build-exe <trivial>.zig -OReleaseFast   -> Segmentation fault
+#     zig build-exe <trivial>.c   -OReleaseFast   -> Segmentation fault
+#     zig build-obj roc_builtins (RF AND Debug)   -> exit 0  (success!)
+#   => ReleaseFast CODEGEN is fine; the crash is in the LINK / emit-executable
+#      phase. Every final exe/lib link in the roc build is what dies.
 #
-# Because the build system runs compiles in `--listen=-` server mode, the actual
-# crash output is swallowed and we only ever see "error code 5". Run 3 (this file)
-# runs the failing compiles DIRECTLY on the CLI (no build system, no --listen) to
-# capture the real panic / stack trace, with minimal/fast inputs:
-#   * trivial C   compile  -> is zig's clang/C path itself crashing?
-#   * trivial zig compile  -> is basic zig codegen crashing?
-#   * base58 Debug vs RF   -> backend-specific (self-hosted vs LLVM)?
-#   * roc_builtins obj      -> a real failing unit, reconstructed w/o --listen.
+# Run 4 (this file) pins down (a) link-phase vs ReleaseFast-specific, and
+# (b) whether LLD is the culprit. Uses pwsh because MSYS bash's signal emulation
+# eats the exit code after a native crash; pwsh records $LASTEXITCODE reliably.
+# A native access-violation shows up as exit code -1073741819 (0xC0000005).
 
 jobs:
   debug:
     runs-on: windows-11-arm
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
@@ -38,95 +31,65 @@ jobs:
           version: 0.16.0
           use-cache: false
 
-      # Stop crashed processes from hanging in the WerFault dialog (suspected
-      # cause of the run-2 timeout). Makes access-violations exit promptly.
       - name: Disable Windows Error Reporting UI
         shell: pwsh
         run: |
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v DontShowUI /t REG_DWORD /d 1 /f
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v Disabled  /t REG_DWORD /d 1 /f
 
-      - name: Environment info
+      - name: Link-phase matrix (trivial inputs, direct CLI)
         shell: pwsh
         run: |
+          # GitHub's pwsh runs with ErrorActionPreference=Stop; without these a
+          # native crash (non-zero exit) would throw and abort the script at the
+          # first failing row, losing the -flld results. Force run-to-completion.
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
           zig version
-          zig env
-          Write-Host "PROCESSOR_ARCHITECTURE = $env:PROCESSOR_ARCHITECTURE"
-          Write-Host "Logical CPUs = $env:NUMBER_OF_PROCESSORS"
-          Get-CimInstance Win32_OperatingSystem |
-            Select-Object @{n='FreeMemMB';e={[math]::Round($_.FreePhysicalMemory/1024)}},
-                          @{n='TotalMemMB';e={[math]::Round($_.TotalVisibleMemorySize/1024)}} |
-            Format-List
+          'pub fn main() void {}' | Set-Content t.zig
+          'int main(void){return 0;}' | Set-Content t.c
+          $log = "link-matrix.log"
+          if (Test-Path $log) { Remove-Item $log }
 
-      # --- trivial C: isolates zig's bundled clang / C compilation path ---
-      - name: trivial C -- build-exe, ReleaseFast and Debug
-        shell: bash
-        continue-on-error: true
-        run: |
-          printf 'int main(void){return 0;}\n' > t.c
-          rm -rf .zig-cache-cc
-          { zig build-exe t.c -lc -OReleaseFast -femit-bin=t_c_rf.exe \
-              --cache-dir .zig-cache-cc --global-cache-dir .zig-cache-cc; \
-            echo "exit_rf=$?"; \
-            zig build-exe t.c -lc -femit-bin=t_c_dbg.exe \
-              --cache-dir .zig-cache-cc --global-cache-dir .zig-cache-cc; \
-            echo "exit_dbg=$?"; } 2>&1 | tee trivial-c.log
+          function Run([string]$label, [string[]]$cmd) {
+            "`n===== $label =====" | Tee-Object -FilePath $log -Append
+            ($cmd -join ' ')       | Tee-Object -FilePath $log -Append
+            $cache = ".zc-" + ($label -replace '[^A-Za-z0-9]','')
+            if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
+            & zig @cmd --cache-dir $cache --global-cache-dir $cache 2>&1 |
+              Tee-Object -FilePath $log -Append
+            "exit[$label]=$LASTEXITCODE" | Tee-Object -FilePath $log -Append
+          }
 
-      # --- trivial zig: isolates basic zig codegen (no C, no roc) ---
-      - name: trivial zig -- build-exe, ReleaseFast and Debug
-        shell: bash
-        continue-on-error: true
-        run: |
-          printf 'pub fn main() void {}\n' > t.zig
-          rm -rf .zig-cache-zz
-          { zig build-exe t.zig -OReleaseFast -femit-bin=t_zig_rf.exe \
-              --cache-dir .zig-cache-zz --global-cache-dir .zig-cache-zz; \
-            echo "exit_rf=$?"; \
-            zig build-exe t.zig -femit-bin=t_zig_dbg.exe \
-              --cache-dir .zig-cache-zz --global-cache-dir .zig-cache-zz; \
-            echo "exit_dbg=$?"; } 2>&1 | tee trivial-zig.log
+          # Controls: codegen without a final link should work.
+          Run 'obj-zig-RF'          @('build-obj','-OReleaseFast','-Mroot=t.zig','-femit-bin=o_zig_rf.o')
+          Run 'exe-zig-RF-noemit'   @('build-exe','-OReleaseFast','-Mroot=t.zig','-fno-emit-bin')
 
-      # --- base58 (no module deps): RF (LLVM) succeeded in run 2; does Debug
-      #     (self-hosted backend) crash? Run directly to capture the trace. ---
-      - name: base58 -- Debug then ReleaseFast, compile only, direct CLI
-        shell: bash
-        continue-on-error: true
-        run: |
-          rm -rf .zig-cache-b58
-          { zig test src/base58/mod.zig -lc --test-no-exec -femit-bin=b58_dbg.exe \
-              --cache-dir .zig-cache-b58 --global-cache-dir .zig-cache-b58; \
-            echo "exit_debug=$?"; \
-            zig test -OReleaseFast src/base58/mod.zig -lc --test-no-exec -femit-bin=b58_rf.exe \
-              --cache-dir .zig-cache-b58 --global-cache-dir .zig-cache-b58; \
-            echo "exit_rf=$?"; } 2>&1 | tee base58-direct.log
+          # The repro and its axes: link in RF vs Debug; native zig vs C.
+          Run 'exe-zig-RF'          @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf.exe')
+          Run 'exe-zig-Debug'       @('build-exe','-Mroot=t.zig','-femit-bin=e_zig_dbg.exe')
+          Run 'exe-c-RF'            @('build-exe','-OReleaseFast','-lc','t.c','-femit-bin=e_c_rf.exe')
 
-      # --- A real failing unit (roc_builtins obj, code 5 in run 2),
-      #     reconstructed WITHOUT --listen so the compiler prints its crash. ---
-      - name: roc_builtins obj -- ReleaseFast then Debug, direct CLI
-        shell: bash
-        continue-on-error: true
-        run: |
-          rm -rf .zig-cache-rb
-          { zig build-obj -fstrip -fPIC -OReleaseFast --dep tracy --dep shim_io \
-              -Mroot=src/builtins/static_lib.zig \
-              -Mtracy=src/builtins/tracy_stub.zig \
-              -Mshim_io=src/shim_io.zig \
-              --name roc_builtins -fno-compiler-rt -femit-bin=roc_builtins_rf.o \
-              --cache-dir .zig-cache-rb --global-cache-dir .zig-cache-rb; \
-            echo "exit_rf=$?"; \
-            zig build-obj -fstrip -fPIC --dep tracy --dep shim_io \
-              -Mroot=src/builtins/static_lib.zig \
-              -Mtracy=src/builtins/tracy_stub.zig \
-              -Mshim_io=src/shim_io.zig \
-              --name roc_builtins -fno-compiler-rt -femit-bin=roc_builtins_dbg.o \
-              --cache-dir .zig-cache-rb --global-cache-dir .zig-cache-rb; \
-            echo "exit_dbg=$?"; } 2>&1 | tee roc-builtins-direct.log
+          # Which linker does the default use? Show the link invocation.
+          Run 'exe-zig-RF-vlink'    @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf2.exe','--verbose-link')
+
+          # Codeberg #35537: the self-hosted COFF linker crashes on Windows.
+          # -fno-lld forces it (expected: crash); -flld forces LLD instead.
+          # If the -flld cases SUCCEED while the default/-fno-lld ones crash,
+          # then `use_lld = true` for Windows in build.zig is the workaround.
+          Run 'exe-zig-RF-no-lld'   @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf3.exe','-fno-lld')
+          Run 'exe-zig-RF-lld'      @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf4.exe','-flld')
+          Run 'exe-zig-Debug-lld'   @('build-exe','-Mroot=t.zig','-femit-bin=e_zig_dbg_lld.exe','-flld')
+          Run 'exe-c-RF-lld'        @('build-exe','-OReleaseFast','-lc','t.c','-femit-bin=e_c_rf_lld.exe','-flld')
+
+          Write-Host "`n================ SUMMARY ================"
+          Select-String -Path $log -Pattern '^exit\[' | ForEach-Object { $_.Line }
 
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4.6.2
         with:
-          name: win11-arm64-debug-logs-run3
+          name: win11-arm64-debug-logs-run4
           path: |
             *.log
           if-no-files-found: warn
