@@ -4285,111 +4285,154 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             dispatch_token = self.peek();
             continue :dispatch .expr_suffix;
         },
-        .expr_suffix => switch (dispatch_token) {
-            .NoSpaceOpenRound,
-            => {
-                self.advance();
-                try expr_collections.enter(open_allocator, .{
-                    .start = expr_finish_state.start,
-                    .min_bp = null,
-                    .scratch_top = self.store.scratchExprTop(),
-                    .end_token = .CloseRound,
-                    .result = .{ .apply = .{
-                        .start = expr_finish_state.start,
-                        .min_bp = expr_finish_state.min_bp,
-                        .function = expr_finish_state.expr,
-                    } },
-                    .close_error = .expected_expr_apply_close_round,
-                });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_collection_next;
-            },
-            .NoSpaceOpQuestion,
-            => {
-                self.advance();
-                expr_finish_state.expr = try self.store.addExpr(.{ .suffix_single_question = .{
-                    .expr = expr_finish_state.expr,
-                    .operator = expr_finish_state.start,
-                    .region = .{ .start = expr_finish_state.start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .NoSpaceDotInt,
-            .DotInt,
-            => {
-                const elem_token = self.pos;
-                self.advance();
-                expr_finish_state.expr = try self.store.addExpr(.{ .tuple_access = .{
-                    .expr = expr_finish_state.expr,
-                    .elem_token = elem_token,
-                    .region = .{ .start = expr_finish_state.start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .NoSpaceDotLowerIdent,
-            .DotLowerIdent,
-            => {
-                const s = self.pos;
-                self.advance();
-                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                const ident = try self.store.addExpr(.{ .ident = .{
-                    .region = .{ .start = s, .end = self.pos },
-                    .token = s,
-                    .qualifiers = empty_qualifiers,
-                } });
-                if (self.peek() == .NoSpaceOpenRound) {
+        .expr_suffix => {
+            const tok = dispatch_token;
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
+                if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                    const elem_token = self.pos;
+                    self.advance();
+                    expr_finish_state.expr = try self.store.addExpr(.{ .tuple_access = .{
+                        .expr = expr_finish_state.expr,
+                        .elem_token = elem_token,
+                        .region = .{ .start = expr_finish_state.start, .end = self.pos },
+                    } });
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
+                if (tok == .NoSpaceDotLowerIdent or tok == .DotLowerIdent) {
+                    const s = self.pos;
+                    self.advance();
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    const ident = try self.store.addExpr(.{ .ident = .{
+                        .region = .{ .start = s, .end = self.pos },
+                        .token = s,
+                        .qualifiers = empty_qualifiers,
+                    } });
+                    if (self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        try expr_collections.enter(open_allocator, .{
+                            .start = s,
+                            .min_bp = null,
+                            .scratch_top = self.store.scratchExprTop(),
+                            .end_token = .CloseRound,
+                            .result = .{ .method_apply = .{
+                                .start = expr_finish_state.start,
+                                .min_bp = expr_finish_state.min_bp,
+                                .receiver = expr_finish_state.expr,
+                                .method_token = s,
+                            } },
+                            .close_error = .expected_expr_apply_close_round,
+                        });
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_collection_next;
+                    } else {
+                        expr_finish_state.expr = try self.store.addExpr(.{ .field_access = .{
+                            .region = .{ .start = expr_finish_state.start, .end = self.pos },
+                            .operator = expr_finish_state.start,
+                            .left = expr_finish_state.expr,
+                            .right = ident,
+                        } });
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_suffix;
+                    }
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+                if (tok == .NoSpaceOpenRound) {
                     self.advance();
                     try expr_collections.enter(open_allocator, .{
-                        .start = s,
+                        .start = expr_finish_state.start,
                         .min_bp = null,
                         .scratch_top = self.store.scratchExprTop(),
                         .end_token = .CloseRound,
-                        .result = .{ .method_apply = .{
+                        .result = .{ .apply = .{
                             .start = expr_finish_state.start,
                             .min_bp = expr_finish_state.min_bp,
-                            .receiver = expr_finish_state.expr,
-                            .method_token = s,
+                            .function = expr_finish_state.expr,
                         } },
                         .close_error = .expected_expr_apply_close_round,
                     });
                     dispatch_token = self.peek();
                     continue :dispatch .expr_collection_next;
-                } else {
-                    expr_finish_state.expr = try self.store.addExpr(.{ .field_access = .{
-                        .region = .{ .start = expr_finish_state.start, .end = self.pos },
+                }
+                if (tok == .NoSpaceOpQuestion) {
+                    self.advance();
+                    expr_finish_state.expr = try self.store.addExpr(.{ .suffix_single_question = .{
+                        .expr = expr_finish_state.expr,
                         .operator = expr_finish_state.start,
-                        .left = expr_finish_state.expr,
-                        .right = ident,
+                        .region = .{ .start = expr_finish_state.start, .end = self.pos },
                     } });
                     dispatch_token = self.peek();
                     continue :dispatch .expr_suffix;
                 }
-            },
-            .OpStar,
-            .OpSlash,
-            .OpDoubleSlash,
-            .OpPercent,
-            .OpPlus,
-            .OpBinaryMinus,
-            .OpDoubleQuestion,
-            .OpQuestion,
-            .OpEquals,
-            .OpNotEquals,
-            .OpLessThan,
-            .OpGreaterThan,
-            .OpLessThanOrEq,
-            .OpGreaterThanOrEq,
-            .OpAnd,
-            .OpOr,
-            => {
-                if ((self.peek() == .OpAnd or self.peek() == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
-                    last_expr = expr_finish_state.expr;
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_complete;
+                if (tok == .OpArrow or tok == .OpFatArrow) {
+                    if (open_syntax.containsKind(.expr_match_guard)) {
+                        last_expr = expr_finish_state.expr;
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_complete;
+                    }
+                    const op_pos = self.pos;
+                    self.advance();
+                    const first_token_tag = self.peek();
+                    if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
+                        const ident_start = self.pos;
+                        const qual_result = try self.readQualificationChain();
+                        self.pos = qual_result.final_token + 1;
+                        const is_tag = if (qual_result.qualifiers.span.len == 0)
+                            first_token_tag == .UpperIdent
+                        else
+                            qual_result.is_upper;
+                        const rhs = if (is_tag)
+                            try self.store.addExpr(.{ .tag = .{
+                                .region = .{ .start = ident_start, .end = self.pos },
+                                .token = qual_result.final_token,
+                                .qualifiers = qual_result.qualifiers,
+                            } })
+                        else
+                            try self.store.addExpr(.{ .ident = .{
+                                .region = .{ .start = ident_start, .end = self.pos },
+                                .token = qual_result.final_token,
+                                .qualifiers = qual_result.qualifiers,
+                            } });
+                        expr_arrow_app_state = .{
+                            .start = expr_finish_state.start,
+                            .min_bp = expr_finish_state.min_bp,
+                            .left = expr_finish_state.expr,
+                            .operator = op_pos,
+                            .rhs = rhs,
+                        };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_arrow_app_next;
+                    } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
+                        self.advance();
+                        try open_syntax.push(open_allocator, .expr_arrow_inner, ExprArrowAfterInnerState, .{
+                            .start = expr_finish_state.start,
+                            .min_bp = expr_finish_state.min_bp,
+                            .left = expr_finish_state.expr,
+                            .operator = op_pos,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_prefix;
+                    } else {
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
+                        expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_suffix;
+                    }
                 }
-                if (getTokenBP(self.peek())) |bp| {
+                if (isInBinOpTokenRange(tok)) {
+                    const bp = getTokenBP(tok) orelse {
+                        last_expr = expr_finish_state.expr;
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_complete;
+                    };
+                    if ((self.peek() == .OpAnd or self.peek() == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
+                        last_expr = expr_finish_state.expr;
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_complete;
+                    }
                     if (bp.left >= expr_finish_state.min_bp) {
                         const op_pos = self.pos;
                         self.advance();
@@ -4404,204 +4447,145 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
                     }
-                }
-                last_expr = expr_finish_state.expr;
-                if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
-                    dispatch_token = self.peek();
-                    switch (parent) {
-                        .expr_collection_item => continue :dispatch .expr_collection_after_item,
-                        .statement_expect => continue :dispatch .statement_expect_after_expr,
-                        .statement_for_expr => continue :dispatch .statement_for_after_expr,
-                        .statement_for_body => continue :dispatch .statement_for_after_body,
-                        .statement_while_cond => continue :dispatch .statement_while_after_cond,
-                        .statement_while_body => continue :dispatch .statement_while_after_body,
-                        .statement_crash => continue :dispatch .statement_crash_after_expr,
-                        .statement_dbg => continue :dispatch .statement_dbg_after_expr,
-                        .statement_return => continue :dispatch .statement_return_after_expr,
-                        .statement_var_body => continue :dispatch .statement_var_after_body,
-                        .statement_decl_body => continue :dispatch .statement_decl_after_body,
-                        .statement_destructure_body => continue :dispatch .statement_destructure_after_body,
-                        .statement_final_expr => continue :dispatch .statement_final_expr,
-                        .none => unreachable,
-                    }
-                }
-                if (open_syntax.peekKind()) |kind| {
-                    switch (kind) {
-                        .expr_unary => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_after_unary;
-                        },
-                        .expr_binary_rhs => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_after_binary_rhs;
-                        },
-                        .expr_arrow_inner => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_arrow_after_inner;
-                        },
-                        .expr_record_ext => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_record_ext_after_expr;
-                        },
-                        .expr_record_field => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_record_field_after_value;
-                        },
-                        .expr_if => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_if_after_condition;
-                        },
-                        .expr_if_then => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_if_after_then;
-                        },
-                        .expr_if_else => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_if_after_else;
-                        },
-                        .expr_match => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_match_after_expr;
-                        },
-                        .expr_match_guard => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_match_branch_after_guard;
-                        },
-                        .expr_match_body => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_match_branch_after_body;
-                        },
-                        .expr_dbg => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_dbg_after_expr;
-                        },
-                        .expr_for_list => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_for_after_list;
-                        },
-                        .expr_for_body => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_for_after_body;
-                        },
-                        .expr_lambda_body => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_lambda_after_body;
-                        },
-                        .statement_type_associated_statement => {
-                            if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
-                                dispatch_token = self.peek();
-                                switch (parent) {
-                                    .expr_collection_item => continue :dispatch .expr_collection_after_item,
-                                    .statement_expect => continue :dispatch .statement_expect_after_expr,
-                                    .statement_for_expr => continue :dispatch .statement_for_after_expr,
-                                    .statement_for_body => continue :dispatch .statement_for_after_body,
-                                    .statement_while_cond => continue :dispatch .statement_while_after_cond,
-                                    .statement_while_body => continue :dispatch .statement_while_after_body,
-                                    .statement_crash => continue :dispatch .statement_crash_after_expr,
-                                    .statement_dbg => continue :dispatch .statement_dbg_after_expr,
-                                    .statement_return => continue :dispatch .statement_return_after_expr,
-                                    .statement_var_body => continue :dispatch .statement_var_after_body,
-                                    .statement_decl_body => continue :dispatch .statement_decl_after_body,
-                                    .statement_destructure_body => continue :dispatch .statement_destructure_after_body,
-                                    .statement_final_expr => continue :dispatch .statement_final_expr,
-                                    .none => unreachable,
-                                }
-                            }
-                            unreachable;
-                        },
-                        .pattern_string => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .pattern_string_after_expr;
-                        },
-                        else => {
-                            if (entry.result_kind == .expr) {
-                                return .{ .expr = expr_finish_state.expr };
-                            }
-                            unreachable;
-                        },
-                    }
-                }
-                return .{ .expr = expr_finish_state.expr };
-            },
-            .OpArrow,
-            .OpFatArrow,
-            => {
-                if (open_syntax.containsKind(.expr_match_guard)) {
                     last_expr = expr_finish_state.expr;
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_complete;
+                    if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
+                        dispatch_token = self.peek();
+                        switch (parent) {
+                            .expr_collection_item => continue :dispatch .expr_collection_after_item,
+                            .statement_expect => continue :dispatch .statement_expect_after_expr,
+                            .statement_for_expr => continue :dispatch .statement_for_after_expr,
+                            .statement_for_body => continue :dispatch .statement_for_after_body,
+                            .statement_while_cond => continue :dispatch .statement_while_after_cond,
+                            .statement_while_body => continue :dispatch .statement_while_after_body,
+                            .statement_crash => continue :dispatch .statement_crash_after_expr,
+                            .statement_dbg => continue :dispatch .statement_dbg_after_expr,
+                            .statement_return => continue :dispatch .statement_return_after_expr,
+                            .statement_var_body => continue :dispatch .statement_var_after_body,
+                            .statement_decl_body => continue :dispatch .statement_decl_after_body,
+                            .statement_destructure_body => continue :dispatch .statement_destructure_after_body,
+                            .statement_final_expr => continue :dispatch .statement_final_expr,
+                            .none => unreachable,
+                        }
+                    }
+                    if (open_syntax.peekKind()) |kind| {
+                        switch (kind) {
+                            .expr_unary => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_after_unary;
+                            },
+                            .expr_binary_rhs => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_after_binary_rhs;
+                            },
+                            .expr_arrow_inner => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_arrow_after_inner;
+                            },
+                            .expr_record_ext => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_record_ext_after_expr;
+                            },
+                            .expr_record_field => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_record_field_after_value;
+                            },
+                            .expr_if => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_if_after_condition;
+                            },
+                            .expr_if_then => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_if_after_then;
+                            },
+                            .expr_if_else => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_if_after_else;
+                            },
+                            .expr_match => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_match_after_expr;
+                            },
+                            .expr_match_guard => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_match_branch_after_guard;
+                            },
+                            .expr_match_body => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_match_branch_after_body;
+                            },
+                            .expr_dbg => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_dbg_after_expr;
+                            },
+                            .expr_for_list => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_for_after_list;
+                            },
+                            .expr_for_body => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_for_after_body;
+                            },
+                            .expr_lambda_body => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_lambda_after_body;
+                            },
+                            .statement_type_associated_statement => {
+                                if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
+                                    dispatch_token = self.peek();
+                                    switch (parent) {
+                                        .expr_collection_item => continue :dispatch .expr_collection_after_item,
+                                        .statement_expect => continue :dispatch .statement_expect_after_expr,
+                                        .statement_for_expr => continue :dispatch .statement_for_after_expr,
+                                        .statement_for_body => continue :dispatch .statement_for_after_body,
+                                        .statement_while_cond => continue :dispatch .statement_while_after_cond,
+                                        .statement_while_body => continue :dispatch .statement_while_after_body,
+                                        .statement_crash => continue :dispatch .statement_crash_after_expr,
+                                        .statement_dbg => continue :dispatch .statement_dbg_after_expr,
+                                        .statement_return => continue :dispatch .statement_return_after_expr,
+                                        .statement_var_body => continue :dispatch .statement_var_after_body,
+                                        .statement_decl_body => continue :dispatch .statement_decl_after_body,
+                                        .statement_destructure_body => continue :dispatch .statement_destructure_after_body,
+                                        .statement_final_expr => continue :dispatch .statement_final_expr,
+                                        .none => unreachable,
+                                    }
+                                }
+                                unreachable;
+                            },
+                            .pattern_string => {
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_string_after_expr;
+                            },
+                            else => {
+                                if (entry.result_kind == .expr) {
+                                    return .{ .expr = expr_finish_state.expr };
+                                }
+                                unreachable;
+                            },
+                        }
+                    }
+                    return .{ .expr = expr_finish_state.expr };
                 }
-                const op_pos = self.pos;
-                self.advance();
-                const first_token_tag = self.peek();
-                if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
-                    const ident_start = self.pos;
-                    const qual_result = try self.readQualificationChain();
-                    self.pos = qual_result.final_token + 1;
-                    const is_tag = if (qual_result.qualifiers.span.len == 0)
-                        first_token_tag == .UpperIdent
-                    else
-                        qual_result.is_upper;
-                    const rhs = if (is_tag)
-                        try self.store.addExpr(.{ .tag = .{
-                            .region = .{ .start = ident_start, .end = self.pos },
-                            .token = qual_result.final_token,
-                            .qualifiers = qual_result.qualifiers,
-                        } })
-                    else
-                        try self.store.addExpr(.{ .ident = .{
-                            .region = .{ .start = ident_start, .end = self.pos },
-                            .token = qual_result.final_token,
-                            .qualifiers = qual_result.qualifiers,
-                        } });
-                    expr_arrow_app_state = .{
-                        .start = expr_finish_state.start,
-                        .min_bp = expr_finish_state.min_bp,
-                        .left = expr_finish_state.expr,
-                        .operator = op_pos,
-                        .rhs = rhs,
-                    };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_arrow_app_next;
-                } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
+            }
+
+            if (getTokenBP(self.peek())) |bp| {
+                if (bp.left >= expr_finish_state.min_bp) {
+                    const op_pos = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_arrow_inner, ExprArrowAfterInnerState, .{
+                    try expr_binary_rhs_stack.enter(open_allocator, .{
                         .start = expr_finish_state.start,
                         .min_bp = expr_finish_state.min_bp,
                         .left = expr_finish_state.expr,
                         .operator = op_pos,
                     });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
+                    expr_state = .{ .start = self.pos, .min_bp = bp.right };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
-                } else {
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
-                    expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
                 }
-            },
-            else => {
-                if (getTokenBP(self.peek())) |bp| {
-                    if (bp.left >= expr_finish_state.min_bp) {
-                        const op_pos = self.pos;
-                        self.advance();
-                        try expr_binary_rhs_stack.enter(open_allocator, .{
-                            .start = expr_finish_state.start,
-                            .min_bp = expr_finish_state.min_bp,
-                            .left = expr_finish_state.expr,
-                            .operator = op_pos,
-                        });
-                        try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
-                        expr_state = .{ .start = self.pos, .min_bp = bp.right };
-                        dispatch_token = self.peek();
-                        continue :dispatch .expr_prefix;
-                    }
-                }
-                last_expr = expr_finish_state.expr;
-                dispatch_token = self.peek();
-                continue :dispatch .expr_complete;
-            },
+            }
+            last_expr = expr_finish_state.expr;
+            dispatch_token = self.peek();
+            continue :dispatch .expr_complete;
         },
         .expr_complete => switch (dispatch_token) {
             else => {
@@ -7827,6 +7811,11 @@ fn finishRecordExpr(
 /// Binding power of the lhs and rhs of a particular operator.
 const BinOpBp = struct { left: u8, right: u8 };
 
+inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
+    const tok_int = @intFromEnum(tok);
+    return tok_int >= @intFromEnum(Token.Tag.OpPlus) and tok_int <= @intFromEnum(Token.Tag.OpEquals);
+}
+
 /// Get the binding power for a Token if it's a operator token, else return null.
 fn getTokenBP(tok: Token.Tag) ?BinOpBp {
     return switch (tok) {
@@ -7848,4 +7837,32 @@ fn getTokenBP(tok: Token.Tag) ?BinOpBp {
         .OpOr => .{ .left = 2, .right = 1 }, // 1 RIGHT
         else => null,
     };
+}
+
+comptime {
+    for (@typeInfo(Token.Tag).@"enum".fields) |field| {
+        const tok: Token.Tag = @enumFromInt(field.value);
+        if (getTokenBP(tok) != null and !isInBinOpTokenRange(tok)) {
+            @compileError("binary operator binding-power token outside parser operator range");
+        }
+    }
+
+    const range_holes = [_]Token.Tag{
+        .OpPizza,
+        .OpAssign,
+        .OpUnaryMinus,
+        .OpBang,
+        .OpAmpersand,
+        .OpBar,
+        .OpCaret,
+        .OpBackArrow,
+    };
+    for (range_holes) |tok| {
+        if (!isInBinOpTokenRange(tok)) {
+            @compileError("expected non-binary operator hole inside parser operator range");
+        }
+        if (getTokenBP(tok) != null) {
+            @compileError("operator range hole unexpectedly has binding power");
+        }
+    }
 }
