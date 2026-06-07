@@ -12,21 +12,8 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - where_clauses_4.md:1:1:1:1
 UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**where_clauses_4.md:1:1:1:1:**
-```roc
-import Decode exposing [Decode]
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _Decode_ is not supported:
 **where_clauses_4.md:4:9:4:17:**
@@ -78,7 +65,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "decodeThings"))
-		(e-runtime-error (tag "not_implemented"))
+		(e-not-implemented)
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

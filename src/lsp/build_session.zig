@@ -48,7 +48,7 @@ pub const BuildSession = struct {
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
-    ) !BuildSession {
+    ) Allocator.Error!BuildSession {
         // Convert URI to path
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
@@ -82,7 +82,7 @@ pub const BuildSession = struct {
 
         // Drain reports regardless of build success to capture parse errors
         // Parse errors are emitted to the sink even when build fails
-        const drained_reports = env.drainReports() catch null;
+        const drained_reports = try env.drainReports();
 
         return BuildSession{
             .allocator = allocator,

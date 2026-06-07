@@ -612,6 +612,41 @@ pub fn compileProgramForTarget(
     };
 }
 
+/// Same as `compileProgramForTarget` but reuses a pre-published Builtin
+/// artifact owned by the caller instead of loading it from the embedded
+/// builtin blob on every call.
+pub fn compileProgramForTargetWithBuiltin(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+    pre_published_builtin: PrePublishedBuiltin,
+) !CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+    );
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
+    errdefer {
+        var owned = lowered;
+        owned.deinit(allocator);
+    }
+
+    return .{
+        .resources = resources,
+        .lowered = lowered,
+    };
+}
+
 /// Compile a program with inspect wrapping so the main proc returns a Str.
 pub fn compileInspectedProgram(
     allocator: Allocator,
@@ -1486,9 +1521,20 @@ fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
         module_env.imports.clearResolvedModules();
         for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
             const import_name = module_env.getString(str_idx);
+            const import_idx: CIR.Import.Idx = @enumFromInt(i);
+            if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
+                for (module_envs, 0..) |candidate_env, module_idx| {
+                    if (candidate_env.module_role == .builtin) {
+                        module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
+                        break;
+                    }
+                }
+                continue;
+            }
             for (module_envs, 0..) |candidate_env, module_idx| {
+                if (candidate_env.module_role == .builtin) continue;
                 if (base.Ident.textEql(candidate_env.module_name, import_name)) {
-                    module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                    module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
                     break;
                 }
             }
@@ -1500,9 +1546,20 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     module_env.imports.clearResolvedModules();
     for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
         const import_name = module_env.getString(str_idx);
+        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
+            for (imported_envs, 0..) |candidate_env, module_idx| {
+                if (candidate_env.module_role == .builtin) {
+                    module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
+                    break;
+                }
+            }
+            continue;
+        }
         for (imported_envs, 0..) |candidate_env, module_idx| {
+            if (candidate_env.module_role == .builtin) continue;
             if (base.Ident.textEql(candidate_env.module_name, import_name)) {
-                module_env.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
+                module_env.imports.setResolvedModule(import_idx, @intCast(module_idx));
                 break;
             }
         }

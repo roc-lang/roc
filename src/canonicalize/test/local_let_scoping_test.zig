@@ -15,7 +15,7 @@ const Counts = struct {
     mutual: usize = 0,
 };
 
-fn scopingDiagnosticCounts(source: []const u8) !Counts {
+fn scopingDiagnosticCounts(source: []const u8) anyerror!Counts {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 

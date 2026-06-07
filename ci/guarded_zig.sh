@@ -39,7 +39,6 @@ run_perl_checks() {
 }
 
 run_perl_checks
-run_check bash ci/check_debug_vars.sh
 run_check zig build run-check-zig-format
 run_check zig build run-check-zig-lints
 run_check zig build run-check-tidy

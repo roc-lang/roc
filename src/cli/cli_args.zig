@@ -1,5 +1,6 @@
 //! Command line argument parsing for the CLI
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const mem = std.mem;
 
@@ -178,7 +179,7 @@ pub const GlueArgs = struct {
 };
 
 /// Parse a list of arguments.
-pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) !CliArgs {
+pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) anyerror!CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
     // "run" is not a valid subcommand - give a helpful error
@@ -518,7 +519,7 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
     } };
 }
 
-fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) !CliArgs {
+fn parseUnbundle(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) anyerror!CliArgs {
     var paths = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
 
     for (args) |arg| {

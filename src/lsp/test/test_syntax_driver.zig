@@ -111,7 +111,7 @@ pub const TestSyntaxDriver = struct {
         allocator: std.mem.Allocator,
         _: []const u8,
         _: []const u8,
-    ) ![]document_symbol_handler.SymbolInformation {
+    ) anyerror![]document_symbol_handler.SymbolInformation {
         self.document_symbol_calls += 1;
         return try allocator.alloc(document_symbol_handler.SymbolInformation, 0);
     }

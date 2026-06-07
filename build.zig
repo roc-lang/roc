@@ -2198,6 +2198,9 @@ pub fn build(b: *std.Build) void {
     const compiler_version_git = getCompilerVersionGit(b);
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
     build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
+    // Absolute path to the compiler-owned Builtin.roc, used by the CLI to detect
+    // when a user is checking/formatting the compiler's own builtin source.
+    build_options.addOption([]const u8, "compiler_builtin_roc_path", b.path("src/build/roc/Builtin.roc").getPath(b));
     // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
     // build_options module so its build-mode prefix comes from @import("builtin").mode — the
     // actual optimization level of each compiled binary. The prefix can't be baked here because

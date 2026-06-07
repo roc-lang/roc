@@ -1,8 +1,6 @@
 # Roc Compiler
 
-This repo contains the source code for the Roc compiler and related tools. There is the original prototype written in Rust (crates folder), and the new version written in Zig.
-
-All discussion, unless otherwise explicitly requested, is regarding the new version in zig. Ignore everything in the crates folder at the root of the repo, always exclude it from searches.
+This repo contains the source code for the Roc compiler and related tools.
 
 ## Git Usage
 

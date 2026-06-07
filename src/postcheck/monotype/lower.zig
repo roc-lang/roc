@@ -32,6 +32,7 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program);
     defer builder.deinit();
     try builder.initHostedCatalog();
+    try builder.initMethodLookupIndex();
 
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
@@ -83,6 +84,92 @@ const MethodLookup = struct {
     view: ModuleView,
     target: static_dispatch.MethodTarget,
 };
+
+const MethodDispatch = struct {
+    owner: static_dispatch.MethodOwner,
+    method: names.MethodNameId,
+};
+
+const MethodLookupIndexEntry = struct {
+    dispatch: MethodDispatch,
+    view: ModuleView,
+    target: static_dispatch.MethodTarget,
+
+    fn lessThan(_: void, lhs: MethodLookupIndexEntry, rhs: MethodLookupIndexEntry) bool {
+        return methodDispatchOrder(lhs.dispatch, rhs.dispatch) == .lt;
+    }
+};
+
+fn assertMethodLookupIndexUnique(entries: []const MethodLookupIndexEntry) void {
+    if (entries.len < 2) return;
+    var index: usize = 1;
+    while (index < entries.len) : (index += 1) {
+        if (methodDispatchOrder(entries[index - 1].dispatch, entries[index].dispatch) != .eq) continue;
+        Common.invariant("checked method registries contain duplicate dispatch targets");
+    }
+}
+
+fn methodDispatchOrder(a: MethodDispatch, b: MethodDispatch) std.math.Order {
+    const owner_order = methodOwnerOrder(a.owner, b.owner);
+    if (owner_order != .eq) return owner_order;
+    return orderEnum(names.MethodNameId, a.method, b.method);
+}
+
+fn methodOwnerOrder(a: static_dispatch.MethodOwner, b: static_dispatch.MethodOwner) std.math.Order {
+    const a_tag = methodOwnerTagRank(a);
+    const b_tag = methodOwnerTagRank(b);
+    if (a_tag != b_tag) return orderU32(a_tag, b_tag);
+
+    return switch (a) {
+        .nominal => |a_nominal| switch (b) {
+            .nominal => |b_nominal| blk: {
+                const module_order = orderEnum(names.ModuleNameId, a_nominal.module_name, b_nominal.module_name);
+                if (module_order != .eq) break :blk module_order;
+                const type_order = orderEnum(names.TypeNameId, a_nominal.type_name, b_nominal.type_name);
+                if (type_order != .eq) break :blk type_order;
+                break :blk orderOptionalU32(a_nominal.source_decl, b_nominal.source_decl);
+            },
+            else => unreachable,
+        },
+        .source_decl => |a_decl| switch (b) {
+            .source_decl => |b_decl| blk: {
+                const module_order = orderEnum(names.ModuleNameId, a_decl.module_name, b_decl.module_name);
+                if (module_order != .eq) break :blk module_order;
+                break :blk orderU32(a_decl.statement, b_decl.statement);
+            },
+            else => unreachable,
+        },
+        .builtin => |a_builtin| switch (b) {
+            .builtin => |b_builtin| orderEnum(static_dispatch.BuiltinOwner, a_builtin, b_builtin),
+            else => unreachable,
+        },
+    };
+}
+
+fn methodOwnerTagRank(owner: static_dispatch.MethodOwner) u32 {
+    return switch (owner) {
+        .nominal => 0,
+        .source_decl => 1,
+        .builtin => 2,
+    };
+}
+
+fn orderOptionalU32(a: ?u32, b: ?u32) std.math.Order {
+    if (a) |a_value| {
+        return if (b) |b_value| orderU32(a_value, b_value) else .gt;
+    }
+    return if (b == null) .eq else .lt;
+}
+
+fn orderEnum(comptime T: type, a: T, b: T) std.math.Order {
+    return orderU32(@intFromEnum(a), @intFromEnum(b));
+}
+
+fn orderU32(a: u32, b: u32) std.math.Order {
+    if (a < b) return .lt;
+    if (a > b) return .gt;
+    return .eq;
+}
 
 const FunctionShape = struct {
     args: Type.Span,
@@ -206,6 +293,7 @@ const Builder = struct {
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
+    method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
 
@@ -225,6 +313,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
         self.inspect_defs.deinit();
         self.const_expr_cache.deinit();
@@ -266,6 +355,39 @@ const Builder = struct {
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
+    fn initMethodLookupIndex(self: *Builder) Allocator.Error!void {
+        var entries = std.ArrayList(MethodLookupIndexEntry).empty;
+        errdefer entries.deinit(self.allocator);
+
+        try self.appendMethodLookupIndexFromView(&entries, moduleView(self.root_view));
+        for (self.modules.imports, 0..) |imported, index| {
+            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            try self.appendMethodLookupIndexFromView(&entries, moduleView(imported));
+        }
+        for (self.modules.root.relation_modules, 0..) |relation, index| {
+            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            try self.appendMethodLookupIndexFromView(&entries, moduleView(relation));
+        }
+
+        std.mem.sort(MethodLookupIndexEntry, entries.items, {}, MethodLookupIndexEntry.lessThan);
+        assertMethodLookupIndexUnique(entries.items);
+
+        self.method_lookup_index = try entries.toOwnedSlice(self.allocator);
+    }
+
+    fn appendMethodLookupIndexFromView(self: *Builder, entries: *std.ArrayList(MethodLookupIndexEntry), view: ModuleView) Allocator.Error!void {
+        for (view.method_registry.entries) |entry| {
+            try entries.append(self.allocator, .{
+                .dispatch = .{
+                    .owner = try self.methodOwnerInProgramNames(view, entry.key.owner),
+                    .method = try self.methodName(view, entry.key.method),
+                },
+                .view = view,
+                .target = entry.target,
+            });
+        }
+    }
+
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
         for (view.hosted_procs.procs) |proc| {
             try entries.append(self.allocator, .{
@@ -298,6 +420,25 @@ const Builder = struct {
         return self.program.names.internTypeName(view.names.typeNameText(id));
     }
 
+    fn methodName(self: *Builder, view: ModuleView, id: names.MethodNameId) Allocator.Error!names.MethodNameId {
+        return self.program.names.internMethodName(view.names.methodNameText(id));
+    }
+
+    fn methodOwnerInProgramNames(self: *Builder, view: ModuleView, owner: static_dispatch.MethodOwner) Allocator.Error!static_dispatch.MethodOwner {
+        return switch (owner) {
+            .builtin => |builtin| .{ .builtin = builtin },
+            .source_decl => |decl| .{ .source_decl = .{
+                .module_name = try self.moduleName(view, decl.module_name),
+                .statement = decl.statement,
+            } },
+            .nominal => |nominal| .{ .nominal = .{
+                .module_name = try self.moduleName(view, nominal.module_name),
+                .type_name = try self.typeName(view, nominal.type_name),
+                .source_decl = nominal.source_decl,
+            } },
+        };
+    }
+
     fn recordFieldName(self: *Builder, view: ModuleView, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
         return self.program.names.internRecordFieldLabel(view.names.recordFieldLabelText(id));
     }
@@ -306,10 +447,17 @@ const Builder = struct {
         return self.program.names.internTagLabel(view.names.tagLabelText(id));
     }
 
-    fn typeDef(self: *Builder, view: ModuleView, module_name: names.ModuleNameId, type_name: names.TypeNameId) Allocator.Error!Type.TypeDef {
+    fn typeDef(
+        self: *Builder,
+        view: ModuleView,
+        module_name: names.ModuleNameId,
+        type_name: names.TypeNameId,
+        source_decl: ?u32,
+    ) Allocator.Error!Type.TypeDef {
         return .{
             .module_name = try self.moduleName(view, module_name),
             .type_name = try self.typeName(view, type_name),
+            .source_decl = source_decl,
         };
     }
 
@@ -339,6 +487,11 @@ const Builder = struct {
         for (self.modules.imports) |imported| {
             const imported_view = moduleView(imported);
             if (moduleViewNameMatches(imported_view, origin_name)) return moduleDigestFromId(imported_view.key);
+        }
+
+        for (self.modules.root.relation_modules) |relation| {
+            const relation_view = moduleView(relation);
+            if (moduleViewNameMatches(relation_view, origin_name)) return moduleDigestFromId(relation_view.key);
         }
 
         Common.invariant("checked named type origin module was not available to Monotype lowering");
@@ -836,7 +989,7 @@ const Builder = struct {
                 defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.declaredModuleForAlias(view, alias), .ty = checked_ty },
-                    .def = try self.typeDef(view, alias.origin_module, alias.name),
+                    .def = try self.typeDef(view, alias.origin_module, alias.name, alias.source_decl),
                     .kind = .alias,
                     .args = try self.program.types.addSpan(args),
                     .backing = .{
@@ -867,7 +1020,7 @@ const Builder = struct {
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = checked_ty },
-                    .def = try self.typeDef(view, nominal.origin_module, nominal.name),
+                    .def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl),
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
                     .args = try self.program.types.addSpan(args),
@@ -1164,17 +1317,26 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) ?MethodLookup {
-        var found: ?MethodLookup = null;
-        self.lookupMethodTargetInView(moduleView(self.root_view), owner, method_name, &found);
-        for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
-            self.lookupMethodTargetInView(moduleView(imported), owner, method_name, &found);
+        const method = self.program.names.lookupMethodName(method_name) orelse return null;
+        return self.lookupMethodTargetInIndex(.{ .owner = owner, .method = method });
+    }
+
+    fn lookupMethodTargetInIndex(
+        self: *Builder,
+        dispatch: MethodDispatch,
+    ) ?MethodLookup {
+        var low: usize = 0;
+        var high: usize = self.method_lookup_index.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const entry = self.method_lookup_index[mid];
+            switch (methodDispatchOrder(entry.dispatch, dispatch)) {
+                .eq => return .{ .view = entry.view, .target = entry.target },
+                .lt => low = mid + 1,
+                .gt => high = mid,
+            }
         }
-        for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
-            self.lookupMethodTargetInView(moduleView(relation), owner, method_name, &found);
-        }
-        return found;
+        return null;
     }
 
     fn importModuleAlreadyScanned(self: *Builder, module_id: checked.ModuleId, import_index: usize) bool {
@@ -1194,31 +1356,6 @@ const Builder = struct {
             if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return true;
         }
         return false;
-    }
-
-    fn lookupMethodTargetInView(
-        self: *Builder,
-        view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_name: []const u8,
-        found: *?MethodLookup,
-    ) void {
-        const view_owner = self.methodOwnerForView(owner, view) orelse return;
-        const view_method = view.names.lookupMethodName(method_name) orelse return;
-        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return;
-        if (found.* != null) Common.invariant("checked method registries contain duplicate dispatch targets");
-        found.* = .{ .view = view, .target = target };
-    }
-
-    fn methodOwnerForView(self: *Builder, owner: static_dispatch.MethodOwner, view: ModuleView) ?static_dispatch.MethodOwner {
-        return switch (owner) {
-            .builtin => |builtin| .{ .builtin = builtin },
-            .nominal => |nominal| blk: {
-                const module_name = view.names.lookupModuleName(self.program.names.moduleNameText(nominal.module_name)) orelse return null;
-                const type_name = view.names.lookupTypeName(self.program.names.typeNameText(nominal.type_name)) orelse return null;
-                break :blk .{ .nominal = .{ .module_name = module_name, .type_name = type_name } };
-            },
-        };
     }
 
     fn fnDefForProcedureUse(self: *Builder, source_ty_view: ModuleView, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
@@ -1448,7 +1585,9 @@ const Builder = struct {
             while (initialized > 0) {
                 initialized -= 1;
                 if (captures[initialized].previous) |previous| {
-                    fn_ctx.binders.put(captures[initialized].binder, previous) catch {};
+                    fn_ctx.binders.put(captures[initialized].binder, previous) catch |err| switch (err) {
+                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                    };
                 } else {
                     _ = fn_ctx.binders.remove(captures[initialized].binder);
                 }
@@ -1478,7 +1617,9 @@ const Builder = struct {
             while (index > 0) {
                 index -= 1;
                 if (captures[index].previous) |previous| {
-                    fn_ctx.binders.put(captures[index].binder, previous) catch {};
+                    fn_ctx.binders.put(captures[index].binder, previous) catch |err| switch (err) {
+                        error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                    };
                 } else {
                     _ = fn_ctx.binders.remove(captures[index].binder);
                 }
@@ -1765,8 +1906,11 @@ const Builder = struct {
     fn toInspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?Ast.ExprId {
         const owner = methodOwnerFromType(&self.program.types, value_ty) orelse return null;
         const lookup = self.lookupMethodTargetByName(owner, "to_inspect") orelse return null;
-        const template = lookup.target.template orelse
-            Common.invariant("checked to_inspect target was not backed by a procedure template");
+        const procedure = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc => return null,
+        };
+        const template = procedure.template;
 
         var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template);
         defer target_ctx.deinit();
@@ -2579,7 +2723,8 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (tags) |tag| {
-            try self.constrainTypeSpanToMono(tag.args, self.monoTagArgs(mono_ty, tag.name), conflict_message);
+            const mono_args = self.monoTagArgs(mono_ty, tag.name);
+            try self.constrainTypeSpanToMono(tag.args, mono_args, conflict_message);
         }
     }
 
@@ -3439,7 +3584,7 @@ const BodyContext = struct {
         const args = try self.reserveTypeSlice(alias.args);
         defer self.allocator.free(args);
         const backing = try self.reserveType(alias.backing);
-        const def = try self.builder.typeDef(self.view, alias.origin_module, alias.name);
+        const def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl);
         const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
@@ -3497,7 +3642,7 @@ const BodyContext = struct {
                 .use = backing_use,
             },
         };
-        const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name);
+        const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         const args_span = try self.builder.program.types.addSpan(args);
         self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
@@ -3524,7 +3669,16 @@ const BodyContext = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!void {
-        const source = self.nominalInstantiationSource(nominal.representation) orelse return;
+        if (nominal.args.len != mono_args.len) {
+            Common.invariant("checked nominal type argument arity differed from monotype named argument arity");
+        }
+        try self.constrainTypeSpanToMono(
+            nominal.args,
+            mono_args,
+            "checked nominal type argument conflicted with an existing Monotype constraint",
+        );
+
+        const source = self.nominalInstantiationSource(nominal) orelse return;
         if (source.declaration.formal_args.len != mono_args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
@@ -3540,17 +3694,18 @@ const BodyContext = struct {
 
     fn nominalInstantiationSource(
         self: *BodyContext,
-        representation: anytype,
+        nominal: checked.CheckedNominalType,
     ) ?NominalInstantiationSource {
-        return switch (representation) {
+        return switch (nominal.representation) {
             .local_declaration => |id| .{
                 .view = self.view,
                 .declaration = self.view.types.nominalDeclarationById(id),
             },
-            .imported_declaration,
-            .builtin,
             .local_box_payload_capability,
+            .imported_declaration,
             .imported_box_payload_capability,
+            => null,
+            .builtin,
             .opaque_without_backing,
             => null,
         };
@@ -3647,7 +3802,7 @@ const BodyContext = struct {
                 defer self.allocator.free(args);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-                    .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name),
+                    .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
                     .kind = .alias,
                     .args = try self.builder.program.types.addSpan(args),
                     .backing = .{
@@ -3678,7 +3833,7 @@ const BodyContext = struct {
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
-                    .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name),
+                    .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl),
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
                     .args = try self.builder.program.types.addSpan(args),
@@ -5902,12 +6057,7 @@ const BodyContext = struct {
             return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self);
         }
         const resolved = lookup.?;
-        const template = resolved.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
-
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, expected_ret_ty);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked dispatch plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
@@ -5919,7 +6069,7 @@ const BodyContext = struct {
         }
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
         return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
     }
@@ -5963,12 +6113,8 @@ const BodyContext = struct {
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
         const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
-        const template = resolved.target.template orelse
-            Common.invariant("checked from_numeral target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
 
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, try_ty);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, try_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked from_numeral plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked from_numeral target callable type differed from dispatch plan callable type");
@@ -5977,7 +6123,7 @@ const BodyContext = struct {
         const fn_data = self.builder.functionShape(target_mono_ty, "checked from_numeral target had a non-function type");
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try target_ctx.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
         return try self.unwrapNumeralResult(call_expr, fn_data.ret, target_ty);
     }
@@ -6122,6 +6268,7 @@ const BodyContext = struct {
     fn typeHasBuiltinOwner(self: *BodyContext, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
         return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return false) {
             .builtin => |actual| actual == owner,
+            .source_decl => false,
             .nominal => false,
         };
     }
@@ -6151,17 +6298,12 @@ const BodyContext = struct {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
             return plan_ret_ty;
         };
-        const template = resolved.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, resolved.view, template);
-        defer target_ctx.deinit();
-
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(resolved.target.callable_ty, &call_ctx, plan.callable_ty, null);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, null);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked dispatch plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked dispatch target callable type differed from dispatch plan callable type");
         }
-        const ret_ty = target_ctx.functionReturnType(target_mono_ty);
+        const ret_ty = self.functionReturnType(target_mono_ty);
         try self.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
         return ret_ty;
     }
@@ -6211,7 +6353,7 @@ const BodyContext = struct {
     ) ?MethodLookup {
         switch (owner) {
             .builtin => |builtin| if (builtin != .list) return null,
-            .nominal => return null,
+            .source_decl, .nominal => return null,
         }
         if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "join_with")) return null;
         if (!self.dispatchArgsAreListJoinWithListItems(dispatcher_ty, arg_tys)) return null;
@@ -6233,6 +6375,85 @@ const BodyContext = struct {
         };
     }
 
+    fn methodTargetContext(
+        self: *BodyContext,
+        lookup: MethodLookup,
+    ) Allocator.Error!BodyContext {
+        const owner_template = switch (lookup.target.kind) {
+            .procedure => |procedure| procedure.template,
+            .local_proc => blk: {
+                self.requireLocalMethodTargetInCurrentView(lookup);
+                break :blk self.owner_template;
+            },
+        };
+        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template);
+    }
+
+    fn requireLocalMethodTargetInCurrentView(self: *BodyContext, lookup: MethodLookup) void {
+        if (!moduleBytesEqual(lookup.view.key.bytes, self.view.key.bytes)) {
+            Common.invariant("local method dispatch target belonged to a different checked module view");
+        }
+    }
+
+    fn methodTargetMonoTypeFromPlan(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        plan_ctx: *BodyContext,
+        plan_callable_ty: checked.CheckedTypeId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        return try target_ctx.instantiateTargetFromPlan(lookup.target.callable_ty, plan_ctx, plan_callable_ty, expected_ret_ty);
+    }
+
+    fn methodTargetMonoTypeFromArgs(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        var target_ctx = try self.methodTargetContext(lookup);
+        defer target_ctx.deinit();
+        return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
+    }
+
+    fn methodTargetCalleeWithMono(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        callable_mono_ty: Type.TypeId,
+    ) Allocator.Error!Ast.FnTemplate {
+        const source_fn_ty = lookup.target.callable_ty;
+        const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        return switch (lookup.target.kind) {
+            .procedure => |procedure| blk: {
+                _ = try self.builder.lowerTemplateWithMono(
+                    procedure.template,
+                    lookup.view,
+                    source_fn_ty,
+                    source_fn_key,
+                    callable_mono_ty,
+                );
+                break :blk self.builder.fnDefForTemplate(
+                    lookup.view,
+                    procedure.template,
+                    source_fn_ty,
+                    source_fn_key,
+                    callable_mono_ty,
+                );
+            },
+            .local_proc => |local| blk: {
+                self.requireLocalMethodTargetInCurrentView(lookup);
+                break :blk try self.fnTemplateForLocalProcWithMono(
+                    .{ .binder = local.binder, .expr = local.expr },
+                    source_fn_ty,
+                    source_fn_key,
+                    callable_mono_ty,
+                );
+            },
+        };
+    }
+
     fn lowerResolvedDispatch(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -6240,26 +6461,10 @@ const BodyContext = struct {
         callable_mono_ty: Type.TypeId,
         arg_ctx: *BodyContext,
     ) Allocator.Error!Ast.ExprData {
-        const template = lookup.target.template orelse
-            Common.invariant("checked dispatch target was not backed by a procedure template");
-        _ = try self.builder.lowerTemplateWithMono(
-            template,
-            lookup.view,
-            lookup.target.callable_ty,
-            lookup.view.types.rootKey(lookup.target.callable_ty),
-            callable_mono_ty,
-        );
-
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
         return .{ .call_proc = .{
-            .callee = self.builder.fnDefForTemplate(
-                lookup.view,
-                template,
-                lookup.target.callable_ty,
-                lookup.view.types.rootKey(lookup.target.callable_ty),
-                callable_mono_ty,
-            ),
+            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
             .args = args,
         } };
     }
@@ -6321,6 +6526,13 @@ const BodyContext = struct {
 
         try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty, conflict_message);
 
+        if (try self.structuralEqualityExprResultType(eq.lhs, null)) |lhs_ty| {
+            return try self.constrainStructuralEqualityOperandType(lhs_ty, eq.rhs, rhs_checked_ty, conflict_message);
+        }
+        if (try self.structuralEqualityExprResultType(eq.rhs, null)) |rhs_ty| {
+            return try self.constrainStructuralEqualityOperandType(rhs_ty, eq.lhs, lhs_checked_ty, conflict_message);
+        }
+
         if (self.constrainedMonoType(lhs_checked_ty)) |lhs_ty| {
             try self.constrainTypeToMono(rhs_checked_ty, lhs_ty, conflict_message);
             return lhs_ty;
@@ -6364,6 +6576,51 @@ const BodyContext = struct {
         }
 
         Common.invariant("checked structural equality operand type was not concrete after equality relation instantiation");
+    }
+
+    /// Resolves the Monotype an equality operand evaluates to, when that operand is a
+    /// result-producing expression (call, dispatch, lookup, field access). The shared
+    /// equality operand type is taken from this result so an open tag literal on the other
+    /// side cannot narrow it. Returns null for any other expression shape (e.g. a tag
+    /// literal): the caller then falls through to the concrete-shape ladder in
+    /// structuralEqualityOperandType, so this must not fall back to lowerType itself.
+    fn structuralEqualityExprResultType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        expected_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return switch (expr.data) {
+            .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
+            .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .lookup_local => |lookup| try self.lookupArgumentMonoType(expr.ty, lookup.resolved, expected_ty, false),
+            .lookup_external => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, false),
+            .lookup_required => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, false),
+            .field_access => |field| blk: {
+                if (expected_ty) |ty| {
+                    try self.constrainTypeToMono(expr.ty, ty, "checked field access expected type conflicted with an existing Monotype constraint");
+                    break :blk ty;
+                }
+                break :blk try self.fieldAccessMonoType(field.receiver, field.field_name);
+            },
+            else => null,
+        };
+    }
+
+    fn constrainStructuralEqualityOperandType(
+        self: *BodyContext,
+        operand_ty: Type.TypeId,
+        other_expr_id: checked.CheckedExprId,
+        other_checked_ty: checked.CheckedTypeId,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!Type.TypeId {
+        try self.constrainTypeToMono(other_checked_ty, operand_ty, conflict_message);
+        if (try self.structuralEqualityExprResultType(other_expr_id, operand_ty)) |other_ty| {
+            if (!self.sameType(operand_ty, other_ty)) Common.invariant(conflict_message);
+        }
+        return operand_ty;
     }
 
     fn lowerEqualityExpr(
@@ -6465,31 +6722,12 @@ const BodyContext = struct {
             Common.invariant("owned equality call requested for a type without a method owner");
         const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse
             Common.invariant("checked method registry is missing owned equality target");
-        const template = lookup.target.template orelse
-            Common.invariant("checked equality target was not backed by a procedure template");
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, template);
-        defer target_ctx.deinit();
-        target_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        target_ctx.current_fn_key = self.current_fn_key;
 
         const arg_tys = [_]Type.TypeId{ ty, ty };
-        const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, &arg_tys, bool_ty);
-        _ = try self.builder.lowerTemplateWithMono(
-            template,
-            lookup.view,
-            lookup.target.callable_ty,
-            lookup.view.types.rootKey(lookup.target.callable_ty),
-            callable_mono_ty,
-        );
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
         const args = [_]Ast.ExprId{ lhs, rhs };
         return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-            .callee = self.builder.fnDefForTemplate(
-                lookup.view,
-                template,
-                lookup.target.callable_ty,
-                lookup.view.types.rootKey(lookup.target.callable_ty),
-                callable_mono_ty,
-            ),
+            .callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty),
             .args = try self.builder.program.addExprSpan(&args),
         } } });
     }
@@ -7491,7 +7729,9 @@ const BodyContext = struct {
         while (index > 0) {
             index -= 1;
             if (saved[index].previous) |previous| {
-                self.binders.put(saved[index].binder, previous) catch {};
+                self.binders.put(saved[index].binder, previous) catch |err| switch (err) {
+                    error.OutOfMemory => Common.invariant("restoring a previously inserted binder cannot reallocate"),
+                };
             } else {
                 _ = self.binders.remove(saved[index].binder);
             }
@@ -7979,7 +8219,7 @@ const BodyContext = struct {
         if (raw >= self.view.bodies.exprs.len) {
             Common.invariant("checked divergence referenced a missing expression");
         }
-        return self.view.bodies.exprs[raw].diverges;
+        return self.view.bodies.exprDiverges(expr_id);
     }
 
     fn checkedStatementDiverges(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
@@ -7987,7 +8227,7 @@ const BodyContext = struct {
         if (raw >= self.view.bodies.statements.len) {
             Common.invariant("checked divergence referenced a missing statement");
         }
-        return self.view.bodies.statements[raw].diverges;
+        return self.view.bodies.statementDiverges(statement_id);
     }
 
     const LoopCarry = struct {
@@ -8011,7 +8251,7 @@ const BodyContext = struct {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
 
-        const step = self.iteratorStepShape(plan.step_ty);
+        const step = try self.iteratorStepShape(plan.step_ty);
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
         const iterator_ty = self.builder.program.exprs.items[@intFromEnum(initial_iterator)].ty;
         try self.constrainTypeToMono(plan.iterator_ty, iterator_ty, "checked iterator type conflicted with an existing Monotype constraint");
@@ -8153,17 +8393,12 @@ const BodyContext = struct {
             Common.invariant("iterator dispatch plan had no method owner");
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse
             Common.invariant("checked iterator dispatch method registry is missing resolved target");
-        const template = lookup.target.template orelse
-            Common.invariant("checked iterator dispatch target was not backed by a procedure template");
 
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, template);
-        defer target_ctx.deinit();
-        const target_mono_ty = try target_ctx.instantiateTargetFromPlan(lookup.target.callable_ty, &call_ctx, plan.callable_ty, expected_ret_ty);
+        const target_mono_ty = try self.methodTargetMonoTypeFromPlan(lookup, &call_ctx, plan.callable_ty, expected_ret_ty);
         try call_ctx.constrainTypeToMono(plan.callable_ty, target_mono_ty, "checked iterator dispatch plan callable type differed from resolved target callable type");
         if (!self.sameType(callable_mono_ty, target_mono_ty)) {
             Common.invariant("checked iterator dispatch target callable type differed from dispatch plan callable type");
         }
-        _ = try self.builder.lowerTemplateWithMono(template, lookup.view, lookup.target.callable_ty, lookup.view.types.rootKey(lookup.target.callable_ty), target_mono_ty);
 
         const fn_data = self.builder.functionShape(target_mono_ty, "checked iterator dispatch target had a non-function type");
         if (expected_ret_ty) |expected| {
@@ -8181,7 +8416,7 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = self.builder.fnDefForTemplate(lookup.view, template, lookup.target.callable_ty, lookup.view.types.rootKey(lookup.target.callable_ty), target_mono_ty),
+                .callee = try self.methodTargetCalleeWithMono(lookup, target_mono_ty),
                 .args = try self.builder.program.addExprSpan(args),
             } },
         });
@@ -8501,12 +8736,8 @@ const BodyContext = struct {
         iterator_ty: Type.TypeId,
         rest_local: Ast.LocalId,
     ) Allocator.Error!Ast.PatId {
-        const count_field = try self.iteratorRecordDestruct(step.skip_count.name, try self.builder.program.addPat(.{
-            .ty = try self.lowerType(step.skip_count.ty),
-            .data = .wildcard,
-        }));
         const rest_field = try self.iteratorRecordDestruct(step.skip_rest.name, try self.builder.bindPat(rest_local, iterator_ty));
-        const fields = [_]Ast.RecordDestruct{ count_field, rest_field };
+        const fields = [_]Ast.RecordDestruct{rest_field};
         return try self.builder.program.addPat(.{
             .ty = try self.lowerType(step.skip_payload_ty),
             .data = .{ .record = try self.builder.program.addRecordDestructSpan(&fields) },
@@ -8801,14 +9032,13 @@ const BodyContext = struct {
         skip_payload_ty: checked.CheckedTypeId,
         one_item: checked.CheckedRecordField,
         one_rest: checked.CheckedRecordField,
-        skip_count: checked.CheckedRecordField,
         skip_rest: checked.CheckedRecordField,
     };
 
-    fn iteratorStepShape(self: *BodyContext, step_ty: checked.CheckedTypeId) IterStepShape {
+    fn iteratorStepShape(self: *BodyContext, step_ty: checked.CheckedTypeId) Allocator.Error!IterStepShape {
         const step_payload = resolvedPayload(self.view, step_ty).payload;
-        const tags = switch (step_payload) {
-            .tag_union => |tag_union| tag_union.tags,
+        const step_tag_union = switch (step_payload) {
+            .tag_union => |tag_union| tag_union,
             else => Common.invariant("iterator .next plan did not return a tag union"),
         };
 
@@ -8818,19 +9048,50 @@ const BodyContext = struct {
         var one_payload_ty: ?checked.CheckedTypeId = null;
         var skip_payload_ty: ?checked.CheckedTypeId = null;
 
-        for (tags) |tag| {
-            const tag_text = self.view.names.tagLabelText(tag.name);
-            if (Ident.textEql(tag_text, "Done")) {
-                if (tag.args.len != 0) Common.invariant("iterator Done step carried payloads");
-                done_tag = tag.name;
-            } else if (Ident.textEql(tag_text, "One")) {
-                if (tag.args.len != 1) Common.invariant("iterator One step did not carry one payload");
-                one_tag = tag.name;
-                one_payload_ty = tag.args[0];
-            } else if (Ident.textEql(tag_text, "Skip")) {
-                if (tag.args.len != 1) Common.invariant("iterator Skip step did not carry one payload");
-                skip_tag = tag.name;
-                skip_payload_ty = tag.args[0];
+        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        var tags = step_tag_union.tags;
+        var current: ?checked.CheckedTypeId = step_tag_union.ext;
+        while (true) {
+            for (tags) |tag| {
+                const tag_text = self.view.names.tagLabelText(tag.name);
+                if (Ident.textEql(tag_text, "Done")) {
+                    if (tag.args.len != 0) Common.invariant("iterator Done step carried payloads");
+                    if (done_tag != null) Common.invariant("iterator step type had duplicate Done tags");
+                    done_tag = tag.name;
+                } else if (Ident.textEql(tag_text, "One")) {
+                    if (tag.args.len != 1) Common.invariant("iterator One step did not carry one payload");
+                    if (one_tag != null) Common.invariant("iterator step type had duplicate One tags");
+                    one_tag = tag.name;
+                    one_payload_ty = tag.args[0];
+                } else if (Ident.textEql(tag_text, "Skip")) {
+                    if (tag.args.len != 1) Common.invariant("iterator Skip step did not carry one payload");
+                    if (skip_tag != null) Common.invariant("iterator step type had duplicate Skip tags");
+                    skip_tag = tag.name;
+                    skip_payload_ty = tag.args[0];
+                }
+            }
+
+            const ext = current orelse break;
+            if (seen.contains(ext)) break;
+            try seen.put(ext, {});
+
+            switch (checkedPayload(self.view, ext)) {
+                .alias => |alias| {
+                    tags = &.{};
+                    current = alias.backing;
+                },
+                .empty_tag_union => break,
+                .flex, .rigid => |variable| {
+                    if (variable.row_default == .empty_tag_union) break;
+                    Common.invariant("open non-tag iterator step row reached Monotype lowering");
+                },
+                .tag_union => |tag_union| {
+                    tags = tag_union.tags;
+                    current = tag_union.ext;
+                },
+                else => Common.invariant("open or non-tag iterator step row reached Monotype lowering"),
             }
         }
 
@@ -8846,7 +9107,6 @@ const BodyContext = struct {
             .skip_payload_ty = skip_payload,
             .one_item = checkedRecordFieldByName(self.view, one_payload, "item"),
             .one_rest = checkedRecordFieldByName(self.view, one_payload, "rest"),
-            .skip_count = checkedRecordFieldByName(self.view, skip_payload, "count"),
             .skip_rest = checkedRecordFieldByName(self.view, skip_payload, "rest"),
         };
     }
@@ -9246,10 +9506,16 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
     return switch (types.ownerHead(ty)) {
         .none => null,
         .builtin => |owner| .{ .builtin = owner },
-        .named_type => |def| .{ .nominal = .{
-            .module_name = def.module_name,
-            .type_name = def.type_name,
-        } },
+        .named_type => |def| if (def.source_decl) |source_decl|
+            .{ .source_decl = .{
+                .module_name = def.module_name,
+                .statement = source_decl,
+            } }
+        else
+            .{ .nominal = .{
+                .module_name = def.module_name,
+                .type_name = def.type_name,
+            } },
     };
 }
 

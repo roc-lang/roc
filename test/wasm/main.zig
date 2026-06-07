@@ -6,6 +6,7 @@
 //! Run with: zig build run-test-wasm-static-lib
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 
 /// Custom error type that host functions can return to signal a trap.

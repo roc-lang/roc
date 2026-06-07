@@ -1,6 +1,7 @@
 //! LSP protocol types and JSON-RPC message structures for client-server communication.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// LSP error codes mirrored from the specification.
 pub const ErrorCode = enum(i32) {
@@ -15,7 +16,7 @@ pub const ErrorCode = enum(i32) {
     content_modified = -32801,
     request_cancelled = -32800,
 
-    pub fn jsonStringify(self: ErrorCode, writer: anytype) !void {
+    pub fn jsonStringify(self: ErrorCode, writer: anytype) error{WriteFailed}!void {
         try writer.write(@intFromEnum(self));
     }
 };
@@ -32,7 +33,7 @@ pub const JsonId = union(enum) {
     integer: i64,
     string: []u8,
 
-    pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !JsonId {
+    pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidIdType})!JsonId {
         return switch (value) {
             .integer => |num| .{ .integer = num },
             .float => return error.InvalidIdType,
@@ -41,7 +42,7 @@ pub const JsonId = union(enum) {
         };
     }
 
-    pub fn clone(self: JsonId, allocator: std.mem.Allocator) !JsonId {
+    pub fn clone(self: JsonId, allocator: std.mem.Allocator) Allocator.Error!JsonId {
         return switch (self) {
             .integer => |num| .{ .integer = num },
             .string => |text| .{ .string = try copyString(allocator, text) },
@@ -56,7 +57,7 @@ pub const JsonId = union(enum) {
         self.* = undefined;
     }
 
-    pub fn jsonStringify(self: JsonId, writer: anytype) !void {
+    pub fn jsonStringify(self: JsonId, writer: anytype) error{WriteFailed}!void {
         switch (self) {
             .integer => |num| try writer.write(num),
             .string => |text| try writer.write(text),
@@ -75,7 +76,7 @@ pub const ClientInfo = struct {
         self.* = undefined;
     }
 
-    pub fn jsonStringify(self: ClientInfo, writer: anytype) !void {
+    pub fn jsonStringify(self: ClientInfo, writer: anytype) error{WriteFailed}!void {
         try writer.write(.{
             .name = self.name,
             .version = self.version,
@@ -90,7 +91,7 @@ pub const InitializeParams = struct {
     client_info: ?ClientInfo = null,
     capabilities_json: ?[]u8 = null,
 
-    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !InitializeParams {
+    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!InitializeParams {
         const obj = switch (value) {
             .object => |o| o,
             else => return error.InvalidParams,
@@ -205,7 +206,7 @@ pub const InitializeResult = struct {
 pub const TextDocumentIdentifier = struct {
     uri: []u8,
 
-    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !TextDocumentIdentifier {
+    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!TextDocumentIdentifier {
         const obj = switch (value) {
             .object => |o| o,
             else => return error.InvalidParams,
@@ -232,7 +233,7 @@ pub const TextDocumentIdentifier = struct {
 pub const SemanticTokensParams = struct {
     textDocument: TextDocumentIdentifier,
 
-    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) !SemanticTokensParams {
+    pub fn fromJson(allocator: std.mem.Allocator, value: std.json.Value) (Allocator.Error || error{InvalidParams})!SemanticTokensParams {
         const obj = switch (value) {
             .object => |o| o,
             else => return error.InvalidParams,
@@ -257,7 +258,7 @@ pub const SemanticTokens = struct {
     /// [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]...
     data: []const u32,
 
-    pub fn jsonStringify(self: SemanticTokens, writer: anytype) !void {
+    pub fn jsonStringify(self: SemanticTokens, writer: anytype) error{WriteFailed}!void {
         try writer.beginObject();
         try writer.objectField("data");
         try writer.beginArray();
@@ -269,13 +270,13 @@ pub const SemanticTokens = struct {
     }
 };
 
-fn copyString(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+fn copyString(allocator: std.mem.Allocator, text: []const u8) Allocator.Error![]u8 {
     const buf = try allocator.alloc(u8, text.len);
     @memcpy(buf, text);
     return buf;
 }
 
-fn stringifyValue(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
+fn stringifyValue(allocator: std.mem.Allocator, value: std.json.Value) Allocator.Error![]u8 {
     var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
     std.json.Stringify.value(value, .{}, &writer.writer) catch return error.OutOfMemory;

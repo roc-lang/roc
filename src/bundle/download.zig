@@ -90,7 +90,10 @@ pub fn download(
     var request = client.request(.GET, uri, .{
         .redirect_behavior = .unhandled,
         .extra_headers = extra_headers,
-    }) catch return error.HttpError;
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.HttpError,
+    };
     defer request.deinit();
 
     // Send just the request head (no body)
@@ -98,7 +101,10 @@ pub fn download(
 
     // Receive headers into a temporary buffer
     var head_buffer: [SERVER_HEADER_BUFFER_SIZE]u8 = undefined;
-    var response = request.receiveHead(&head_buffer) catch return error.HttpError;
+    var response = request.receiveHead(&head_buffer) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.HttpError,
+    };
 
     // Check response status
     if (response.head.status != .ok) {

@@ -4,6 +4,7 @@
 //! Walks the AST to find all containing regions for proper expand/shrink selection.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
@@ -13,7 +14,7 @@ const TokenizedRegion = AST.TokenizedRegion;
 /// Handler for `textDocument/selectionRange` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "selectionRange requires params");
                 return;
@@ -107,7 +108,10 @@ pub fn handler(comptime ServerType: type) type {
                     };
                 };
 
-                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch null;
+                const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => null,
+                };
                 try results.append(self.allocator, selection_range);
             }
 
@@ -142,7 +146,7 @@ fn freeSelectionRange(allocator: std.mem.Allocator, range: SelectionRange) void 
 
 /// Compute selection range hierarchy for a position.
 /// Walks the AST to find all containing nodes (token, expression, statement, file).
-fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) !SelectionRange {
+fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) (Allocator.Error || error{ InvalidPosition, ParseFailed, NoRangeFound })!SelectionRange {
     // Build line offset table
     const line_offsets = buildLineOffsets(source);
 
@@ -150,13 +154,12 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
 
     // Parse to get AST
-    var module_env = can.ModuleEnv.init(allocator, source) catch {
-        return error.ParseFailed;
-    };
+    var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch {
-        return error.ParseFailed;
+    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TooNested => return error.ParseFailed,
     };
     defer ast.deinit();
 

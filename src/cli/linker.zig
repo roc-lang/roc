@@ -3,6 +3,7 @@
 //! Supports ELF, COFF, MachO, and WebAssembly targets.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
@@ -107,7 +108,7 @@ pub const LinkError = error{
 /// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
 /// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
 /// because the linker runs on Linux/macOS/Windows but may target any OS.
-fn selfExePath(std_io: std.Io, buf: []u8) ![]const u8 {
+fn selfExePath(std_io: std.Io, buf: []u8) anyerror![]const u8 {
     switch (comptime builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .visionos => {
             var n: u32 = @intCast(buf.len);
@@ -130,7 +131,7 @@ fn selfExePath(std_io: std.Io, buf: []u8) ![]const u8 {
 }
 
 /// Get the directory containing the currently running executable.
-fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
+fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) anyerror![]const u8 {
     var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const symlink_path = try selfExePath(std_io, &symlink_path_buf);
     var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -142,7 +143,7 @@ fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
 /// Find the Darwin sysroot directory at runtime.
 /// First looks for a 'darwin' directory next to the executable (for distributed builds),
 /// then falls back to the compile-time path (for local development builds).
-fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
+fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) Allocator.Error![]const u8 {
     const exe_dir = getSelfExeDir(allocator, std_io) catch |err| {
         std.log.warn("Failed to resolve executable path: {}, falling back to compile-time path", .{err});
         return build_options.darwin_sysroot;
@@ -170,15 +171,20 @@ fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) ![]const u8 {
 /// Looks for 'macos-sysroot' directory in the platform's files directory.
 /// For example, if platform_files_dir is "/path/to/platform/targets",
 /// this looks for "/path/to/platform/targets/macos-sysroot/".
-fn findPlatformSysroot(allocator: std.mem.Allocator, std_io: std.Io, platform_files_dir: ?[]const u8) ?[]const u8 {
+fn findPlatformSysroot(allocator: std.mem.Allocator, std_io: std.Io, platform_files_dir: ?[]const u8) std.mem.Allocator.Error!?[]const u8 {
     const files_dir = platform_files_dir orelse return null;
 
     // Look for macos-sysroot in the platform files directory
-    const sysroot_path = std.fs.path.join(allocator, &.{ files_dir, "macos-sysroot" }) catch return null;
+    const sysroot_path = try std.fs.path.join(allocator, &.{ files_dir, "macos-sysroot" });
+    errdefer allocator.free(sysroot_path);
 
     // Verify it exists and has the expected structure (usr/lib/libSystem.tbd)
-    const lib_path = std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" }) catch return null;
-    std.Io.Dir.cwd().access(std_io, lib_path, .{}) catch return null;
+    const lib_path = try std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" });
+    defer allocator.free(lib_path);
+    std.Io.Dir.cwd().access(std_io, lib_path, .{}) catch {
+        allocator.free(sysroot_path);
+        return null;
+    };
 
     std.log.info("Using platform-provided macOS sysroot: {s}", .{sysroot_path});
     return sysroot_path;
@@ -291,7 +297,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
             // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
             try args.append("-syslibroot");
-            if (findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
+            if (try findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
                 try args.append(platform_sysroot);
 
                 // Add framework search path to help linker resolve framework dependencies
@@ -613,7 +619,7 @@ const macho = std.macho;
 
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
-fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) !void {
+fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!void {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
     defer file.close(io);
 
@@ -639,7 +645,7 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) !void {
     // No LC_MAIN — leave as-is (e.g. dylibs or unusual layouts).
 }
 
-fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) !void {
+fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
     const result = try std.process.run(ctx.arena, ctx.io.std_io, .{
         .argv = &.{ "/usr/bin/codesign", "--force", "--sign", "-", path },
     });

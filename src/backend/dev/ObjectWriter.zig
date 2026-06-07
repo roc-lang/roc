@@ -23,7 +23,7 @@ pub fn generateObjectFile(
     relocations: []const Relocation,
     rodata_relocations: []const DataRelocation,
     output: *std.ArrayList(u8),
-) !void {
+) (Allocator.Error || error{UnsupportedTarget})!void {
     const cpu_arch = target.toCpuArch();
     const os_tag = target.toOsTag();
 
@@ -497,7 +497,7 @@ test "static strings are emitted into readonly object sections for native target
     }
 }
 
-fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) !void {
+fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) anyerror!void {
     const allocator = std.testing.allocator;
     const code = switch (target.toCpuArch()) {
         .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 }, // ret
@@ -536,7 +536,7 @@ fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, fo
     try std.testing.expect(std.mem.find(u8, output.items, forbidden) == null);
 }
 
-fn readonlySection(target: RocTarget, object_bytes: []const u8) ![]const u8 {
+fn readonlySection(target: RocTarget, object_bytes: []const u8) error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound }![]const u8 {
     return switch (target.toOsTag()) {
         .macos => try machoSection(object_bytes, "__const"),
         .windows => try coffSectionData(object_bytes, ".rdata"),
@@ -545,7 +545,7 @@ fn readonlySection(target: RocTarget, object_bytes: []const u8) ![]const u8 {
     };
 }
 
-fn elfSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
+fn elfSectionData(bytes: []const u8, wanted_name: []const u8) error{ InvalidObjectFile, UnsupportedTarget, SectionNotFound }![]const u8 {
     if (bytes.len < 64) return error.InvalidObjectFile;
     if (!std.mem.eql(u8, bytes[0..4], "\x7fELF")) return error.InvalidObjectFile;
     if (bytes[4] != 2) return error.UnsupportedTarget;
@@ -587,7 +587,7 @@ fn elfSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
     return error.SectionNotFound;
 }
 
-fn machoSection(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
+fn machoSection(bytes: []const u8, wanted_name: []const u8) error{ InvalidObjectFile, SectionNotFound }![]const u8 {
     if (bytes.len < 32) return error.InvalidObjectFile;
     if (std.mem.readInt(u32, bytes[0..4], .little) != 0xfeedfacf) return error.InvalidObjectFile;
 
@@ -628,7 +628,7 @@ fn machoSection(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
     return error.SectionNotFound;
 }
 
-fn coffSectionData(bytes: []const u8, wanted_name: []const u8) ![]const u8 {
+fn coffSectionData(bytes: []const u8, wanted_name: []const u8) error{ InvalidObjectFile, SectionNotFound }![]const u8 {
     if (bytes.len < 20) return error.InvalidObjectFile;
     const number_of_sections = std.mem.readInt(u16, bytes[2..4], .little);
     const optional_header_size = std.mem.readInt(u16, bytes[16..18], .little);

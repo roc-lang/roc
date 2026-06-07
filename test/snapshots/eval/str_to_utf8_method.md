@@ -56,7 +56,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "bytes"))
-		(e-dispatch-call (method "to_utf8") (constraint-fn-var 45)
+		(e-dispatch-call (method "to_utf8") (constraint-fn-var 41)
 			(receiver
 				(e-string
 					(e-literal (string "hello"))))

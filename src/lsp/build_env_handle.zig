@@ -22,7 +22,7 @@ pub const BuildEnvHandle = struct {
     document_has_reports: bool = true,
 
     /// Create a new handle with a single owner.
-    pub fn create(allocator: Allocator, env: BuildEnv, owner: []const u8, debug: bool) !*BuildEnvHandle {
+    pub fn create(allocator: Allocator, env: BuildEnv, owner: []const u8, debug: bool) Allocator.Error!*BuildEnvHandle {
         const handle = try allocator.create(BuildEnvHandle);
         handle.* = .{
             .allocator = allocator,

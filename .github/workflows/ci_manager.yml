@@ -21,7 +21,7 @@ jobs:
       other_than_zig: ${{ steps.other_filter.outputs.other_than_zig }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # 4.0.1
         id: filter
         with:
           filters: |
@@ -42,7 +42,7 @@ jobs:
               - 'ci/valgrind_snapshots.sh'
               - 'ci/zig_nix_ci.sh'
               - 'ci/valgrind.supp'
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # 4.0.1
         id: other_filter
         with:
           # Makes it so that every pattern below must match.
@@ -84,14 +84,9 @@ jobs:
     needs: check-changes
     if: needs.check-changes.outputs.zig == 'true'
     uses: ./.github/workflows/ci_zig.yml
-
-  call-old-workflow:
-    needs: check-changes
-    if: needs.check-changes.outputs.other_than_zig == 'true'
-    uses: ./.github/workflows/ci_manager_old.yml
     
   finish:
-    needs: [check-changes, call-zig-workflow, call-old-workflow]
+    needs: [check-changes, call-zig-workflow]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -100,12 +95,6 @@ jobs:
           if [[ "${{ needs.check-changes.outputs.zig }}" == "true" ]]; then
             if [[ "${{ needs.call-zig-workflow.result }}" != "success" ]]; then
               echo "ci_zig.yml failed."
-              exit 1
-            fi
-          fi
-          if [[ "${{ needs.check-changes.outputs.other_than_zig }}" == "true" ]]; then
-            if [[ "${{ needs.call-old-workflow.result }}" != "success" ]]; then
-              echo "ci_manager_old.yml failed."
               exit 1
             fi
           fi

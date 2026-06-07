@@ -1,6 +1,7 @@
 //! LSP server implementation that routes requests and notifications to handlers.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
@@ -107,7 +108,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             writer: WriterType,
             log_file: ?std.Io.File,
             debug_options: DebugOptions,
-        ) !Self {
+        ) Allocator.Error!Self {
             const flags = DebugFlags{
                 .build = debug_options.build,
                 .syntax = debug_options.syntax,
@@ -131,11 +132,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.syntax_checker.deinit();
         }
 
-        pub fn run(self: *Self) !void {
+        pub fn run(self: *Self) anyerror!void {
             while (try self.processNextMessage()) {}
         }
 
-        fn processNextMessage(self: *Self) !bool {
+        fn processNextMessage(self: *Self) anyerror!bool {
             if (self.state == .exit_success or self.state == .exit_failure) {
                 return false;
             }
@@ -156,7 +157,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             };
         }
 
-        fn handlePayload(self: *Self, payload: []u8) !void {
+        fn handlePayload(self: *Self, payload: []u8) anyerror!void {
             var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{});
             defer parsed.deinit();
 
@@ -185,7 +186,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
         }
 
-        fn handleRequest(self: *Self, method: []const u8, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        fn handleRequest(self: *Self, method: []const u8, id: *protocol.JsonId, maybe_params: ?std.json.Value) anyerror!void {
             if (request_handlers.get(method)) |handler| {
                 try handler(self, id, maybe_params);
                 return;
@@ -194,7 +195,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             try self.sendError(id, .method_not_found, "method not implemented");
         }
 
-        fn handleNotification(self: *Self, method: []const u8, params: ?std.json.Value) !void {
+        fn handleNotification(self: *Self, method: []const u8, params: ?std.json.Value) Allocator.Error!void {
             if (std.mem.eql(u8, method, "initialized")) {
                 if (self.state == .waiting_for_initialized) {
                     self.state = .running;
@@ -217,7 +218,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             // Other notifications are ignored until server capabilities are implemented.
         }
 
-        pub fn sendNullResponse(self: *Self, id: *protocol.JsonId) !void {
+        pub fn sendNullResponse(self: *Self, id: *protocol.JsonId) (Allocator.Error || error{WriteFailed})!void {
             const Response = struct {
                 jsonrpc: []const u8 = "2.0",
                 id: protocol.JsonId,
@@ -230,7 +231,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             });
         }
 
-        pub fn sendError(self: *Self, id: *protocol.JsonId, code: protocol.ErrorCode, message: []const u8) !void {
+        pub fn sendError(self: *Self, id: *protocol.JsonId, code: protocol.ErrorCode, message: []const u8) (Allocator.Error || error{WriteFailed})!void {
             const Response = struct {
                 jsonrpc: []const u8 = "2.0",
                 id: protocol.JsonId,
@@ -243,7 +244,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             });
         }
 
-        pub fn sendResponse(self: *Self, id: *protocol.JsonId, result: anytype) !void {
+        pub fn sendResponse(self: *Self, id: *protocol.JsonId, result: anytype) (Allocator.Error || error{WriteFailed})!void {
             const Response = struct {
                 jsonrpc: []const u8 = "2.0",
                 id: protocol.JsonId,
@@ -262,14 +263,14 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             };
         }
 
-        fn runSyntaxCheck(self: *Self, uri: []const u8) !void {
+        fn runSyntaxCheck(self: *Self, uri: []const u8) anyerror!void {
             const doc = self.doc_store.get(uri);
-            const root_path = if (self.client.root_uri) |root_uri| blk: {
-                const path = uri_util.uriToPath(self.allocator, root_uri) catch null;
-                break :blk path;
-            } else null;
+            const root_path = if (self.client.root_uri) |root_uri|
+                try uri_util.uriToPath(self.allocator, root_uri)
+            else
+                null;
+            defer if (root_path) |p| self.allocator.free(p);
             const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path);
-            if (root_path) |p| self.allocator.free(p);
             defer {
                 for (publish_sets) |*set| set.deinit(self.allocator);
                 self.allocator.free(publish_sets);
@@ -280,7 +281,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
         }
 
-        fn publishDiagnostics(self: *Self, publish: Diagnostics.PublishDiagnostics) !void {
+        fn publishDiagnostics(self: *Self, publish: Diagnostics.PublishDiagnostics) (Allocator.Error || error{WriteFailed})!void {
             const Notification = struct {
                 jsonrpc: []const u8 = "2.0",
                 method: []const u8 = "textDocument/publishDiagnostics",
@@ -316,7 +317,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
 }
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
-pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) !void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) anyerror!void {
     var stdin_file = std.Io.File.stdin();
     var stdout_file = std.Io.File.stdout();
 
@@ -358,7 +359,7 @@ const LogFileInfo = struct {
     path: []u8,
 };
 
-fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) !LogFileInfo {
+fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) anyerror!LogFileInfo {
     const dir_path = try resolveTempDir(allocator);
     defer allocator.free(dir_path);
     const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
@@ -377,7 +378,7 @@ fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) !LogFileInfo {
     return .{ .file = file, .path = absolute_path };
 }
 
-fn resolveTempDir(allocator: std.mem.Allocator) ![]u8 {
+fn resolveTempDir(allocator: std.mem.Allocator) Allocator.Error![]u8 {
     const env_names = if (builtin.os.tag == .windows)
         [_][]const u8{ "TMP", "TEMP", "LOCALAPPDATA" }
     else
