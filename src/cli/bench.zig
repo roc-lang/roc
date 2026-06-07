@@ -85,9 +85,6 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io,
     var total_tokens: u64 = 0;
 
     std.debug.print("Running {} iterations...\n", .{num_iterations});
-    if (is_parse) {
-        parse.Parser.resetInstrumentationCounters();
-    }
 
     // Benchmark loop
     for (0..num_iterations) |_| {
@@ -146,21 +143,6 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, std_io: std.Io,
 
     const result_name = if (is_parse) "Parse" else "Tokenizer";
     printBenchmarkResults(result_name, results);
-    if (is_parse) {
-        const counters = parse.Parser.instrumentation_counters;
-        std.debug.print("\nParser counters:\n", .{});
-        std.debug.print("  direct entries: {}\n", .{counters.direct_entries});
-        std.debug.print("  open pushes: {}\n", .{counters.pushes});
-        std.debug.print("  open pops: {}\n", .{counters.pops});
-        std.debug.print("  containsKind calls: {}\n", .{counters.contains_kind_calls});
-        std.debug.print("  containsKind entries scanned: {}\n", .{counters.contains_kind_entries_scanned});
-        std.debug.print("  pushes by kind:\n", .{});
-        for (counters.pushes_by_kind, 0..) |count, kind_idx| {
-            if (count != 0) {
-                std.debug.print("    {}: {}\n", .{ kind_idx, count });
-            }
-        }
-    }
 }
 
 /// Benchmarks the parsing of Roc files.

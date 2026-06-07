@@ -381,22 +381,6 @@ const OpenSyntaxKind = enum(u8) {
     type_fn_ret,
 };
 
-pub const InstrumentationCounters = struct {
-    direct_entries: u64 = 0,
-    pushes: u64 = 0,
-    pops: u64 = 0,
-    contains_kind_calls: u64 = 0,
-    contains_kind_entries_scanned: u64 = 0,
-    pushes_by_kind: [@typeInfo(OpenSyntaxKind).@"enum".fields.len]u64 = [_]u64{0} ** @typeInfo(OpenSyntaxKind).@"enum".fields.len,
-    pops_by_kind: [@typeInfo(OpenSyntaxKind).@"enum".fields.len]u64 = [_]u64{0} ** @typeInfo(OpenSyntaxKind).@"enum".fields.len,
-};
-
-pub var instrumentation_counters: InstrumentationCounters = .{};
-
-pub fn resetInstrumentationCounters() void {
-    instrumentation_counters = .{};
-}
-
 const OpenSyntaxStack = struct {
     const Entry = struct {
         kind: OpenSyntaxKind,
@@ -412,8 +396,6 @@ const OpenSyntaxStack = struct {
     }
 
     fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
-        instrumentation_counters.pushes += 1;
-        instrumentation_counters.pushes_by_kind[@intFromEnum(kind)] += 1;
         const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
         const end = start + @sizeOf(Payload);
         try self.payloads.resize(allocator, end);
@@ -422,8 +404,6 @@ const OpenSyntaxStack = struct {
     }
 
     fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
-        instrumentation_counters.pushes += 1;
-        instrumentation_counters.pushes_by_kind[@intFromEnum(kind)] += 1;
         try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
     }
 
@@ -437,19 +417,15 @@ const OpenSyntaxStack = struct {
     }
 
     fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
-        instrumentation_counters.contains_kind_calls += 1;
         for (self.entries.items) |entry| {
-            instrumentation_counters.contains_kind_entries_scanned += 1;
             if (entry.kind == kind) return true;
         }
         return false;
     }
 
     fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
-        instrumentation_counters.pops += 1;
         const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
-        instrumentation_counters.pops_by_kind[@intFromEnum(entry.kind)] += 1;
         const start: usize = @intCast(entry.payload_start);
         const end = start + @sizeOf(Payload);
         var payload: Payload = undefined;
@@ -459,10 +435,8 @@ const OpenSyntaxStack = struct {
     }
 
     fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
-        instrumentation_counters.pops += 1;
         const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
-        instrumentation_counters.pops_by_kind[@intFromEnum(entry.kind)] += 1;
         self.payloads.shrinkRetainingCapacity(@intCast(entry.payload_start));
     }
 };
@@ -2571,8 +2545,6 @@ const DirectEntry = struct {
 fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    instrumentation_counters.direct_entries += 1;
 
     var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
     const open_allocator = open_allocator_state.get();
