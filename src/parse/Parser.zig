@@ -781,1025 +781,10 @@ pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runHeaderDirect();
-}
-
-const HeaderKind = enum {
-    app,
-    module,
-    hosted,
-    package,
-    platform,
-    type_module,
-};
-
-const HeaderExposedTarget = enum {
-    app_provides,
-    module_exposes,
-    hosted_exposes,
-    package_exposes,
-    platform_exposes,
-};
-
-const HeaderRecordTarget = enum {
-    app_packages,
-    package_packages,
-    platform_packages,
-    platform_provides,
-};
-
-const HeaderContext = enum {
-    start,
-    exposed_open,
-    exposed_item_or_close,
-    exposed_after_item,
-    record_open,
-    record_field_or_close,
-    record_after_field,
-    platform_name_start,
-    platform_name_part,
-    platform_name_end,
-    platform_requires_kw,
-    platform_requires_open,
-    requires_entry_or_close,
-    requires_alias_item_or_close,
-    requires_alias_after_item,
-    requires_alias_for,
-    requires_entry_name,
-    requires_entry_colon,
-    requires_entry_type,
-    requires_after_entry,
-    platform_exposes_kw,
-    platform_exposes_open,
-    platform_packages_kw,
-    platform_packages_open,
-    platform_provides_kw,
-    platform_provides_open,
-    platform_targets_or_finish,
-    targets_colon,
-    targets_open,
-    targets_field_or_close,
-    targets_field_colon,
-    targets_string_value,
-    targets_link_entry_or_close,
-    target_entry_colon,
-    target_files_open,
-    target_file_or_close,
-    target_file_after,
-    target_entry_after,
-    targets_after_field,
-    finish,
-};
-
-fn runHeaderDirect(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    var kind: HeaderKind = .type_module;
-
-    var exposed_target: HeaderExposedTarget = undefined;
-    var exposed_start: TokenIdx = 0;
-    var exposed_top: u32 = 0;
-    var exposed_open_error: AST.Diagnostic.Tag = .header_expected_open_square;
-    var exposed_close_error: AST.Diagnostic.Tag = .header_expected_close_square;
-    var exposed_malformed_close_error: AST.Diagnostic.Tag = .import_exposing_no_close;
-    var exposes: AST.Collection.Idx = undefined;
-    var provides_exposes: AST.Collection.Idx = undefined;
-
-    var record_target: HeaderRecordTarget = undefined;
-    var record_start: TokenIdx = 0;
-    var record_top: u32 = 0;
-    var record_collection_tag: Node.Tag = .collection_packages;
-    var record_open_error: AST.Diagnostic.Tag = .expected_package_platform_open_curly;
-    var record_close_error: AST.Diagnostic.Tag = .expected_package_platform_close_curly;
-    var record_field_start: TokenIdx = 0;
-    var record_field_name: TokenIdx = 0;
-    var packages: AST.Collection.Idx = undefined;
-    var platform_provides: AST.Collection.Idx = undefined;
-    var platform_field: ?AST.RecordField.Idx = null;
-
-    var platform_name: TokenIdx = 0;
-    var requires_top: u32 = 0;
-    var requires_entries: AST.RequiresEntry.Span = .{ .span = base.DataSpan.empty() };
-    var requires_entry_start: TokenIdx = 0;
-    var requires_entry_name: TokenIdx = 0;
-    var requires_alias_top: u32 = 0;
-    var requires_aliases: AST.ForClauseTypeAlias.Span = .{ .span = base.DataSpan.empty() };
-    var requires_alias_start: TokenIdx = 0;
-    var requires_alias_name: TokenIdx = 0;
-
-    var targets: ?AST.TargetsSection.Idx = null;
-    var targets_start: TokenIdx = 0;
-    var targets_files_path: ?TokenIdx = null;
-    var targets_exe: ?AST.TargetLinkType.Idx = null;
-    var targets_static_lib: ?AST.TargetLinkType.Idx = null;
-    var targets_field_name: TokenIdx = 0;
-    var target_link_start: TokenIdx = 0;
-    var target_link_entries_top: u32 = 0;
-    var target_entry_start: TokenIdx = 0;
-    var target_entry_name: TokenIdx = 0;
-    var target_files_top: u32 = 0;
-
-    var context: HeaderContext = .start;
-    dispatch: while (true) {
-        const tok = self.peek();
-        switch (context) {
-            .start => switch (tok) {
-                .KwApp => {
-                    kind = .app;
-                    self.advance();
-                    exposed_target = .app_provides;
-                    exposed_open_error = .expected_provides_open_square;
-                    exposed_close_error = .header_expected_close_square;
-                    exposed_malformed_close_error = .import_exposing_no_close;
-                    context = .exposed_open;
-                    continue :dispatch;
-                },
-                .KwModule => {
-                    kind = .module;
-                    self.advance();
-                    exposed_target = .module_exposes;
-                    exposed_open_error = .header_expected_open_square;
-                    exposed_close_error = .header_expected_close_square;
-                    exposed_malformed_close_error = .import_exposing_no_close;
-                    context = .exposed_open;
-                    continue :dispatch;
-                },
-                .KwHosted => {
-                    kind = .hosted;
-                    self.advance();
-                    exposed_target = .hosted_exposes;
-                    exposed_open_error = .header_expected_open_square;
-                    exposed_close_error = .header_expected_close_square;
-                    exposed_malformed_close_error = .import_exposing_no_close;
-                    context = .exposed_open;
-                    continue :dispatch;
-                },
-                .KwPackage => {
-                    kind = .package;
-                    self.advance();
-                    exposed_target = .package_exposes;
-                    exposed_open_error = .expected_provides_open_square;
-                    exposed_close_error = .header_expected_close_square;
-                    exposed_malformed_close_error = .import_exposing_no_close;
-                    context = .exposed_open;
-                    continue :dispatch;
-                },
-                .KwPlatform => {
-                    kind = .platform;
-                    self.advance();
-                    context = .platform_name_start;
-                    continue :dispatch;
-                },
-                else => {
-                    kind = .type_module;
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-
-            .exposed_open => switch (tok) {
-                .OpenSquare => {
-                    exposed_start = self.pos;
-                    exposed_top = self.store.scratchExposedItemTop();
-                    self.advance();
-                    context = .exposed_item_or_close;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, exposed_open_error, start),
-            },
-            .exposed_item_or_close => switch (tok) {
-                .CloseSquare => {
-                    self.advance();
-                    const span = try self.store.exposedItemSpanFrom(exposed_top);
-                    const collection = try self.store.addCollection(.collection_exposed, .{
-                        .span = span.span,
-                        .region = .{ .start = exposed_start, .end = self.pos },
-                    });
-                    switch (exposed_target) {
-                        .app_provides => {
-                            provides_exposes = collection;
-                            record_target = .app_packages;
-                            record_start = self.pos;
-                            record_collection_tag = .collection_packages;
-                            record_open_error = .expected_package_platform_open_curly;
-                            record_close_error = .expected_package_platform_close_curly;
-                            context = .record_open;
-                        },
-                        .module_exposes, .hosted_exposes => {
-                            exposes = collection;
-                            context = .finish;
-                        },
-                        .package_exposes => {
-                            exposes = collection;
-                            try self.recordPackageHeaderModules(span);
-                            record_target = .package_packages;
-                            record_start = self.pos;
-                            record_collection_tag = .collection_packages;
-                            record_open_error = .expected_package_platform_open_curly;
-                            record_close_error = .expected_package_platform_close_curly;
-                            context = .record_open;
-                        },
-                        .platform_exposes => {
-                            exposes = collection;
-                            context = .platform_packages_kw;
-                        },
-                    }
-                    continue :dispatch;
-                },
-                .EndOfFile => {
-                    self.store.clearScratchExposedItemsFrom(exposed_top);
-                    return try self.pushMalformed(AST.Header.Idx, exposed_close_error, start);
-                },
-                else => {
-                    const item = try self.parseExposedItemTokens();
-                    try self.store.addScratchExposedItem(item);
-                    context = .exposed_after_item;
-                    continue :dispatch;
-                },
-            },
-            .exposed_after_item => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .exposed_item_or_close;
-                    continue :dispatch;
-                },
-                .CloseSquare => {
-                    context = .exposed_item_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    const error_pos = self.pos;
-                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                        self.advance();
-                    }
-                    self.store.clearScratchExposedItemsFrom(exposed_top);
-                    if (self.peek() == .CloseSquare) {
-                        self.advance();
-                        return try self.pushMalformed(AST.Header.Idx, exposed_malformed_close_error, error_pos);
-                    }
-                    return try self.pushMalformed(AST.Header.Idx, exposed_close_error, error_pos);
-                },
-            },
-
-            .record_open => switch (tok) {
-                .OpenCurly => {
-                    record_start = self.pos;
-                    record_top = self.store.scratchRecordFieldTop();
-                    self.advance();
-                    context = .record_field_or_close;
-                    continue :dispatch;
-                },
-                else => switch (record_target) {
-                    .app_packages => return try self.pushMalformed(AST.Header.Idx, record_open_error, start),
-                    .package_packages, .platform_packages, .platform_provides => {
-                        const malformed = try self.pushMalformed(AST.Collection.Idx, record_open_error, record_start);
-                        switch (record_target) {
-                            .package_packages, .platform_packages => packages = malformed,
-                            .platform_provides => platform_provides = malformed,
-                            .app_packages => unreachable,
-                        }
-                        context = switch (record_target) {
-                            .package_packages => .finish,
-                            .platform_packages => .platform_provides_kw,
-                            .platform_provides => .platform_targets_or_finish,
-                            .app_packages => unreachable,
-                        };
-                        continue :dispatch;
-                    },
-                },
-            },
-            .record_field_or_close => switch (tok) {
-                .CloseCurly => {
-                    self.advance();
-                    const span = try self.store.recordFieldSpanFrom(record_top);
-                    const collection = try self.store.addCollection(record_collection_tag, .{
-                        .span = span.span,
-                        .region = .{ .start = record_start, .end = self.pos },
-                    });
-                    switch (record_target) {
-                        .app_packages => {
-                            packages = collection;
-                            context = .finish;
-                        },
-                        .package_packages => {
-                            packages = collection;
-                            context = .finish;
-                        },
-                        .platform_packages => {
-                            packages = collection;
-                            context = .platform_provides_kw;
-                        },
-                        .platform_provides => {
-                            platform_provides = collection;
-                            context = .platform_targets_or_finish;
-                        },
-                    }
-                    continue :dispatch;
-                },
-                .EndOfFile => {
-                    self.store.clearScratchRecordFieldsFrom(record_top);
-                    if (record_target == .app_packages) {
-                        return try self.pushMalformed(AST.Header.Idx, record_close_error, start);
-                    }
-                    const malformed = try self.pushMalformed(AST.Collection.Idx, record_close_error, record_start);
-                    switch (record_target) {
-                        .package_packages, .platform_packages => packages = malformed,
-                        .platform_provides => platform_provides = malformed,
-                        .app_packages => unreachable,
-                    }
-                    context = switch (record_target) {
-                        .package_packages => .finish,
-                        .platform_packages => .platform_provides_kw,
-                        .platform_provides => .platform_targets_or_finish,
-                        .app_packages => unreachable,
-                    };
-                    continue :dispatch;
-                },
-                .LowerIdent => {
-                    record_field_start = self.pos;
-                    record_field_name = self.pos;
-                    self.advance();
-                    if (record_target == .app_packages) {
-                        if (self.peek() != .OpColon) {
-                            self.store.clearScratchRecordFieldsFrom(record_top);
-                            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_colon, start);
-                        }
-                        self.advance();
-                        if (self.peek() == .KwPlatform) {
-                            if (platform_field != null) {
-                                self.store.clearScratchRecordFieldsFrom(record_top);
-                                return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
-                            }
-                            self.advance();
-                            if (self.peek() != .StringStart) {
-                                self.store.clearScratchRecordFieldsFrom(record_top);
-                                return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
-                            }
-                            const value = try self.runExpr();
-                            const field = try self.store.addRecordField(.{
-                                .name = record_field_name,
-                                .value = value,
-                                .region = .{ .start = record_field_start, .end = self.pos },
-                            });
-                            try self.store.addScratchRecordField(field);
-                            platform_field = field;
-                        } else {
-                            if (self.peek() != .StringStart) {
-                                self.store.clearScratchRecordFieldsFrom(record_top);
-                                return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_string, start);
-                            }
-                            const value = try self.runExpr();
-                            try self.store.addScratchRecordField(try self.store.addRecordField(.{
-                                .name = record_field_name,
-                                .value = value,
-                                .region = .{ .start = record_field_start, .end = self.pos },
-                            }));
-                        }
-                    } else {
-                        var value: ?AST.Expr.Idx = null;
-                        if (self.peek() == .OpColon) {
-                            self.advance();
-                            value = try self.runExpr();
-                        }
-                        try self.store.addScratchRecordField(try self.store.addRecordField(.{
-                            .name = record_field_name,
-                            .value = value,
-                            .region = .{ .start = record_field_start, .end = self.pos },
-                        }));
-                    }
-                    context = .record_after_field;
-                    continue :dispatch;
-                },
-                else => {
-                    if (record_target == .app_packages) {
-                        self.store.clearScratchRecordFieldsFrom(record_top);
-                        return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
-                    }
-                    self.store.clearScratchRecordFieldsFrom(record_top);
-                    const malformed = try self.pushMalformed(AST.Collection.Idx, record_close_error, record_start);
-                    switch (record_target) {
-                        .package_packages, .platform_packages => packages = malformed,
-                        .platform_provides => platform_provides = malformed,
-                        .app_packages => unreachable,
-                    }
-                    context = switch (record_target) {
-                        .package_packages => .finish,
-                        .platform_packages => .platform_provides_kw,
-                        .platform_provides => .platform_targets_or_finish,
-                        .app_packages => unreachable,
-                    };
-                    continue :dispatch;
-                },
-            },
-            .record_after_field => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .record_field_or_close;
-                    continue :dispatch;
-                },
-                .CloseCurly => {
-                    context = .record_field_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchRecordFieldsFrom(record_top);
-                    if (record_target == .app_packages) {
-                        return try self.pushMalformed(AST.Header.Idx, record_close_error, start);
-                    }
-                    const malformed = try self.pushMalformed(AST.Collection.Idx, record_close_error, record_start);
-                    switch (record_target) {
-                        .package_packages, .platform_packages => packages = malformed,
-                        .platform_provides => platform_provides = malformed,
-                        .app_packages => unreachable,
-                    }
-                    context = switch (record_target) {
-                        .package_packages => .finish,
-                        .platform_packages => .platform_provides_kw,
-                        .platform_provides => .platform_targets_or_finish,
-                        .app_packages => unreachable,
-                    };
-                    continue :dispatch;
-                },
-            },
-
-            .platform_name_start => switch (tok) {
-                .StringStart => {
-                    self.advance();
-                    context = .platform_name_part;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_start, self.pos),
-            },
-            .platform_name_part => switch (tok) {
-                .StringPart => {
-                    platform_name = self.pos;
-                    self.advance();
-                    context = .platform_name_end;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_string, self.pos),
-            },
-            .platform_name_end => switch (tok) {
-                .StringEnd => {
-                    self.advance();
-                    context = .platform_requires_kw;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_end, self.pos),
-            },
-            .platform_requires_kw => switch (tok) {
-                .KwRequires => {
-                    self.advance();
-                    context = .platform_requires_open;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_requires, self.pos),
-            },
-            .platform_requires_open => switch (tok) {
-                .OpenCurly => {
-                    requires_top = self.store.scratchRequiresEntryTop();
-                    self.advance();
-                    if (self.peek() == .CloseCurly) {
-                        self.advance();
-                        if (self.peek() == .OpenCurly) {
-                            self.advance();
-                            context = .requires_entry_or_close;
-                        } else {
-                            requires_entries = try self.store.requiresEntrySpanFrom(requires_top);
-                            context = .platform_exposes_kw;
-                        }
-                    } else {
-                        context = .requires_entry_or_close;
-                    }
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_requires_rigids_open_curly, start),
-            },
-            .requires_entry_or_close => switch (tok) {
-                .CloseCurly => {
-                    self.advance();
-                    requires_entries = try self.store.requiresEntrySpanFrom(requires_top);
-                    context = .platform_exposes_kw;
-                    continue :dispatch;
-                },
-                .OpenSquare => {
-                    requires_entry_start = self.pos;
-                    requires_alias_top = self.store.scratchForClauseTypeAliasTop();
-                    self.advance();
-                    context = .requires_alias_item_or_close;
-                    continue :dispatch;
-                },
-                .EndOfFile => {
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_requires_signatures_close_curly, start);
-                },
-                else => {
-                    requires_entry_start = self.pos;
-                    requires_alias_top = self.store.scratchForClauseTypeAliasTop();
-                    requires_aliases = try self.store.forClauseTypeAliasSpanFrom(requires_alias_top);
-                    context = .requires_entry_name;
-                    continue :dispatch;
-                },
-            },
-            .requires_alias_item_or_close => switch (tok) {
-                .CloseSquare => {
-                    self.advance();
-                    requires_aliases = try self.store.forClauseTypeAliasSpanFrom(requires_alias_top);
-                    context = .requires_alias_for;
-                    continue :dispatch;
-                },
-                .UpperIdent => {
-                    requires_alias_start = self.pos;
-                    requires_alias_name = self.pos;
-                    self.advance();
-                    if (self.peek() != .OpColon) {
-                        self.store.clearScratchForClauseTypeAliasesFrom(requires_alias_top);
-                        self.store.clearScratchRequiresEntriesFrom(requires_top);
-                        return try self.pushMalformed(AST.Header.Idx, .expected_for_clause_colon, start);
-                    }
-                    self.advance();
-                    if (self.peek() != .LowerIdent) {
-                        self.store.clearScratchForClauseTypeAliasesFrom(requires_alias_top);
-                        self.store.clearScratchRequiresEntriesFrom(requires_top);
-                        return try self.pushMalformed(AST.Header.Idx, .expected_for_clause_rigid_name, start);
-                    }
-                    const rigid_name = self.pos;
-                    self.advance();
-                    try self.store.addScratchForClauseTypeAlias(try self.store.addForClauseTypeAlias(.{
-                        .alias_name = requires_alias_name,
-                        .rigid_name = rigid_name,
-                        .region = .{ .start = requires_alias_start, .end = self.pos },
-                    }));
-                    context = .requires_alias_after_item;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchForClauseTypeAliasesFrom(requires_alias_top);
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_for_clause_alias_name, start);
-                },
-            },
-            .requires_alias_after_item => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .requires_alias_item_or_close;
-                    continue :dispatch;
-                },
-                .CloseSquare => {
-                    context = .requires_alias_item_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchForClauseTypeAliasesFrom(requires_alias_top);
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_for_clause_close_square, start);
-                },
-            },
-            .requires_alias_for => switch (tok) {
-                .KwFor => {
-                    self.advance();
-                    context = .requires_entry_name;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_for_keyword, start);
-                },
-            },
-            .requires_entry_name => switch (tok) {
-                .LowerIdent => {
-                    requires_entry_name = self.pos;
-                    self.advance();
-                    context = .requires_entry_colon;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_for_clause_entrypoint_name, start);
-                },
-            },
-            .requires_entry_colon => switch (tok) {
-                .OpColon => {
-                    self.advance();
-                    context = .requires_entry_type;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_for_clause_type_colon, start);
-                },
-            },
-            .requires_entry_type => switch (tok) {
-                else => {
-                    const type_anno = try self.runTypeAnno(.not_looking_for_args);
-                    try self.store.addScratchRequiresEntry(try self.store.addRequiresEntry(.{
-                        .type_aliases = requires_aliases,
-                        .entrypoint_name = requires_entry_name,
-                        .type_anno = type_anno,
-                        .region = .{ .start = requires_entry_start, .end = self.pos },
-                    }));
-                    context = .requires_after_entry;
-                    continue :dispatch;
-                },
-            },
-            .requires_after_entry => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .requires_entry_or_close;
-                    continue :dispatch;
-                },
-                .CloseCurly => {
-                    context = .requires_entry_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchRequiresEntriesFrom(requires_top);
-                    return try self.pushMalformed(AST.Header.Idx, .expected_requires_signatures_close_curly, start);
-                },
-            },
-
-            .platform_exposes_kw => switch (tok) {
-                .KwExposes => {
-                    self.advance();
-                    context = .platform_exposes_open;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_exposes, self.pos),
-            },
-            .platform_exposes_open => switch (tok) {
-                .OpenSquare => {
-                    exposed_target = .platform_exposes;
-                    exposed_open_error = .expected_exposes_open_square;
-                    exposed_close_error = .expected_exposes_close_square;
-                    exposed_malformed_close_error = .expected_exposes_close_square;
-                    context = .exposed_open;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_exposes_open_square, self.pos),
-            },
-            .platform_packages_kw => switch (tok) {
-                .KwPackages => {
-                    self.advance();
-                    context = .platform_packages_open;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_packages, self.pos),
-            },
-            .platform_packages_open => switch (tok) {
-                .OpenCurly => {
-                    record_target = .platform_packages;
-                    record_start = self.pos;
-                    record_collection_tag = .collection_packages;
-                    record_open_error = .expected_packages_open_curly;
-                    record_close_error = .expected_packages_close_curly;
-                    context = .record_open;
-                    continue :dispatch;
-                },
-                else => {
-                    record_target = .platform_packages;
-                    record_start = self.pos;
-                    record_open_error = .expected_packages_open_curly;
-                    record_close_error = .expected_packages_close_curly;
-                    context = .record_open;
-                    continue :dispatch;
-                },
-            },
-            .platform_provides_kw => switch (tok) {
-                .KwProvides => {
-                    self.advance();
-                    context = .platform_provides_open;
-                    continue :dispatch;
-                },
-                else => return try self.pushMalformed(AST.Header.Idx, .expected_provides, self.pos),
-            },
-            .platform_provides_open => switch (tok) {
-                .OpenCurly => {
-                    record_target = .platform_provides;
-                    record_start = self.pos;
-                    record_collection_tag = .collection_record_fields;
-                    record_open_error = .expected_provides_open_curly;
-                    record_close_error = .expected_provides_close_curly;
-                    context = .record_open;
-                    continue :dispatch;
-                },
-                else => {
-                    record_target = .platform_provides;
-                    record_start = self.pos;
-                    record_collection_tag = .collection_record_fields;
-                    record_open_error = .expected_provides_open_curly;
-                    record_close_error = .expected_provides_close_curly;
-                    context = .record_open;
-                    continue :dispatch;
-                },
-            },
-            .platform_targets_or_finish => switch (tok) {
-                .KwTargets => {
-                    targets_start = self.pos;
-                    self.advance();
-                    context = .targets_colon;
-                    continue :dispatch;
-                },
-                else => {
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .targets_colon => switch (tok) {
-                .OpColon => {
-                    self.advance();
-                    context = .targets_open;
-                    continue :dispatch;
-                },
-                else => {
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, targets_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .targets_open => switch (tok) {
-                .OpenCurly => {
-                    self.advance();
-                    context = .targets_field_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, targets_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .targets_field_or_close => switch (tok) {
-                .CloseCurly => {
-                    self.advance();
-                    targets = try self.store.addTargetsSection(.{
-                        .files_path = targets_files_path,
-                        .exe = targets_exe,
-                        .static_lib = targets_static_lib,
-                        .region = .{ .start = targets_start, .end = self.pos },
-                    });
-                    context = .finish;
-                    continue :dispatch;
-                },
-                .LowerIdent => {
-                    targets_field_name = self.pos;
-                    self.advance();
-                    context = .targets_field_colon;
-                    continue :dispatch;
-                },
-                else => {
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, targets_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .targets_field_colon => switch (tok) {
-                .OpColon => {
-                    self.advance();
-                    switch (self.peek()) {
-                        .StringStart => context = .targets_string_value,
-                        .OpenCurly => {
-                            target_link_start = self.pos;
-                            target_link_entries_top = self.store.scratchTargetEntryTop();
-                            self.advance();
-                            context = .targets_link_entry_or_close;
-                        },
-                        else => {
-                            targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, targets_start);
-                            context = .finish;
-                        },
-                    }
-                    continue :dispatch;
-                },
-                else => {
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, targets_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .targets_string_value => switch (tok) {
-                .StringStart => {
-                    self.advance();
-                    if (self.peek() == .StringPart) {
-                        targets_files_path = self.pos;
-                        self.advance();
-                    }
-                    while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
-                        self.advance();
-                    }
-                    if (self.peek() == .StringEnd) {
-                        self.advance();
-                    }
-                    context = .targets_after_field;
-                    continue :dispatch;
-                },
-                else => {
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, targets_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .targets_link_entry_or_close => switch (tok) {
-                .CloseCurly => {
-                    self.advance();
-                    const link_type = try self.store.addTargetLinkType(.{
-                        .entries = try self.store.targetEntrySpanFrom(target_link_entries_top),
-                        .region = .{ .start = target_link_start, .end = self.pos },
-                    });
-                    const field_name = self.tokenText(targets_field_name);
-                    if (std.mem.eql(u8, field_name, "exe")) {
-                        targets_exe = link_type;
-                    } else if (std.mem.eql(u8, field_name, "static_lib")) {
-                        targets_static_lib = link_type;
-                    }
-                    context = .targets_after_field;
-                    continue :dispatch;
-                },
-                .LowerIdent => {
-                    target_entry_start = self.pos;
-                    target_entry_name = self.pos;
-                    self.advance();
-                    context = .target_entry_colon;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchTargetEntriesFrom(target_link_entries_top);
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_target_link_close_curly, target_link_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-            .target_entry_colon => switch (tok) {
-                .OpColon => {
-                    self.advance();
-                    context = .target_files_open;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchTargetEntriesFrom(target_link_entries_top);
-                    const malformed = try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, target_entry_start);
-                    try self.store.addScratchTargetEntry(malformed);
-                    context = .target_entry_after;
-                    continue :dispatch;
-                },
-            },
-            .target_files_open => switch (tok) {
-                .OpenSquare => {
-                    target_files_top = self.store.scratchTargetFileTop();
-                    self.advance();
-                    context = .target_file_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    const malformed = try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, target_entry_start);
-                    try self.store.addScratchTargetEntry(malformed);
-                    context = .target_entry_after;
-                    continue :dispatch;
-                },
-            },
-            .target_file_or_close => switch (tok) {
-                .CloseSquare => {
-                    self.advance();
-                    try self.store.addScratchTargetEntry(try self.store.addTargetEntry(.{
-                        .target = target_entry_name,
-                        .files = try self.store.targetFileSpanFrom(target_files_top),
-                        .region = .{ .start = target_entry_start, .end = self.pos },
-                    }));
-                    context = .target_entry_after;
-                    continue :dispatch;
-                },
-                .StringStart => {
-                    const file_start = self.pos;
-                    self.advance();
-                    var content_tok = file_start;
-                    if (self.peek() == .StringPart) {
-                        content_tok = self.pos;
-                        self.advance();
-                    }
-                    while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
-                        self.advance();
-                    }
-                    if (self.peek() == .EndOfFile) {
-                        try self.store.addScratchTargetFile(try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, file_start));
-                    } else {
-                        self.advance();
-                        try self.store.addScratchTargetFile(try self.store.addTargetFile(.{ .string_literal = content_tok }));
-                    }
-                    context = .target_file_after;
-                    continue :dispatch;
-                },
-                .LowerIdent, .KwApp => {
-                    const file_tok = self.pos;
-                    self.advance();
-                    try self.store.addScratchTargetFile(try self.store.addTargetFile(.{ .special_ident = file_tok }));
-                    context = .target_file_after;
-                    continue :dispatch;
-                },
-                else => {
-                    try self.store.addScratchTargetFile(try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, self.pos));
-                    context = .target_file_after;
-                    continue :dispatch;
-                },
-            },
-            .target_file_after => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .target_file_or_close;
-                    continue :dispatch;
-                },
-                .CloseSquare => {
-                    context = .target_file_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchTargetFilesFrom(target_files_top);
-                    const malformed = try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, target_entry_start);
-                    try self.store.addScratchTargetEntry(malformed);
-                    context = .target_entry_after;
-                    continue :dispatch;
-                },
-            },
-            .target_entry_after => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .targets_link_entry_or_close;
-                    continue :dispatch;
-                },
-                .CloseCurly => {
-                    context = .targets_link_entry_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    self.store.clearScratchTargetEntriesFrom(target_link_entries_top);
-                    const link_type = try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, target_link_start);
-                    const field_name = self.tokenText(targets_field_name);
-                    if (std.mem.eql(u8, field_name, "exe")) {
-                        targets_exe = link_type;
-                    } else if (std.mem.eql(u8, field_name, "static_lib")) {
-                        targets_static_lib = link_type;
-                    }
-                    context = .targets_after_field;
-                    continue :dispatch;
-                },
-            },
-            .targets_after_field => switch (tok) {
-                .Comma => {
-                    self.advance();
-                    context = .targets_field_or_close;
-                    continue :dispatch;
-                },
-                .CloseCurly => {
-                    context = .targets_field_or_close;
-                    continue :dispatch;
-                },
-                else => {
-                    targets = try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, targets_start);
-                    context = .finish;
-                    continue :dispatch;
-                },
-            },
-
-            .finish => switch (kind) {
-                .type_module => return try self.store.addHeader(.{ .type_module = .{
-                    .region = .{ .start = 0, .end = 0 },
-                } }),
-                .module => return try self.store.addHeader(.{ .module = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .exposes = exposes,
-                } }),
-                .hosted => return try self.store.addHeader(.{ .hosted = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .exposes = exposes,
-                } }),
-                .package => return try self.store.addHeader(.{ .package = .{
-                    .exposes = exposes,
-                    .packages = packages,
-                    .region = .{ .start = start, .end = self.pos },
-                } }),
-                .app => {
-                    if (platform_field) |platform_idx| {
-                        return try self.store.addHeader(.{ .app = .{
-                            .platform_idx = platform_idx,
-                            .provides = provides_exposes,
-                            .packages = packages,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    }
-                    return try self.pushMalformed(AST.Header.Idx, .no_platform, start);
-                },
-                .platform => return try self.store.addHeader(.{ .platform = .{
-                    .name = platform_name,
-                    .requires_entries = requires_entries,
-                    .exposes = exposes,
-                    .packages = packages,
-                    .provides = platform_provides,
-                    .targets = targets,
-                    .region = .{ .start = start, .end = self.pos },
-                } }),
-            },
-        }
-    }
+    return (try self.runDirectParser(.{
+        .initial_context = .header_start,
+        .result_kind = .header,
+    })).header;
 }
 
 const DelimitedError = Error || error{ExpectedNotFound};
@@ -1869,6 +854,29 @@ fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
         },
         else => return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start),
     }
+}
+
+fn parseStringExprTokens(self: *Parser) Error!AST.Expr.Idx {
+    std.debug.assert(self.peek() == .StringStart);
+    return try self.runExpr();
+}
+
+fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
+    const start = self.pos;
+    self.expect(.LowerIdent) catch {
+        return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
+    };
+    const name = start;
+    var value: ?AST.Expr.Idx = null;
+    if (self.peek() == .OpColon) {
+        self.advance();
+        value = try self.runExpr();
+    }
+    return try self.store.addRecordField(.{
+        .name = name,
+        .value = value,
+        .region = .{ .start = start, .end = self.pos },
+    });
 }
 
 fn parseTypeIdentToken(self: *Parser) Error!AST.TypeAnno.Idx {
@@ -3825,7 +2833,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 .KwPlatform,
                 .EndOfFile,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3841,7 +2849,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_type_module => switch (dispatch_token) {
                 .EndOfFile,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3856,7 +2864,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_app_start => switch (dispatch_token) {
                 .OpenSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3871,7 +2879,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_app_provides_next => switch (dispatch_token) {
                 .CloseSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3886,7 +2894,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_app_packages_next => switch (dispatch_token) {
                 .CloseCurly,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3901,7 +2909,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_module_start => switch (dispatch_token) {
                 .OpenSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3916,7 +2924,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_module_exposes_next => switch (dispatch_token) {
                 .CloseSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3931,7 +2939,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_hosted_start => switch (dispatch_token) {
                 .OpenSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3946,7 +2954,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_hosted_exposes_next => switch (dispatch_token) {
                 .CloseSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3961,7 +2969,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_package_start => switch (dispatch_token) {
                 .OpenSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3976,7 +2984,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_package_exposes_next => switch (dispatch_token) {
                 .CloseSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -3991,7 +2999,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_package_packages_next => switch (dispatch_token) {
                 .CloseCurly,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -4006,7 +3014,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_platform_start => switch (dispatch_token) {
                 .StringStart,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -4021,7 +3029,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_platform_requires_next => switch (dispatch_token) {
                 .CloseCurly,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -4036,7 +3044,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_platform_exposes_next => switch (dispatch_token) {
                 .CloseSquare,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -4051,7 +3059,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_platform_packages_next => switch (dispatch_token) {
                 .CloseCurly,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -4066,7 +3074,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_platform_provides_next => switch (dispatch_token) {
                 .CloseCurly,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
@@ -4081,7 +3089,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .header_platform_targets_next => switch (dispatch_token) {
                 .CloseCurly,
                 => {
-                    last_header = try self.runHeaderDirect();
+                    last_header = try self.parseHeaderTokens();
                     if (entry.result_kind == .header) {
                         return .{ .header = last_header.? };
                     }
