@@ -2227,3 +2227,28 @@ test "failed inline expect exits with code 1 and continues program (interpreter)
     try testing.expect(std.mem.find(u8, result.stdout, "Hello, World!") != null);
     try testing.expect(std.mem.find(u8, result.stderr, "Expect failed") != null);
 }
+
+test "roc test eq on tag union with list payload does not panic" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Regression test: using == on a tag union whose payload contains a List
+    // triggered a panic in lowerEqLocalsInto (solved_lir_lower.zig) with the
+    // message "non-structural equality reached direct LIR structural equality
+    // lowering", because the tag-payload equality lowering did not handle the
+    // .list LIR type.
+    const result = try util.runRoc(gpa, &.{ "test", "--no-cache" }, "test/cli/EqTagWithListPayload.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The command must not abort/panic (exit code 134 or a signal indicates SIGABRT).
+    const did_panic = result.term == .signal or (result.term == .exited and result.term.exited == 134);
+    try testing.expect(!did_panic);
+
+    // Stderr must not contain "panic".
+    const has_panic_text = std.mem.find(u8, result.stderr, "panic") != null;
+    try testing.expect(!has_panic_text);
+
+    // The expects should pass (exit code 0).
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+}
