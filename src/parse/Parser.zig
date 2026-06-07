@@ -358,7 +358,6 @@ const OpenSyntaxKind = enum(u8) {
     expr_lambda,
     expr_lambda_args,
     expr_lambda_body,
-    pattern_root,
     pattern_tag_args,
     pattern_list,
     pattern_tuple,
@@ -2036,6 +2035,29 @@ const RootStatementParents = struct {
     }
 };
 
+const RootPatternParents = struct {
+    current: ?usize = null,
+    stack: std.ArrayList(usize) = .empty,
+
+    fn deinit(self: *RootPatternParents, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    fn set(self: *RootPatternParents, allocator: std.mem.Allocator, open_depth: usize) Error!void {
+        if (self.current) |current| {
+            try self.stack.append(allocator, current);
+        }
+        self.current = open_depth;
+    }
+
+    fn take(self: *RootPatternParents, open_depth: usize) bool {
+        const current = self.current orelse return false;
+        if (current != open_depth) return false;
+        self.current = self.stack.pop();
+        return true;
+    }
+};
+
 const ExprBlockStack = struct {
     current: ?ExprBlockState = null,
     stack: std.ArrayList(ExprBlockState) = .empty,
@@ -2056,6 +2078,32 @@ const ExprBlockStack = struct {
     }
 
     fn leave(self: *ExprBlockStack) ExprBlockState {
+        const state = self.current orelse unreachable;
+        self.current = self.stack.pop();
+        return state;
+    }
+};
+
+const PatternRootStack = struct {
+    current: ?PatternRootState = null,
+    stack: std.ArrayList(PatternRootState) = .empty,
+
+    fn deinit(self: *PatternRootStack, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    fn enter(self: *PatternRootStack, allocator: std.mem.Allocator, state: PatternRootState) Error!void {
+        if (self.current) |current| {
+            try self.stack.append(allocator, current);
+        }
+        self.current = state;
+    }
+
+    fn active(self: *PatternRootStack) *PatternRootState {
+        return &self.current.?;
+    }
+
+    fn leave(self: *PatternRootStack) PatternRootState {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
@@ -2559,7 +2607,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var expr_for_after_body_state: ExprForAfterBodyState = undefined;
     var expr_blocks: ExprBlockStack = .{};
     defer expr_blocks.deinit(open_allocator);
-    var pattern_root_state: PatternRootState = undefined;
+    var pattern_roots: PatternRootStack = .{};
+    defer pattern_roots.deinit(open_allocator);
     var pattern_tag_args_state: PatternTagArgsState = undefined;
     var pattern_list_state: PatternListState = undefined;
     var pattern_record_state: PatternRecordState = undefined;
@@ -2589,6 +2638,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     defer root_statement_parents.deinit(open_allocator);
     var root_expr_parents: RootExprParents = .{};
     defer root_expr_parents.deinit(open_allocator);
+    var root_pattern_parents: RootPatternParents = .{};
+    defer root_pattern_parents.deinit(open_allocator);
     var pattern_alternatives = entry.pattern_alternatives;
     var type_args = entry.type_args;
     var statement_type = entry.statement_type;
@@ -2632,7 +2683,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &expr_for_after_list_state;
     _ = &expr_for_after_body_state;
     _ = &expr_blocks;
-    _ = &pattern_root_state;
+    _ = &pattern_roots;
     _ = &pattern_tag_args_state;
     _ = &pattern_list_state;
     _ = &pattern_record_state;
@@ -2660,6 +2711,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &statement_associated_statement_state;
     _ = &root_statement_parents;
     _ = &root_expr_parents;
+    _ = &root_pattern_parents;
     _ = &pattern_alternatives;
     _ = &type_args;
     _ = &statement_type;
@@ -3071,11 +3123,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     const start = self.pos;
                     self.advance();
                     try open_syntax.push(open_allocator, .statement_for_pattern, Token.Idx, start);
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_forbidden,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -3334,11 +3386,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     if (is_destructure) {
                         try open_syntax.push(open_allocator, .statement_destructure_pattern, Token.Idx, start);
-                        pattern_root_state = .{
+                        try pattern_roots.enter(open_allocator, .{
                             .outer_start = self.pos,
                             .scratch_top = self.store.scratchPatternTop(),
                             .alternatives = .alternatives_forbidden,
-                        };
+                        });
                         context = .pattern_root_next;
                         dispatch_token = self.peek();
                         continue :dispatch;
@@ -4281,11 +4333,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     const start = self.pos;
                     self.advance();
                     try open_syntax.push(open_allocator, .expr_for_pattern, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_forbidden,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -5267,11 +5319,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         continue :dispatch;
                     }
                     try open_syntax.push(open_allocator, .expr_lambda_args, ExprLambdaArgsState, expr_lambda_args_state);
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_forbidden,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -5469,11 +5521,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         .scratch_top = expr_match_branch_state.scratch_top,
                         .branch_start = self.pos,
                     });
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_allowed,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -5841,17 +5893,18 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .pattern_root_next => switch (dispatch_token) {
                 .EndOfFile,
                 => {
-                    const pattern_count = self.store.scratchPatternTop() - pattern_root_state.scratch_top;
+                    const state = pattern_roots.leave();
+                    const pattern_count = self.store.scratchPatternTop() - state.scratch_top;
                     if (pattern_count == 0) {
-                        last_pattern = try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = pattern_root_state.outer_start, .end = self.pos });
+                        last_pattern = try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = state.outer_start, .end = self.pos });
                     } else if (pattern_count == 1) {
                         const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
-                        self.store.clearScratchPatternsFrom(pattern_root_state.scratch_top);
+                        self.store.clearScratchPatternsFrom(state.scratch_top);
                         last_pattern = try self.finishAsPattern(single_pattern);
                     } else {
-                        const patterns = try self.store.patternSpanFrom(pattern_root_state.scratch_top);
+                        const patterns = try self.store.patternSpanFrom(state.scratch_top);
                         last_pattern = try self.store.addPattern(.{ .alternatives = .{
-                            .region = .{ .start = pattern_root_state.outer_start, .end = self.pos },
+                            .region = .{ .start = state.outer_start, .end = self.pos },
                             .patterns = patterns,
                         } });
                     }
@@ -5860,8 +5913,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch;
                 },
                 else => {
-                    try open_syntax.push(open_allocator, .pattern_root, PatternRootState, pattern_root_state);
-                    pattern_alternatives = pattern_root_state.alternatives;
+                    const state = pattern_roots.active().*;
+                    try root_pattern_parents.set(open_allocator, open_syntax.depth());
+                    pattern_alternatives = state.alternatives;
                     context = .pattern_prefix;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -5870,10 +5924,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .pattern_root_after_one => switch (dispatch_token) {
                 .OpBar,
                 => {
-                    const state = open_syntax.popPayload(.pattern_root, PatternRootState);
+                    const state = pattern_roots.active().*;
                     const p = last_pattern orelse unreachable;
                     last_pattern = null;
                     if (state.alternatives == .alternatives_forbidden) {
+                        _ = pattern_roots.leave();
                         self.store.clearScratchPatternsFrom(state.scratch_top);
                         last_pattern = try self.finishAsPattern(p);
                         context = .pattern_complete;
@@ -5882,16 +5937,16 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     try self.store.addScratchPattern(p);
                     self.advance();
-                    pattern_root_state = state;
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
                 },
                 else => {
-                    const state = open_syntax.popPayload(.pattern_root, PatternRootState);
+                    const state = pattern_roots.active().*;
                     const p = last_pattern orelse unreachable;
                     last_pattern = null;
                     if (state.alternatives == .alternatives_forbidden) {
+                        _ = pattern_roots.leave();
                         self.store.clearScratchPatternsFrom(state.scratch_top);
                         last_pattern = try self.finishAsPattern(p);
                         context = .pattern_complete;
@@ -5900,6 +5955,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     if (self.peek() != .OpBar) {
                         if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
+                            _ = pattern_roots.leave();
                             last_pattern = try self.finishAsPattern(p);
                             context = .pattern_complete;
                             dispatch_token = self.peek();
@@ -5907,6 +5963,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         }
                         try self.store.addScratchPattern(p);
                         const patterns = try self.store.patternSpanFrom(state.scratch_top);
+                        _ = pattern_roots.leave();
                         last_pattern = try self.store.addPattern(.{ .alternatives = .{
                             .region = .{ .start = state.outer_start, .end = self.pos },
                             .patterns = patterns,
@@ -5917,7 +5974,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     try self.store.addScratchPattern(p);
                     self.advance();
-                    pattern_root_state = state;
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -5926,9 +5982,13 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             .pattern_complete => switch (dispatch_token) {
                 else => {
                     const completed = last_pattern orelse unreachable;
+                    if (root_pattern_parents.take(open_syntax.depth())) {
+                        context = .pattern_root_after_one;
+                        dispatch_token = self.peek();
+                        continue :dispatch;
+                    }
                     if (open_syntax.peekKind()) |kind| {
                         context = switch (kind) {
-                            .pattern_root => .pattern_root_after_one,
                             .pattern_tag_args => .pattern_tag_args_after_item,
                             .pattern_list => .pattern_list_after_item,
                             .pattern_tuple => .pattern_tuple_after_item,
@@ -6244,11 +6304,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         continue :dispatch;
                     }
                     try open_syntax.push(open_allocator, .pattern_tag_args, PatternTagArgsState, pattern_tag_args_state);
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_allowed,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -6332,11 +6392,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         continue :dispatch;
                     }
                     try open_syntax.push(open_allocator, .pattern_list, PatternListState, pattern_list_state);
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_allowed,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -6466,11 +6526,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         .field_start = field_start,
                         .name = name,
                     });
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = pattern_record_state.alternatives,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
@@ -6579,11 +6639,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         continue :dispatch;
                     }
                     try open_syntax.push(open_allocator, .pattern_tuple, PatternTupleState, pattern_tuple_state);
-                    pattern_root_state = .{
+                    try pattern_roots.enter(open_allocator, .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
                         .alternatives = .alternatives_allowed,
-                    };
+                    });
                     context = .pattern_root_next;
                     dispatch_token = self.peek();
                     continue :dispatch;
