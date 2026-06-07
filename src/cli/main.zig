@@ -3561,16 +3561,22 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
+fn stdTargetAbiForLlvmBuild(target: RocTarget) std.Target.Abi {
+    return switch (target) {
+        .x64musl, .arm64musl, .arm32musl => .musl,
+        .x64glibc, .x64linux, .arm64glibc, .arm64linux, .arm32linux => .gnu,
+        .x64win, .arm64win => .msvc,
+        else => .none,
+    };
+}
+
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     if (target == RocTarget.detectNative()) return builtin.target;
 
     const query = std.Target.Query{
         .cpu_arch = target.toCpuArch(),
         .os_tag = target.toOsTag(),
-        .abi = switch (target) {
-            .wasm32 => .none,
-            else => .none,
-        },
+        .abi = stdTargetAbiForLlvmBuild(target),
     };
     return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 }
@@ -3873,14 +3879,15 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.link_type;
-    const native_target = RocTarget.detectNative();
 
-    if (target != .wasm32 and target != native_target) {
-        try ctx.io.stderr().print(
-            "Error: roc build --opt={s} supports only the detected native host target ({s}) and wasm32 in this release, but target {s} was requested.\n",
-            .{ @tagName(args.opt), @tagName(native_target), @tagName(target) },
-        );
-        return error.UnsupportedTarget;
+    if (target.isDynamic() and builtin.target.os.tag != .linux) {
+        renderValidationError(ctx.gpa, .{
+            .unsupported_glibc_cross = .{
+                .target = target,
+                .host_os = @tagName(builtin.target.os.tag),
+            },
+        }, ctx.io.stderr());
+        return error.UnsupportedCrossCompilation;
     }
 
     if (target != .wasm32 and target.ptrBitWidth() != 64) {

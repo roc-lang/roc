@@ -1773,7 +1773,7 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
         .args = &.{ "build", "--target=x64glibc" },
         .roc_file = "test/int/app.roc",
         .exit = .failure,
-        .contains = &.{ .{ .stream = .stderr, .text = "glibc" }, .{ .stream = .stderr, .text = "native host target" } },
+        .contains = &.{ .{ .stream = .stderr, .text = "glibc" }, .{ .stream = .stderr, .text = "musl" } },
     })) |failure| return failure;
     return null;
 }
