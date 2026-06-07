@@ -5271,7 +5271,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 };
                 if (self.peek() == .Comma) {
                     self.advance();
-                } else {}
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_record_fields_next;
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .expr_record_finish;
             },
@@ -6370,7 +6372,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 try self.store.addScratchPattern(rest_pattern);
                 if (self.peek() == .Comma) {
                     self.advance();
-                } else {}
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_list_next;
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_list_finish;
             },
@@ -6461,7 +6465,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 try self.store.addScratchPatternRecordField(field);
                 if (self.peek() == .Comma) {
                     self.advance();
-                } else {}
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_record_next;
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_record_finish;
             },
@@ -6480,7 +6486,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     try self.store.addScratchPatternRecordField(field);
                     if (self.peek() == .Comma) {
                         self.advance();
-                    } else {}
+                        dispatch_token = self.peek();
+                        continue :dispatch .pattern_record_next;
+                    }
                     dispatch_token = self.peek();
                     continue :dispatch .pattern_record_finish;
                 }
@@ -6545,7 +6553,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 };
                 if (self.peek() == .Comma) {
                     self.advance();
-                } else {}
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_record_next;
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_record_finish;
             },
@@ -7288,7 +7298,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 };
                 if (self.peek() == .Comma) {
                     self.advance();
-                } else {}
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_record_next;
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .type_record_finish;
             },
@@ -7437,7 +7449,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 };
                 if (self.peek() == .Comma) {
                     self.advance();
-                } else {}
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_tag_union_next;
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .type_tag_union_finish;
             },
