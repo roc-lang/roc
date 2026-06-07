@@ -134,6 +134,24 @@ assembly has been checked for this shape: no recursive parser calls for the
 converted grammar, no instruction-driver loop, no repeated context-dispatch
 ladder, and no unexpected indirect branch in the hot transition path.
 
+Parser conversion proceeds by grammar slices that can be assembly-audited.
+Before expanding a slice, build a tiny Zig proof of the intended dispatch shape
+and compare it with the analogous simdjson stage-2 parser shape: local token
+tests, direct branches between parser states, and explicit syntax state only
+where nested syntax requires it. After converting the real Roc slice, build the
+ReleaseFast compiler with symbols and disassemble the converted parser symbol
+directly, for example:
+
+```sh
+zig build roc -Doptimize=ReleaseFast -Dstrip=false
+xcrun llvm-objdump --macho --disassemble --dis-symname _Parser.parseExposedCollectionTokens zig-out/bin/roc
+```
+
+The audit result must be recorded before moving to the next slice. If the
+assembly shows a dense jump table, generic context dispatch loop, indirect
+branch in the hot parser transition path, or revived recursive grammar call,
+the slice is not accepted and must be reshaped before more grammar is converted.
+
 Nested Roc syntax uses explicit open-syntax state, like simdjson's open
 container depth. This state records concrete syntax currently being parsed:
 open lists, records, strings, blocks, matches, type applications, and similar
