@@ -184,15 +184,15 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
 
 /// Build a RocList of RocStr from CLI argument slices.
 /// Each argument is sanitized to valid UTF-8.
-pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) RocList {
+pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) std.mem.Allocator.Error!RocList {
     if (comptime is_wasm) return RocList.empty();
     if (app_args.len == 0) return RocList.empty();
 
     const allocator = std.heap.page_allocator;
-    const roc_strs = allocator.alloc(RocStr, app_args.len) catch return RocList.empty();
+    const roc_strs = try allocator.alloc(RocStr, app_args.len);
 
     for (app_args, 0..) |arg, i| {
-        const sanitized = sanitizeUtf8(arg, allocator);
+        const sanitized = try sanitizeUtf8(arg, allocator);
         roc_strs[i] = RocStr.fromSlice(sanitized, roc_ops);
     }
 
@@ -201,11 +201,11 @@ pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) Roc
 
 /// Sanitize a byte slice to valid UTF-8, replacing invalid bytes with U+FFFD.
 /// Returns the input slice unchanged if it's already valid UTF-8.
-fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) []const u8 {
+fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
     if (std.unicode.utf8ValidateSlice(input)) return input;
 
     // Worst case: each invalid byte becomes 3-byte replacement char
-    const buf = allocator.alloc(u8, input.len * 3) catch return input;
+    const buf = try allocator.alloc(u8, input.len * 3);
     var out_i: usize = 0;
     var in_i: usize = 0;
     while (in_i < input.len) {
@@ -254,7 +254,7 @@ const test_allocator = std.heap.page_allocator;
 
 test "sanitizeUtf8: valid ASCII passes through unchanged" {
     const input = "hello world";
-    const result = sanitizeUtf8(input, test_allocator);
+    const result = try sanitizeUtf8(input, test_allocator);
     try testing.expectEqualStrings("hello world", result);
     // Should return the original slice (no allocation)
     try testing.expectEqual(input.ptr, result.ptr);
@@ -262,42 +262,42 @@ test "sanitizeUtf8: valid ASCII passes through unchanged" {
 
 test "sanitizeUtf8: valid multibyte UTF-8 passes through unchanged" {
     const input = "na\xc3\xafve \xe2\x9c\x93"; // "naïve ✓"
-    const result = sanitizeUtf8(input, test_allocator);
+    const result = try sanitizeUtf8(input, test_allocator);
     try testing.expectEqualStrings(input, result);
     try testing.expectEqual(input.ptr, result.ptr);
 }
 
 test "sanitizeUtf8: single invalid byte becomes replacement char" {
-    const result = sanitizeUtf8("\xff", test_allocator);
+    const result = try sanitizeUtf8("\xff", test_allocator);
     try testing.expectEqualStrings("\xef\xbf\xbd", result); // U+FFFD
 }
 
 test "sanitizeUtf8: invalid byte surrounded by valid ASCII" {
-    const result = sanitizeUtf8("a\xffb", test_allocator);
+    const result = try sanitizeUtf8("a\xffb", test_allocator);
     try testing.expectEqualStrings("a\xef\xbf\xbdb", result);
 }
 
 test "sanitizeUtf8: truncated 2-byte sequence" {
     // 0xC3 starts a 2-byte sequence but there's no continuation byte
-    const result = sanitizeUtf8("a\xc3", test_allocator);
+    const result = try sanitizeUtf8("a\xc3", test_allocator);
     try testing.expectEqualStrings("a\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: truncated 3-byte sequence" {
     // 0xE2 starts a 3-byte sequence but only one continuation follows
-    const result = sanitizeUtf8("\xe2\x9c", test_allocator);
+    const result = try sanitizeUtf8("\xe2\x9c", test_allocator);
     // Each byte of the truncated sequence is replaced individually
     try testing.expectEqualStrings("\xef\xbf\xbd\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: multiple consecutive invalid bytes" {
-    const result = sanitizeUtf8("\xff\xfe\xfd", test_allocator);
+    const result = try sanitizeUtf8("\xff\xfe\xfd", test_allocator);
     // Each invalid byte gets its own replacement char
     try testing.expectEqualStrings("\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: empty input" {
     const input: []const u8 = "";
-    const result = sanitizeUtf8(input, test_allocator);
+    const result = try sanitizeUtf8(input, test_allocator);
     try testing.expectEqual(@as(usize, 0), result.len);
 }

@@ -6,6 +6,7 @@
 //! them as offsets into the source code with additional metadata.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const tracy = @import("tracy");
 
@@ -675,7 +676,7 @@ pub const Cursor = struct {
     /// Chomps an exponent including sign and digits, if one if found.
     /// Returns true if an exponent was chomped.
     /// Will error if the exponent has no digits.
-    pub fn chompExponent(self: *Cursor) !bool {
+    pub fn chompExponent(self: *Cursor) error{EmptyExponent}!bool {
         if (self.peek() orelse 0 == 'e' or self.peek() orelse 0 == 'E') {
             self.pos += 1;
             // Optional sign
@@ -736,7 +737,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 10.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase10(self: *Cursor) !void {
+    pub fn chompIntegerBase10(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if (c >= '0' and c <= '9') {
@@ -755,7 +756,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 16.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase16(self: *Cursor) !void {
+    pub fn chompIntegerBase16(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')) {
@@ -774,7 +775,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 8.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase8(self: *Cursor) !void {
+    pub fn chompIntegerBase8(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if (c >= '0' and c <= '7') {
@@ -793,7 +794,7 @@ pub const Cursor = struct {
 
     /// Chomp the digits of an integer in base 2.
     /// Will error if the integer has no digits.
-    pub fn chompIntegerBase2(self: *Cursor) !void {
+    pub fn chompIntegerBase2(self: *Cursor) error{EmptyInteger}!void {
         var contains_digits = false;
         while (self.peek()) |c| {
             if (c == '0' or c == '1') {
@@ -863,11 +864,11 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompEscapeSequence(self: *Cursor) !void {
+    pub fn chompEscapeSequence(self: *Cursor) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
         return self.chompEscapeSequenceWithQuote(null);
     }
 
-    pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) !void {
+    pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
         // Store the start position of the escape sequence (before the backslash)
         const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
 
@@ -1144,7 +1145,7 @@ pub const Tokenizer = struct {
         tag: Token.Tag,
         tok_offset: Token.Idx,
         text_offset: Token.Idx,
-    ) !void {
+    ) Allocator.Error!void {
         const text = self.cursor.buf[text_offset..self.cursor.pos];
         const id = try self.env.insertIdent(gpa, base.Ident.for_text(text));
 
@@ -1683,7 +1684,7 @@ pub const Tokenizer = struct {
     }
 };
 
-fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
+fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) anyerror!void {
     var messages: [10]Diagnostic = undefined;
 
     var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
@@ -1704,7 +1705,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) std.mem.Allocator.Error!void {
-    var env = try CommonEnv.init(gpa, gpa.dupe(u8, "") catch unreachable);
+    var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
     defer env.deinit(gpa);
 
     // Initial tokenization.
@@ -1818,7 +1819,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     }
 }
 
-fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.array_list.Managed(u8) {
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) (Allocator.Error || error{Unsupported})!std.array_list.Managed(u8) {
     // Create an arraylist to store the new buffer.
     var buf2 = try std.array_list.Managed(u8).initCapacity(alloc, buf.len);
     errdefer buf2.deinit();

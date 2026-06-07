@@ -6,6 +6,7 @@
 //! reference-counting analysis.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 
@@ -1841,7 +1842,7 @@ const ArcTest = struct {
     tag_str: layout_mod.Idx,
     next_join_point: u32 = 0,
 
-    fn init(allocator: std.mem.Allocator) !ArcTest {
+    fn init(allocator: std.mem.Allocator) Allocator.Error!ArcTest {
         var layouts = try layout_mod.Store.init(allocator, .u64);
         errdefer layouts.deinit();
 
@@ -1874,7 +1875,7 @@ const ArcTest = struct {
         self.layouts.deinit();
     }
 
-    fn local(self: *ArcTest, layout_idx: layout_mod.Idx) !LIR.LocalId {
+    fn local(self: *ArcTest, layout_idx: layout_mod.Idx) Allocator.Error!LIR.LocalId {
         return try self.store.addLocal(.{ .layout_idx = layout_idx });
     }
 
@@ -1884,11 +1885,11 @@ const ArcTest = struct {
         return id;
     }
 
-    fn span(self: *ArcTest, locals: []const LIR.LocalId) !LIR.LocalSpan {
+    fn span(self: *ArcTest, locals: []const LIR.LocalId) Allocator.Error!LIR.LocalSpan {
         return try self.store.addLocalSpan(locals);
     }
 
-    fn addProc(self: *ArcTest, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+    fn addProc(self: *ArcTest, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.span(args),
@@ -1897,7 +1898,7 @@ const ArcTest = struct {
         });
     }
 
-    fn addBodylessProc(self: *ArcTest, ret_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+    fn addBodylessProc(self: *ArcTest, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = LIR.LocalSpan.empty(),
@@ -1906,7 +1907,7 @@ const ArcTest = struct {
         });
     }
 
-    fn addHostedProc(self: *ArcTest, args: []const LIR.LocalId, ret_layout: layout_mod.Idx) !LIR.LirProcSpecId {
+    fn addHostedProc(self: *ArcTest, args: []const LIR.LocalId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.span(args),
@@ -1919,15 +1920,15 @@ const ArcTest = struct {
         });
     }
 
-    fn ret(self: *ArcTest, value: LIR.LocalId) !LIR.CFStmtId {
+    fn ret(self: *ArcTest, value: LIR.LocalId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .ret = .{ .value = value } });
     }
 
-    fn crash(self: *ArcTest, message: []const u8) !LIR.CFStmtId {
+    fn crash(self: *ArcTest, message: []const u8) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .crash = .{ .msg = try self.store.insertString(message) } });
     }
 
-    fn assignI64(self: *ArcTest, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignI64(self: *ArcTest, target: LIR.LocalId, value: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .i64_literal = .{ .value = value, .layout_idx = .i64 } },
@@ -1935,7 +1936,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignStr(self: *ArcTest, target: LIR.LocalId, text: []const u8, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignStr(self: *ArcTest, target: LIR.LocalId, text: []const u8, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .str_literal = try self.store.insertStringView(text, 0, @intCast(text.len)) },
@@ -1943,7 +1944,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignList(self: *ArcTest, target: LIR.LocalId, elems: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignList(self: *ArcTest, target: LIR.LocalId, elems: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_list = .{
             .target = target,
             .elems = try self.span(elems),
@@ -1951,7 +1952,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignStruct(self: *ArcTest, target: LIR.LocalId, fields: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignStruct(self: *ArcTest, target: LIR.LocalId, fields: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.span(fields),
@@ -1959,7 +1960,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u16, payload: ?LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignTag(self: *ArcTest, target: LIR.LocalId, discriminant: u16, payload: ?LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = discriminant,
@@ -1969,7 +1970,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignRefLocal(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignRefLocal(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .local = source },
@@ -1977,7 +1978,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
@@ -1985,7 +1986,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignTagPayload(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignTagPayload(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .tag_payload = .{ .source = source, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } },
@@ -1993,7 +1994,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignCall(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignCall(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_call = .{
             .target = target,
             .proc = try self.addBodylessProc(self.store.getLocal(target).layout_idx),
@@ -2002,7 +2003,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignHostedCall(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignHostedCall(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_call = .{
             .target = target,
             .proc = try self.addHostedProc(args, self.store.getLocal(target).layout_idx),
@@ -2011,7 +2012,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn assignLowLevel(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, rc_effect: LIR.LowLevel.RcEffect, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn assignLowLevel(self: *ArcTest, target: LIR.LocalId, args: []const LIR.LocalId, rc_effect: LIR.LowLevel.RcEffect, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .list_append_unsafe,
@@ -2021,7 +2022,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn setLocal(self: *ArcTest, target: LIR.LocalId, value: LIR.LocalId, mode: LIR.SetLocalWriteMode, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn setLocal(self: *ArcTest, target: LIR.LocalId, value: LIR.LocalId, mode: LIR.SetLocalWriteMode, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .set_local = .{
             .target = target,
             .value = value,
@@ -2030,7 +2031,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn expectStmt(self: *ArcTest, condition: LIR.LocalId, next: LIR.CFStmtId) !LIR.CFStmtId {
+    fn expectStmt(self: *ArcTest, condition: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .expect = .{
             .condition = condition,
             .next = next,
@@ -2043,7 +2044,7 @@ const ArcTest = struct {
         branch_body: LIR.CFStmtId,
         default_branch: LIR.CFStmtId,
         continuation: ?LIR.CFStmtId,
-    ) !LIR.CFStmtId {
+    ) Allocator.Error!LIR.CFStmtId {
         const branches = try self.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
             .{ .value = 1, .body = branch_body },
         });
@@ -2055,7 +2056,7 @@ const ArcTest = struct {
         } });
     }
 
-    fn run(self: *ArcTest) !void {
+    fn run(self: *ArcTest) Allocator.Error!void {
         try insert(&self.store, &self.layouts);
     }
 
@@ -2096,13 +2097,13 @@ const ArcTest = struct {
         return count;
     }
 
-    fn expectRc(self: *const ArcTest, local_id: LIR.LocalId, increfs: usize, decrefs: usize, frees: usize) !void {
+    fn expectRc(self: *const ArcTest, local_id: LIR.LocalId, increfs: usize, decrefs: usize, frees: usize) anyerror!void {
         try testing.expectEqual(increfs, self.countRc(local_id, .incref));
         try testing.expectEqual(decrefs, self.countRc(local_id, .decref));
         try testing.expectEqual(frees, self.countRc(local_id, .free));
     }
 
-    fn expectReachableRcBefore(self: *const ArcTest, start: LIR.CFStmtId, kind: RcKind, local_id: LIR.LocalId, before: RcStopKind) !void {
+    fn expectReachableRcBefore(self: *const ArcTest, start: LIR.CFStmtId, kind: RcKind, local_id: LIR.LocalId, before: RcStopKind) error{ ExpectedRcBeforeStop, NonLinearPath, CyclicPath }!void {
         var cursor = start;
         var remaining: usize = self.store.cf_stmts.items.len + 1;
         while (remaining > 0) : (remaining -= 1) {
@@ -2150,7 +2151,7 @@ const ArcTest = struct {
 const RcKind = enum { incref, decref, free };
 const RcStopKind = enum { ret, crash };
 
-fn setupUnusedBinding(layout_idx: layout_mod.Idx) !struct { fixture: ArcTest, value: LIR.LocalId } {
+fn setupUnusedBinding(layout_idx: layout_mod.Idx) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId } {
     var f = try ArcTest.init(testing.allocator);
     errdefer f.deinit();
     const value = try f.local(layout_idx);
@@ -2165,7 +2166,7 @@ fn setupUnusedBinding(layout_idx: layout_mod.Idx) !struct { fixture: ArcTest, va
     return .{ .fixture = f, .value = value };
 }
 
-fn setupSwitchUse(use_branch: bool, use_default: bool, use_twice_in_branch: bool, use_after: bool) !struct { fixture: ArcTest, value: LIR.LocalId, branch_local: LIR.LocalId, default_local: LIR.LocalId } {
+fn setupSwitchUse(use_branch: bool, use_default: bool, use_twice_in_branch: bool, use_after: bool) Allocator.Error!struct { fixture: ArcTest, value: LIR.LocalId, branch_local: LIR.LocalId, default_local: LIR.LocalId } {
     var f = try ArcTest.init(testing.allocator);
     errdefer f.deinit();
     const value = try f.local(.str);
@@ -2193,7 +2194,7 @@ fn setupSwitchUse(use_branch: bool, use_default: bool, use_twice_in_branch: bool
     return .{ .fixture = f, .value = value, .branch_local = branch_local, .default_local = default_local };
 }
 
-fn setupMutation(reuse_after: bool) !struct { fixture: ArcTest, old_value: LIR.LocalId, new_value: LIR.LocalId, target: LIR.LocalId } {
+fn setupMutation(reuse_after: bool) Allocator.Error!struct { fixture: ArcTest, old_value: LIR.LocalId, new_value: LIR.LocalId, target: LIR.LocalId } {
     var f = try ArcTest.init(testing.allocator);
     errdefer f.deinit();
     const target = try f.local(f.list_str);

@@ -218,8 +218,8 @@ pub const TestEnv = struct {
         const self: *TestEnv = @ptrCast(@alignCast(env));
 
         // Look up the old allocation
-        if (self.allocation_map.fetchRemove(roc_realloc.answer)) |entry| {
-            const old_bytes: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+        if (self.allocation_map.fetchRemove(roc_realloc.answer.?)) |entry| {
+            const old_bytes: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer.?));
             const old_slice = old_bytes[0..entry.value.size];
 
             // Reallocate with the same alignment
@@ -1174,7 +1174,7 @@ test "TestEnv allocation tracking" {
     // Test deallocation
     var dealloc_request = @import("host_abi.zig").RocDealloc{
         .alignment = 8,
-        .ptr = alloc_request.answer,
+        .ptr = alloc_request.answer.?,
     };
 
     ops.roc_dealloc(&dealloc_request, ops.env);

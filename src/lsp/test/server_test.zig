@@ -1,15 +1,16 @@
 //! Tests for the LSP server lifecycle and request handling.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const server_module = @import("../server.zig");
 const protocol = @import("../protocol.zig");
 const transport_module = @import("../transport.zig");
 
-fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+fn frame(allocator: std.mem.Allocator, body: []const u8) Allocator.Error![]u8 {
     return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }
 
-fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
+fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) anyerror![][]u8 {
     const reader: std.Io.Reader = .fixed(bytes);
     var sink_storage: [1]u8 = undefined;
     const sink: std.Io.Writer = .fixed(&sink_storage);
@@ -35,7 +36,7 @@ fn collectResponses(allocator: std.mem.Allocator, bytes: []const u8) ![][]u8 {
     return responses.toOwnedSlice(allocator);
 }
 
-fn lifecycleInput(allocator: std.mem.Allocator) ![]u8 {
+fn lifecycleInput(allocator: std.mem.Allocator) Allocator.Error![]u8 {
     const messages = [_][]const u8{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{}}}
         ,
@@ -331,7 +332,7 @@ test "server handles burst of incremental didChange messages" {
     try std.testing.expectEqual(@as(i64, 4), doc.version);
 }
 
-fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) Allocator.Error![]u8 {
     return @import("../uri.zig").pathToUri(allocator, path);
 }
 

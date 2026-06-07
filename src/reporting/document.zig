@@ -428,8 +428,8 @@ pub const Document = struct {
 
     /// Add a formatted string to the document.
     pub fn addFormattedText(self: *Document, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
-        var buf: [1024]u8 = undefined;
-        const text = try std.fmt.bufPrint(&buf, fmt, args);
+        const text = try std.fmt.allocPrint(self.allocator, fmt, args);
+        defer self.allocator.free(text);
         try self.addText(text);
     }
 

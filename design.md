@@ -28,15 +28,17 @@ checked modules
   -> Monotype IR
   -> Monotype Lifted IR
   -> Lambda Solved IR
-  -> Lambda Mono IR
+  -> Lambda Mono decisions
   -> LIR
   -> ARC insertion
   -> backend, interpreter, or LirImage
 ```
 
 There is no separate MIR layer. There is no separate stored layout IR between
-Lambda Mono IR and LIR. Layout selection is owned by the direct Lambda Mono IR
-to LIR builder.
+Lambda Mono and LIR. Layout selection is owned by the direct Lambda Mono to LIR
+builder. In optimized builds, Lambda Mono is represented by explicit callable
+and procedure decision tables consumed by direct LIR lowering, not by a second
+stored expression, pattern, and statement tree.
 
 ## Core Principles
 
@@ -234,9 +236,9 @@ imports must produce the same reachable specializations, callable
 representations, layout decisions, ARC statements, and backend behavior.
 
 The compiler does not cache Monotype IR, Monotype Lifted IR, Lambda Solved IR,
-Lambda Mono IR, LIR, or any callable/layout representation derived from them as
-part of checked modules. Those structures are target/session products of the
-current root compilation.
+Lambda Mono decisions, LIR, or any callable/layout representation derived from
+them as part of checked modules. Those structures are target/session products
+of the current root compilation.
 
 Monotype IR is target-independent, but it is still post-check and root-specific.
 It depends on the roots requested for the current compilation, the reachable
@@ -537,7 +539,7 @@ Type-store ownership is explicit at each stage boundary:
 - Monotype Lifted IR uses the same Monotype type store because lifting does not
   change types.
 - Lambda Solved IR owns a new type store with lambda-set variables.
-- Lambda Mono IR owns a new type store with no function types.
+- Lambda Mono owns a new type store with no function types.
 - LIR owns committed layouts, not post-check type ids.
 
 A later stage must not reinterpret an earlier stage's type ids unless the stage
@@ -1081,7 +1083,7 @@ loop iterator:
         One item next_iterator ->
             match item with
                 pattern -> body; continue next_iterator
-        Skip { count, rest } ->
+        Skip { rest } ->
             continue rest
 ```
 
@@ -1094,9 +1096,9 @@ The exact step tag names and payloads come from the checked/builtin `Iter`
 definition and the monomorphic iterator type. The `.iter` and `.next` calls are
 resolved through the same Monotype static-dispatch path described above.
 
-The `Skip` count is part of the iterator step value. A plain source `for` loop
-does not bind it, but iterator adapters may use it to preserve efficient skip
-information.
+A `Skip` carries only `rest`: it signals "advanced one position, produced no
+item this step," which is what keeps adapters like `keep_if` non-recursive. A
+plain source `for` loop binds nothing from it and simply continues with `rest`.
 
 No `for` node exists after Monotype IR.
 
@@ -1105,12 +1107,31 @@ No `for` node exists after Monotype IR.
 Monotype Lifted IR removes closures and local functions from expression
 position. Its type store is the Monotype type store.
 
-The expression language is intentionally close to Monotype IR, but:
+The expression language is intentionally close to Monotype IR, and the
+implementation consumes Monotype expression storage in place. Expression,
+pattern, statement, and side-array ids are preserved across the Monotype to
+Monotype Lifted boundary. Patterns and statements are the same storage. Most
+expressions are the same storage. Lifting rewrites only the expression variants
+whose callable meaning changes:
 
-- there is no `lambda` expression
-- there is no local function definition inside an expression
+- `lambda`, `def_ref`, and `fn_def` become `fn_ref`
+- a direct-call callee changes from a Monotype function template to a lifted
+  function id
+
+This is a representation-sharing rule, not a license for later stages to accept
+pre-lift callable forms. After lifting, a valid lifted program has no reachable
+`lambda`, `def_ref`, `fn_def`, or template-callee `call_proc` expression. Those
+variants may still exist in the shared Zig union because Monotype and Monotype
+Lifted use one backing expression representation, but seeing one through the
+Monotype Lifted API is a compiler bug.
+
+The lifted stage output adds only the data that lifting owns:
+
 - every function body is a top-level lifted definition
 - each lifted function definition declares its capture symbols explicitly
+- roots and layout requests refer to lifted function ids
+- capture spans appended by lifting are stored in the shared typed-local side
+  array
 
 ```zig
 const LiftedDef = struct {
@@ -1133,11 +1154,18 @@ const LiftedFn = struct {
 
 Function references remain ordinary values with function type. A function value
 is not packed here. Captures are explicit metadata on the lifted function
-definition; callable representation is not chosen until Lambda Mono IR.
+definition; callable representation is not chosen until Lambda Mono.
 
 The lifting pass owns free-variable analysis. It does not choose finite
 callable representations, erased callable representations, closure object
 layouts, or runtime tags.
+
+Release builds must not allocate or fill a second expression, pattern,
+statement, branch, field-expression, or span arena for Monotype Lifted. The
+normal path may allocate lifted function metadata, capture spans, request
+rewrites, and traversal scratch owned by lifting. Debug builds may materialize
+the old copied lifted tree only as a verifier; the in-place lifted program
+remains the source consumed by Lambda Solved and later stages.
 
 ## Lambda Solved IR
 
@@ -1212,8 +1240,8 @@ use the full ordered argument list plus the result type.
 
 ### Lambda Solving
 
-Lambda Solved IR has the same lifted expression shape as Monotype Lifted IR.
-Only the type store changes.
+Lambda Solved IR keeps the Monotype Lifted expression storage and adds solved
+type arrays beside it. Only the type store changes.
 
 The solver:
 
@@ -1257,10 +1285,13 @@ No ordinary source expression becomes erased because a later stage finds finite
 dispatch inconvenient. Erasure is introduced only by one of the checked boundary
 data above.
 
-## Lambda Mono IR
+## Lambda Mono Decisions
 
-Lambda Mono IR consumes Lambda Solved IR and produces function-free typed IR
-where callable representation is explicit in values and calls.
+Lambda Mono consumes Lambda Solved IR and chooses function-free callable,
+procedure, capture, and type representation data. These decisions are explicit
+stage output, but release builds do not store a full Lambda Mono expression,
+pattern, or statement tree. The direct LIR builder consumes the Lambda Solved
+lifted syntax together with Lambda Mono decision tables.
 
 The Lambda Mono type store has no function type. Function values have already
 become ordinary value representations:
@@ -1313,7 +1344,30 @@ capture record with those exact slots and stores it in the callable value. It
 does not use the source function's own function type as a proxy for the
 expression-site callable type.
 
-### Lambda Mono Expressions
+The release-build Lambda Mono output contains only data that later stages must
+consume explicitly:
+
+- the function-free Lambda Mono type store
+- queued function specializations keyed by exact lifted function id, solved
+  function type, capture ABI, and capture shape
+- callable variants, erased callable entries, capture-record types, and exact
+  function targets
+- root, layout, runtime-schema, and const-plan requests rewritten to Lambda Mono
+  type and function ids
+- per-function capture bindings used by direct LIR lowering
+
+The output does not contain copies of lifted expressions, patterns, statements,
+branches, field-expression spans, tuple spans, loop spans, or source statement
+spans. When a lifted node is unchanged by Lambda Mono, direct LIR lowering reads
+the original lifted node. When Lambda Mono changes behavior, direct LIR lowering
+uses the explicit Lambda Mono decision associated with that expression, call,
+function reference, captured local, or callable pattern.
+
+This keeps Lambda Mono as a real compiler stage without making the normal
+pipeline pay for a second syntax arena that mostly duplicates Monotype Lifted
+IR.
+
+### Logical Lambda Mono Expressions
 
 ```zig
 const ExprData = union(enum) {
@@ -1348,12 +1402,20 @@ const ExprData = union(enum) {
 };
 ```
 
+The expression forms above define the logical Lambda Mono language. They do not
+require release builds to store a contiguous `ExprData` array. The direct LIR
+builder may synthesize one logical expression at a time while it lowers a
+Lambda Solved lifted node. If it creates helper expressions for capture records,
+callable payload patterns, or finite-call branch bodies, those helpers are
+builder-local work data and must not become a stage boundary consumed by later
+compiler stages.
+
 Lambda Mono uses the same loop-carried `LoopExpr` and `ContinueExpr` shape as
 Monotype. A pass that preserves loops must preserve explicit parameters,
 initial values, and continue values. LIR lowering is the first stage allowed to
 turn that state into concrete jumps, blocks, or backend-friendly loop control.
 
-Lambda Mono IR has no `call_value` node. A call through a finite lambda set is
+Logical Lambda Mono has no `call_value` node. A call through a finite lambda set is
 lowered to a match over the generated callable tag union; each branch makes a
 `direct_call` to the variant's `target`. A call through an erased callable
 becomes `indirect_erased_call`.
@@ -1362,7 +1424,7 @@ Generated callable variants are stage-local ids created by Lambda Mono. The
 runtime discriminant and variant slot are chosen later by LIR layout commitment
 and then output explicitly in the LIR result.
 
-Lambda Mono specialization is queued by exact function source id, solved
+Lambda Mono specialization is queued by exact lifted function id, solved
 function type, callable ABI, and capture shape. The queue is driven only by
 explicit callable flow in Lambda Solved IR. Each `FnVariant.target` names the
 queued result directly, so later stages consume a direct function id instead of
@@ -1374,12 +1436,12 @@ argument. For an erased callable, the erased ABI contains the full ordered Roc
 argument list and result layout. Neither path introduces currying or
 partial-application wrappers.
 
-Lambda Mono IR has no generic conversion expression. Any operation that must
+Logical Lambda Mono has no generic conversion expression. Any operation that must
 survive to statement lowering is represented by a concrete expression form
 above. Differences that are only layout choices are handled by layout
 selection while lowering those concrete expressions.
 
-If the direct LIR builder sees that Lambda Mono IR and the committed layouts
+If the direct LIR builder sees that Lambda Mono decisions and the committed layouts
 require incompatible representations for the same value, compilation has found a
 compiler bug. The builder stops with an invariant failure. It must not invent a
 conversion path, conversion table, wrapper, or reshaping step to continue.
@@ -1395,17 +1457,19 @@ after-the-result conversion.
 
 ## Direct LIR Lowering
 
-LIR lowering consumes Lambda Mono IR directly.
+LIR lowering consumes Lambda Solved lifted syntax plus Lambda Mono decision
+tables directly. It is the only production path from Lambda Solved to LIR.
 
 There is no separate stored layout IR. The Lambda Mono to LIR builder owns:
 
 - a layout builder that interns and commits recursive layouts from
   Lambda Mono type nodes
 - a procedure builder that maps Lambda Mono procedure ids to LIR procedure ids
-- a local builder that allocates LIR locals from Lambda Mono expression and
-  binder types
-- a pattern builder that consumes Lambda Mono patterns plus committed layouts
-  and emits LIR switches, joins, and bindings directly
+- a local builder that allocates LIR locals from lifted binders plus Lambda Mono
+  local, capture, and type decisions
+- a pattern builder that consumes lifted patterns plus Lambda Mono callable
+  pattern decisions and committed layouts, then emits LIR switches, joins, and
+  bindings directly
 - callable lowering that turns generated callable tag unions into ordinary LIR
   tag operations and erased callable values into explicit packed-erased-callable
   statements
@@ -1415,10 +1479,50 @@ There is no separate stored layout IR. The Lambda Mono to LIR builder owns:
 
 These are builder responsibilities, not a separate meaning-carrying IR.
 
-The builder may maintain temporary maps such as `TypeId -> layout.Idx` and
-`LambdaMonoProcId -> LirProcSpecId`. These maps are caches of work the builder
-owns. They must not contain checked data that are absent from Lambda Mono IR
-or the LIR result.
+The builder may maintain temporary maps such as `TypeId -> layout.Idx`,
+`LambdaMonoFnId -> LirProcSpecId`, `LiftedLocalId -> LirLocalId`, and
+`LiftedExprId -> lowered logical expression` while lowering one function
+specialization. These maps are caches of work the builder owns. They must not
+contain checked data that are absent from Lambda Solved IR, Lambda Mono
+decisions, or the LIR result.
+
+Release builds must not allocate, fill, traverse, or validate a materialized
+Lambda Mono expression, pattern, or statement tree. Release builds may allocate
+only the Lambda Mono decision data needed by direct LIR lowering: function-free types,
+function specializations, callable variants, capture records, root/layout/schema
+requests, and builder-local scratch storage.
+
+### Debug Lambda Mono Verification
+
+Debug builds may additionally materialize the logical Lambda Mono tree for
+verification. That tree is never an input to production lowering, never a
+substitute result, and never a recovery path. The direct solved-to-LIR builder
+always produces the LIR result first. The debug verifier then checks a
+separately materialized Lambda Mono tree against the direct path.
+
+The verifier must be guarded so that release builds pay nothing for it: no tree
+allocation, no materialized Lambda Mono traversal, no verifier data structures,
+and no old Lambda Mono-to-LIR run. The release branch must be compile-time dead
+after Zig specializes the debug condition.
+
+The debug verifier checks at least these explicit decisions:
+
+- every direct function specialization has the same lifted function id, solved
+  function type, capture ABI, capture span, capture record type, source
+  metadata, argument list, and return type as the materialized Lambda Mono tree
+- every finite callable type has the same variants, variant ids, source
+  symbols, target functions, and capture payload types
+- every erased callable type has the same entries, targets, source function
+  digest, and capture payload types
+- every function reference, direct call, value call, captured local access, and
+  callable pattern uses the same target, payload, and capture binding decisions
+- root, layout, runtime-schema, const-plan, and requested-layout outputs name
+  the same checked ids and Lambda Mono types
+
+The verifier may also lower the materialized Lambda Mono tree with the legacy
+Lambda Mono-to-LIR builder and compare that LIR to the direct LIR result. This
+comparison is a debug assertion only. A mismatch is a compiler bug. The compiler
+must not continue by using the materialized Lambda Mono LIR.
 
 ### Direct Builder Internal Contracts
 
@@ -1428,12 +1532,12 @@ explicit contracts so the stage does not become an implicit reconstruction layer
 - the layout builder consumes only Lambda Mono type nodes and emits committed
   LIR layouts plus explicit maps from checked ids to runtime encodings for
   direct-builder result data
-- the procedure builder consumes only Lambda Mono procedure ids, root requests,
+- the procedure builder consumes only Lambda Mono function ids, root requests,
   and committed layouts, then emits LIR procedure ids and root metadata
-- the local builder consumes Lambda Mono binder types plus committed layouts and
-  emits LIR locals
-- the pattern builder consumes Lambda Mono patterns plus committed layouts and
-  emits LIR control flow
+- the local builder consumes lifted binder ids, Lambda Mono local types, capture
+  bindings, and committed layouts, then emits LIR locals
+- the pattern builder consumes lifted patterns, Lambda Mono callable patterns,
+  and committed layouts, then emits LIR control flow
 - callable lowering consumes generated callable type nodes and committed
   layouts, then emits ordinary tag operations or packed erased callable
   statements
@@ -1443,11 +1547,11 @@ explicit contracts so the stage does not become an implicit reconstruction layer
 No internal component may inspect source syntax, checked bodies, display names,
 runtime bytes, backend symbols, or any data outside the direct-builder inputs.
 Internal maps are work caches only. If an internal component needs data that
-is not in Lambda Mono IR, committed layouts, checked identities explicitly
-passed to the builder, or the LIR result it is constructing, the earlier stage
-contract is incomplete.
+is not in Lambda Solved IR, Lambda Mono decisions, committed layouts, checked
+identities explicitly passed to the builder, or the LIR result it is
+constructing, the earlier stage contract is incomplete.
 The direct builder must not invent conversion operations to repair a mismatch
-between Lambda Mono IR and committed layouts.
+between Lambda Mono decisions and committed layouts.
 
 The direct builder returns one explicit output object:
 
@@ -1528,7 +1632,7 @@ checked CIR
   -> Monotype IR
   -> Monotype Lifted IR
   -> Lambda Solved IR
-  -> Lambda Mono IR
+  -> Lambda Mono decisions
   -> LIR
   -> ARC insertion
   -> LIR interpreter
@@ -1536,14 +1640,15 @@ checked CIR
 ```
 
 The compile-time evaluator is an LIR interpreter. It does not interpret
-Monotype IR, Lambda Solved IR, Lambda Mono IR, or any source-level IR.
+Monotype IR, Lambda Solved IR, logical Lambda Mono expressions, or any
+source-level IR.
 
 The LIR interpreter produces a runtime value. Checking then stores that eval
 result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
 stores checked Roc values only. It does not contain Monotype nodes, Lambda
-Solved data, Lambda Mono data, runtime addresses, allocation identity, layout
-ids, runtime discriminants, field offsets, LIR locals, LIR procedure ids,
-backend symbols, backend bytes, or host handles.
+Solved data, Lambda Mono decision data, runtime addresses, allocation identity,
+layout ids, runtime discriminants, field offsets, LIR locals, LIR procedure
+ids, backend symbols, backend bytes, or host handles.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.
@@ -1774,8 +1879,8 @@ Roc's checked module boundary and existing LIR.
 | `monotype` | Monotype IR |
 | `monotype_lifted` | Monotype Lifted IR |
 | `lambdasolved` | Lambda Solved IR |
-| `lambdamono` | Lambda Mono IR |
-| `ir` | direct Lambda Mono IR to LIR builder |
+| `lambdamono` | Lambda Mono decisions |
+| `ir` | direct Lambda Mono to LIR builder |
 | `eval` | LIR interpreter for compile-time evaluation |
 
 Roc intentionally keeps Cor's post-solve shape:
@@ -1783,7 +1888,7 @@ Roc intentionally keeps Cor's post-solve shape:
 - Monotype IR is closed, monomorphic typed IR.
 - Monotype Lifted IR has top-level lifted functions and explicit captures.
 - Lambda Solved IR stores callable flow in function types.
-- Lambda Mono IR removes function types by turning finite function values into
+- Lambda Mono removes function types by turning finite function values into
   ordinary generated tag unions and erased function values into packed erased
   callables.
 
@@ -1837,7 +1942,7 @@ relationships.
 The post-check pipeline must not contain:
 
 - MIR as a separate compiler layer
-- a persisted layout IR between Lambda Mono IR and LIR
+- a persisted layout IR between Lambda Mono and LIR
 - post-demand worklists
 - alternate post-check lowering paths
 - comparing against another lowering path to decide compiler behavior
@@ -1876,15 +1981,17 @@ Minimum boundary checks:
 - Monotype IR contains only closed monomorphic types.
 - Monotype IR contains no runtime tag discriminants, layout ids, or callable
   representation ids.
-- Monotype Lifted IR contains no closure expressions or local function
-  definitions in expression position.
+- Monotype Lifted IR contains no reachable closure expressions, local function
+  definitions in expression position, definition references in expression
+  position, or direct calls whose callee is still a Monotype function template.
 - Lambda Solved IR has every function type in `args/callable/ret` form.
 - Lambda Solved IR has no unresolved callable slot before Lambda Mono lowering.
-- Lambda Mono IR contains no function type and no value-call node.
-- Lambda Mono IR contains no unresolved lambda set.
-- Lambda Mono IR contains no runtime tag discriminants or layout ids.
+- Lambda Mono decisions contain no function type and no value-call node.
+- Lambda Mono decisions contain no unresolved lambda set.
+- Lambda Mono decisions contain no runtime tag discriminants or layout ids.
 - Checked compile-time stores contain only `ConstStore` data.
-- LIR lowering receives only Lambda Mono IR.
+- LIR lowering receives only Lambda Solved lifted syntax plus Lambda Mono
+  decisions.
 - Backends receive only ARC-complete LIR.
 
 If a boundary check fails, the compiler stops as a compiler bug.

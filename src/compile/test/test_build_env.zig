@@ -27,7 +27,7 @@ test "OrderedSink: prefix gating and drain order" {
 
     // Emit Second first; should not emit anything yet due to prefix gating (First not ready).
     const r2 = Report.init(gpa, "Second report", .runtime_error);
-    sink.emitReport("pkg", "Second", r2);
+    try sink.emitReport("pkg", "Second", r2);
 
     const drained0 = try sink.drainEmitted(gpa);
     defer gpa.free(drained0);
@@ -35,7 +35,7 @@ test "OrderedSink: prefix gating and drain order" {
 
     // Emit First; now both First and Second should emit (First unlocks the prefix, then Second).
     const r1 = Report.init(gpa, "First report", .runtime_error);
-    sink.emitReport("pkg", "First", r1);
+    try sink.emitReport("pkg", "First", r1);
 
     const drained1 = try sink.drainEmitted(gpa);
     defer {
@@ -60,7 +60,7 @@ test "OrderedSink: early emit before order still drains after order build" {
 
     // Emit before any order is built; should not drain yet
     const early = Report.init(gpa, "Early", .runtime_error);
-    sink.emitReport("pkg", "M", early);
+    try sink.emitReport("pkg", "M", early);
 
     const drained0 = try sink.drainEmitted(gpa);
     defer gpa.free(drained0);
@@ -74,7 +74,7 @@ test "OrderedSink: early emit before order still drains after order build" {
 
     // Emit again to trigger tryEmitLocked; now drain should return the module
     const later = Report.init(gpa, "Later", .runtime_error);
-    sink.emitReport("pkg", "M", later);
+    try sink.emitReport("pkg", "M", later);
 
     const drained1 = try sink.drainEmitted(gpa);
     defer {
@@ -104,9 +104,9 @@ test "OrderedSink: case-insensitive sort of fq names at same depth" {
     try sink.buildOrder(&pkg_names, &module_names, &depths);
 
     const r_b = Report.init(gpa, "B", .runtime_error);
-    sink.emitReport("pkg", "B", r_b);
+    try sink.emitReport("pkg", "B", r_b);
     const r_a = Report.init(gpa, "a", .runtime_error);
-    sink.emitReport("pkg", "a", r_a);
+    try sink.emitReport("pkg", "a", r_a);
 
     const drained = try sink.drainEmitted(gpa);
     defer {

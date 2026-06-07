@@ -95,16 +95,19 @@ pub const Modules = struct {
                 .precompiled => |module_env| blk: {
                     try module_env.getIdentStore().enableRuntimeInserts(allocator);
                     try ensureModuleNameIdents(module_env);
+                    module_env.finalizeMethodTables();
                     break :blk ModuleData.initBorrowed(module_env);
                 },
                 .owned_checked => |owned| blk: {
                     try owned.env.getIdentStore().enableRuntimeInserts(allocator);
                     try ensureModuleNameIdents(owned.env);
+                    owned.env.finalizeMethodTables();
                     break :blk ModuleData.initOwnedChecked(owned.env, owned.owned_source);
                 },
                 .owned_cached => |owned| blk: {
                     try owned.env.getIdentStore().enableRuntimeInserts(allocator);
                     try ensureModuleNameIdents(owned.env);
+                    owned.env.finalizeMethodTables();
                     break :blk ModuleData.initOwnedCached(owned.env, owned.buffer);
                 },
             };
@@ -315,7 +318,20 @@ pub const Module = struct {
 
     /// Return the checked module's method identifier table for tooling and lowering.
     pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.env().method_idents.sorted);
+            std.debug.assert(self.env().method_idents.deduplicated);
+        }
         return self.env().method_idents.entries.items;
+    }
+
+    /// Return the checked module's method definition table for static-dispatch lowering.
+    pub fn methodDefEntries(self: @This()) []const ModuleEnv.MethodDefs.Entry {
+        if (@import("builtin").mode == .Debug) {
+            std.debug.assert(self.env().method_defs.sorted);
+            std.debug.assert(self.env().method_defs.deduplicated);
+        }
+        return self.env().method_defs.entries.items;
     }
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {

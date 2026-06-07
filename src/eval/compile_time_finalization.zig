@@ -68,7 +68,7 @@ fn finalize(
         }
     }
 
-    module.const_store.verifyComplete();
+    try module.const_store.verifyComplete();
 }
 
 const RootStatus = enum {

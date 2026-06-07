@@ -499,6 +499,102 @@ pub fn printSlowestN(
     }
 }
 
+const timing_dir = ".zig-cache/roc-test-timings";
+const max_timing_file_bytes = 16 * 1024 * 1024;
+
+/// Per-runner timing history, keyed by stable test display name.
+///
+/// This is test-infrastructure scheduling data only. Missing or malformed
+/// entries do not affect test coverage; they only mean a runner falls back to
+/// its deterministic default ordering for that test.
+pub const TimingWeights = struct {
+    allocator: Allocator,
+    map: std.StringHashMap(u64),
+
+    pub fn init(allocator: Allocator) TimingWeights {
+        return .{
+            .allocator = allocator,
+            .map = std.StringHashMap(u64).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TimingWeights) void {
+        var key_it = self.map.keyIterator();
+        while (key_it.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.map.deinit();
+    }
+
+    pub fn load(self: *TimingWeights, io: std.Io, path: []const u8) void {
+        const contents = std.Io.Dir.cwd().readFileAlloc(
+            io,
+            path,
+            self.allocator,
+            .limited(max_timing_file_bytes),
+        ) catch return;
+        defer self.allocator.free(contents);
+
+        var lines = std.mem.splitScalar(u8, contents, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            const tab = std.mem.findScalar(u8, line, '\t') orelse continue;
+            const duration_ns = std.fmt.parseUnsigned(u64, line[0..tab], 10) catch continue;
+            const name = line[tab + 1 ..];
+            if (name.len == 0) continue;
+
+            if (self.map.getPtr(name)) |existing| {
+                existing.* = duration_ns;
+                continue;
+            }
+
+            const owned_name = self.allocator.dupe(u8, name) catch continue;
+            self.map.put(owned_name, duration_ns) catch {
+                self.allocator.free(owned_name);
+                continue;
+            };
+        }
+    }
+
+    pub fn weight(self: *const TimingWeights, name: []const u8, default_weight: u64) u64 {
+        return self.map.get(name) orelse default_weight;
+    }
+};
+
+/// Return the default timing-history path for a named standalone test runner.
+pub fn defaultTimingPath(allocator: Allocator, runner_name: []const u8) Allocator.Error![]const u8 {
+    std.debug.assert(std.mem.findScalar(u8, runner_name, '/') == null);
+    std.debug.assert(std.mem.findScalar(u8, runner_name, '\\') == null);
+    return std.fmt.allocPrint(allocator, "{s}/{s}.tsv", .{ timing_dir, runner_name });
+}
+
+/// Persist test durations as timing-history weights keyed by test display name.
+pub fn writeTimingWeights(
+    comptime Spec: type,
+    io: std.Io,
+    allocator: Allocator,
+    path: []const u8,
+    specs: []const Spec,
+    durations: []const u64,
+    comptime getName: fn (Spec) []const u8,
+) void {
+    if (specs.len != durations.len) return;
+
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    for (specs, durations) |spec, duration_ns| {
+        if (duration_ns == 0) continue;
+        buf.print(allocator, "{d}\t{s}\n", .{ duration_ns, getName(spec) }) catch return;
+    }
+
+    std.Io.Dir.cwd().createDirPath(io, timing_dir) catch return;
+    std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = buf.items,
+    }) catch {};
+}
+
 // CLI argument parsing
 
 /// Common CLI arguments shared across parallel test runners.
@@ -707,7 +803,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             pid: posix.pid_t,
             pipe_fd: posix.fd_t,
             test_index: usize,
-            start_time_ms: i64,
+            start_time_ns: u64,
             buf: std.ArrayListUnmanaged(u8),
             timed_out: bool,
         };
@@ -734,7 +830,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             _ = std.c.raise(posix.SIG.INT);
         }
 
-        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64) bool {
+        fn launchChild(slot: *?ChildSlot, specs: []const Spec, test_idx: usize, timeout_ms: u64, start_time_ns: u64) bool {
             if (comptime !has_fork) return false;
 
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
@@ -770,7 +866,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .pid = pid,
                 .pipe_fd = pipe_fds[0],
                 .test_index = test_idx,
-                .start_time_ms = milliTimestamp(),
+                .start_time_ns = start_time_ns,
                 .buf = .empty,
                 .timed_out = false,
             };
@@ -867,7 +963,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             // Fill initial slots
             for (slots) |*slot| {
                 if (next_test >= specs.len) break;
-                if (!launchChild(slot, specs, next_test, timeout_ms)) {
+                if (!launchChild(slot, specs, next_test, timeout_ms, progress_timer.read())) {
                     results[next_test] = cfg.default_result;
                     completed += 1;
                 }
@@ -908,7 +1004,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                         completed += 1;
 
                         if (next_test < specs.len) {
-                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms)) {
+                            if (!launchChild(&slots[slot_idx], specs, next_test, timeout_ms, progress_timer.read())) {
                                 results[next_test] = cfg.default_result;
                                 completed += 1;
                             }
@@ -919,10 +1015,10 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 // Check timeouts
                 if (timeout_ms > 0) {
-                    const now = milliTimestamp();
+                    const now_ns = progress_timer.read();
                     for (slots) |*slot_opt| {
                         if (slot_opt.*) |*slot| {
-                            const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
+                            const elapsed = (now_ns - slot.start_time_ns) / std.time.ns_per_ms;
                             const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
                             if (elapsed > kill_after_ms and !slot.timed_out) {
                                 slot.timed_out = true;

@@ -26,6 +26,7 @@
 //! - 0: All expectations matched in order
 //! - 1: Test failed (mismatch, missing output, extra output, or invalid spec)
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const base = @import("base");
@@ -1321,7 +1322,7 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
 };
 
 /// Platform host entrypoint
-fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
+fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error || error{InvalidSpecFormat})!c_int {
     // Install signal handlers for stack overflow, access violations, and division by zero
     // This allows us to display helpful error messages instead of crashing
     installRuntimeSignalHandlers();

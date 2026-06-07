@@ -27,7 +27,7 @@ const HELP =
 ;
 
 /// CLI entrypoint for fuzzing failure reproducer.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer {
         _ = gpa_impl.deinit();

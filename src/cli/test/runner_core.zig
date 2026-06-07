@@ -37,24 +37,17 @@ pub const TestStats = struct {
     }
 };
 
-fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []const u8, max_output_bytes: usize) !std.process.RunResult {
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB at use)
-    // and PosixBlock on POSIX (must point at std.c.environ).
-    const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
-        .block = .global,
-    } else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    var env_map = try environ.createMap(allocator);
+fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []const u8, max_output_bytes: usize) anyerror!std.process.RunResult {
+    var env_map = try util.buildProcessEnvMap(allocator, null);
     defer env_map.deinit();
 
     // Give every child build/run its own Roc and Zig local cache roots so test
     // runner processes cannot share module/build artifacts or observe one
     // another's cache state.
     const cache_dirs = try util.createIsolatedTestCacheDirs(allocator);
-    defer cache_dirs.deinit(allocator);
+    defer cache_dirs.cleanupAndDeinit(allocator);
     try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+    try env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 
     return util.runChildWithTimeout(allocator, argv, .{
@@ -63,7 +56,7 @@ fn runRocChildWithOutputLimit(allocator: Allocator, _: std.Io, argv: []const []c
     });
 }
 
-fn runRocChild(allocator: Allocator, std_io: std.Io, argv: []const []const u8) !std.process.RunResult {
+fn runRocChild(allocator: Allocator, std_io: std.Io, argv: []const []const u8) anyerror!std.process.RunResult {
     return runRocChildWithOutputLimit(allocator, std_io, argv, 50 * 1024);
 }
 
@@ -77,7 +70,7 @@ pub fn crossCompile(
     target: []const u8,
     output_name: []const u8,
     backend: ?[]const u8,
-) !TestResult {
+) Allocator.Error!TestResult {
     const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target});
     defer allocator.free(target_arg);
 
@@ -123,7 +116,7 @@ pub fn buildNative(
     roc_file: []const u8,
     output_name: []const u8,
     backend: ?[]const u8,
-) !TestResult {
+) Allocator.Error!TestResult {
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
     defer allocator.free(output_arg);
 
@@ -161,7 +154,7 @@ pub fn runNative(
     allocator: Allocator,
     _: std.Io,
     exe_path: []const u8,
-) !TestResult {
+) Allocator.Error!TestResult {
     const result = util.runChildWithTimeout(allocator, &[_][]const u8{exe_path}, .{
         .max_output_bytes = 50 * 1024,
     }) catch |err| {
@@ -219,7 +212,7 @@ pub fn runWithIoSpec(
     roc_file: []const u8,
     io_spec: []const u8,
     backend: ?[]const u8,
-) !TestResult {
+) Allocator.Error!TestResult {
     if (backend) |b| {
         return runWithIoSpecBuildAndExec(allocator, std_io, roc_binary, roc_file, io_spec, b);
     }
@@ -281,7 +274,7 @@ fn runWithIoSpecBuildAndExec(
     roc_file: []const u8,
     io_spec: []const u8,
     backend: []const u8,
-) !TestResult {
+) Allocator.Error!TestResult {
     // Generate a temp output name from the roc file basename
     const basename = std.fs.path.stem(std.fs.path.basename(roc_file));
     const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}_test", .{ basename, backend });
@@ -354,7 +347,7 @@ pub fn runWithValgrind(
     std_io: std.Io,
     roc_binary: []const u8,
     roc_file: []const u8,
-) !TestResult {
+) Allocator.Error!TestResult {
     const valgrind_max_output_bytes = 16 * 1024 * 1024;
 
     // Valgrind only works on Linux x86_64
@@ -416,7 +409,7 @@ pub fn verifyPlatformFiles(
     std_io: std.Io,
     platform_dir: []const u8,
     target: []const u8,
-) !bool {
+) Allocator.Error!bool {
     const libhost_path = try std.fmt.allocPrint(allocator, "{s}/platform/targets/{s}/libhost.a", .{ platform_dir, target });
     defer allocator.free(libhost_path);
 

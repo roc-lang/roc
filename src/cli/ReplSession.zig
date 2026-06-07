@@ -21,7 +21,11 @@ allocator: Allocator,
 io: std.Io,
 backend_kind: eval.EvalBackend,
 definitions: DefinitionStore,
-builtin_modules: eval.BuiltinModules,
+builtin_modules: *eval.BuiltinModules,
+/// Whether this session owns `builtin_modules` (and must deinit it). Tests can
+/// borrow a shared, already-published instance to avoid re-publishing the
+/// Builtin module for every session; see `initBorrowingBuiltins`.
+owns_builtin_modules: bool,
 
 /// Outcome of evaluating a single REPL input line.
 pub const StepResult = union(enum) {
@@ -38,19 +42,46 @@ pub const StepResult = union(enum) {
     }
 };
 
-pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) !ReplSession {
+pub fn init(allocator: Allocator, io: std.Io, backend_kind: eval.EvalBackend) anyerror!ReplSession {
+    const builtin_modules = try allocator.create(eval.BuiltinModules);
+    errdefer allocator.destroy(builtin_modules);
+    builtin_modules.* = try eval.BuiltinModules.init(allocator);
     return .{
         .allocator = allocator,
         .io = io,
         .backend_kind = backend_kind,
         .definitions = DefinitionStore.init(),
-        .builtin_modules = try eval.BuiltinModules.init(allocator),
+        .builtin_modules = builtin_modules,
+        .owns_builtin_modules = true,
+    };
+}
+
+/// Construct a session that borrows a caller-owned, already-published
+/// `BuiltinModules`. The session never deinits it, so one published Builtin can
+/// back many sessions. Intended for tests that would otherwise re-publish the
+/// Builtin module on every assertion.
+fn initBorrowingBuiltins(
+    allocator: Allocator,
+    io: std.Io,
+    backend_kind: eval.EvalBackend,
+    builtin_modules: *eval.BuiltinModules,
+) ReplSession {
+    return .{
+        .allocator = allocator,
+        .io = io,
+        .backend_kind = backend_kind,
+        .definitions = DefinitionStore.init(),
+        .builtin_modules = builtin_modules,
+        .owns_builtin_modules = false,
     };
 }
 
 pub fn deinit(self: *ReplSession) void {
     self.definitions.deinit(self.allocator);
-    self.builtin_modules.deinit();
+    if (self.owns_builtin_modules) {
+        self.builtin_modules.deinit();
+        self.allocator.destroy(self.builtin_modules);
+    }
 }
 
 fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin {
@@ -62,7 +93,7 @@ fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin
 }
 
 /// Process one complete REPL statement or command and return the user-visible output.
-pub fn step(self: *ReplSession, input: []const u8) ![]u8 {
+pub fn step(self: *ReplSession, input: []const u8) anyerror![]u8 {
     const result = try self.stepWithConfig(input, reporting.ReportingConfig.initColorTerminal());
     return switch (result) {
         .output => |bytes| bytes,
@@ -73,7 +104,7 @@ pub fn step(self: *ReplSession, input: []const u8) ![]u8 {
 }
 
 /// Process one complete REPL statement or command and keep stdout/stderr output separate.
-pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) !StepResult {
+pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) anyerror!StepResult {
     const line = std.mem.trim(u8, input, " \t\r\n");
     if (line.len == 0) return .none;
 
@@ -122,23 +153,28 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
 }
 
 /// Split pasted input into complete REPL statements using the parser as the boundary check.
-pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]const u8 {
+pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) Allocator.Error![][]const u8 {
+    return splitInputIntoStatementsWithAllocator(self.allocator, input);
+}
+
+/// Split pasted input into complete REPL statements using the parser as the boundary check.
+pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []const u8) Allocator.Error![][]const u8 {
     const trimmed_input = std.mem.trim(u8, input, " \t\r\n");
-    if (trimmed_input.len == 0) return self.allocator.alloc([]const u8, 0);
+    if (trimmed_input.len == 0) return allocator.alloc([]const u8, 0);
     if (isSpecialCommand(trimmed_input)) {
-        const out = try self.allocator.alloc([]const u8, 1);
-        out[0] = try self.allocator.dupe(u8, trimmed_input);
+        const out = try allocator.alloc([]const u8, 1);
+        out[0] = try allocator.dupe(u8, trimmed_input);
         return out;
     }
 
     var result = std.ArrayList([]const u8).empty;
     errdefer {
-        for (result.items) |slice| self.allocator.free(slice);
-        result.deinit(self.allocator);
+        for (result.items) |slice| allocator.free(slice);
+        result.deinit(allocator);
     }
 
     var current = std.ArrayList(u8).empty;
-    defer current.deinit(self.allocator);
+    defer current.deinit(allocator);
 
     var lines = std.mem.splitScalar(u8, input, '\n');
     while (lines.next()) |raw_line| {
@@ -147,14 +183,14 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]cons
             continue;
         }
 
-        if (current.items.len > 0) try current.append(self.allocator, '\n');
-        try current.appendSlice(self.allocator, trimmed_line);
+        if (current.items.len > 0) try current.append(allocator, '\n');
+        try current.appendSlice(allocator, trimmed_line);
 
         const candidate = std.mem.trim(u8, current.items, " \t\r\n");
         if (candidate.len == 0) continue;
-        switch (try self.inputStatus(candidate)) {
+        switch (try inputStatusWithAllocator(allocator, candidate)) {
             .complete => {
-                try result.append(self.allocator, try self.allocator.dupe(u8, candidate));
+                try result.append(allocator, try allocator.dupe(u8, candidate));
                 current.clearRetainingCapacity();
             },
             .incomplete, .invalid => {},
@@ -163,25 +199,30 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) ![][]cons
 
     const remaining = std.mem.trim(u8, current.items, " \t\r\n");
     if (remaining.len > 0) {
-        try result.append(self.allocator, try self.allocator.dupe(u8, remaining));
+        try result.append(allocator, try allocator.dupe(u8, remaining));
     }
 
-    return result.toOwnedSlice(self.allocator);
+    return result.toOwnedSlice(allocator);
 }
 
 /// Free slices returned by `splitInputIntoStatements`.
 pub fn freeStatementSlices(self: *ReplSession, slices: []const []const u8) void {
-    for (slices) |slice| self.allocator.free(slice);
-    self.allocator.free(slices);
+    freeStatementSlicesWithAllocator(self.allocator, slices);
+}
+
+/// Free slices returned by `splitInputIntoStatementsWithAllocator`.
+pub fn freeStatementSlicesWithAllocator(allocator: Allocator, slices: []const []const u8) void {
+    for (slices) |slice| allocator.free(slice);
+    allocator.free(slices);
 }
 
 /// Add or replace one stored definition while preserving definition order.
-pub fn addOrReplaceDefinition(self: *ReplSession, source: []const u8, name: []const u8, kind: DefinitionKind) !void {
+pub fn addOrReplaceDefinition(self: *ReplSession, source: []const u8, name: []const u8, kind: DefinitionKind) Allocator.Error!void {
     try self.definitions.addOrReplace(self.allocator, source, name, kind);
 }
 
 /// Build a block expression containing all current definitions followed by `expr`.
-pub fn buildFullSource(self: *const ReplSession, expr: []const u8) ![]u8 {
+pub fn buildFullSource(self: *const ReplSession, expr: []const u8) Allocator.Error![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(self.allocator);
 
@@ -202,7 +243,7 @@ pub fn buildFullSource(self: *const ReplSession, expr: []const u8) ![]u8 {
 }
 
 /// Build module-level source for the current stored definitions.
-pub fn definitionsSource(self: *const ReplSession) ![]u8 {
+pub fn definitionsSource(self: *const ReplSession) Allocator.Error![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(self.allocator);
 
@@ -214,7 +255,7 @@ pub fn definitionsSource(self: *const ReplSession) ![]u8 {
     return out.toOwnedSlice(self.allocator);
 }
 
-fn helpText(self: *ReplSession) ![]u8 {
+fn helpText(self: *ReplSession) Allocator.Error![]u8 {
     return self.allocator.dupe(u8,
         \\Enter an expression or definition.
         \\
@@ -232,7 +273,7 @@ const DefinitionValidation = struct {
     error_message: ?[]u8,
 };
 
-fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) !DefinitionValidation {
+fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
@@ -267,7 +308,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     }
 }
 
-fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: reporting.ReportingConfig) !StepResult {
+fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: reporting.ReportingConfig) anyerror!StepResult {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
@@ -301,14 +342,14 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     };
 }
 
-fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) anyerror![]u8 {
     return eval.test_helpers.renderProblemsWithConfig(self.allocator, .module, source, report_config) catch |err| switch (err) {
         error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
         else => err,
     };
 }
 
-fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{ TooNested, WriteFailed })![]u8 {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;
@@ -320,7 +361,7 @@ fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_c
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
 }
 
-fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;
@@ -341,7 +382,7 @@ fn renderAstDiagnostics(
     env: *const base.CommonEnv,
     filename: []const u8,
     report_config: reporting.ReportingConfig,
-) ![]u8 {
+) (Allocator.Error || error{WriteFailed})![]u8 {
     var out: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer out.deinit();
 
@@ -368,7 +409,7 @@ fn renderAstDiagnostics(
     return trimOwnedRight(self.allocator, raw);
 }
 
-fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ![]u8 {
+fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
     var report = reporting.Report.init(self.allocator, "PARSE ERROR", .runtime_error);
     defer report.deinit();
     try report.document.addReflowingText("The REPL input could not be parsed.");
@@ -385,7 +426,7 @@ fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_
     return trimOwnedRight(self.allocator, raw);
 }
 
-fn trimOwnedRight(allocator: Allocator, raw: []u8) ![]u8 {
+fn trimOwnedRight(allocator: Allocator, raw: []u8) Allocator.Error![]u8 {
     const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
     if (trimmed.len == raw.len) return raw;
     const result = try allocator.dupe(u8, trimmed);
@@ -420,13 +461,18 @@ pub const InputStatus = union(enum) {
 };
 
 /// Parses a line to determine whether it is a complete, incomplete, or invalid REPL input.
-pub fn inputStatus(self: *ReplSession, line: []const u8) !InputStatus {
-    var env = try ModuleEnv.init(self.allocator, line);
+pub fn inputStatus(self: *ReplSession, line: []const u8) Allocator.Error!InputStatus {
+    return inputStatusWithAllocator(self.allocator, line);
+}
+
+/// Parses a line to determine whether it is a complete, incomplete, or invalid REPL input.
+pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocator.Error!InputStatus {
+    var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
-    try env.common.calcLineStarts(self.allocator);
+    try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(self.allocator, &env.common) catch |err| switch (err) {
+    const ast = parse.parseStatement(allocator, &env.common) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .invalid,
     };
@@ -624,7 +670,7 @@ pub const DefinitionStore = struct {
         }
     }
 
-    fn addOrReplace(self: *DefinitionStore, allocator: Allocator, source: []const u8, name: []const u8, kind: DefinitionKind) !void {
+    fn addOrReplace(self: *DefinitionStore, allocator: Allocator, source: []const u8, name: []const u8, kind: DefinitionKind) Allocator.Error!void {
         for (self.items.items) |*definition| {
             if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
                 const new_source = try allocator.dupe(u8, source);
@@ -643,7 +689,7 @@ pub const DefinitionStore = struct {
         });
     }
 
-    fn snapshot(self: *const DefinitionStore, allocator: Allocator) !DefinitionStore {
+    fn snapshot(self: *const DefinitionStore, allocator: Allocator) Allocator.Error!DefinitionStore {
         var result = DefinitionStore.init();
         errdefer result.deinit(allocator);
         try result.items.ensureTotalCapacity(allocator, self.items.items.len);
@@ -666,6 +712,32 @@ pub const DefinitionStore = struct {
 
 const testing = std.testing;
 
+/// One Builtin module, published once and shared (read-only) by every test
+/// session. Publishing the Builtin via `BuiltinModules.init` is the dominant
+/// per-session cost, so reusing a single instance across the ~100 sessions in
+/// this file is the largest win. Allocated with `page_allocator` (not
+/// `testing.allocator`) so the never-freed singleton isn't flagged as a leak.
+/// The cli_test runner is single-threaded, so lazy init needs no locking.
+var shared_test_builtins: ?eval.BuiltinModules = null;
+
+fn sharedTestBuiltins() anyerror!*eval.BuiltinModules {
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+    return &shared_test_builtins.?;
+}
+
+/// Build a test session that borrows the shared Builtin (see
+/// `shared_test_builtins`) instead of publishing its own.
+fn testRepl(backend_kind: eval.EvalBackend) anyerror!ReplSession {
+    return ReplSession.initBorrowingBuiltins(
+        testing.allocator,
+        std.testing.io,
+        backend_kind,
+        try sharedTestBuiltins(),
+    );
+}
+
 const TestBackend = enum { interpreter, dev, wasm };
 
 fn toEvalBackend(backend: TestBackend) eval.EvalBackend {
@@ -684,11 +756,11 @@ fn backendName(backend: TestBackend) []const u8 {
     };
 }
 
-fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) !void {
+fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) anyerror!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, eval_backend);
+    var repl = try testRepl(eval_backend);
     defer repl.deinit();
 
     const result = try repl.step(expr);
@@ -699,14 +771,13 @@ fn expectBackend(backend: TestBackend, expr: []const u8, expected: []const u8) !
     };
 }
 
-fn expectInterpreter(expr: []const u8, expected: []const u8) !void {
+fn expectInterpreter(expr: []const u8, expected: []const u8) anyerror!void {
     try expectBackend(.interpreter, expr, expected);
 }
 
-fn expectAllNative(expr: []const u8, expected: []const u8) !void {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
-    defer repl.deinit();
-
+/// Build the wrapped module source (`<defs>\nmain = <expr>`) for `expr` and
+/// confirm it is an expression. Caller owns the returned source.
+fn replExprSource(repl: *ReplSession, expr: []const u8) anyerror![]u8 {
     const line = std.mem.trim(u8, expr, " \t\r\n");
     const input_info = switch (try repl.inputStatus(line)) {
         .complete => |info| info,
@@ -717,7 +788,43 @@ fn expectAllNative(expr: []const u8, expected: []const u8) !void {
     const definitions = try repl.definitionsSource();
     defer testing.allocator.free(definitions);
 
-    const source = try std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
+    return std.fmt.allocPrint(testing.allocator, "{s}\nmain = {s}\n", .{ definitions, line });
+}
+
+/// Evaluate `expr` on the two native backends (interpreter and dev) and assert
+/// both render `expected`. Only the native target is lowered — wasm coverage is
+/// exercised explicitly by `expectAllBackends` on a representative subset, so it
+/// is not re-run for every native assertion.
+fn expectAllNative(expr: []const u8, expected: []const u8) anyerror!void {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const source = try replExprSource(&repl, expr);
+    defer testing.allocator.free(source);
+
+    var compiled = try eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
+        testing.allocator,
+        repl.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        repl.prePublishedBuiltin(),
+    );
+    defer compiled.deinit(testing.allocator);
+
+    try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
+    try expectCompiledBackend(.dev, expr, expected, &compiled.lowered);
+}
+
+/// Evaluate `expr` on all backends — interpreter, dev, and wasm. Lowers both the
+/// native and wasm targets, so reserve this for a representative subset rather
+/// than every assertion.
+fn expectAllBackends(expr: []const u8, expected: []const u8) anyerror!void {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const source = try replExprSource(&repl, expr);
     defer testing.allocator.free(source);
 
     var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
@@ -740,7 +847,7 @@ fn expectCompiledBackend(
     expr: []const u8,
     expected: []const u8,
     lowered: *eval.test_helpers.LoweredProgram,
-) !void {
+) anyerror!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
@@ -757,11 +864,11 @@ fn expectCompiledBackend(
     };
 }
 
-fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) !void {
+fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) anyerror!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, eval_backend);
+    var repl = try testRepl(eval_backend);
     defer repl.deinit();
 
     for (steps) |step_pair| {
@@ -774,11 +881,11 @@ fn expectStateful(backend: TestBackend, steps: []const [2][]const u8) !void {
     }
 }
 
-fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: []const u8) !void {
+fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: []const u8) anyerror!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, eval_backend);
+    var repl = try testRepl(eval_backend);
     defer repl.deinit();
 
     for (steps, 0..) |step_input, i| {
@@ -795,13 +902,13 @@ fn expectStepsFinal(backend: TestBackend, steps: []const []const u8, expected: [
 }
 
 test "Repl - initialization and cleanup" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
     try testing.expect(repl.definitions.count() == 0);
 }
 
 test "Repl - special commands" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -875,8 +982,11 @@ test "Repl - lambda renders as <function>" {
     try expectAllNative("|x, y| x + y", "<function>");
 }
 
-test "Repl - Str.to_utf8" {
+test "Repl - Str.to_utf8 bytes" {
     try expectAllNative("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
+}
+
+test "Repl - Str.to_utf8 lengths" {
     try expectAllNative("List.len(Str.to_utf8(\"\"))", "0");
     try expectAllNative("List.len(Str.to_utf8(\"hello\"))", "5");
     try expectAllNative("List.len(Str.to_utf8(\"é\"))", "2");
@@ -884,6 +994,9 @@ test "Repl - Str.to_utf8" {
     try expectAllNative("List.len(Str.to_utf8(\"Hello, World!\"))", "13");
     try expectAllNative("List.len(Str.to_utf8(\"日本語\"))", "9");
     try expectAllNative("List.len(Str.to_utf8(\"a é 🎉\"))", "9");
+}
+
+test "Repl - Str.to_utf8 empty checks" {
     try expectAllNative("List.is_empty(Str.to_utf8(\"\"))", "True");
     try expectAllNative("List.is_empty(Str.to_utf8(\"x\"))", "False");
 }
@@ -935,14 +1048,23 @@ test "Repl - list literals" {
     try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
 }
 
-test "Repl - list operations" {
+test "Repl - list operations concat" {
     try expectAllNative("List.len(List.concat([1, 2], [3, 4]))", "4");
     try expectAllNative("List.len(List.concat([], [1, 2, 3]))", "3");
     try expectAllNative("List.len(List.concat([1, 2, 3], []))", "3");
+}
+
+test "Repl - list operations contains" {
     try expectAllNative("List.contains([1, 2, 3, 4, 5], 3)", "True");
+}
+
+test "Repl - list operations filters" {
     try expectAllNative("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)", "[1.0, 2.0]");
     try expectAllNative("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
     try expectAllNative("List.keep_if([1, 2, 3], |_| Bool.False)", "[]");
+}
+
+test "Repl - list operations fold_rev" {
     try expectAllNative("List.fold_rev([1.I64, 2.I64, 3.I64], 0.I64, |x, acc| acc * 10 + x)", "321");
     try expectAllNative("List.fold_rev([1], 0, |x, acc| acc * 10 + x)", "1.0");
     try expectAllNative("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)", "321.0");
@@ -962,9 +1084,12 @@ test "Repl - range_to" {
     try expectInterpreter("Iter.fold(1.to(3), [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
 }
 
-test "Repl - list_sort_with" {
+test "Repl - list_sort_with lengths" {
     try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))", "3");
     try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))", "5");
+}
+
+test "Repl - list_sort_with empty" {
     try expectAllNative(
         \\{
         \\    xs : List(I64)
@@ -972,6 +1097,9 @@ test "Repl - list_sort_with" {
         \\    List.len(List.sort_with(xs, |a, b| if a < b LT else if a > b GT else EQ))
         \\}
     , "0");
+}
+
+test "Repl - list_sort_with single" {
     try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))", "1");
 }
 
@@ -1044,7 +1172,7 @@ test "Repl - for loop over list" {
     try expectStateful(.wasm, steps);
 }
 
-test "Repl - for loop snapshots" {
+test "Repl - for loop snapshots empty list" {
     const steps = &[_][2][]const u8{
         .{
             \\unchanged = {
@@ -1057,6 +1185,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `unchanged`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots conditional" {
+    const steps = &[_][2][]const u8{
         .{
             \\result = {
             \\    var all_true_ = Bool.True
@@ -1072,6 +1208,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `result`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots string count" {
+    const steps = &[_][2][]const u8{
         .{
             \\count = {
             \\    var counter_ = 0
@@ -1083,6 +1227,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `count`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots sum" {
+    const steps = &[_][2][]const u8{
         .{
             \\sum = {
             \\    var total_ = 0
@@ -1094,6 +1246,14 @@ test "Repl - for loop snapshots" {
             ,
             "assigned `sum`",
         },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+    try expectStateful(.wasm, steps);
+}
+
+test "Repl - for loop snapshots nested product" {
+    const steps = &[_][2][]const u8{
         .{
             \\product = {
             \\    var result_ = 0
@@ -1114,7 +1274,7 @@ test "Repl - for loop snapshots" {
 }
 
 test "Repl - build full source with block syntax" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 5", "x", .value);
@@ -1134,7 +1294,7 @@ test "Repl - build full source with block syntax" {
 }
 
 test "Repl - definition replacement" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     try repl.addOrReplaceDefinition("x = 1", "x", .value);
@@ -1165,12 +1325,9 @@ test "Repl - 4-arg lambda call (dev)" {
     try expectStateful(.wasm, steps);
 }
 
-fn expectSplit(input: []const u8, expected: []const []const u8) !void {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
-    defer repl.deinit();
-
-    const slices = try repl.splitInputIntoStatements(input);
-    defer repl.freeStatementSlices(slices);
+fn expectSplit(input: []const u8, expected: []const []const u8) anyerror!void {
+    const slices = try splitInputIntoStatementsWithAllocator(testing.allocator, input);
+    defer freeStatementSlicesWithAllocator(testing.allocator, slices);
 
     try testing.expectEqual(expected.len, slices.len);
     for (expected, slices) |want, got| {
@@ -1216,7 +1373,7 @@ test "splitInputIntoStatements - annotation and decl stay separate" {
 }
 
 test "Repl - paste of annotation + decl produces single assigned message" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z : U64\nz = 5");
@@ -1233,7 +1390,7 @@ test "Repl - paste of annotation + decl produces single assigned message" {
 }
 
 test "Repl - paste of two assignments processes both" {
-    var repl = try ReplSession.init(testing.allocator, std.testing.io, .interpreter);
+    var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
     const slices = try repl.splitInputIntoStatements("z = 5\ny = 6");
@@ -1264,4 +1421,29 @@ test "issue 9364: F64.to_str integer-valued float literal" {
 
 test "issue 9364: F64.to_str non-integer float literal" {
     try expectAllNative("F64.to_str(2.5)", "\"2.5\"");
+}
+
+// Representative wasm coverage. The bulk of expression assertions run on the
+// native backends only (`expectAllNative`); this test runs a representative
+// spread of value kinds — ints, floats, strings, bools, lists, lambdas, and
+// result/tag values — through all backends including wasm, so wasm codegen and
+// bytebox execution stay covered without paying for them on every assertion.
+// Stateful wasm behavior (assignments, redefinition, for-loops) is additionally
+// covered by the `expectStateful(.wasm, ...)` tests above.
+test "Repl - representative all-backends coverage (incl. wasm)" {
+    try expectAllBackends("42", "42.0");
+    try expectAllBackends("\"Hello, World!\"", "\"Hello, World!\"");
+    try expectAllBackends("Bool.True", "True");
+    try expectAllBackends("Bool.not(False)", "True");
+    try expectAllBackends("I8.mod_by(-10, 3)", "2");
+    try expectAllBackends("[1, 2, 3]", "[1.0, 2.0, 3.0]");
+    try expectAllBackends("[\"hello\", \"world\", \"test\"]", "[\"hello\", \"world\", \"test\"]");
+    try expectAllBackends("List.len([1, 2, 3])", "3");
+    try expectAllBackends("List.append([1, 2], 3)", "[1.0, 2.0, 3.0]");
+    try expectAllBackends("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)", "[3.0, 4.0, 5.0]");
+    try expectAllBackends("|x| x + 1", "<function>");
+    try expectAllBackends("Str.to_utf8(\"hello\")", "[104, 101, 108, 108, 111]");
+    try expectAllBackends("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
+    try expectAllBackends("U8.from_str(\"42\")", "Ok(42)");
+    try expectAllBackends("F64.to_str(2.5)", "\"2.5\"");
 }

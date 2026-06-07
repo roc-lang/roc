@@ -124,23 +124,6 @@ test = |{}| {
 				(p-underscore))
 			(e-empty_record)))
 	(d-let
-		(p-assign (ident "Utf8Format.encode_str"))
-		(e-lambda
-			(args
-				(p-assign (ident "_fmt"))
-				(p-assign (ident "s")))
-			(e-call (constraint-fn-var 114)
-				(e-lookup-external
-					(builtin))
-				(e-lookup-local
-					(p-assign (ident "s")))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-lookup (name "Utf8Format") (local))
-				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "U8") (builtin))))))
-	(d-let
 		(p-assign (ident "test"))
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-nominal-decl
@@ -153,7 +136,6 @@ test = |{}| {
 	(defs
 		(patt (type "Str => {}"))
 		(patt (type "_arg -> {}"))
-		(patt (type "Utf8Format, Str -> List(U8)"))
 		(patt (type "{ .. } -> Error")))
 	(type_decls
 		(nominal (type "Utf8Format")
@@ -161,6 +143,5 @@ test = |{}| {
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "_arg -> {}"))
-		(expr (type "Utf8Format, Str -> List(U8)"))
 		(expr (type "{ .. } -> Error"))))
 ~~~

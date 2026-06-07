@@ -1,25 +1,23 @@
-//! Tests verifying that "Builtin" is not in scope and cannot be imported,
-//! but that nested types like Str, List, etc. are available.
+//! Tests verifying that compiler-owned Builtin is not in scope as a visible
+//! module, but that nested types like Str, List, etc. are available.
 
 const TestEnv = @import("./TestEnv.zig");
 const testing = @import("std").testing;
 const std = @import("std");
 
-test "cannot import Builtin module" {
+test "compiler Builtin is not a visible auto-imported module" {
     const src =
-        \\import Builtin
-        \\
-        \\x = 5
+        \\x = Builtin.value
     ;
 
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    // Should have a canonicalization problem because Builtin is not a module that can be imported
+    // The compiler-owned Builtin module is only reachable through hidden import
+    // identity; visible name lookup should not bind it.
     const diagnostics = try test_env.module_env.getDiagnostics();
     defer test_env.module_env.gpa.free(diagnostics);
 
-    // Expect at least one diagnostic (module not found error)
     try testing.expect(diagnostics.len > 0);
 }
 

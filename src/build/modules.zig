@@ -39,6 +39,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .eval => &.{"eval tests"},
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
+        .lsp => &.{"lsp tests"},
         else => &.{},
     };
 }
@@ -266,7 +267,6 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
 /// Represents a test module with its compilation and execution steps.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
-    run_step: *Step.Run,
 };
 
 /// Bundles the per-module test steps with accounting for forced passes (aggregators +
@@ -611,6 +611,7 @@ pub const RocModules = struct {
         optimize: OptimizeMode,
         zstd: ?*Dependency,
         test_filters: []const []const u8,
+        test_runner: ?Step.Compile.TestRunner,
     ) ModuleTestsResult {
         const test_configs = [_]ModuleType{
             .collections,
@@ -670,6 +671,7 @@ pub const RocModules = struct {
                     .link_libc = true,
                 }),
                 .filters = filter_injection.filters,
+                .test_runner = test_runner,
             });
 
             // Watch module needs Core Foundation and FSEvents on macOS (only when not cross-compiling)
@@ -689,11 +691,8 @@ pub const RocModules = struct {
                 }
             }
 
-            const run_step = b.addRunArtifact(test_step);
-
             tests[i] = .{
                 .test_step = test_step,
-                .run_step = run_step,
             };
         }
 

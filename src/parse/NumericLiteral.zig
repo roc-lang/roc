@@ -4,6 +4,7 @@
 //! consume these facts; they must not parse number token text again.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Index of a parsed numeric literal stored in `NodeStore.numeric_literals`.
 pub const Idx = enum(u32) { _ };
@@ -182,8 +183,9 @@ const Exact = struct {
 /// Parse a numeric token into exact base-256 digit facts and a compact payload when possible.
 pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std.mem.Allocator.Error!Owned {
     const split = splitDeprecatedSuffix(raw_text, kind);
-    const exact = parseExact(allocator, split.number_text, kind) catch {
-        return .{
+    const exact = parseExact(allocator, split.number_text, kind) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidNumeral => return .{
             .kind = kind,
             .compact = .invalid,
             .before = try allocator.alloc(u8, 0),
@@ -191,7 +193,7 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
             .after_decimal_digit_count = 0,
             .is_negative = false,
             .had_decimal_point = kind == .frac,
-        };
+        },
     };
     errdefer exact.deinit(allocator);
 
@@ -325,14 +327,14 @@ fn digitValue(byte: u8) ?u8 {
     };
 }
 
-fn parseExact(allocator: std.mem.Allocator, text: []const u8, kind: Kind) !Exact {
+fn parseExact(allocator: std.mem.Allocator, text: []const u8, kind: Kind) (Allocator.Error || error{InvalidNumeral})!Exact {
     return switch (kind) {
         .int => parseExactInteger(allocator, text),
         .frac => parseExactDecimal(allocator, text),
     };
 }
 
-fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) !Exact {
+fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.Error || error{InvalidNumeral})!Exact {
     if (text.len == 0) return error.InvalidNumeral;
     const is_negative = text[0] == '-';
     var first_digit: usize = @intFromBool(is_negative);
@@ -371,7 +373,7 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) !Exact {
     };
 }
 
-fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) !Exact {
+fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) (Allocator.Error || error{InvalidNumeral})!Exact {
     if (text.len == 0) return error.InvalidNumeral;
     const is_negative = text[0] == '-';
     const first: usize = @intFromBool(is_negative);
@@ -397,13 +399,16 @@ fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) !Exact {
     };
 }
 
-fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) !DecimalParts {
+fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Allocator.Error || error{InvalidNumeral})!DecimalParts {
     const exp_index = std.mem.findAny(u8, unsigned_text, "eE");
     const mantissa = unsigned_text[0..(exp_index orelse unsigned_text.len)];
     const exponent: i64 = if (exp_index) |index| blk: {
         const exp_text = unsigned_text[index + 1 ..];
         if (exp_text.len == 0) return error.InvalidNumeral;
-        break :blk parseI64NoUnderscores(allocator, exp_text) catch return error.InvalidNumeral;
+        break :blk parseI64NoUnderscores(allocator, exp_text) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidCharacter, error.Overflow => return error.InvalidNumeral,
+        };
     } else 0;
 
     var before_raw = std.ArrayList(u8).empty;
@@ -537,7 +542,10 @@ fn compactFrac(
     allocator: std.mem.Allocator,
     text: []const u8,
 ) std.mem.Allocator.Error!Compact {
-    const parts = decimalParts(allocator, text[@intFromBool(text.len > 0 and text[0] == '-')..]) catch return .invalid;
+    const parts = decimalParts(allocator, text[@intFromBool(text.len > 0 and text[0] == '-')..]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidNumeral => return .invalid,
+    };
     defer parts.deinit(allocator);
 
     const is_negative = text.len > 0 and text[0] == '-';
@@ -624,7 +632,7 @@ fn checkedMulAdd(comptime T: type, value: T, multiplier: T, addend: u8) ?T {
     return added[0];
 }
 
-fn parseI64NoUnderscores(allocator: std.mem.Allocator, text: []const u8) !i64 {
+fn parseI64NoUnderscores(allocator: std.mem.Allocator, text: []const u8) (Allocator.Error || error{ InvalidCharacter, Overflow })!i64 {
     const cleaned = try withoutUnderscores(allocator, text);
     defer allocator.free(cleaned);
     return try std.fmt.parseInt(i64, cleaned, 10);
@@ -645,7 +653,7 @@ fn withoutUnderscores(allocator: std.mem.Allocator, text: []const u8) std.mem.Al
     return out;
 }
 
-fn intDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8, radix: u8) ![]u8 {
+fn intDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8, radix: u8) (Allocator.Error || error{InvalidNumeral})![]u8 {
     var bytes_le = std.ArrayList(u8).empty;
     defer bytes_le.deinit(allocator);
 
@@ -659,7 +667,7 @@ fn intDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8, radix: u
     return bytesLeToBe(allocator, bytes_le.items);
 }
 
-fn decimalDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8) ![]u8 {
+fn decimalDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8) (Allocator.Error || error{InvalidNumeral})![]u8 {
     var bytes_le = std.ArrayList(u8).empty;
     defer bytes_le.deinit(allocator);
 

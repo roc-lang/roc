@@ -6,6 +6,7 @@
 //! Run with: zig build test-wasm-static-lib
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 
 /// Custom error type that host functions can return to signal a trap.
@@ -102,7 +103,7 @@ const HostContext = struct {
 var global_host_context: HostContext = .{};
 
 /// Initialize WASM module from file.
-fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
+fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) Allocator.Error!WasmInterface {
     const wasm_data = std.Io.Dir.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
         std.debug.print("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
@@ -146,7 +147,7 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
 }
 
 /// Call wasm_main() and get the result string.
-fn callWasmMain(wasm: *const WasmInterface) ![]const u8 {
+fn callWasmMain(wasm: *const WasmInterface) Allocator.Error![]const u8 {
     // Call wasm_main() which returns a pointer to the result string
     var params_main: [0]bytebox.Val = undefined;
     var returns_main: [1]bytebox.Val = undefined;
@@ -211,7 +212,7 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const 
     }
 }
 
-pub fn main() !void {
+pub fn main() Allocator.Error!void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

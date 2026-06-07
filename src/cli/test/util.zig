@@ -1,6 +1,7 @@
 //! Utilities for CLI tests using the actual roc binary.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 /// Pick an IO suitable for the build context.
@@ -21,18 +22,43 @@ pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
 
 /// Absolute cache directory paths reserved for a single CLI test subprocess.
 pub const IsolatedCacheDirs = struct {
+    cache_root_dir: []u8,
     roc_cache_dir: []u8,
     zig_local_cache_dir: []u8,
+
+    pub fn cleanup(self: IsolatedCacheDirs) void {
+        std.Io.Dir.cwd().deleteTree(io, self.cache_root_dir) catch {};
+    }
+
+    pub fn cleanupAndDeinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
+        self.cleanup();
+        self.deinit(allocator);
+    }
 
     pub fn deinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
         allocator.free(self.zig_local_cache_dir);
         allocator.free(self.roc_cache_dir);
+        allocator.free(self.cache_root_dir);
+    }
+};
+
+/// Process environment map plus any test-owned cache directories it references.
+pub const IsolatedTestEnv = struct {
+    env_map: std.process.Environ.Map,
+    cache_dirs: ?IsolatedCacheDirs,
+
+    pub fn deinit(self: *IsolatedTestEnv, allocator: std.mem.Allocator) void {
+        self.env_map.deinit();
+        if (self.cache_dirs) |cache_dirs| {
+            cache_dirs.cleanupAndDeinit(allocator);
+            self.cache_dirs = null;
+        }
     }
 };
 
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
-fn reserveTestCacheRoot(allocator: std.mem.Allocator) ![]u8 {
+fn reserveTestCacheRoot(allocator: std.mem.Allocator) anyerror![]u8 {
     const cache_parent_rel = try std.fs.path.join(allocator, &.{ ".zig-cache", "roc-test-cache" });
     defer allocator.free(cache_parent_rel);
 
@@ -107,7 +133,7 @@ fn appendTimeoutMessage(
     stderr: *std.ArrayList(u8),
     argv: []const []const u8,
     timeout_ms: u64,
-) !void {
+) error{WriteFailed}!void {
     var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, stderr);
     defer stderr.* = aw.toArrayList();
     try aw.writer.print(
@@ -130,7 +156,7 @@ pub fn runChildWithTimeout(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     options: ChildRunOptions,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     const Watch = struct {
         child_id: std.process.Child.Id,
         timeout_ms: u64,
@@ -230,7 +256,7 @@ pub fn runChildWithTimeout(
 }
 
 /// Create unique Roc and Zig local cache directories for one CLI test subprocess.
-pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheDirs {
+pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) anyerror!IsolatedCacheDirs {
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
 
@@ -246,18 +272,17 @@ pub fn createIsolatedTestCacheDirs(allocator: std.mem.Allocator) !IsolatedCacheD
     try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
     return .{
+        .cache_root_dir = try std.fs.path.join(allocator, &.{ cwd_path, cache_root_rel }),
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
         .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
     };
 }
 
-/// Build an environment map for a test Roc subprocess.
-/// Unless the caller already set them, this gives the subprocess unique Roc,
-/// URL package, and Zig local cache roots so concurrent CLI tests cannot share cache state.
-pub fn buildIsolatedTestEnvMap(
+/// Copy the current process environment and overlay any caller-provided entries.
+pub fn buildProcessEnvMap(
     allocator: std.mem.Allocator,
     extra_env: ?*const std.process.Environ.Map,
-) !std.process.Environ.Map {
+) anyerror!std.process.Environ.Map {
     // In Zig 0.16, Environ.Block is GlobalBlock on Windows (read from PEB on use) and
     // PosixBlock on POSIX (must point at std.c.environ).
     const environ: std.process.Environ = if (builtin.os.tag == .windows) .{
@@ -276,27 +301,47 @@ pub fn buildIsolatedTestEnvMap(
         }
     }
 
+    return env_map;
+}
+
+/// Build an environment map for a test Roc subprocess.
+/// Unless the caller already set them, this gives the subprocess unique Roc,
+/// URL package, and Zig local cache roots so concurrent CLI tests cannot share cache state.
+pub fn buildIsolatedTestEnv(
+    allocator: std.mem.Allocator,
+    extra_env: ?*const std.process.Environ.Map,
+) anyerror!IsolatedTestEnv {
+    var env_map = try buildProcessEnvMap(allocator, extra_env);
+    errdefer env_map.deinit();
+    var cache_dirs: ?IsolatedCacheDirs = null;
+    errdefer if (cache_dirs) |dirs| {
+        dirs.cleanupAndDeinit(allocator);
+    };
+
     if (env_map.get("ROC_CACHE_DIR") == null or
         env_map.get("XDG_CACHE_HOME") == null or
         env_map.get("ZIG_LOCAL_CACHE_DIR") == null)
     {
-        const cache_dirs = try createIsolatedTestCacheDirs(allocator);
-        defer cache_dirs.deinit(allocator);
+        const dirs = try createIsolatedTestCacheDirs(allocator);
+        cache_dirs = dirs;
 
         if (env_map.get("ROC_CACHE_DIR") == null) {
-            try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
+            try env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir);
         }
 
         if (env_map.get("XDG_CACHE_HOME") == null) {
-            try env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir);
+            try env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir);
         }
 
         if (env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
-            try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
+            try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
         }
     }
 
-    return env_map;
+    return .{
+        .env_map = env_map,
+        .cache_dirs = cache_dirs,
+    };
 }
 
 fn runChild(
@@ -304,13 +349,13 @@ fn runChild(
     argv: []const []const u8,
     cwd_path: []const u8,
     extra_env: ?*const std.process.Environ.Map,
-) !RocResult {
-    var env_map = try buildIsolatedTestEnvMap(allocator, extra_env);
-    defer env_map.deinit();
+) anyerror!RocResult {
+    var env = try buildIsolatedTestEnv(allocator, extra_env);
+    defer env.deinit(allocator);
 
     const result = try runChildWithTimeout(allocator, argv, .{
         .cwd = cwd_path,
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024, // 10MB
     });
 
@@ -322,7 +367,7 @@ fn runChild(
 }
 
 /// Helper to run roc with arguments that don't require a test file
-pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !RocResult {
+pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) anyerror!RocResult {
     return runRocCommandWithEnv(allocator, args, null);
 }
 
@@ -331,7 +376,7 @@ pub fn runRocCommandWithEnv(
     allocator: std.mem.Allocator,
     args: []const []const u8,
     extra_env: ?*const std.process.Environ.Map,
-) !RocResult {
+) anyerror!RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
@@ -350,7 +395,7 @@ pub fn runRocCommandWithEnv(
 }
 
 /// Helper to set up and run roc with arbitrary arguments
-pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_path: []const u8) !RocResult {
+pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_path: []const u8) anyerror!RocResult {
     return runRocWithEnv(allocator, args, test_file_path, null);
 }
 
@@ -360,7 +405,7 @@ pub fn runRocWithEnv(
     args: []const []const u8,
     test_file_path: []const u8,
     extra_env: ?*const std.process.Environ.Map,
-) !RocResult {
+) anyerror!RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
@@ -388,13 +433,13 @@ pub fn runRocWithEnv(
 /// Runs a roc app with --test mode using the given IO spec.
 /// Spec format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
 /// Returns success if the app's IO matches the spec exactly.
-pub fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) !RocResult {
+pub fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) anyerror!RocResult {
     return runRocCommand(allocator, &.{ roc_file, "--", "--test", spec });
 }
 
 /// Check if a run result indicates success (exit code 0).
 /// Also checks for GPA memory errors in stderr.
-pub fn checkSuccess(result: RocResult) !void {
+pub fn checkSuccess(result: RocResult) anyerror!void {
     if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDOUT: {s}\n", .{result.stdout});
@@ -428,7 +473,7 @@ pub fn checkSuccess(result: RocResult) !void {
 
 /// Check if a run result indicates failure (non-zero exit code).
 /// Verifies the process exited cleanly with a non-zero code, NOT that it crashed.
-pub fn checkFailure(result: RocResult) !void {
+pub fn checkFailure(result: RocResult) anyerror!void {
     switch (result.term) {
         .exited => |code| {
             if (code == 0) {
@@ -453,7 +498,7 @@ pub fn checkFailure(result: RocResult) !void {
 
 /// Check if a test mode run succeeded (exit code 0).
 /// Also checks for GPA memory errors.
-pub fn checkTestSuccess(result: RocResult) !void {
+pub fn checkTestSuccess(result: RocResult) anyerror!void {
     if (std.mem.find(u8, result.stderr, "error(gpa):") != null) {
         std.debug.print("Memory error detected (GPA)\n", .{});
         std.debug.print("STDERR: {s}\n", .{result.stderr});
@@ -482,7 +527,7 @@ pub fn checkTestSuccess(result: RocResult) !void {
 }
 
 /// Helper to run roc with stdin input (for REPL testing)
-pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) !RocResult {
+pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) anyerror!RocResult {
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", allocator);
     defer allocator.free(cwd_path);
@@ -497,11 +542,11 @@ pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, s
     });
     defer allocator.free(argv);
 
-    var env_map = try buildIsolatedTestEnvMap(allocator, null);
-    defer env_map.deinit();
+    var env = try buildIsolatedTestEnv(allocator, null);
+    defer env.deinit(allocator);
     const result = try runChildWithTimeout(allocator, argv, .{
         .cwd = cwd_path,
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
         .stdin = stdin_input,
     });

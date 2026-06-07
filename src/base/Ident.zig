@@ -6,6 +6,7 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -125,7 +126,7 @@ pub const Idx = packed struct(u32) {
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
         writer: anytype,
-    ) !void {
+    ) Allocator.Error!void {
         // Extract from packed struct to avoid formatting issues
         const idx_val: u32 = @intCast(self.idx);
         try writer.print("Ident({?})", .{idx_val});

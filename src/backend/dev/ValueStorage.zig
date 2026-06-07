@@ -193,7 +193,7 @@ pub fn ValueStorage(
         // Local variable management
 
         /// Bind a local variable to a location
-        pub fn bindLocal(self: *Self, idx: u32, loc: ValueLoc) !void {
+        pub fn bindLocal(self: *Self, idx: u32, loc: ValueLoc) Allocator.Error!void {
             try self.locals.put(idx, loc);
         }
 
@@ -205,13 +205,13 @@ pub fn ValueStorage(
         // Code emission helpers (architecture-independent interface)
 
         /// Emit function prologue
-        pub fn emitPrologue(_: *Self) !void {
+        pub fn emitPrologue(_: *Self) Allocator.Error!void {
             // This will be specialized per architecture
             @compileError("emitPrologue must be specialized for the target architecture");
         }
 
         /// Emit function epilogue and return
-        pub fn emitEpilogue(_: *Self) !void {
+        pub fn emitEpilogue(_: *Self) Allocator.Error!void {
             // This will be specialized per architecture
             @compileError("emitEpilogue must be specialized for the target architecture");
         }

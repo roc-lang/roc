@@ -141,7 +141,7 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-reassign
 					(p-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 136)
+					(e-dispatch-call (method "plus") (constraint-fn-var 138)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "count_"))))
@@ -149,7 +149,7 @@ NO CHANGE
 							(e-num (value "1")))))
 				(s-reassign
 					(p-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 168)
+					(e-dispatch-call (method "plus") (constraint-fn-var 170)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "total_"))))
@@ -157,25 +157,28 @@ NO CHANGE
 							(e-num (value "10")))))
 				(s-let
 					(p-assign (ident "nestedFunc"))
-					(e-lambda
-						(args
-							(p-underscore))
-						(e-block
-							(s-reassign
-								(p-assign (ident "count_"))
-								(e-runtime-error (tag "var_across_function_boundary")))
-							(s-reassign
-								(p-assign (ident "total_"))
-								(e-runtime-error (tag "var_across_function_boundary")))
-							(e-lookup-local
-								(p-assign (ident "count_"))))))
+					(e-closure
+						(captures
+							(capture (ident "count_")))
+						(e-lambda
+							(args
+								(p-underscore))
+							(e-block
+								(s-reassign
+									(p-assign (ident "count_"))
+									(e-runtime-error (tag "var_across_function_boundary")))
+								(s-reassign
+									(p-assign (ident "total_"))
+									(e-runtime-error (tag "var_across_function_boundary")))
+								(e-lookup-local
+									(p-assign (ident "count_")))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 172)
+					(e-call (constraint-fn-var 174)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 173)
+				(e-dispatch-call (method "plus") (constraint-fn-var 175)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "total_"))))

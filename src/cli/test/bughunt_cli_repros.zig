@@ -2719,7 +2719,7 @@ fn currentProcessIdForFilename() u64 {
     return @intCast(std.c.getpid());
 }
 
-fn pathJoin(gpa: Allocator, parts: []const []const u8) ![]u8 {
+fn pathJoin(gpa: Allocator, parts: []const []const u8) Allocator.Error![]u8 {
     return std.fs.path.join(gpa, parts);
 }
 
@@ -2729,7 +2729,7 @@ fn appendReplacing(
     input: []const u8,
     needle: []const u8,
     replacement: []const u8,
-) !void {
+) Allocator.Error!void {
     var rest = input;
     while (std.mem.find(u8, rest, needle)) |idx| {
         try out.appendSlice(gpa, rest[0..idx]);
@@ -2739,7 +2739,7 @@ fn appendReplacing(
     try out.appendSlice(gpa, rest);
 }
 
-fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) Allocator.Error![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [");
     for (0..65535) |i| {
@@ -2754,7 +2754,7 @@ fn generateTooManyExportsApp(gpa: Allocator, fx_platform: []const u8) ![]const u
     return try out.toOwnedSlice(gpa);
 }
 
-fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) Allocator.Error![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [main!] { pf: platform \"");
     try out.appendSlice(gpa, fx_platform);
@@ -2766,7 +2766,7 @@ fn generateDeepConcatApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
     return try out.toOwnedSlice(gpa);
 }
 
-fn generateWideRecordInspectApp(gpa: Allocator, fx_platform: []const u8) ![]const u8 {
+fn generateWideRecordInspectApp(gpa: Allocator, fx_platform: []const u8) Allocator.Error![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(gpa, "app [main!] { pf: platform \"");
     try out.appendSlice(gpa, fx_platform);
@@ -2788,7 +2788,7 @@ fn renderSource(
     str_platform: []const u8,
     glue_platform: []const u8,
     fx_open_platform: []const u8,
-) ![]const u8 {
+) Allocator.Error![]const u8 {
     if (std.mem.eql(u8, input, "{GENERATE_TOO_MANY_EXPORTS_APP}")) {
         return generateTooManyExportsApp(gpa, fx_platform);
     }
@@ -2816,7 +2816,7 @@ fn renderSource(
     return try stage4.toOwnedSlice(gpa);
 }
 
-fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
+fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) Allocator.Error!void {
     const fx_platform = "../../../test/fx/platform/main.roc";
     const str_platform = "../../../test/str/platform/main.roc";
     const glue_platform = "../../../src/glue/platform/main.roc";
@@ -2829,11 +2829,11 @@ fn writeFiles(gpa: Allocator, spec: CliBugSpec, test_dir: []const u8) !void {
         if (std.fs.path.dirname(full_path)) |dir| {
             try std.Io.Dir.cwd().createDirPath(std.testing.io, dir);
         }
-        try std.fs.cwd().writeFile(.{ .sub_path = full_path, .data = rendered });
+        try std.fs.cwd().writeFile(std.testing.io, .{ .sub_path = full_path, .data = rendered });
     }
 }
 
-fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: []const u8, repo_root: []const u8) ![]const []const u8 {
+fn buildArgv(gpa: Allocator, spec: CliBugSpec, main_path: []const u8, test_dir: []const u8, repo_root: []const u8) Allocator.Error![]const []const u8 {
     switch (spec.command) {
         .check => return gpa.dupe([]const u8, &.{ roc_binary_path, "check", "--no-cache", main_path }),
         .docs => return gpa.dupe([]const u8, &.{ roc_binary_path, "docs", main_path }),
@@ -3015,7 +3015,7 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
 
     const cache_dirs = util.createIsolatedTestCacheDirs(gpa) catch
         return .{ .status = .crash, .message = "failed to create cache dirs" };
-    defer cache_dirs.deinit(gpa);
+    defer cache_dirs.cleanupAndDeinit(gpa);
 
     const test_dir = std.fmt.allocPrint(gpa, ".zig-cache/bughunt-cli/{d}_{d}", .{
         currentProcessIdForFilename(),
@@ -3038,11 +3038,13 @@ fn runSingleTest(gpa: Allocator, spec: CliBugSpec) TestResult {
     const argv = buildArgv(gpa, spec, main_path, test_dir, repo_root) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to build argv" };
 
-    var env_map = util.buildIsolatedTestEnvMap(gpa, null) catch
+    var env_map = util.buildProcessEnvMap(gpa, null) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set roc cache env" };
+    env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir) catch
+        return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set xdg cache env" };
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .duration_ns = timer.read(), .message = "failed to set zig cache env" };
 
@@ -3138,7 +3140,7 @@ fn matchesFilters(spec: CliBugSpec, filters: []const []const u8) bool {
     return false;
 }
 
-fn filteredTests(gpa: Allocator, filters: []const []const u8) ![]const CliBugSpec {
+fn filteredTests(gpa: Allocator, filters: []const []const u8) Allocator.Error![]const CliBugSpec {
     var result: std.ArrayListUnmanaged(CliBugSpec) = .empty;
     for (tests) |spec| {
         if (matchesFilters(spec, filters)) try result.append(gpa, spec);
@@ -3229,7 +3231,7 @@ fn printUsage() void {
 }
 
 /// Runs the CLI bughunt repro harness.
-pub fn main() !void {
+pub fn main() Allocator.Error!void {
     var gpa_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();

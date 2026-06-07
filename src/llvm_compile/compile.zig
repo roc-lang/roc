@@ -435,7 +435,7 @@ fn linkSharedLibrary(
     };
 }
 
-fn getTempDir(allocator: Allocator) ![]u8 {
+fn getTempDir(allocator: Allocator) (Allocator.Error || error{TempDirUnavailable})![]u8 {
     const names: []const [:0]const u8 = if (builtin.os.tag == .windows)
         &.{ "TEMP", "TMP" }
     else
@@ -452,7 +452,7 @@ fn getTempDir(allocator: Allocator) ![]u8 {
 }
 
 /// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) ![:0]const u8 {
+fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) anyerror![:0]const u8 {
     const counter = temp_path_counter.fetchAdd(1, .monotonic);
     // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
     // mixed with the pid for cross-process uniqueness of the temp path.

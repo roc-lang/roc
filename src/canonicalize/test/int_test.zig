@@ -18,7 +18,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const CoreCtx = @import("ctx").CoreCtx;
 const RocDec = builtins.dec.RocDec;
 
-fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
+fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) error{NotAnInteger}!i128 {
     const expr = module_env.store.getExpr(expr_idx);
     switch (expr) {
         .e_num => |int_expr| {
@@ -288,8 +288,7 @@ test "canonicalize integer preserves all bytes correctly" {
 
         const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
         const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
-        const value_bytes: [16]u8 = @bitCast(value);
-        try testing.expectEqualSlices(u8, &tc.expected_bytes, &value_bytes);
+        try testing.expectEqualSlices(u8, &tc.expected_bytes, std.mem.asBytes(&value));
     }
 }
 
@@ -302,8 +301,8 @@ test "canonicalize integer round trip through NodeStore" {
     };
 
     for (test_values) |expected| {
-        var buf: [64]u8 = undefined;
-        const source = try std.fmt.bufPrint(&buf, "{}", .{expected});
+        const source = try std.fmt.allocPrint(testing.allocator, "{}", .{expected});
+        defer testing.allocator.free(source);
 
         var test_env = try TestEnv.init(source);
         defer test_env.deinit();

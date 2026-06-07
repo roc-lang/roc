@@ -21,8 +21,8 @@ PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:8
 PARSE ERROR - type_shadowing_across_scopes.md:9:21:9:28
 PARSE ERROR - type_shadowing_across_scopes.md:9:28:9:29
 PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
-MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
+MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
@@ -68,16 +68,6 @@ This is an unexpected parsing error. Please check your syntax.
 ^
 
 
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**type_shadowing_across_scopes.md:9:21:9:28:**
-```roc
-    Try : [Success, Failure]
-```
-                    ^^^^^^^
-
-
 **UNUSED VARIABLE**
 Variable `data` is not used anywhere in your code.
 
@@ -88,6 +78,16 @@ The unused variable is declared here:
 processData = |data|
 ```
                ^^^^
+
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**type_shadowing_across_scopes.md:9:21:9:28:**
+```roc
+    Try : [Success, Failure]
+```
+                    ^^^^^^^
 
 
 # TOKENS

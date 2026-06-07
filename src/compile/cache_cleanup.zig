@@ -65,7 +65,7 @@ pub const CleanupThread = if (!is_freestanding) struct {
 /// The thread is fire-and-forget: if the main process exits before cleanup
 /// completes, the OS will automatically terminate the cleanup thread.
 /// You do not need to join the returned handle.
-pub fn startBackgroundCleanup(allocator: Allocator, roc_ctx: CoreCtx) !?CleanupThread {
+pub fn startBackgroundCleanup(allocator: Allocator, roc_ctx: CoreCtx) std.Thread.SpawnError!?CleanupThread {
     if (comptime is_freestanding) return null;
     const thread = try std.Thread.spawn(.{}, runCleanup, .{ allocator, roc_ctx });
     return CleanupThread{ .thread = thread };

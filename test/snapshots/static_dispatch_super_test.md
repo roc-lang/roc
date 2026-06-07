@@ -2,15 +2,82 @@
 ~~~ini
 description=Dot access super test
 type=expr
+canonicalize_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:15
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_super_test.md:1:1:1:8:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_super_test.md:1:9:1:13:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+        ^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:15:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:41:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:72:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:86:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpQuestion,
