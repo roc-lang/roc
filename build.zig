@@ -2111,8 +2111,6 @@ pub fn build(b: *std.Build) void {
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
     const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
     const run_test_cli_step = b.step("run-test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
-    const build_test_cli_bughunt_runner_step = b.step("build-test-cli-bughunt-runner", "Build opt-in CLI compiler-bug repro runner");
-    const run_test_cli_bughunt_step = b.step("run-test-cli-bughunt", "Run opt-in CLI compiler-bug repros");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
@@ -2560,38 +2558,6 @@ pub fn build(b: *std.Build) void {
         run_cli.step.dependOn(build_test_hosts_step);
         run_cli_test_step = &run_cli.step;
         run_test_cli_step.dependOn(&run_cli.step);
-
-        // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
-        // stays out of test-cli because these tests document currently failing
-        // behavior.
-        const bughunt_cli_runner_exe = b.addExecutable(.{
-            .name = "bughunt_cli_repros",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/bughunt_cli_repros.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "test_harness", .module = b.createModule(.{
-                        .root_source_file = b.path("src/build/test_harness.zig"),
-                    }) },
-                },
-            }),
-        });
-        bughunt_cli_runner_exe.root_module.link_libc = true;
-        build_test_cli_bughunt_runner_step.dependOn(&bughunt_cli_runner_exe.step);
-
-        const run_bughunt_cli = b.addRunArtifact(bughunt_cli_runner_exe);
-        run_bughunt_cli.addArg("zig-out/bin/roc");
-        for (test_filters) |f| {
-            run_bughunt_cli.addArg("--filter");
-            run_bughunt_cli.addArg(f);
-        }
-        if (run_args.len != 0) {
-            run_bughunt_cli.addArgs(run_args);
-        }
-        run_bughunt_cli.step.dependOn(&install.step);
-        run_bughunt_cli.step.dependOn(build_test_hosts_step);
-        run_test_cli_bughunt_step.dependOn(&run_bughunt_cli.step);
     }
 
     // Manual rebuild command: zig build run-rebuild-builtins
