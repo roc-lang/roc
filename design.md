@@ -115,13 +115,24 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
-The parser is a direct token-dispatch machine. Each hot parser transition is
-written as a labeled Zig `switch` over the current grammar context and current
-token tag. Transitions use `continue :dispatch key(next_context, self.peek())`,
-which lets Zig's optimizer lower the parser to jump-table or direct-branch
-control flow instead of recursive calls or an instruction interpreter. This
-mirrors simdjson stage 2: tokenization does the linear input discovery, and the
-parser proper is a stack-safe token walker with explicit parser-owned state.
+The parser is a direct token-dispatch machine. Each hot parser context is a
+case in a labeled Zig `switch`, and each context case immediately switches on
+the current token tag. Transitions use `continue :dispatch .next_context` after
+advancing to the next token. This mirrors simdjson stage 2: tokenization does
+the linear input discovery, and the parser proper is a stack-safe token walker
+with explicit parser-owned state and direct jumps between documented parser
+contexts.
+
+The hot path must not bounce through a generic `(context, token)` dispatch key
+unless optimized assembly for that exact chunk proves it is better. Dense
+combined keys can lower to an indirect jump table, which is not the same shape
+as simdjson's stage-2 parser on arm64. The preferred shape is local token
+switches inside context branches, because Zig can lower constant
+`continue :dispatch .next_context` transitions to direct branches between code
+blocks. Parser chunks are not considered structurally done until ReleaseFast
+assembly has been checked for this shape: no recursive parser calls for the
+converted grammar, no instruction-driver loop, no repeated context-dispatch
+ladder, and no unexpected indirect branch in the hot transition path.
 
 Nested Roc syntax uses explicit open-syntax state, like simdjson's open
 container depth. This state records concrete syntax currently being parsed:
