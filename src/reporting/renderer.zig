@@ -41,7 +41,7 @@ pub const RenderTarget = enum {
 };
 
 /// Render a report to the specified target format.
-pub fn renderReport(report: *const Report, writer: *std.Io.Writer, target: RenderTarget) !void {
+pub fn renderReport(report: *const Report, writer: *std.Io.Writer, target: RenderTarget) (Allocator.Error || error{WriteFailed})!void {
     // Create appropriate config based on render target
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
@@ -60,7 +60,7 @@ pub fn renderReport(report: *const Report, writer: *std.Io.Writer, target: Rende
 }
 
 /// Render a report with an explicit reporting configuration.
-pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     const palette = ColorUtils.getPaletteForConfig(config);
     switch (config.getRenderTarget()) {
         .color_terminal => try renderReportToTerminal(report, writer, palette, config),
@@ -71,7 +71,7 @@ pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, con
 }
 
 /// Render a report to terminal with color support.
-pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
+pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     // Render title with appropriate severity styling
     const title_color = switch (report.severity) {
         .info => palette.info,
@@ -102,7 +102,7 @@ pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, pal
 }
 
 /// Render a report to plain text.
-pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     try writer.writeAll("**");
     try writer.writeAll(report.title);
     try writer.writeAll("**\n");
@@ -111,7 +111,7 @@ pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, con
 }
 
 /// Render a report to HTML.
-pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     const title_class = switch (report.severity) {
         .info => "info",
         .fatal => "error",
@@ -129,7 +129,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 }
 
 /// Render a report for language server protocol.
-pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     // LSP typically wants plain text without formatting
     try writer.writeAll(report.title);
     try writer.writeAll("\n\n");
@@ -137,7 +137,7 @@ pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: 
 }
 
 /// Render a document to the specified target format.
-pub fn renderDocument(document: *const Document, writer: *std.Io.Writer, target: RenderTarget) std.mem.Allocator.Error!void {
+pub fn renderDocument(document: *const Document, writer: *std.Io.Writer, target: RenderTarget) (Allocator.Error || error{WriteFailed})!void {
     // Create appropriate config based on render target
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
@@ -158,7 +158,7 @@ pub fn renderDocument(document: *const Document, writer: *std.Io.Writer, target:
 }
 
 /// Render a document to terminal with color support.
-pub fn renderDocumentToTerminal(document: *const Document, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) !void {
+pub fn renderDocumentToTerminal(document: *const Document, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
@@ -168,14 +168,14 @@ pub fn renderDocumentToTerminal(document: *const Document, writer: *std.Io.Write
 }
 
 /// Render a document to plain text.
-pub fn renderDocumentToMarkdown(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderDocumentToMarkdown(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     for (document.elements.items) |element| {
         try renderElementToMarkdown(element, writer, config);
     }
 }
 
 /// Render a document to HTML.
-pub fn renderDocumentToHtml(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderDocumentToHtml(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     var annotation_stack = std.array_list.Managed(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
@@ -185,7 +185,7 @@ pub fn renderDocumentToHtml(document: *const Document, writer: *std.Io.Writer, c
 }
 
 /// Render a document for language server protocol.
-pub fn renderDocumentToLsp(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) !void {
+pub fn renderDocumentToLsp(document: *const Document, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     for (document.elements.items) |element| {
         try renderElementToLsp(element, writer, config);
     }
@@ -193,7 +193,7 @@ pub fn renderDocumentToLsp(document: *const Document, writer: *std.Io.Writer, co
 
 // Terminal rendering functions
 
-fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, palette: ColorPalette, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) !void {
+fn renderElementToTerminal(element: DocumentElement, writer: *std.Io.Writer, palette: ColorPalette, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
@@ -449,7 +449,7 @@ fn getAnnotationColor(annotation: Annotation, palette: ColorPalette) []const u8 
 
 // Plain text rendering functions
 
-fn renderElementToMarkdown(element: DocumentElement, writer: *std.Io.Writer, config: ReportingConfig) !void {
+fn renderElementToMarkdown(element: DocumentElement, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
@@ -661,7 +661,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: *std.Io.Writer, con
 
 // HTML rendering functions
 
-fn renderElementToHtml(element: DocumentElement, writer: *std.Io.Writer, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) !void {
+fn renderElementToHtml(element: DocumentElement, writer: *std.Io.Writer, annotation_stack: *std.array_list.Managed(Annotation), config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     switch (element) {
         .text => |text| try writeEscapedHtml(writer, text),
         .annotated => |annotated| {
@@ -776,7 +776,7 @@ fn getAnnotationHtmlClass(annotation: Annotation) []const u8 {
     return annotation.semanticName();
 }
 
-fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) !void {
+fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
     for (text) |char| {
         switch (char) {
             '<' => try writer.writeAll("&lt;"),
@@ -791,7 +791,7 @@ fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) !void {
 
 // LSP rendering functions
 
-fn renderElementToLsp(element: DocumentElement, writer: *std.Io.Writer, config: ReportingConfig) !void {
+fn renderElementToLsp(element: DocumentElement, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| try writer.writeAll(annotated.content),

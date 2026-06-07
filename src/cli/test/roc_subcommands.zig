@@ -3,18 +3,18 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-fn createPerTestCacheEnv(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    return util.buildIsolatedTestEnvMap(allocator, null);
+fn createPerTestCacheEnv(allocator: std.mem.Allocator) anyerror!util.IsolatedTestEnv {
+    return util.buildIsolatedTestEnv(allocator, null);
 }
 
 test "CLI test cache roots are distinct" {
     const allocator = std.testing.allocator;
 
     const first = try util.createIsolatedTestCacheDirs(allocator);
-    defer first.deinit(allocator);
+    defer first.cleanupAndDeinit(allocator);
 
     const second = try util.createIsolatedTestCacheDirs(allocator);
-    defer second.deinit(allocator);
+    defer second.cleanupAndDeinit(allocator);
 
     try std.testing.expect(!std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir));
     try std.testing.expect(!std.mem.eql(u8, first.zig_local_cache_dir, second.zig_local_cache_dir));
@@ -38,7 +38,7 @@ fn writeGeneratedModuleGraphProject(
     allocator: std.mem.Allocator,
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
-) !void {
+) anyerror!void {
     try std.testing.expect(config.roc_file_count > 0);
     try std.testing.expect(config.symbols_per_file > 0);
 
@@ -53,7 +53,7 @@ fn writeGeneratedModuleGraphProject(
 fn writeGeneratedPackageModule(
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
-) !void {
+) anyerror!void {
     var file = try dir.createFile(std.testing.io, "main.roc", .{});
     defer file.close(std.testing.io);
 
@@ -98,7 +98,7 @@ fn writeGeneratedTypeModule(
     dir: std.Io.Dir,
     config: GeneratedModuleGraphConfig,
     module_idx: usize,
-) !void {
+) anyerror!void {
     const file_name = try std.fmt.allocPrint(allocator, "T{d}.roc", .{module_idx});
     defer allocator.free(file_name);
 
@@ -137,7 +137,7 @@ fn writeGeneratedTypeModule(
 fn runGeneratedModuleGraphCheck(
     allocator: std.mem.Allocator,
     config: GeneratedModuleGraphConfig,
-) !void {
+) anyerror!void {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -160,13 +160,13 @@ fn runGeneratedModuleGraphCheck(
     const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
-    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
-    defer env_map.deinit();
-    try env_map.put("ROC_CACHE_DIR", cache_path);
+    var env = try util.buildIsolatedTestEnv(allocator, null);
+    defer env.deinit(allocator);
+    try env.env_map.put("ROC_CACHE_DIR", cache_path);
 
     const result = try util.runChildWithTimeout(allocator, &.{ roc_path, "check", main_path }, .{
         .cwd = cwd_path,
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(result.stdout);
@@ -202,7 +202,7 @@ fn runGeneratedModuleGraphCheck(
     try std.testing.expectEqual(config.roc_file_count, cached_module_count);
 }
 
-fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) !usize {
+fn countModuleCacheFiles(allocator: std.mem.Allocator, cache_path: []const u8) anyerror!usize {
     var cache_dir = std.Io.Dir.cwd().openDir(std.testing.io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return 0,
         else => return err,
@@ -889,7 +889,7 @@ test "roc check test/int/app.roc does not panic" {
     try testing.expect(!has_panic_text);
 }
 
-fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) !void {
+fn testRocRunsSuccessfully(opt: []const u8, roc_file: []const u8) anyerror!void {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const result = try util.runRoc(gpa, &.{ opt, "--no-cache" }, roc_file);
@@ -1179,17 +1179,17 @@ test "roc build glibc target gives helpful error on non-Linux" {
     try testing.expect(suggests_musl);
 }
 
-fn testCachesPassingResults(opt: []const u8) !void {
+fn testCachesPassingResults(opt: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 0);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
@@ -1203,17 +1203,17 @@ test "roc test caches passing results (dev)" {
     try testCachesPassingResults("--opt=dev");
 }
 
-fn testCachesFailingResults(opt: []const u8) !void {
+fn testCachesFailingResults(opt: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
@@ -1230,8 +1230,8 @@ test "roc test caches failing results (dev)" {
 test "roc test cache invalidated by source change (interpreter)" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
     // Create a temporary copy of the test file
     var tmp_dir = testing.tmpDir(.{});
@@ -1259,7 +1259,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     const result1 = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = .{ .path = cwd_path },
-        .environ_map = &env_map,
+        .environ_map = &env.env_map,
         .stdout_limit = .limited(10 * 1024 * 1024),
         .stderr_limit = .limited(10 * 1024 * 1024),
     });
@@ -1276,7 +1276,7 @@ test "roc test cache invalidated by source change (interpreter)" {
     const result2 = try std.process.run(gpa, std.testing.io, .{
         .argv = &.{ roc_path, "test", "--opt=interpreter", temp_file_path },
         .cwd = .{ .path = cwd_path },
-        .environ_map = &env_map,
+        .environ_map = &env.env_map,
         .stdout_limit = .limited(10 * 1024 * 1024),
         .stderr_limit = .limited(10 * 1024 * 1024),
     });
@@ -1292,8 +1292,8 @@ test "roc test cache invalidated by source change (interpreter)" {
 test "roc test cache invalidated by source change (dev)" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -1307,7 +1307,7 @@ test "roc test cache invalidated by source change (dev)" {
     const file_path = try std.fs.path.join(gpa, &.{ tmp_path, "CacheTest.roc" });
     defer gpa.free(file_path);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try testing.expect(result1.term == .exited and result1.term.exited == 0);
@@ -1315,7 +1315,7 @@ test "roc test cache invalidated by source change (dev)" {
     const updated_content = "CacheTest := {}\nadd = |a, b| a + b\nexpect { add(2, 3) == 5 }\n";
     try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "CacheTest.roc", .data = updated_content });
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=dev" }, file_path, &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
 
@@ -1323,17 +1323,17 @@ test "roc test cache invalidated by source change (dev)" {
     try testing.expect(std.mem.find(u8, result2.stdout, "(cached)") == null);
 }
 
-fn testVerboseWorksFromCache(opt: []const u8) !void {
+fn testVerboseWorksFromCache(opt: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/AllPassTests.roc", &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 0);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/AllPassTests.roc", &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 0);
@@ -1348,17 +1348,17 @@ test "roc test --verbose works from cache (dev)" {
     try testVerboseWorksFromCache("--opt=dev");
 }
 
-fn testVerboseCachesFailureReports(opt: []const u8) !void {
+fn testVerboseCachesFailureReports(opt: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
@@ -1374,18 +1374,18 @@ test "roc test --verbose caches failure reports (dev)" {
     try testVerboseCachesFailureReports("--opt=dev");
 }
 
-fn testNonVerboseCachesVerboseReports(opt: []const u8) !void {
+fn testNonVerboseCachesVerboseReports(opt: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try std.testing.expect(result1.term == .exited and result1.term.exited == 1);
     try std.testing.expect(std.mem.find(u8, result1.stderr, "expect failed") == null);
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try std.testing.expect(result2.term == .exited and result2.term.exited == 1);
@@ -1431,7 +1431,7 @@ test "roc test with nested list chunks does not panic on layout upgrade (dev)" {
     return error.SkipZigTest;
 }
 
-fn testFailureOutputContainsSourceSnippet(opt: []const u8) !void {
+fn testFailureOutputContainsSourceSnippet(opt: []const u8) anyerror!void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -1454,7 +1454,7 @@ test "roc test failure output contains source snippet (dev)" {
     try testFailureOutputContainsSourceSnippet("--opt=dev");
 }
 
-fn testFailureOutputContainsDocComment(opt: []const u8) !void {
+fn testFailureOutputContainsDocComment(opt: []const u8) anyerror!void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -1477,20 +1477,20 @@ test "roc test failure output contains doc comment (dev)" {
     try testFailureOutputContainsDocComment("--opt=dev");
 }
 
-fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) !void {
+fn testVerboseAndNonVerboseFailureFormatMatch(opt: []const u8) anyerror!void {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    var env_map1 = try createPerTestCacheEnv(gpa);
-    defer env_map1.deinit();
-    var env_map2 = try createPerTestCacheEnv(gpa);
-    defer env_map2.deinit();
+    var env1 = try createPerTestCacheEnv(gpa);
+    defer env1.deinit(gpa);
+    var env2 = try createPerTestCacheEnv(gpa);
+    defer env2.deinit(gpa);
 
-    const non_verbose = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env_map1);
+    const non_verbose = try util.runRocWithEnv(gpa, &.{ "test", opt }, "test/cli/SomeFailTests.roc", &env1.env_map);
     defer gpa.free(non_verbose.stdout);
     defer gpa.free(non_verbose.stderr);
 
-    const verbose = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env_map2);
+    const verbose = try util.runRocWithEnv(gpa, &.{ "test", opt, "--verbose" }, "test/cli/SomeFailTests.roc", &env2.env_map);
     defer gpa.free(verbose.stdout);
     defer gpa.free(verbose.stderr);
 
@@ -1832,6 +1832,39 @@ test "roc check does not panic on invalid package shorthand import (issue 9084)"
     try testing.expect(result.stderr.len > 0);
 }
 
+test "roc check succeeds with unused app package shorthand (issue 9488)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/package_shorthand_check_app/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+}
+
+test "roc check resolves and checks a used sibling package shorthand (issue 9488)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/package_shorthand_used_app/main.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // The app imports from a sibling package (declared via a `../` shorthand)
+    // that lives outside the app directory. Registering the package directory
+    // as a workspace root lets the sandbox resolve it, so the package is
+    // genuinely type-checked rather than silently skipped: the planted type
+    // error inside the package must surface, referencing the package file.
+    try testing.expect(result.term == .exited);
+    try testing.expect(std.mem.find(u8, result.stderr, "leaked") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "package_shorthand_used_pkg") != null);
+    try testing.expect(std.mem.find(u8, result.stderr, "TYPE MISMATCH") != null);
+}
+
 test "roc check does not hang on tag union type alias inside List (issue 9481)" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -2004,7 +2037,7 @@ test "roc test issue 9388 List.sort_with top-level expect does not overflow" {
     try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
 }
 
-fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) !void {
+fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u8) anyerror!void {
     try std.testing.expect(result.term == .exited and result.term.exited == 0);
     try std.testing.expect(std.mem.find(u8, result.stdout, expected_pass_count) != null);
     try std.testing.expect(std.mem.find(u8, result.stdout, "failed") == null);
@@ -2013,17 +2046,17 @@ fn expectRocTestAllPassed(result: util.RocResult, expected_pass_count: []const u
 
 test "roc test issue 9392 numeric utility expects are deterministic with no cache" {
     const gpa = std.testing.allocator;
-    var env_map = try createPerTestCacheEnv(gpa);
-    defer env_map.deinit();
+    var env = try createPerTestCacheEnv(gpa);
+    defer env.deinit(gpa);
 
     const path = "test/cli/Issue9392NumUtilsDeterministic.roc";
 
-    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    const result1 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env.env_map);
     defer gpa.free(result1.stdout);
     defer gpa.free(result1.stderr);
     try expectRocTestAllPassed(result1, "All (11) tests passed");
 
-    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env_map);
+    const result2 = try util.runRocWithEnv(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, path, &env.env_map);
     defer gpa.free(result2.stdout);
     defer gpa.free(result2.stderr);
     try expectRocTestAllPassed(result2, "All (11) tests passed");
@@ -2091,6 +2124,22 @@ test "roc build issue 9435 hosted nominal return builds without mono panic" {
     try std.testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
     try std.testing.expect(std.mem.find(u8, result.stderr, "mono nominal materialization") == null);
     try std.testing.expect(std.mem.find(u8, result.stderr, "published instantiated nominal backing") == null);
+}
+
+test "roc test issue 9487 static dispatch result compares to tag literal" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "test", "--opt=interpreter", "--no-cache" }, "test/cli/Issue9487StaticDispatchEq.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+    try testing.expect(std.mem.find(u8, result.stderr, "Segmentation fault") == null);
+    try testing.expect(std.mem.find(u8, result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, result.stdout, "passed") != null);
 }
 
 test "roc docs Builtin.roc succeeds" {

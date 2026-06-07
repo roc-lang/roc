@@ -14,6 +14,7 @@
 //! the cross-compilation test runner.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const util = @import("util.zig");
 const fx_test_specs = @import("fx_test_specs.zig");
@@ -28,7 +29,7 @@ fn runDevBackendHostSelfTest(
     allocator: std.mem.Allocator,
     roc_file: []const u8,
     self_test_flag: []const u8,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -49,16 +50,10 @@ fn runDevBackendHostSelfTest(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
-    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
-        .block = .global,
-    } else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    var env_map = try environ.createMap(allocator);
+    var env_map = try util.buildProcessEnvMap(allocator, null);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("XDG_CACHE_HOME", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
     const build_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
@@ -105,7 +100,7 @@ fn buildAndRunDevBackendApp(
     roc_file: []const u8,
     output_basename: []const u8,
     inspect_output: ?*const fn (std.mem.Allocator, []const u8) anyerror!void,
-) !std.process.RunResult {
+) anyerror!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -126,16 +121,10 @@ fn buildAndRunDevBackendApp(
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
-    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
-        .block = .global,
-    } else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    var env_map = try environ.createMap(allocator);
+    var env_map = try util.buildProcessEnvMap(allocator, null);
     defer env_map.deinit();
     try env_map.put("ROC_CACHE_DIR", cache_path);
+    try env_map.put("XDG_CACHE_HOME", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
     const build_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
@@ -178,7 +167,7 @@ fn buildAndRunDevBackendApp(
     });
 }
 
-fn expectInterpreterRuntimeStackOverflow() !void {
+fn expectInterpreterRuntimeStackOverflow() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/stack_overflow_runtime.roc");
@@ -204,7 +193,7 @@ fn expectInterpreterRuntimeStackOverflow() !void {
     }
 }
 
-fn expectDevRuntimeStackOverflow() !void {
+fn expectDevRuntimeStackOverflow() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try runDevBackendHostSelfTest(
@@ -239,7 +228,7 @@ fn expectDevRuntimeStackOverflow() !void {
     }
 }
 
-fn expectInterpreterRuntimeDivisionByZero() !void {
+fn expectInterpreterRuntimeDivisionByZero() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try util.runRoc(allocator, &.{"--opt=interpreter"}, "test/fx/division_by_zero.roc");
@@ -265,7 +254,7 @@ fn expectInterpreterRuntimeDivisionByZero() !void {
     }
 }
 
-fn expectDevRuntimeDivisionByZero() !void {
+fn expectDevRuntimeDivisionByZero() anyerror!void {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(
@@ -309,7 +298,7 @@ fn expectDevRuntimeDivisionByZero() !void {
 // test runner.
 
 /// Shared body for IO spec tests with a specific backend.
-fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) !void {
+fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) anyerror!void {
     try runIoSpecTestWithEnv(opt_flag, spec, null);
 }
 
@@ -317,7 +306,7 @@ fn runIoSpecTestWithEnv(
     comptime opt_flag: []const u8,
     spec: fx_test_specs.TestSpec,
     extra_env: ?*const std.process.Environ.Map,
-) !void {
+) anyerror!void {
     const allocator = testing.allocator;
 
     const result = util.runRocCommandWithEnv(allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }, extra_env) catch |err| {
@@ -336,24 +325,125 @@ fn runIoSpecTestWithEnv(
     };
 }
 
-fn runIoSpecTests(comptime opt_flag: []const u8) !void {
+const IoSpecPartition = struct {
+    index: usize,
+    count: usize,
+};
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) anyerror!?[]u8 {
+    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
+        .block = .global,
+    } else blk: {
+        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
+    };
+
+    return environ.getAlloc(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => null,
+        else => err,
+    };
+}
+
+fn ioSpecPartitionFromEnv(allocator: std.mem.Allocator) anyerror!IoSpecPartition {
+    const index_text = try getEnvVarOwned(allocator, "ROC_FX_IO_SPEC_PARTITION_INDEX") orelse
+        return .{ .index = 0, .count = 1 };
+    defer allocator.free(index_text);
+
+    const count_text = try getEnvVarOwned(allocator, "ROC_FX_IO_SPEC_PARTITION_COUNT") orelse
+        return error.InvalidIoSpecPartition;
+    defer allocator.free(count_text);
+
+    const index = try std.fmt.parseUnsigned(usize, index_text, 10);
+    const count = try std.fmt.parseUnsigned(usize, count_text, 10);
+    if (count == 0 or index >= count) return error.InvalidIoSpecPartition;
+
+    return .{ .index = index, .count = count };
+}
+
+const WeightedIoSpec = struct {
+    spec_i: usize,
+    weight: u64,
+};
+
+fn runnableIoSpec(spec: fx_test_specs.TestSpec) bool {
+    if (spec.skip) return false;
+    if (spec.skip_on_windows and @import("builtin").os.tag == .windows) return false;
+    return true;
+}
+
+fn ioSpecSourceSize(roc_file: []const u8) u64 {
+    const stat = std.Io.Dir.cwd().statFile(std.testing.io, roc_file, .{}) catch return 0;
+    return stat.size;
+}
+
+fn ioSpecWeight(spec: fx_test_specs.TestSpec) u64 {
+    return 1 + ioSpecSourceSize(spec.roc_file) + @as(u64, @intCast(spec.io_spec.len)) * 1000;
+}
+
+fn leastLoadedPartition(loads: []const u64) usize {
+    var min_i: usize = 0;
+    for (loads[1..], 1..) |load, i| {
+        if (load < loads[min_i]) min_i = i;
+    }
+    return min_i;
+}
+
+fn assignIoSpecPartitions(allocator: std.mem.Allocator, partition_count: usize) anyerror![]usize {
+    std.debug.assert(partition_count > 0);
+
+    var weighted = std.ArrayList(WeightedIoSpec).empty;
+    defer weighted.deinit(allocator);
+
+    for (fx_test_specs.io_spec_tests, 0..) |spec, spec_i| {
+        if (!runnableIoSpec(spec)) continue;
+        try weighted.append(allocator, .{
+            .spec_i = spec_i,
+            .weight = ioSpecWeight(spec),
+        });
+    }
+
+    std.mem.sort(WeightedIoSpec, weighted.items, {}, struct {
+        fn lessThan(_: void, a: WeightedIoSpec, b: WeightedIoSpec) bool {
+            if (a.weight != b.weight) return a.weight > b.weight;
+            return a.spec_i < b.spec_i;
+        }
+    }.lessThan);
+
+    const owners = try allocator.alloc(usize, fx_test_specs.io_spec_tests.len);
+    @memset(owners, partition_count);
+    errdefer allocator.free(owners);
+
+    const loads = try allocator.alloc(u64, partition_count);
+    defer allocator.free(loads);
+    @memset(loads, 0);
+
+    for (weighted.items) |entry| {
+        const owner = leastLoadedPartition(loads);
+        owners[entry.spec_i] = owner;
+        loads[owner] +|= entry.weight;
+    }
+
+    return owners;
+}
+
+fn runIoSpecTests(comptime opt_flag: []const u8) anyerror!void {
     if (!fx_test_options.include_io_spec_tests) return error.SkipZigTest;
-    std.debug.assert(fx_test_options.io_spec_shard_count > 0);
-    std.debug.assert(fx_test_options.io_spec_shard_index < fx_test_options.io_spec_shard_count);
 
     const allocator = testing.allocator;
-    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
-    defer env_map.deinit();
+    const partition = try ioSpecPartitionFromEnv(allocator);
+    const partition_owners = try assignIoSpecPartitions(allocator, partition.count);
+    defer allocator.free(partition_owners);
+
+    var env = try util.buildIsolatedTestEnv(allocator, null);
+    defer env.deinit(allocator);
 
     var passed: usize = 0;
     var failed: usize = 0;
 
     for (fx_test_specs.io_spec_tests, 0..) |spec, spec_i| {
-        if (spec_i % fx_test_options.io_spec_shard_count != fx_test_options.io_spec_shard_index) continue;
-        if (spec.skip) continue;
-        if (spec.skip_on_windows and @import("builtin").os.tag == .windows) continue;
+        if (partition_owners[spec_i] != partition.index) continue;
 
-        runIoSpecTestWithEnv(opt_flag, spec, &env_map) catch {
+        runIoSpecTestWithEnv(opt_flag, spec, &env.env_map) catch {
             failed += 1;
             continue;
         };
@@ -418,7 +508,7 @@ test "provided static data exports are host-linkable readonly constants" {
     try testing.expectEqualStrings("static data host constants ok\n", run_result.stderr);
 }
 
-fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) !void {
+fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []const u8) anyerror!void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, output_path, allocator, .limited(256 * 1024 * 1024));
     defer allocator.free(bytes);
 
@@ -453,7 +543,7 @@ fn inspectStaticDataHostBinary(allocator: std.mem.Allocator, output_path: []cons
 }
 
 /// Shared body for "roc test" tests that expect exactly 1 passing test.
-fn testRocTestSinglePass(opt: []const u8, roc_file: []const u8) !void {
+fn testRocTestSinglePass(opt: []const u8, roc_file: []const u8) anyerror!void {
     const allocator = testing.allocator;
     const run_result = try util.runRoc(allocator, &.{ "test", opt }, roc_file);
     defer allocator.free(run_result.stdout);
@@ -801,8 +891,8 @@ test "fx platform run from different cwd" {
     // Get absolute path to roc binary since we'll change cwd
     const roc_abs_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, util.roc_binary_path, allocator);
     defer allocator.free(roc_abs_path);
-    var env_map = try util.buildIsolatedTestEnvMap(allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnv(allocator, null);
+    defer env.deinit(allocator);
 
     // Run roc from the test/fx directory with a relative path to app.roc
     const run_result = try util.runChildWithTimeout(allocator, &[_][]const u8{
@@ -810,7 +900,7 @@ test "fx platform run from different cwd" {
         "app.roc",
     }, .{
         .cwd = "test/fx",
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);

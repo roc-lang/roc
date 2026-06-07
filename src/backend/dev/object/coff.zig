@@ -106,7 +106,7 @@ const CoffSymbol = struct {
         std.mem.writeInt(u32, self.name_bytes[4..8], str_offset, .little);
     }
 
-    fn writeToBuffer(self: *const CoffSymbol, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+    fn writeToBuffer(self: *const CoffSymbol, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) Allocator.Error!void {
         // Write exactly 18 bytes
         try buffer.appendSlice(allocator, &self.name_bytes); // 8 bytes
         var value_bytes: [4]u8 = undefined;
@@ -214,7 +214,7 @@ pub const CoffWriter = struct {
         reloc_type: u16, // Relocation type
     };
 
-    pub fn init(allocator: Allocator, arch: Architecture) !Self {
+    pub fn init(allocator: Allocator, arch: Architecture) Allocator.Error!Self {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
@@ -247,26 +247,26 @@ pub const CoffWriter = struct {
     }
 
     /// Set the code section contents
-    pub fn setCode(self: *Self, code: []const u8) !void {
+    pub fn setCode(self: *Self, code: []const u8) Allocator.Error!void {
         self.text.clearRetainingCapacity();
         try self.text.appendSlice(self.allocator, code);
     }
 
     /// Set read-only data section contents.
-    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+    pub fn setRodata(self: *Self, rodata: []const u8) Allocator.Error!void {
         self.rdata.clearRetainingCapacity();
         try self.rdata.appendSlice(self.allocator, rodata);
     }
 
     /// Add a symbol to the object file
-    pub fn addSymbol(self: *Self, symbol: Symbol) !u32 {
+    pub fn addSymbol(self: *Self, symbol: Symbol) Allocator.Error!u32 {
         const idx: u32 = @intCast(self.symbols.items.len);
         try self.symbols.append(self.allocator, symbol);
         return idx;
     }
 
     /// Add an external symbol reference
-    pub fn addExternalSymbol(self: *Self, name: []const u8) !u32 {
+    pub fn addExternalSymbol(self: *Self, name: []const u8) Allocator.Error!u32 {
         return self.addSymbol(.{
             .name = name,
             .section = .undef,
@@ -277,7 +277,7 @@ pub const CoffWriter = struct {
     }
 
     /// Add a relocation to the text section
-    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32) !void {
+    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32) Allocator.Error!void {
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
@@ -286,7 +286,7 @@ pub const CoffWriter = struct {
     }
 
     /// Add a data-symbol relocation to the text section.
-    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) !void {
+    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) Allocator.Error!void {
         const reloc_type: u16 = switch (kind) {
             .abs64 => self.arch.absolutePointerRelocType(),
             .rel32 => switch (self.arch) {
@@ -310,7 +310,7 @@ pub const CoffWriter = struct {
     }
 
     /// Add an absolute pointer relocation to the read-only data section.
-    pub fn addRdataRelocation(self: *Self, offset: u32, symbol_idx: u32, addend: i64) !void {
+    pub fn addRdataRelocation(self: *Self, offset: u32, symbol_idx: u32, addend: i64) Allocator.Error!void {
         if (offset + 8 > self.rdata.items.len) unreachable;
         std.mem.writeInt(i64, self.rdata.items[offset..][0..8], addend, .little);
         try self.rdata_relocs.append(self.allocator, .{
@@ -322,13 +322,13 @@ pub const CoffWriter = struct {
 
     /// Add function info for unwind data generation (Windows x64)
     /// This must be called for each function to enable proper exception handling.
-    pub fn addFunctionInfo(self: *Self, info: FunctionInfo) !void {
+    pub fn addFunctionInfo(self: *Self, info: FunctionInfo) Allocator.Error!void {
         try self.functions.append(self.allocator, info);
     }
 
     /// Add a string to the string table, return its offset
     /// COFF string table offsets start at 4 (after the size field)
-    fn addString(self: *Self, str: []const u8) !u32 {
+    fn addString(self: *Self, str: []const u8) Allocator.Error!u32 {
         const offset: u32 = @intCast(self.strtab.items.len);
         try self.strtab.appendSlice(self.allocator, str);
         try self.strtab.append(self.allocator, 0); // Null terminator
@@ -336,7 +336,7 @@ pub const CoffWriter = struct {
     }
 
     /// Write a COFF relocation entry (10 bytes) manually to avoid struct padding issues
-    fn writeRelocation(self: *Self, output: *std.ArrayList(u8), virtual_address: u32, symbol_idx: u32, reloc_type: u16) !void {
+    fn writeRelocation(self: *Self, output: *std.ArrayList(u8), virtual_address: u32, symbol_idx: u32, reloc_type: u16) Allocator.Error!void {
         var buf: [10]u8 = undefined;
         std.mem.writeInt(u32, buf[0..4], virtual_address, .little);
         std.mem.writeInt(u32, buf[4..8], symbol_idx, .little);
@@ -384,7 +384,7 @@ pub const CoffWriter = struct {
         return 4 + codes_size;
     }
 
-    fn appendArm64AllocCode(self: *Self, codes: *std.ArrayList(u8), size: u32) !void {
+    fn appendArm64AllocCode(self: *Self, codes: *std.ArrayList(u8), size: u32) Allocator.Error!void {
         if (builtin.mode == .Debug and (size == 0 or size % 16 != 0)) {
             std.debug.panic("COFF invariant violated: ARM64 stack allocation must be non-zero and 16-byte aligned, got {d}", .{size});
         }
@@ -408,7 +408,7 @@ pub const CoffWriter = struct {
         }
     }
 
-    fn appendArm64SaveFplr(self: *Self, codes: *std.ArrayList(u8), frame_size: u32) !void {
+    fn appendArm64SaveFplr(self: *Self, codes: *std.ArrayList(u8), frame_size: u32) Allocator.Error!void {
         if (frame_size <= 504) {
             if (builtin.mode == .Debug and (frame_size == 0 or frame_size % 8 != 0)) {
                 std.debug.panic("COFF invariant violated: ARM64 small frame must be a non-zero multiple of 8, got {d}", .{frame_size});
@@ -420,7 +420,7 @@ pub const CoffWriter = struct {
         }
     }
 
-    fn appendArm64AllocChunks(self: *Self, codes: *std.ArrayList(u8), frame_size: u32, with_probe_nops: bool) !void {
+    fn appendArm64AllocChunks(self: *Self, codes: *std.ArrayList(u8), frame_size: u32, with_probe_nops: bool) Allocator.Error!void {
         if (frame_size <= 504) return;
 
         if (frame_size < 4096 or !with_probe_nops) {
@@ -446,7 +446,7 @@ pub const CoffWriter = struct {
         }
     }
 
-    fn appendArm64RegPair(self: *Self, codes: *std.ArrayList(u8), reg: u8, offset: u32) !void {
+    fn appendArm64RegPair(self: *Self, codes: *std.ArrayList(u8), reg: u8, offset: u32) Allocator.Error!void {
         if (builtin.mode == .Debug and (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63)) {
             std.debug.panic("COFF invariant violated: ARM64 saved register pair x{d} at offset {d} is not encodable", .{ reg, offset });
         }
@@ -474,7 +474,7 @@ pub const CoffWriter = struct {
         .{ .reg = 27, .offset = 80 },
     };
 
-    fn appendArm64PairsReverse(self: *Self, codes: *std.ArrayList(u8), mask: u32) !void {
+    fn appendArm64PairsReverse(self: *Self, codes: *std.ArrayList(u8), mask: u32) Allocator.Error!void {
         var index = arm64_pairs.len;
         while (index > 0) {
             index -= 1;
@@ -485,7 +485,7 @@ pub const CoffWriter = struct {
         }
     }
 
-    fn appendArm64PairsForward(self: *Self, codes: *std.ArrayList(u8), mask: u32) !void {
+    fn appendArm64PairsForward(self: *Self, codes: *std.ArrayList(u8), mask: u32) Allocator.Error!void {
         for (arm64_pairs) |pair| {
             if (arm64PairUsed(mask, pair.reg)) {
                 try self.appendArm64RegPair(codes, pair.reg, pair.offset);
@@ -493,7 +493,7 @@ pub const CoffWriter = struct {
         }
     }
 
-    fn appendArm64BodySequence(self: *Self, codes: *std.ArrayList(u8), func: FunctionInfo) !void {
+    fn appendArm64BodySequence(self: *Self, codes: *std.ArrayList(u8), func: FunctionInfo) Allocator.Error!void {
         try self.appendArm64PairsReverse(codes, func.callee_saved_mask);
         if (func.uses_frame_pointer) {
             try codes.append(self.allocator, 0xE1);
@@ -503,7 +503,7 @@ pub const CoffWriter = struct {
         try codes.append(self.allocator, 0xE4);
     }
 
-    fn appendArm64EpilogueSequence(self: *Self, codes: *std.ArrayList(u8), func: FunctionInfo) !void {
+    fn appendArm64EpilogueSequence(self: *Self, codes: *std.ArrayList(u8), func: FunctionInfo) Allocator.Error!void {
         try self.appendArm64PairsForward(codes, func.callee_saved_mask);
         try self.appendArm64SaveFplr(codes, func.frame_size);
         try self.appendArm64AllocChunks(codes, func.frame_size, false);
@@ -525,7 +525,7 @@ pub const CoffWriter = struct {
         }
     };
 
-    fn buildArm64UnwindData(self: *Self, func: FunctionInfo) !Arm64UnwindData {
+    fn buildArm64UnwindData(self: *Self, func: FunctionInfo) Allocator.Error!Arm64UnwindData {
         if (builtin.mode == .Debug and func.frame_size == 0) {
             std.debug.panic("COFF invariant violated: ARM64 function {d}-{d} has no frame size", .{ func.start_offset, func.end_offset });
         }
@@ -550,13 +550,13 @@ pub const CoffWriter = struct {
         };
     }
 
-    fn arm64XdataSize(self: *Self, func: FunctionInfo) !u32 {
+    fn arm64XdataSize(self: *Self, func: FunctionInfo) Allocator.Error!u32 {
         var data = try self.buildArm64UnwindData(func);
         defer data.codes.deinit(self.allocator);
         return data.recordSize();
     }
 
-    fn functionXdataSize(self: *Self, func: FunctionInfo) !u32 {
+    fn functionXdataSize(self: *Self, func: FunctionInfo) Allocator.Error!u32 {
         return switch (self.arch) {
             .x86_64 => x64UnwindSize(func),
             .aarch64 => try self.arm64XdataSize(func),
@@ -564,7 +564,7 @@ pub const CoffWriter = struct {
     }
 
     /// Write the COFF object file to a buffer
-    pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
+    pub fn write(self: *Self, output: *std.ArrayList(u8)) Allocator.Error!void {
         // Section indices (1-based in COFF)
         const SECT_TEXT: i16 = 1;
         const has_rdata = self.rdata.items.len > 0;

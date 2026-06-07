@@ -1,9 +1,10 @@
 //! Tests for JSON-RPC transport layer message encoding and decoding.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const transport_module = @import("../transport.zig");
 
-fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+fn frame(allocator: std.mem.Allocator, body: []const u8) Allocator.Error![]u8 {
     return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }
 

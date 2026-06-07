@@ -75,7 +75,7 @@ pub const Slot = union(enum) {
     }
 
     /// Deserialize a Slot from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8) !Slot {
+    pub fn deserializeFrom(buffer: []const u8) Allocator.Error!Slot {
         if (buffer.len < @sizeOf(u8) + @sizeOf(u32)) return error.BufferTooSmall;
 
         const tag = buffer[0];
@@ -1285,7 +1285,7 @@ pub const Store = struct {
     }
 
     /// Deserialize a Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
+    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) Allocator.Error!Self {
         if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
 
         var offset: usize = 0;
@@ -1444,7 +1444,7 @@ const SlotStore = struct {
     }
 
     /// Deserialize a SlotStore from the provided buffer
-    fn deserializeFrom(buffer: []align(@alignOf(Slot)) const u8, allocator: Allocator) !Self {
+    fn deserializeFrom(buffer: []align(@alignOf(Slot)) const u8, allocator: Allocator) Allocator.Error!Self {
         return .{
             .backing = try collections.SafeList(Slot).deserializeFrom(buffer, allocator),
         };
@@ -1553,7 +1553,7 @@ const DescStore = struct {
     }
 
     /// Deserialize a DescStore from the provided buffer
-    pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) !Self {
+    pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) Allocator.Error!Self {
         const backing = try DescSafeMultiList.deserializeFrom(buffer, allocator);
         return Self{ .backing = backing };
     }

@@ -41,7 +41,7 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Allocate a new wasm local for the given LIR local id.
-pub fn allocLocal(self: *Self, local_id: LocalId, val_type: ValType) !u32 {
+pub fn allocLocal(self: *Self, local_id: LocalId, val_type: ValType) Allocator.Error!u32 {
     const idx = self.next_local_idx;
     self.next_local_idx += 1;
     try self.local_types.append(self.allocator, val_type);
@@ -51,7 +51,7 @@ pub fn allocLocal(self: *Self, local_id: LocalId, val_type: ValType) !u32 {
 }
 
 /// Allocate an anonymous local (not bound to any symbol).
-pub fn allocAnonymousLocal(self: *Self, val_type: ValType) !u32 {
+pub fn allocAnonymousLocal(self: *Self, val_type: ValType) Allocator.Error!u32 {
     const idx = self.next_local_idx;
     self.next_local_idx += 1;
     try self.local_types.append(self.allocator, val_type);

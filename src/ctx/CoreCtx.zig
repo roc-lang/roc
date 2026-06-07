@@ -512,7 +512,7 @@ pub fn testing(gpa: Allocator, arena: Allocator) Self {
 
 /// Write data to a file path relative to the current working directory.
 /// Exposed so backend/eval code can write files without a full CoreCtx instance.
-pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) !void {
+pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) anyerror!void {
     return std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sub_path, .data = data });
 }
 
@@ -575,7 +575,9 @@ fn osListDir(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Alloca
     };
     defer dir.close(std_io);
 
-    var walker = dir.walk(allocator) catch return error.IoError;
+    var walker = dir.walk(allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     defer walker.deinit();
 
     var entries: std.ArrayList(FileEntry) = .empty;
@@ -585,7 +587,10 @@ fn osListDir(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Alloca
     }
 
     while (true) {
-        const next = walker.next(std_io) catch return error.IoError;
+        const next = walker.next(std_io) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.IoError,
+        };
         const entry = next orelse break;
         const kind: FileKind = switch (entry.kind) {
             .file => .file,

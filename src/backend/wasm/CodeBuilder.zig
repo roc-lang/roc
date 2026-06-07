@@ -48,7 +48,7 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
 /// Writes a `call` opcode followed by a 5-byte padded LEB128 placeholder (value 0).
 /// Records the relocation position relative to this function's code buffer so that
 /// `insertIntoModule` can compute the absolute offset later.
-pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex) !void {
+pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: SymbolIndex) Allocator.Error!void {
     try self.code.append(allocator, WasmModule.Op.call);
     const code_pos: u32 = @intCast(self.code.items.len);
     try self.import_relocations.append(allocator, .{
@@ -64,7 +64,7 @@ pub fn emitRelocatableCall(self: *Self, allocator: Allocator, symbol_idx: Symbol
 /// `code_bytes` (accounting for the LEB128 body-length prefix and preamble).
 /// Returns the byte offset where this function's body starts in `code_bytes`
 /// (i.e. the position of the body-length prefix).
-pub fn insertIntoModule(self: *const Self, allocator: Allocator, module: *WasmModule) !u32 {
+pub fn insertIntoModule(self: *const Self, allocator: Allocator, module: *WasmModule) Allocator.Error!u32 {
     const fn_offset: u32 = @intCast(module.code_bytes.items.len);
     try module.function_offsets.append(allocator, fn_offset);
 
@@ -98,7 +98,7 @@ pub fn insertIntoModule(self: *const Self, allocator: Allocator, module: *WasmMo
 /// Used for stack prologues and other code that must appear before the main
 /// instruction bytes but whose content isn't known until after code generation
 /// (e.g. because the stack frame size depends on what instructions were emitted).
-pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) !void {
+pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) Allocator.Error!void {
     if (prefix.len == 0) return;
     const prefix_len: u32 = @intCast(prefix.len);
     // Adjust relocation offsets to account for the prefix

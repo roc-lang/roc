@@ -2,6 +2,7 @@
 //! Used by semantic tokens to encode positions in the LSP delta format.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Tracks line start offsets for efficient byte-to-position conversion.
 pub const LineInfo = struct {
@@ -16,7 +17,7 @@ pub const LineInfo = struct {
     };
 
     /// Creates LineInfo by scanning the source for newline characters.
-    pub fn init(allocator: std.mem.Allocator, source: []const u8) !LineInfo {
+    pub fn init(allocator: std.mem.Allocator, source: []const u8) Allocator.Error!LineInfo {
         const line_starts = try computeLineStarts(allocator, source);
         return .{
             .line_starts = line_starts,
@@ -76,7 +77,7 @@ pub const LineInfo = struct {
 
 /// Computes an array of byte offsets where each line starts.
 /// Line 0 always starts at offset 0.
-pub fn computeLineStarts(allocator: std.mem.Allocator, source: []const u8) ![]u32 {
+pub fn computeLineStarts(allocator: std.mem.Allocator, source: []const u8) Allocator.Error![]u32 {
     // Count newlines first to allocate exact size
     var count: usize = 1; // Line 0 always exists
     for (source) |c| {

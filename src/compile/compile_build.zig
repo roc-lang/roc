@@ -27,6 +27,10 @@ const BuiltinModules = eval.BuiltinModules;
 const compile_package = @import("compile_package.zig");
 const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
+
+/// The set of errors that can occur during a build (including `roc check`).
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ TooNested, ExpectedPlatformString, ExpectedString, FileNotFound, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency };
+
 const ModuleEnv = can.ModuleEnv;
 const PackageEnv = compile_package.PackageEnv;
 const SemanticModuleData = compile_package.SemanticModuleData;
@@ -77,7 +81,7 @@ fn freeConstSlice(gpa: Allocator, s: []const u8) void {
 
 // Rooted path + normalization helper
 const PathUtils = struct {
-    fn normalizeAndJoin(gpa: Allocator, root: []const u8, rel: []const u8) ![]const u8 {
+    fn normalizeAndJoin(gpa: Allocator, root: []const u8, rel: []const u8) Allocator.Error![]const u8 {
         const joined = try std.fs.path.join(gpa, &.{ root, rel });
         errdefer gpa.free(joined);
         // Resolve .. and . components
@@ -86,7 +90,7 @@ const PathUtils = struct {
         return canon;
     }
 
-    fn makeAbsolute(gpa: Allocator, base_dir: []const u8, path: []const u8) ![]const u8 {
+    fn makeAbsolute(gpa: Allocator, base_dir: []const u8, path: []const u8) Allocator.Error![]const u8 {
         if (std.fs.path.isAbsolute(path)) {
             return try std.fs.path.resolve(gpa, &.{path});
         } else {
@@ -96,7 +100,14 @@ const PathUtils = struct {
 
     fn isWithinRoot(candidate: []const u8, roots: []const []const u8) bool {
         for (roots) |root| {
-            if (std.mem.startsWith(u8, candidate, root)) return true;
+            if (!std.mem.startsWith(u8, candidate, root)) continue;
+            // Only match whole path segments so root "/x/app" does not capture
+            // sibling "/x/app-secrets". An exact match counts, as does a match
+            // where the next character (or the root's own trailing char) is a
+            // path separator.
+            if (candidate.len == root.len) return true;
+            if (std.fs.path.isSep(candidate[root.len])) return true;
+            if (root.len > 0 and std.fs.path.isSep(root[root.len - 1])) return true;
         }
         return false;
     }
@@ -167,6 +178,7 @@ pub const BuildEnv = struct {
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
+    owns_builtin_modules: bool,
 
     // Discovery state (populated by discoverDependencies, consumed by compileDiscovered)
     discovered_root_abs: ?[]const u8 = null,
@@ -189,7 +201,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) anyerror!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -197,6 +209,31 @@ pub const BuildEnv = struct {
         builtin_modules.* = try BuiltinModules.init(gpa);
         errdefer builtin_modules.deinit();
 
+        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, true);
+    }
+
+    pub fn initBorrowingBuiltinModules(
+        gpa: Allocator,
+        mode: Mode,
+        max_threads: usize,
+        target: roc_target.RocTarget,
+        cwd: []const u8,
+        std_io: std.Io,
+        builtin_modules: *BuiltinModules,
+    ) BuildEnv {
+        return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, false);
+    }
+
+    fn initWithBuiltinModules(
+        gpa: Allocator,
+        mode: Mode,
+        max_threads: usize,
+        target: roc_target.RocTarget,
+        cwd: []const u8,
+        std_io: std.Io,
+        builtin_modules: *BuiltinModules,
+        owns_builtin_modules: bool,
+    ) BuildEnv {
         var env = BuildEnv{
             .gpa = gpa,
             .mode = mode,
@@ -206,6 +243,7 @@ pub const BuildEnv = struct {
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .builtin_modules = builtin_modules,
+            .owns_builtin_modules = owns_builtin_modules,
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
@@ -228,9 +266,12 @@ pub const BuildEnv = struct {
             std.debug.print("[DEINIT] BuildEnv.deinit starting\n", .{});
         }
 
-        // Deinit and free builtin modules
-        self.builtin_modules.deinit();
-        self.gpa.destroy(self.builtin_modules);
+        // Deinit and free owned builtin modules. Borrowed builtins outlive this
+        // BuildEnv and are released by their owner.
+        if (self.owns_builtin_modules) {
+            self.builtin_modules.deinit();
+            self.gpa.destroy(self.builtin_modules);
+        }
 
         if (comptime trace_build) {
             std.debug.print("[DEINIT] builtin_modules done\n", .{});
@@ -375,7 +416,7 @@ pub const BuildEnv = struct {
     }
 
     /// Build an app file specifically (validates it's an app)
-    pub fn buildApp(self: *BuildEnv, app_file: []const u8) !void {
+    pub fn buildApp(self: *BuildEnv, app_file: []const u8) anyerror!void {
         // Build and let the main function handle everything
         // The build function accepts both apps and modules
         try self.build(app_file);
@@ -396,14 +437,14 @@ pub const BuildEnv = struct {
     //
     // Uses the actor model coordinator for both single-threaded and multi-threaded modes.
     // The coordinator uses message passing to eliminate race conditions.
-    pub fn build(self: *BuildEnv, root_file: []const u8) !void {
+    pub fn build(self: *BuildEnv, root_file: []const u8) anyerror!void {
         try self.discoverDependencies(root_file);
         try self.compileDiscovered();
     }
 
     /// Initialize the actor model coordinator.
     /// This must be called before compileDiscovered().
-    pub fn initCoordinator(self: *BuildEnv) !void {
+    pub fn initCoordinator(self: *BuildEnv) Allocator.Error!void {
         if (self.coordinator != null) return; // Already initialized
 
         // Propagate std_io to the ordered sink for its mutex operations
@@ -426,10 +467,17 @@ pub const BuildEnv = struct {
         self.coordinator = coord;
     }
 
+    /// Register a directory as a workspace root, skipping it if an existing root
+    /// already contains it. Takes ownership of nothing; copies `dir` when stored.
+    fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) Allocator.Error!void {
+        if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
+        try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
+    }
+
     /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
     /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
     /// discovered state (e.g., TargetsConfig) and change the target before compilation.
-    pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) !void {
+    pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) BuildError!void {
         // Parse root file header
         const root_abs = try self.makeAbsolute(root_file);
         // Store immediately so deinit() frees on any subsequent error
@@ -437,7 +485,7 @@ pub const BuildEnv = struct {
         const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
         self.discovered_root_dir = root_dir;
 
-        try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
+        try self.addWorkspaceRoot(root_dir);
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
@@ -484,7 +532,7 @@ pub const BuildEnv = struct {
     /// Phase 2: Initialize the Coordinator, create coordinator packages from the
     /// discovered BuildEnv packages, and run compilation to completion.
     /// Must be called after discoverDependencies().
-    pub fn compileDiscovered(self: *BuildEnv) !void {
+    pub fn compileDiscovered(self: *BuildEnv) anyerror!void {
         const pkg_name = self.discovered_pkg_name orelse unreachable; // Must call discoverDependencies() first
 
         // Initialize coordinator if not already done
@@ -618,7 +666,7 @@ pub const BuildEnv = struct {
     }
 
     /// Transfer compilation results from Coordinator to PackageEnv.
-    fn transferCoordinatorResults(self: *BuildEnv) !void {
+    fn transferCoordinatorResults(self: *BuildEnv) Allocator.Error!void {
         const coord = self.coordinator orelse return;
 
         var coord_pkg_it = coord.packages.iterator();
@@ -648,13 +696,13 @@ pub const BuildEnv = struct {
                         std.debug.print("[TRANSFER]   Module {s} not in scheduler, creating\n", .{coord_mod.name});
                     }
                     // Create the module in the scheduler
-                    _ = sched.ensureModule(coord_mod.name, coord_mod.path) catch continue;
+                    _ = try sched.ensureModule(coord_mod.name, coord_mod.path);
                     maybe_sched_mod = sched.getModuleState(coord_mod.name);
                 }
                 const sched_mod = maybe_sched_mod orelse continue;
 
                 // Transfer depth from coordinator to scheduler
-                sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth) catch {};
+                try sched.setModuleDepthIfSmaller(coord_mod.name, coord_mod.depth);
                 if (comptime trace_build) {
                     std.debug.print("[TRANSFER]   Transferred depth {} for {s}\n", .{ coord_mod.depth, coord_mod.name });
                 }
@@ -731,7 +779,7 @@ pub const BuildEnv = struct {
                 // Emit reports to sink for deterministic ordering
                 // Then clear scheduler's reports to transfer ownership to sink
                 for (sched_mod.reports.items) |rep| {
-                    self.sink.emitReport(coord_entry.key_ptr.*, coord_mod.name, rep);
+                    try self.sink.emitReport(coord_entry.key_ptr.*, coord_mod.name, rep);
                 }
                 sched_mod.reports.clearRetainingCapacity();
             }
@@ -769,7 +817,7 @@ pub const BuildEnv = struct {
     // External import classification now comes from CIR qualifier metadata.
     // ModuleBuild determines external vs local using CIR qualifier metadata (s_import.qualifier_tok).
 
-    fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
+    fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) Allocator.Error!void {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         const cur_pkg = self.ws.packages.get(current_package) orelse return;
 
@@ -783,17 +831,16 @@ pub const BuildEnv = struct {
             return;
         };
 
-        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, qualified.module) catch {
-            return;
+        const mod_path = self.ws.dottedToPath(target_pkg.root_dir, qualified.module) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PathOutsideWorkspace => return,
         };
         defer self.ws.gpa.free(mod_path);
 
         const sched = self.ws.schedulers.get(target_pkg_name) orelse {
             return;
         };
-        sched.*.scheduleModule(qualified.module, mod_path, 1) catch {
-            // Continue anyway - dependency resolution will handle missing modules
-        };
+        try sched.*.scheduleModule(qualified.module, mod_path, 1);
     }
 
     fn resolverIsReady(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) bool {
@@ -856,9 +903,12 @@ pub const BuildEnv = struct {
             null;
     }
 
-    fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
+    fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) Allocator.Error![]const u8 {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
-        return self.ws.dottedToPath(root_dir, import_name) catch import_name;
+        return self.ws.dottedToPath(root_dir, import_name) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PathOutsideWorkspace => import_name,
+        };
     }
 
     fn makeResolver(self: *BuildEnv) ImportResolver {
@@ -953,15 +1003,13 @@ pub const BuildEnv = struct {
         }
     };
 
-    fn detectPackageCycle(self: *BuildEnv, from_pkg: []const u8, to_pkg: []const u8) bool {
+    fn detectPackageCycle(self: *BuildEnv, from_pkg: []const u8, to_pkg: []const u8) Allocator.Error!bool {
         // Simple DFS walk on shorthand edges to detect if to_pkg reaches from_pkg
         if (std.mem.eql(u8, from_pkg, to_pkg)) return true;
 
         var stack = std.ArrayList([]const u8).empty;
         defer stack.deinit(self.gpa);
-        stack.append(self.gpa, to_pkg) catch {
-            return false;
-        };
+        try stack.append(self.gpa, to_pkg);
 
         var visited = std.StringHashMapUnmanaged(void){};
         defer visited.deinit(self.gpa);
@@ -971,9 +1019,7 @@ pub const BuildEnv = struct {
             const cur = stack.items[idx];
             stack.items.len = idx;
             if (visited.contains(cur)) continue;
-            visited.put(self.gpa, cur, {}) catch {
-                return false;
-            };
+            try visited.put(self.gpa, cur, {});
 
             if (std.mem.eql(u8, cur, from_pkg)) return true;
 
@@ -981,15 +1027,13 @@ pub const BuildEnv = struct {
             var it = pkg.shorthands.iterator();
             while (it.next()) |e| {
                 const next = e.value_ptr.name;
-                stack.append(self.gpa, next) catch {
-                    return false;
-                };
+                try stack.append(self.gpa, next);
             }
         }
         return false;
     }
 
-    fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) !HeaderInfo {
+    fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) BuildError!HeaderInfo {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
@@ -1015,7 +1059,7 @@ pub const BuildEnv = struct {
                     break :blk report;
                 },
             };
-            self.sink.emitReport("main", file_abs, report);
+            try self.sink.emitReport("main", file_abs, report);
             try self.sink.buildOrder(&[_][]const u8{"main"}, &[_][]const u8{file_abs}, &[_]u32{0});
             self.sink.tryEmit();
             return err;
@@ -1039,11 +1083,11 @@ pub const BuildEnv = struct {
 
             for (ast.tokenize_diagnostics.items) |diagnostic| {
                 const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, file_abs);
-                self.sink.emitReport(pkg_name, module_name, report);
+                try self.sink.emitReport(pkg_name, module_name, report);
             }
             for (ast.parse_diagnostics.items) |diagnostic| {
                 const report = try ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, file_abs);
-                self.sink.emitReport(pkg_name, module_name, report);
+                try self.sink.emitReport(pkg_name, module_name, report);
             }
 
             // Build the order so drainReports can find these reports
@@ -1089,9 +1133,7 @@ pub const BuildEnv = struct {
                 // can be resolved. This is needed for both URL packages (cached paths) and
                 // relative paths that may point outside the app directory (e.g., ../platform/main.roc)
                 if (std.fs.path.dirname(plat_path)) |plat_dir| {
-                    if (!PathUtils.isWithinRoot(plat_dir, self.workspace_roots.items)) {
-                        try self.workspace_roots.append(try self.gpa.dupe(u8, plat_dir));
-                    }
+                    try self.addWorkspaceRoot(plat_dir);
                 }
 
                 // Packages map
@@ -1112,12 +1154,17 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
-                        break :blk try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
+                        errdefer self.gpa.free(abs_path);
+                        if (std.fs.path.dirname(abs_path)) |pkg_dir| {
+                            try self.addWorkspaceRoot(pkg_dir);
+                        }
+                        break :blk abs_path;
                     };
 
                     // TODO: actually handle duplicate keys
@@ -1147,7 +1194,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
@@ -1188,7 +1235,7 @@ pub const BuildEnv = struct {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
-                            try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                            try self.addWorkspaceRoot(cache_pkg_dir);
                         }
                         break :blk cached_path;
                     } else blk: {
@@ -1257,7 +1304,7 @@ pub const BuildEnv = struct {
                 }
 
                 // Extract targets config from the platform AST
-                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast) catch null;
+                info.targets_config = try targets_config_mod.TargetsConfig.fromAST(self.gpa, ast);
             },
             .module => {
                 info.kind = .module;
@@ -1282,7 +1329,7 @@ pub const BuildEnv = struct {
         return info;
     }
 
-    fn stringFromExpr(self: *BuildEnv, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
+    fn stringFromExpr(self: *BuildEnv, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) BuildError![]const u8 {
         const e = ast.store.getExpr(expr_idx);
         return switch (e) {
             .string => |s| blk: {
@@ -1313,12 +1360,12 @@ pub const BuildEnv = struct {
         };
     }
 
-    fn makeAbsolute(self: *BuildEnv, path: []const u8) ![]const u8 {
+    fn makeAbsolute(self: *BuildEnv, path: []const u8) Allocator.Error![]const u8 {
         if (std.fs.path.isAbsolute(path)) return try std.fs.path.resolve(self.gpa, &.{path});
         return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
-    fn readFile(self: *BuildEnv, path: []const u8) ![]u8 {
+    fn readFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
         const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
@@ -1332,31 +1379,34 @@ pub const BuildEnv = struct {
     /// Cross-platform environment variable lookup.
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
-    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) ?[]const u8 {
-        return self.filesystem.getEnvVar(key, allocator) catch null;
+    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) Allocator.Error!?[]const u8 {
+        return self.filesystem.getEnvVar(key, allocator) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.EnvironmentVariableMissing => null,
+        };
     }
 
     /// Get the roc cache directory for downloaded packages.
     /// Standard cache locations by platform:
     /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
     /// - Windows: %LOCALAPPDATA%\roc\packages\
-    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) ![]const u8 {
+    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) BuildError![]const u8 {
         // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        if (try self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
             defer allocator.free(xdg_cache);
             return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
         }
 
         // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
         if (comptime builtin.os.tag == .windows) {
-            if (self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
+            if (try self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
                 defer allocator.free(local_app_data);
                 return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
             }
         }
 
         // Fall back to ~/.cache/roc/packages (Unix)
-        if (self.getEnvVar(allocator, "HOME")) |home| {
+        if (try self.getEnvVar(allocator, "HOME")) |home| {
             defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
         }
@@ -1366,25 +1416,31 @@ pub const BuildEnv = struct {
 
     /// Resolve a URL package by downloading and caching it.
     /// Returns the local path to the cached package's main.roc or platform.roc file.
-    fn resolveUrlPackage(self: *BuildEnv, url: []const u8) ![]const u8 {
+    fn resolveUrlPackage(self: *BuildEnv, url: []const u8) BuildError![]const u8 {
         if (comptime is_freestanding)
             return error.DownloadFailed;
         const download = unbundle.download;
 
         // Validate URL and extract hash
-        const base58_hash = download.validateUrl(url) catch |err| {
-            if (comptime !is_freestanding) {
-                std.log.err("Invalid package URL: {s} ({})", .{ url, err });
-            }
-            return error.InvalidUrl;
+        const base58_hash = download.validateUrl(url) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                if (comptime !is_freestanding) {
+                    std.log.err("Invalid package URL: {s} ({})", .{ url, err });
+                }
+                return error.InvalidUrl;
+            },
         };
 
         // Get cache directory
-        const cache_dir_path = self.getRocCacheDir(self.gpa) catch {
-            if (comptime !is_freestanding) {
-                std.log.err("Could not determine cache directory", .{});
-            }
-            return error.NoCacheDir;
+        const cache_dir_path = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                if (comptime !is_freestanding) {
+                    std.log.err("Could not determine cache directory", .{});
+                }
+                return error.NoCacheDir;
+            },
         };
         defer self.gpa.free(cache_dir_path);
 
@@ -1401,14 +1457,18 @@ pub const BuildEnv = struct {
             }
 
             // Create cache directory structure
-            self.filesystem.makePath(cache_dir_path) catch |make_err| {
-                std.log.err("Failed to create cache directory: {}", .{make_err});
-                return error.FileError;
+            self.filesystem.makePath(cache_dir_path) catch |make_err| switch (make_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("Failed to create cache directory: {}", .{make_err});
+                    return error.FileError;
+                },
             };
 
             // Create package directory
             self.filesystem.createDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.IoError => {}, // May be PathAlreadyExists from race condition
+                error.OutOfMemory => return error.OutOfMemory,
                 else => {
                     if (comptime !is_freestanding) {
                         std.log.err("Failed to create package directory: {}", .{make_err});
@@ -1420,8 +1480,13 @@ pub const BuildEnv = struct {
             // Download and extract via io vtable (path-based, no Dir handle needed)
             self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
                 self.filesystem.deleteTree(package_dir_path) catch {};
-                std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
-                return error.DownloadFailed;
+                switch (fetch_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
+                        return error.DownloadFailed;
+                    },
+                }
             };
 
             if (comptime !is_freestanding) {
@@ -1444,7 +1509,7 @@ pub const BuildEnv = struct {
         return source_path;
     }
 
-    fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) ![]const u8 {
+    fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
         var parts = std.mem.splitScalar(u8, dotted, '.');
         var segs = std.ArrayList([]const u8).empty;
         defer segs.deinit(self.gpa);
@@ -1473,7 +1538,7 @@ pub const BuildEnv = struct {
         return canon;
     }
 
-    fn ensurePackage(self: *BuildEnv, name: []const u8, kind: PackageKind, root_file_abs: []const u8) !void {
+    fn ensurePackage(self: *BuildEnv, name: []const u8, kind: PackageKind, root_file_abs: []const u8) (Allocator.Error || error{PathOutsideWorkspace})!void {
         if (self.packages.contains(name)) return;
 
         const dir_raw = std.fs.path.dirname(root_file_abs) orelse ".";
@@ -1502,18 +1567,41 @@ pub const BuildEnv = struct {
         });
     }
 
+    fn putPackageShorthand(self: *BuildEnv, pack: *Package, alias: []const u8, target_name: []const u8, root_file: []const u8) Allocator.Error![]const u8 {
+        const key = try self.gpa.dupe(u8, alias);
+        errdefer self.gpa.free(key);
+
+        const name = try self.gpa.dupe(u8, target_name);
+        errdefer self.gpa.free(name);
+
+        const root_file_owned = try self.gpa.dupe(u8, root_file);
+        errdefer self.gpa.free(root_file_owned);
+
+        if (pack.shorthands.fetchRemove(key)) |old_entry| {
+            freeConstSlice(self.gpa, old_entry.key);
+            freeConstSlice(self.gpa, old_entry.value.name);
+            freeConstSlice(self.gpa, old_entry.value.root_file);
+        }
+        try pack.shorthands.put(self.gpa, key, .{
+            .name = name,
+            .root_file = root_file_owned,
+        });
+
+        return name;
+    }
+
     const PkgSinkCtx = struct {
         gpa: Allocator,
         sink: *OrderedSink,
         pkg: []const u8,
 
-        fn emit(ctx: ?*anyopaque, module_name: []const u8, report: Report) void {
+        fn emit(ctx: ?*anyopaque, module_name: []const u8, report: Report) Allocator.Error!void {
             var self: *PkgSinkCtx = @ptrCast(@alignCast(ctx.?));
-            self.sink.emitReport(self.pkg, module_name, report);
+            try self.sink.emitReport(self.pkg, module_name, report);
         }
     };
 
-    fn createSchedulers(self: *BuildEnv) !void {
+    fn createSchedulers(self: *BuildEnv) Allocator.Error!void {
         const resolver = self.makeResolver();
         // Track resolver ctx for cleanup (typed)
         try self.resolver_ctxs.append(@ptrCast(@alignCast(resolver.ctx)));
@@ -1558,20 +1646,20 @@ pub const BuildEnv = struct {
     /// Register pending known modules with their target schedulers.
     /// Also schedules the external modules so they'll be built before the app.
     /// Called after createSchedulers() to ensure all schedulers exist.
-    fn processPendingKnownModules(self: *BuildEnv) !void {
+    fn processPendingKnownModules(self: *BuildEnv) Allocator.Error!void {
         for (self.pending_known_modules.items) |pkm| {
             if (self.schedulers.get(pkm.target_package)) |sched| {
                 try sched.addKnownModule(pkm.qualified_name, pkm.import_name);
                 // Also schedule the external module so it gets built
                 // This is needed so the module is ready when we populate module_envs_map
                 if (sched.resolver) |res| {
-                    res.scheduleExternal(res.ctx, pkm.target_package, pkm.import_name);
+                    try res.scheduleExternal(res.ctx, pkm.target_package, pkm.import_name);
                 }
             }
         }
     }
 
-    fn populatePackageShorthands(self: *BuildEnv, pkg_name: []const u8, info: *HeaderInfo) !void {
+    fn populatePackageShorthands(self: *BuildEnv, pkg_name: []const u8, info: *HeaderInfo) BuildError!void {
         var pack = self.packages.getPtr(pkg_name).?;
 
         // App-specific platform dependency
@@ -1594,9 +1682,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            const dep_key = try self.gpa.dupe(u8, alias);
-            const dep_name = try self.gpa.dupe(u8, alias);
-            try self.ensurePackage(dep_name, .platform, abs);
+            try self.ensurePackage(alias, .platform, abs);
 
             // Transfer provides entries and targets_config from parsed header to platform package
             if (self.packages.getPtr(alias)) |plat_pkg| {
@@ -1613,17 +1699,7 @@ pub const BuildEnv = struct {
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
-            // If key already exists, free the old value before overwriting
-            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
-                freeConstSlice(self.gpa, old_entry.key);
-                freeConstSlice(self.gpa, old_entry.value.name);
-                freeConstSlice(self.gpa, old_entry.value.root_file);
-            }
-            try pack.shorthands.put(self.gpa, dep_key, .{
-                .name = dep_name,
-                .root_file = try self.gpa.dupe(u8, abs),
-            });
-
+            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
             try self.populatePackageShorthands(dep_name, &child_info);
 
             // Register platform-exposed modules as packages so apps can import them
@@ -1648,16 +1724,7 @@ pub const BuildEnv = struct {
                 pack = self.packages.getPtr(pkg_name).?;
 
                 // Also add to app's shorthands so imports resolve correctly
-                const mod_key = try self.gpa.dupe(u8, module_name);
-                if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
-                    freeConstSlice(self.gpa, old_entry.key);
-                    freeConstSlice(self.gpa, old_entry.value.name);
-                    freeConstSlice(self.gpa, old_entry.value.root_file);
-                }
-                try pack.shorthands.put(self.gpa, mod_key, .{
-                    .name = try self.gpa.dupe(u8, module_name),
-                    .root_file = try self.gpa.dupe(u8, module_path),
-                });
+                _ = try self.putPackageShorthand(pack, module_name, module_name, module_path);
 
                 // Add to pending list - will be registered after schedulers are created
                 // Use the QUALIFIED name (e.g., "pf.Stdout") because that's how imports are tracked
@@ -1695,7 +1762,7 @@ pub const BuildEnv = struct {
             }
 
             // Detect package-level cycles: if alias already on the path, report cycle
-            if (self.detectPackageCycle(pkg_name, alias)) {
+            if (try self.detectPackageCycle(pkg_name, alias)) {
                 // Build a more descriptive cycle message using source-level identifiers (aliases)
                 // Do not include file paths here (cycle messages should show source identities).
                 const msg = try std.fmt.allocPrint(self.gpa, "Package-level cycle detected involving aliases: {s} ... {s}", .{ pkg_name, alias });
@@ -1704,10 +1771,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            const dep_key = try self.gpa.dupe(u8, alias);
-            const dep_name = try self.gpa.dupe(u8, alias);
-
-            try self.ensurePackage(dep_name, child_info.kind, abs);
+            try self.ensurePackage(alias, child_info.kind, abs);
 
             // Transfer provides entries from parsed header to platform package
             if (child_info.kind == .platform) {
@@ -1722,33 +1786,23 @@ pub const BuildEnv = struct {
             // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
             pack = self.packages.getPtr(pkg_name).?;
 
-            // If key already exists, free the old value before overwriting
-            if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
-                freeConstSlice(self.gpa, old_entry.key);
-                freeConstSlice(self.gpa, old_entry.value.name);
-                freeConstSlice(self.gpa, old_entry.value.root_file);
-            }
-            try pack.shorthands.put(self.gpa, dep_key, .{
-                .name = dep_name,
-                .root_file = try self.gpa.dupe(u8, abs),
-            });
-
+            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
             try self.populatePackageShorthands(dep_name, &child_info);
         }
     }
 
-    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) !void {
+    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) Allocator.Error!void {
         var rep = Report.init(self.gpa, "Invalid package dependency", .runtime_error);
         const owned = try rep.addOwnedString(msg);
         try rep.addErrorMessage(owned);
         // Route through OrderedSink with a stable fully-qualified identity so it participates in ordering.
         // We use "workspace:root" as the fq module identity.
-        self.sink.emitReport("workspace", "root", rep);
+        try self.sink.emitReport("workspace", "root", rep);
     }
 
     // Compute global deterministic emission of accumulated reports:
     // sort by (min dependency depth from root app, then package and module names).
-    fn emitDeterministic(self: *BuildEnv) !void {
+    fn emitDeterministic(self: *BuildEnv) Allocator.Error!void {
         // Build arrays of package names, module names, and depths
         var pkg_names = std.ArrayList([]const u8).empty;
         defer pkg_names.deinit(self.gpa);
@@ -1790,7 +1844,7 @@ pub const BuildEnv = struct {
         self.sink.tryEmitLocked();
     }
 
-    fn moduleToPath(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) ![]const u8 {
+    fn moduleToPath(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) (Allocator.Error || error{ InvalidPackageName, PathOutsideWorkspace })![]const u8 {
         if (self.packages.get(pkg_name)) |pkg| {
             return try self.dottedToPath(pkg.root_dir, module_name);
         }
@@ -1802,14 +1856,17 @@ pub const BuildEnv = struct {
         reports: []Report,
     };
 
-    pub fn drainReports(self: *BuildEnv) ![]DrainedModuleReports {
+    pub fn drainReports(self: *BuildEnv) Allocator.Error![]DrainedModuleReports {
         const drained = try self.sink.drainEmitted(self.gpa);
         defer self.gpa.free(drained);
 
         var out = try self.gpa.alloc(DrainedModuleReports, drained.len);
         var i: usize = 0;
         while (i < drained.len) : (i += 1) {
-            const path = self.moduleToPath(drained[i].pkg_name, drained[i].module_name) catch try self.gpa.dupe(u8, "");
+            const path = self.moduleToPath(drained[i].pkg_name, drained[i].module_name) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPackageName, error.PathOutsideWorkspace => try self.gpa.dupe(u8, ""),
+            };
             out[i] = .{
                 .abs_path = path,
                 .reports = drained[i].reports,
@@ -1966,7 +2023,7 @@ pub const BuildEnv = struct {
     ///
     /// IMPORTANT: This reads from schedulers, not the coordinator, because
     /// transferCoordinatorResults() moves env ownership to schedulers.
-    pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) ![]CompiledModuleInfo {
+    pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
         // Assert we have a coordinator (build was called)
         std.debug.assert(self.coordinator != null);
 
@@ -2026,7 +2083,7 @@ pub const BuildEnv = struct {
 
     /// Get modules in serialization order: platform siblings → platform main → app siblings → app.
     /// This order ensures dependencies are serialized before dependents.
-    pub fn getModulesInSerializationOrder(self: *BuildEnv, allocator: Allocator) ![]CompiledModuleInfo {
+    pub fn getModulesInSerializationOrder(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
         const all_modules = try self.getCompiledModules(allocator);
         errdefer allocator.free(all_modules);
 
@@ -2157,7 +2214,7 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) ![]check.CheckedArtifact.ImportedModuleView {
+    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
         const modules = try self.getCompiledModules(allocator);
         defer allocator.free(modules);
 
@@ -2185,7 +2242,7 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) ![]check.CheckedArtifact.ImportedModuleView {
+    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
         const modules = try self.getCompiledModules(allocator);
         defer allocator.free(modules);
 
@@ -2297,8 +2354,8 @@ pub const BuildEnv = struct {
 
     /// Drain reports and render them to a writer. Returns error/warning counts.
     /// Replaces the repeated drain → iterate → render boilerplate pattern.
-    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) RenderDiagnosticsResult {
-        const drained = self.drainReports() catch &[_]DrainedModuleReports{};
+    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) Allocator.Error!RenderDiagnosticsResult {
+        const drained = try self.drainReports();
         defer self.freeDrainedReports(drained);
 
         var total_error_count: usize = 0;
@@ -2330,7 +2387,7 @@ pub const BuildEnv = struct {
 
     /// Get compiled module envs ready for backend use: Builtin at [0], imports resolved.
     /// Replaces the repeated pattern of getCompiledModules + build array + resolveImports.
-    pub fn getResolvedModuleEnvs(self: *BuildEnv, allocator: Allocator) !ResolvedModules {
+    pub fn getResolvedModuleEnvs(self: *BuildEnv, allocator: Allocator) Allocator.Error!ResolvedModules {
         const modules = try self.getCompiledModules(allocator);
         if (modules.len == 0) return error.NoModulesCompiled;
 
@@ -2462,7 +2519,7 @@ pub const OrderedSink = struct {
     }
 
     // Build deterministic order once: caller provides package names, module names, and depths
-    pub fn buildOrder(self: *OrderedSink, pkg_names: []const []const u8, module_names: []const []const u8, depths: []const u32) !void {
+    pub fn buildOrder(self: *OrderedSink, pkg_names: []const []const u8, module_names: []const []const u8, depths: []const u32) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[SINK] buildOrder: {} modules\n", .{pkg_names.len});
         }
@@ -2539,7 +2596,7 @@ pub const OrderedSink = struct {
     }
 
     // Emit with package and module names
-    pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) void {
+    pub fn emitReport(self: *OrderedSink, pkg_name: []const u8, module_name: []const u8, report: Report) Allocator.Error!void {
         self.lock.lockUncancelable(self.std_io);
         defer self.lock.unlock(self.std_io);
 
@@ -2558,26 +2615,20 @@ pub const OrderedSink = struct {
         } else {
             entry_index = self.entries.items.len;
             const reports_list = std.array_list.Managed(Report).init(self.gpa);
-            self.entries.append(.{
+            try self.entries.append(.{
                 .pkg_name = pkg_name,
                 .module_name = module_name,
                 .depth = std.math.maxInt(u32),
                 .reports = reports_list,
                 .ready = false,
                 .emitted = false,
-            }) catch return;
-            if (self.index.put(key, entry_index) catch null == null) {
-                return;
-            }
+            });
+            try self.index.put(key, entry_index);
             // Note: do not append to order here; buildOrder will populate and sort later
         }
 
         // Record report; take ownership by appending to per-module list
-        self.entries.items[entry_index].reports.append(report) catch {
-            var r = report;
-            r.deinit();
-            return;
-        };
+        try self.entries.items[entry_index].reports.append(report);
         self.entries.items[entry_index].ready = true;
 
         // Attempt ordered emission only if order has been built
@@ -2632,7 +2683,7 @@ pub const OrderedSink = struct {
         reports: []Report,
     };
 
-    pub fn drainEmitted(self: *OrderedSink, gpa: Allocator) ![]Drained {
+    pub fn drainEmitted(self: *OrderedSink, gpa: Allocator) Allocator.Error![]Drained {
         self.lock.lockUncancelable(self.std_io);
         defer self.lock.unlock(self.std_io);
 

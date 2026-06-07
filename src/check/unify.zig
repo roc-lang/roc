@@ -577,7 +577,11 @@ const Unifier = struct {
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
         const a_backing_var = self.types_store.getAliasBackingVar(a_alias);
         const b_backing_var = self.types_store.getAliasBackingVar(b_alias);
-        self.unifyGuarded(a_backing_var, b_backing_var) catch {};
+        self.unifyGuarded(a_backing_var, b_backing_var) catch |err| switch (err) {
+            // Don't report backing-var mismatches; they are surfaced from the argument types.
+            error.TypeMismatch => {},
+            else => return err,
+        };
 
         // Ensure the target variable has slots for the alias arguments
         try self.merge(vars, vars.b.desc.content);

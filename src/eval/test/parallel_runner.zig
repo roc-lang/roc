@@ -52,6 +52,7 @@
 //!   zig build test-eval [-- [--filter <pattern>] [--threads <N>] [--timeout <ms>] [--verbose] [--llvm]]
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const coverage_options = @import("coverage_options");
@@ -494,7 +495,7 @@ fn forkAndEval(
 const LlvmEvalPermit = struct {
     file: std.Io.File,
 
-    fn acquire() !LlvmEvalPermit {
+    fn acquire() anyerror!LlvmEvalPermit {
         var queue_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const queue_path = try llvmEvalQueueLockPath(&queue_path_buf);
         var queue_file = try openLlvmEvalLockFile(queue_path);
@@ -517,7 +518,7 @@ const LlvmEvalPermit = struct {
     }
 };
 
-fn acquireLlvmEvalSlot() !?LlvmEvalPermit {
+fn acquireLlvmEvalSlot() anyerror!?LlvmEvalPermit {
     for (0..llvm_eval_slot_count) |slot| {
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const path = try llvmEvalSlotLockPath(&path_buf, slot);
@@ -534,7 +535,7 @@ fn acquireLlvmEvalSlot() !?LlvmEvalPermit {
     return null;
 }
 
-fn openLlvmEvalLockFile(path: []const u8) !std.Io.File {
+fn openLlvmEvalLockFile(path: []const u8) anyerror!std.Io.File {
     return std.Io.Dir.createFileAbsolute(app_io, path, .{
         .read = true,
         .truncate = false,
@@ -548,11 +549,11 @@ fn llvmEvalLockPrefix() []const u8 {
         "/tmp/roc_eval_llvm_";
 }
 
-fn llvmEvalSlotLockPath(buf: *[std.fs.max_path_bytes]u8, slot: usize) ![]const u8 {
+fn llvmEvalSlotLockPath(buf: *[std.fs.max_path_bytes]u8, slot: usize) error{NoSpaceLeft}![]const u8 {
     return std.fmt.bufPrint(buf, "{s}slot_{d}.lock", .{ llvmEvalLockPrefix(), slot });
 }
 
-fn llvmEvalQueueLockPath(buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
+fn llvmEvalQueueLockPath(buf: *[std.fs.max_path_bytes]u8) error{NoSpaceLeft}![]const u8 {
     return std.fmt.bufPrint(buf, "{s}queue.lock", .{llvmEvalLockPrefix()});
 }
 
@@ -566,7 +567,7 @@ fn runBackendEval(
     eval_fn: BackendEvalFn,
     lowered: *const LoweredProgram,
     timeout_ms: u64,
-) !ForkResult {
+) anyerror!ForkResult {
     if (index == LLVM_BACKEND_INDEX) {
         var permit = try LlvmEvalPermit.acquire();
         defer permit.release();
@@ -841,7 +842,7 @@ fn backendTimeoutBudgetMs(index: usize, standard_deadline: ?*Deadline) u64 {
     return remainingBackendBudgetMs(standard_deadline);
 }
 
-fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, deadline: ?*Deadline) !TestOutcome {
+fn runSingleTestInner(allocator: std.mem.Allocator, tc: TestCase, deadline: ?*Deadline) anyerror!TestOutcome {
     return switch (tc.expected) {
         .inspect_str => runInspectTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline),
         .allocations_at_most => |expected| runAllocationTest(allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
@@ -858,7 +859,7 @@ fn runAllocationTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.AllocationExpectation,
     skip: TestCase.Skip,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var compiled = try helpers.compileProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
@@ -992,7 +993,7 @@ fn runInspectTest(
     expected: TestCase.Expected,
     skip: TestCase.Skip,
     deadline: ?*Deadline,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
@@ -1121,7 +1122,7 @@ fn runTestProblem(
     source_kind: helpers.SourceKind,
     src: []const u8,
     imports: []const helpers.ModuleSource,
-) !TestOutcome {
+) Allocator.Error!TestOutcome {
     var timer = Timer.start() catch unreachable;
     var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
         // Parse or canonicalize error means a problem was found — that's a pass.
@@ -1170,7 +1171,7 @@ fn runCrashTest(
     skip: TestCase.Skip,
     require_problems: bool,
     deadline: ?*Deadline,
-) !TestOutcome {
+) anyerror!TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, app_io, source_kind, src, imports);
     defer compiled.deinit(allocator);
 
@@ -1350,7 +1351,7 @@ fn serializeOutcomeToBuffer(
     gpa: std.mem.Allocator,
     outcome: TestOutcome,
     duration_ns: u64,
-) !void {
+) Allocator.Error!void {
     var header: WireHeader = .{
         .status = @intFromEnum(outcome.status),
         .backend_statuses = undefined,
@@ -1492,7 +1493,7 @@ fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
 /// per-worker; we strip any pre-existing instance so we don't double-add).
-fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
     // std.fs.selfExePath was removed in Zig 0.16; use std.process.executablePathAlloc instead.
     const self_path = try std.process.executablePathAlloc(io, arena);
 
@@ -1698,6 +1699,36 @@ fn collectTests() []const TestCase {
     return &eval_tests.tests;
 }
 
+const WeightedEvalTest = struct {
+    original_i: usize,
+    weight: u64,
+    test_case: TestCase,
+};
+
+fn sortEvalTests(allocator: std.mem.Allocator, tests: []TestCase, weights: *const harness.TimingWeights) Allocator.Error!void {
+    const weighted = try allocator.alloc(WeightedEvalTest, tests.len);
+    defer allocator.free(weighted);
+
+    for (tests, 0..) |test_case, original_i| {
+        weighted[original_i] = .{
+            .original_i = original_i,
+            .weight = weights.weight(test_case.name, 0),
+            .test_case = test_case,
+        };
+    }
+
+    std.mem.sort(WeightedEvalTest, weighted, {}, struct {
+        fn lessThan(_: void, a: WeightedEvalTest, b: WeightedEvalTest) bool {
+            if (a.weight != b.weight) return a.weight > b.weight;
+            return a.original_i < b.original_i;
+        }
+    }.lessThan);
+
+    for (weighted, 0..) |entry, i| {
+        tests[i] = entry.test_case;
+    }
+}
+
 //
 // CLI parsing
 //
@@ -1873,7 +1904,7 @@ fn writeTimingBreakdown(t: EvalTimings) void {
 const nsToMs = harness.nsToMs;
 const computeTimingStats = harness.computeTimingStats;
 
-fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, results: []const TestResult) !void {
+fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, results: []const TestResult) Allocator.Error!void {
     // Collect per-phase timing arrays (only include tests that ran that phase, i.e. ns > 0)
     var parse_times: std.ArrayListUnmanaged(u64) = .empty;
     defer parse_times.deinit(gpa);
@@ -1940,6 +1971,23 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
     }
 }
 
+fn writeEvalTimingWeights(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    timing_path: []const u8,
+    tests: []const TestCase,
+    results: []const TestResult,
+) void {
+    var durations = gpa.alloc(u64, results.len) catch return;
+    defer gpa.free(durations);
+
+    for (results, 0..) |result, i| {
+        durations[i] = result.duration_ns;
+    }
+
+    harness.writeTimingWeights(TestCase, io, gpa, timing_path, tests, durations, getTestName);
+}
+
 //
 // Main
 //
@@ -1995,7 +2043,7 @@ fn hasPositionalArg(args: []const []const u8, target: []const u8) bool {
 }
 
 /// Entry point for the parallel eval test runner.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var trace_worker = WorkerTrace.init();
     trace_worker.stamp("main entry");
 
@@ -2055,6 +2103,12 @@ pub fn main(init: std.process.Init) !void {
         }
         return;
     }
+
+    const timing_path = try harness.defaultTimingPath(args_arena.allocator(), "eval");
+    var timing_weights = harness.TimingWeights.init(gpa);
+    defer timing_weights.deinit();
+    timing_weights.load(io, timing_path);
+    try sortEvalTests(gpa, tests, &timing_weights);
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
     const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
@@ -2221,6 +2275,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const wall_elapsed = wall_timer.read();
+
+    writeEvalTimingWeights(io, gpa, timing_path, tests, results);
 
     var passed: usize = 0;
     var failed: usize = 0;

@@ -170,7 +170,7 @@ export fn compileAndRun(source_ptr: [*]const u8, source_len: usize) u8 {
     return result;
 }
 
-fn compileAndRunInner(source: []const u8) !u8 {
+fn compileAndRunInner(source: []const u8) anyerror!u8 {
     fba.reset();
     allocator = fba.allocator();
 

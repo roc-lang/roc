@@ -5,6 +5,7 @@
 //! lambdas that run the matching low-level operation before checking begins.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("CIR.zig");
@@ -25,7 +26,7 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
 }
 
 /// Replaces Builtin.roc annotation-only primitive declarations with low-level operation lambdas.
-pub fn apply(env: *ModuleEnv) !void {
+pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
     var new_def_indices = try replaceProvidedByCompilerLowLevels(env);
     defer new_def_indices.deinit(env.gpa);
 
@@ -102,7 +103,7 @@ fn putLowLevelFmt(
 /// lowering can recognize them generically instead of carrying per-builtin
 /// exceptions.
 /// Returns a list of new def indices created.
-fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
+fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!std.ArrayList(CIR.Def.Idx) {
     const gpa = env.gpa;
     var new_def_indices = std.ArrayList(CIR.Def.Idx).empty;
 
@@ -114,7 +115,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         // Fill the gap with fresh type variables
         var i: u64 = current_types;
         while (i < current_nodes) : (i += 1) {
-            _ = env.types.fresh() catch unreachable;
+            _ = try env.types.fresh();
         }
     }
 
@@ -373,25 +374,25 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) !std.ArrayList(CIR.Def.Id
         var buf: [256]u8 = undefined;
 
         // bitwise_and
-        const bitwise_and = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_and", .{num_type});
+        const bitwise_and = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_and", .{num_type}) catch unreachable;
         if (env.common.findIdent(bitwise_and)) |ident| {
             try low_level_map.put(ident, .num_bitwise_and);
         }
 
         // bitwise_or
-        const bitwise_or = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_or", .{num_type});
+        const bitwise_or = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_or", .{num_type}) catch unreachable;
         if (env.common.findIdent(bitwise_or)) |ident| {
             try low_level_map.put(ident, .num_bitwise_or);
         }
 
         // bitwise_xor
-        const bitwise_xor = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_xor", .{num_type});
+        const bitwise_xor = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_xor", .{num_type}) catch unreachable;
         if (env.common.findIdent(bitwise_xor)) |ident| {
             try low_level_map.put(ident, .num_bitwise_xor);
         }
 
         // bitwise_not
-        const bitwise_not = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_not", .{num_type});
+        const bitwise_not = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_not", .{num_type}) catch unreachable;
         if (env.common.findIdent(bitwise_not)) |ident| {
             try low_level_map.put(ident, .num_bitwise_not);
         }

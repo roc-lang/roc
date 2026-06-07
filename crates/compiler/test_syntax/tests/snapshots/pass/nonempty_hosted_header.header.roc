@@ -1,3 +1,0 @@
-hosted [Stuff, Things,
-    somethingElse,
-]

@@ -70,7 +70,7 @@ const run_configs = [_]RunConfig{
 
 // Spec generation
 
-fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) ![]const CliTestSpec {
+fn buildTestSpecs(allocator: Allocator, filters: []const []const u8) anyerror![]CliTestSpec {
     var specs: std.ArrayListUnmanaged(CliTestSpec) = .empty;
 
     for (&run_configs) |cfg| {
@@ -134,7 +134,7 @@ fn skipIoSpecOnHost(spec: @import("fx_test_specs.zig").TestSpec) bool {
     return spec.skip_on_windows and builtin.os.tag == .windows;
 }
 
-fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8) ![]const u8 {
+fn fmtTestName(allocator: Allocator, roc_file: []const u8, backend: ?[]const u8) anyerror![]const u8 {
     if (backend) |b| {
         return std.fmt.allocPrint(allocator, "{s} [{s}]", .{ roc_file, b });
     }
@@ -148,6 +148,21 @@ fn matchesFilters(name: []const u8, roc_file: []const u8, filters: []const []con
         if (std.mem.find(u8, roc_file, f) != null) return true;
     }
     return false;
+}
+
+const CliSortContext = struct {
+    weights: *const harness.TimingWeights,
+};
+
+fn sortCliTests(tests: []CliTestSpec, weights: *const harness.TimingWeights) void {
+    std.mem.sort(CliTestSpec, tests, CliSortContext{ .weights = weights }, struct {
+        fn lessThan(ctx: CliSortContext, a: CliTestSpec, b: CliTestSpec) bool {
+            const a_weight = ctx.weights.weight(a.name, 0);
+            const b_weight = ctx.weights.weight(b.name, 0);
+            if (a_weight != b_weight) return a_weight > b_weight;
+            return a.id < b.id;
+        }
+    }.lessThan);
 }
 
 // Wire protocol (child -> parent via pipe)
@@ -264,14 +279,14 @@ fn currentProcessIdForFilename() u64 {
     return @intCast(std.c.getpid());
 }
 
-fn deleteIfExists(path: []const u8) !void {
+fn deleteIfExists(path: []const u8) anyerror!void {
     std.Io.Dir.cwd().deleteFile(std.Options.debug_io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
 }
 
-fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) !void {
+fn deleteOutputArtifacts(allocator: Allocator, output_name: []const u8) anyerror!void {
     try deleteIfExists(output_name);
 
     if (comptime builtin.os.tag == .windows) {
@@ -294,7 +309,7 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
 
     const cache_dirs = util.createIsolatedTestCacheDirs(allocator) catch
         return .{ .status = .crash, .message = "failed to create cache dirs" };
-    defer cache_dirs.deinit(allocator);
+    defer cache_dirs.cleanupAndDeinit(allocator);
 
     const pid = currentProcessIdForFilename();
     const output_name = std.fmt.allocPrint(allocator, "./.test_output_{d}_{d}", .{ pid, spec.id }) catch
@@ -305,18 +320,13 @@ fn runSingleTest(allocator: Allocator, spec: CliTestSpec, _: u64) TestResult {
     };
     defer cleanupOutputArtifacts(allocator, output_name);
 
-    // In Zig 0.16, Environ.Block is GlobalBlock on Windows (PEB-backed) vs PosixBlock on POSIX.
-    const environ: std.process.Environ = if (@import("builtin").os.tag == .windows) .{
-        .block = .global,
-    } else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    var env_map = environ.createMap(allocator) catch
+    var env_map = util.buildProcessEnvMap(allocator, null) catch
         return .{ .status = .crash, .message = "failed to get env" };
     defer env_map.deinit();
     env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir) catch
         return .{ .status = .crash, .message = "failed to set roc cache env" };
+    env_map.put("XDG_CACHE_HOME", cache_dirs.roc_cache_dir) catch
+        return .{ .status = .crash, .message = "failed to set xdg cache env" };
     env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir) catch
         return .{ .status = .crash, .message = "failed to set env" };
 
@@ -438,7 +448,7 @@ fn hasMemoryErrors(stderr: []const u8) ?[]const u8 {
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
 /// duplication when the harness appends `--worker <idx>` per spawn).
-fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) ![]const []const u8 {
+fn buildCliWorkerArgvTemplate(arena: Allocator, process_args: std.process.Args) anyerror![]const []const u8 {
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path_len = try std.process.executablePath(std.Options.debug_io, &self_path_buf);
     const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
@@ -579,6 +589,23 @@ fn printResults(
     harness.printSlowestN(CliTestSpec, tests, duration_arr, 5, gpa, getTestName);
 }
 
+fn writeCliTimingWeights(
+    io: std.Io,
+    gpa: Allocator,
+    timing_path: []const u8,
+    tests: []const CliTestSpec,
+    results: []const TestResult,
+) void {
+    var durations = gpa.alloc(u64, results.len) catch return;
+    defer gpa.free(durations);
+
+    for (results, 0..) |result, i| {
+        durations[i] = result.duration_ns;
+    }
+
+    harness.writeTimingWeights(CliTestSpec, io, gpa, timing_path, tests, durations, getTestName);
+}
+
 fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
     const data = capture orelse return;
     if (data.len == 0) return;
@@ -618,7 +645,7 @@ fn printUsage() void {
 }
 
 /// Entry point for the parallel CLI test runner.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     // Initialize the debug IO with a real allocator so std.Options.debug_io
     // can spawn processes, create directories, delete files, etc.
     debug_threaded_io_instance = .init(init.gpa, .{
@@ -650,6 +677,12 @@ pub fn main(init: std.process.Init) !void {
 
     const tests = try buildTestSpecs(spec_arena.allocator(), args.filters);
     if (tests.len == 0) return;
+
+    const timing_path = try harness.defaultTimingPath(spec_arena.allocator(), "cli");
+    var timing_weights = harness.TimingWeights.init(gpa);
+    defer timing_weights.deinit();
+    timing_weights.load(init.io, timing_path);
+    sortCliTests(tests, &timing_weights);
 
     // Worker mode: parent spawned us with `--worker <idx>` to run a single
     // test and serialize the result to stdout. Used on Windows where the
@@ -716,6 +749,7 @@ pub fn main(init: std.process.Init) !void {
     Pool.run(init.io, tests, results, max_children, args.timeout_ms, gpa, worker_argv_template);
     const wall_ns = wall_timer.read();
 
+    writeCliTimingWeights(init.io, gpa, timing_path, tests, results);
     printResults(tests, results, args.verbose, gpa, wall_ns, max_children);
 
     for (results) |r| {

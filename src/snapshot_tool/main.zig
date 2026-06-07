@@ -109,7 +109,7 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
 }
 
-fn getTempRoot(allocator: Allocator) ![]u8 {
+fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailable})![]u8 {
     const names: []const [:0]const u8 = if (comptime @import("builtin").os.tag == .windows)
         &.{ "TEMP", "TMP" }
     else
@@ -125,7 +125,7 @@ fn getTempRoot(allocator: Allocator) ![]u8 {
     return error.TempDirUnavailable;
 }
 
-fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) ![]u8 {
+fn makeSnapshotTempDir(allocator: Allocator, prefix: []const u8, output_path: []const u8) anyerror![]u8 {
     const temp_root = try getTempRoot(allocator);
     defer allocator.free(temp_root);
 
@@ -165,7 +165,7 @@ const ProblemEntry = struct {
     end_line: u32,
     end_col: u32,
 
-    fn format(self: ProblemEntry, writer: anytype) !void {
+    fn format(self: ProblemEntry, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
         try writer.print("{s} - {s}:{d}:{d}:{d}:{d}", .{
             self.problem_type,
             self.file,
@@ -178,7 +178,7 @@ const ProblemEntry = struct {
 };
 
 /// Parse a PROBLEMS entry to extract problem type and location
-fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_idx: usize) !?struct { entry: ?ProblemEntry, next_idx: usize } {
+fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_idx: usize) Allocator.Error!?struct { entry: ?ProblemEntry, next_idx: usize } {
     var idx = start_idx;
 
     // Skip whitespace and empty lines
@@ -392,7 +392,7 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
 }
 
 /// Parse all problems from PROBLEMS section
-fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) !std.array_list.Managed(ProblemEntry) {
+fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) Allocator.Error!std.array_list.Managed(ProblemEntry) {
     var problems = std.array_list.Managed(ProblemEntry).init(allocator);
     errdefer {
         for (problems.items) |p| {
@@ -426,7 +426,7 @@ fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) !std.
 }
 
 /// Generate EXPECTED content from problems
-fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const ProblemEntry) ![]const u8 {
+fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const ProblemEntry) (Allocator.Error || error{WriteFailed})![]const u8 {
     if (problems.len == 0) {
         return try allocator.dupe(u8, "NIL");
     }
@@ -452,7 +452,7 @@ fn generateAllReports(
     solver: *Check,
     snapshot_path: []const u8,
     module_env: *ModuleEnv,
-) !std.array_list.Managed(reporting.Report) {
+) Allocator.Error!std.array_list.Managed(reporting.Report) {
     var reports = std.array_list.Managed(reporting.Report).init(allocator);
     errdefer reports.deinit();
 
@@ -485,7 +485,7 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = check.ReportBuilder.init(
+        var report_builder = try check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,
@@ -495,7 +495,7 @@ fn generateAllReports(
             empty_modules,
             &solver.import_mapping,
             &solver.regions,
-        ) catch continue;
+        );
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {
@@ -508,7 +508,7 @@ fn generateAllReports(
 }
 
 /// Render reports to PROBLEMS section format (markdown and HTML)
-fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) !void {
+fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) error{WriteFailed}!void {
     // HTML PROBLEMS section
     if (output.html_writer) |writer| {
         try writer.writer.writeAll(
@@ -548,7 +548,7 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
 }
 
 /// Render reports to EXPECTED section format (parsed problem entries)
-fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const std.array_list.Managed(reporting.Report)) ![]const u8 {
+fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const std.array_list.Managed(reporting.Report)) (Allocator.Error || error{WriteFailed})![]const u8 {
     if (reports.items.len == 0) {
         return try allocator.dupe(u8, "NIL");
     }
@@ -594,7 +594,7 @@ fn defaultSnapshotThreadCount() usize {
 }
 
 /// cli entrypoint for snapshot tool
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     app_io = init.io;
 
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
@@ -802,7 +802,7 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn checkSnapshotExpectations(gpa: Allocator) !bool {
+fn checkSnapshotExpectations(gpa: Allocator) anyerror!bool {
     // Load builtin modules using the same code path as roc check
     const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
     defer gpa.destroy(builtin_modules_ptr);
@@ -856,7 +856,7 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
     return .file; // unreachable if isMultiFileSnapshot was checked first
 }
 
-fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) !bool {
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: *const Config) anyerror!bool {
     var success: bool = true;
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
@@ -989,7 +989,7 @@ fn processSnapshotContent(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) !bool {
+) anyerror!bool {
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
@@ -1202,7 +1202,7 @@ fn processSnapshotContent(
             try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
         }
         can_ir.imports.clearResolvedModules();
-        can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+        try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
         can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
         var checker = try Check.init(
@@ -1258,7 +1258,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
             can_ir.imports.clearResolvedModules();
-            can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
+            try can_ir.imports.resolveImportsByExactModuleName(can_ir, builtin_modules.items);
             can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
             var checker = try Check.init(
@@ -1423,7 +1423,7 @@ fn processRocFileAsSnapshotWithExpected(
     meta: Meta,
     expected_content: ?[]const u8,
     config: *const Config,
-) !bool {
+) anyerror!bool {
     // Create content structure
     const content = Content{
         .meta = meta,
@@ -1504,7 +1504,7 @@ fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usiz
 }
 
 /// Stage 2: Process work items in parallel using the parallel utility
-fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: *const Config) !ProcessResult {
+fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, debug: bool, config: *const Config) std.Thread.SpawnError!ProcessResult {
     if (work_list.items.len == 0) {
         return ProcessResult{ .success = 0, .failed = 0 };
     }
@@ -1538,7 +1538,7 @@ fn processWorkItems(gpa: Allocator, work_list: WorkList, max_threads: usize, deb
 }
 
 /// Stage 1: Walk directory tree and collect work items
-fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !void {
+fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) (Allocator.Error || std.Io.Dir.Iterator.Error)!void {
     const canonical_path = realPathFileAllocSafe(app_io, path, gpa) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return;
@@ -1716,7 +1716,7 @@ pub const NodeType = enum {
     pub const DEV_OBJECT = "dev_object";
     pub const DOCS_TYPE = "docs";
 
-    fn fromString(str: []const u8) !NodeType {
+    fn fromString(str: []const u8) Error!NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
         if (std.mem.eql(u8, str, EXPR)) return .expr;
         if (std.mem.eql(u8, str, STMT)) return .statement;
@@ -1804,7 +1804,7 @@ const Meta = struct {
         };
     }
 
-    fn format(self: Meta, writer: anytype) !void {
+    fn format(self: Meta, writer: anytype) error{WriteFailed}!void {
         try writer.writeAll(DESC_START);
         try writer.writeAll(self.description);
         try writer.writeAll("\n");
@@ -1974,7 +1974,7 @@ pub const DualOutput = struct {
         };
     }
 
-    fn begin_section(self: *DualOutput, name: []const u8) !void {
+    fn begin_section(self: *DualOutput, name: []const u8) error{WriteFailed}!void {
         try self.md_writer.writer.print("# {s}\n", .{name});
         if (self.html_writer) |writer| {
             try writer.writer.print(
@@ -1984,7 +1984,7 @@ pub const DualOutput = struct {
         }
     }
 
-    fn end_section(self: *DualOutput) !void {
+    fn end_section(self: *DualOutput) error{WriteFailed}!void {
         if (self.html_writer) |writer| {
             try writer.writer.writeAll(
                 \\            </div>
@@ -1993,17 +1993,17 @@ pub const DualOutput = struct {
         }
     }
 
-    fn begin_code_block(self: *DualOutput, language: []const u8) !void {
+    fn begin_code_block(self: *DualOutput, language: []const u8) error{WriteFailed}!void {
         try self.md_writer.writer.print("~~~{s}\n", .{language});
     }
 
-    fn end_code_block(self: *DualOutput) !void {
+    fn end_code_block(self: *DualOutput) error{WriteFailed}!void {
         try self.md_writer.writer.writeAll("~~~\n");
     }
 };
 
 /// Helper function to escape HTML characters
-fn escapeHtmlChar(writer: anytype, char: u8) !void {
+fn escapeHtmlChar(writer: anytype, char: u8) error{WriteFailed}!void {
     switch (char) {
         '<' => try writer.writeAll("&lt;"),
         '>' => try writer.writeAll("&gt;"),
@@ -2015,7 +2015,7 @@ fn escapeHtmlChar(writer: anytype, char: u8) !void {
 }
 
 /// Generate META section for both markdown and HTML
-fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
+fn generateMetaSection(output: *DualOutput, content: *const Content) error{WriteFailed}!void {
     try output.begin_section("META");
     try output.begin_code_block("ini");
     try content.meta.format(&output.md_writer.writer);
@@ -2042,7 +2042,7 @@ fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
 }
 
 /// Generate SOURCE section for both markdown and HTML
-fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
+fn generateSourceSection(output: *DualOutput, content: *const Content) error{WriteFailed}!void {
     try output.begin_section("SOURCE");
     try output.begin_code_block("roc");
     try output.md_writer.writer.writeAll(content.source);
@@ -2090,7 +2090,7 @@ fn generateExpectedSection(
     content: *const Content,
     reports: *const std.array_list.Managed(reporting.Report),
     config: *const Config,
-) !bool {
+) (Allocator.Error || error{WriteFailed})!bool {
     try output.begin_section("EXPECTED");
     var success = true;
 
@@ -2175,14 +2175,14 @@ fn generateExpectedSection(
 }
 
 /// Generate PROBLEMS section for both markdown and HTML using shared report generation
-fn generateProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) !void {
+fn generateProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) error{WriteFailed}!void {
     try output.begin_section("PROBLEMS");
     try renderReportsToProblemsSection(output, reports);
     try output.end_section();
 }
 
 /// Generate TOKENS section for both markdown and HTML
-pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv, linecol_mode: LineColMode) !void {
+pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
@@ -2263,7 +2263,7 @@ fn source_contains_newline_in_range(source: []const u8, start: usize, end: usize
 }
 
 /// Generate PARSE2 section using SExprTree for both markdown and HTML
-fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv, linecol_mode: LineColMode) !void {
+fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast: *AST, env: *CommonEnv, linecol_mode: LineColMode) (Allocator.Error || error{ WriteFailed, ErrFinalizingHTMLWriter })!void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
 
@@ -2340,7 +2340,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
 }
 
 /// Generate FORMATTED section for both markdown and HTML
-fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
+fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_ast: *AST) anyerror!void {
     var formatted: std.Io.Writer.Allocating = .init(output.gpa);
     defer formatted.deinit();
 
@@ -2411,7 +2411,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) !void {
+fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) (Allocator.Error || error{ WriteFailed, ErrFinalizingHTMLWriter })!void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushToSExprTree(maybe_expr_idx, &tree);
@@ -2438,7 +2438,7 @@ fn generateCanonicalizeSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_ex
 }
 
 /// Generate TYPES section for both markdown and HTML
-fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) !void {
+fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx, linecol_mode: LineColMode) (Allocator.Error || error{ WriteFailed, ErrFinalizingHTMLWriter })!void {
     var tree = SExprTree.init(output.gpa);
     defer tree.deinit();
     try can_ir.pushTypesToSExprTree(maybe_expr_idx, &tree);
@@ -2469,7 +2469,7 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 fn computeTransformedExprType(
     can_ir: *ModuleEnv,
     expr_idx: CIR.Expr.Idx,
-) !types.Var {
+) Allocator.Error!types.Var {
     const expr_var = ModuleEnv.varFrom(expr_idx);
 
     // Ensure type var exists for this expression
@@ -2634,7 +2634,7 @@ fn computeTransformedExprType(
 /// Get the defaulted (monomorphized) type string for an expression.
 /// This defaults flex vars with from_numeral constraint to Dec.
 /// Uses a seen set for cycle detection.
-fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
+fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) (Allocator.Error || error{WriteFailed})![]const u8 {
     var seen = std.ArrayList(types.Var).empty;
     defer seen.deinit(allocator);
     return getDefaultedTypeStringWithSeen(allocator, can_ir, type_var, &seen, true);
@@ -2646,7 +2646,7 @@ fn getDefaultedTypeStringWithSeen(
     type_var: types.Var,
     seen: *std.ArrayList(types.Var),
     is_top_level: bool,
-) ![]const u8 {
+) (Allocator.Error || error{WriteFailed})![]const u8 {
     const resolved = can_ir.types.resolveVar(type_var);
 
     // Check for cycle - use "_" (type wildcard) for cyclic references
@@ -2809,7 +2809,7 @@ fn isTopLevelPattern(can_ir: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
 
 /// Get the monomorphized type string for an expression.
 /// For closures, this includes capture types as leading function arguments.
-fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx: CIR.Expr.Idx) ![]const u8 {
+fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
     const expr = can_ir.store.getExpr(expr_idx);
 
     // For blocks, get the type of the final expression (what the block evaluates to)
@@ -3022,7 +3022,10 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
 
     const imported_modules: []const *const ModuleEnv = &.{builtin_env};
     validation_env.imports.clearResolvedModules();
-    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules);
+    validation_env.imports.resolveImportsByExactModuleName(&validation_env, imported_modules) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to resolve imports: {}", .{ source_path, err });
+        return false;
+    };
     validation_env.imports.markUnresolvedImportsFailedBeforeChecking();
 
     var checker = Check.init(
@@ -3088,7 +3091,7 @@ fn validateMonoFormatting(allocator: Allocator, mono_source: []const u8, source_
 }
 
 /// Parse Roc source and return formatted output.
-fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
+fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) anyerror![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
@@ -3141,7 +3144,7 @@ fn isIdentReferencedIn(name: []const u8, text: []const u8) bool {
 }
 
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) (Allocator.Error || error{ WriteFailed, NoSpaceLeft, MonoValidationFailed, MonoFormattingFailed })!void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3268,7 +3271,7 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
 }
 
 /// Generate HTML document structure and JavaScript
-fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
+fn generateHtmlWrapper(output: *DualOutput, content: *const Content) error{WriteFailed}!void {
     const writer = output.html_writer orelse return;
 
     // Write HTML document structure
@@ -3326,7 +3329,7 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
 }
 
 /// Generate HTML closing tags and JavaScript
-fn generateHtmlClosing(output: *DualOutput) !void {
+fn generateHtmlClosing(output: *DualOutput) error{WriteFailed}!void {
     const writer = output.html_writer orelse return;
 
     // Close data sections container and add JavaScript
@@ -3346,7 +3349,7 @@ fn generateHtmlClosing(output: *DualOutput) !void {
 }
 
 /// Write HTML buffer to file
-fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) !void {
+fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) (Allocator.Error || error{WriteFailed})!void {
     // Convert .md path to .html path
     const html_path = blk: {
         if (std.mem.endsWith(u8, snapshot_path, ".md")) {
@@ -3373,7 +3376,7 @@ fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.Ar
 }
 
 /// New unified processSnapshotFile function that generates both markdown and HTML simultaneously
-fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
+fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config: *const Config) (Allocator.Error || Error || error{WriteFailed})!bool {
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
 
@@ -3453,7 +3456,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 }
 
 /// Write a single source to the fuzz corpus with a random filename
-fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: std.Random) !void {
+fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: std.Random) (Allocator.Error || error{WriteFailed})!void {
     const rand_file_name = [_][]const u8{
         path,
         &[_]u8{
@@ -3488,12 +3491,12 @@ fn writeCorpusFile(gpa: Allocator, path: []const u8, source: []const u8, rng: st
     try writer.flush();
 }
 
-fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, config: *const Config) !bool {
+fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, config: *const Config) (Allocator.Error || Error || error{WriteFailed})!bool {
     return processSnapshotFileUnified(gpa, snapshot_path, config);
 }
 
 /// Extracts the sections from a snapshot file
-pub fn extractSections(gpa: Allocator, content: []const u8) !Content {
+pub fn extractSections(gpa: Allocator, content: []const u8) (Allocator.Error || Error)!Content {
     var ranges = std.AutoHashMap(Section, Section.Range).init(gpa);
     defer ranges.deinit();
 
@@ -3571,7 +3574,7 @@ fn processDocsSnapshot(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) !bool {
+) anyerror!bool {
     log("Processing docs snapshot: {s}", .{output_path});
 
     // 1. Parse multi-file source
@@ -3656,10 +3659,12 @@ fn processDocsSnapshot(
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
+        errdefer mod_docs.deinit(allocator);
         // Override the module name with the clean name from CompiledModuleInfo
+        const clean_name = try allocator.dupe(u8, mod.name);
         allocator.free(mod_docs.name);
-        mod_docs.name = allocator.dupe(u8, mod.name) catch continue;
-        module_docs_list.append(allocator, mod_docs) catch continue;
+        mod_docs.name = clean_name;
+        try module_docs_list.append(allocator, mod_docs);
     }
 
     // Build PackageDocs
@@ -3781,7 +3786,7 @@ const SourceFile = struct {
 ///   ~~~roc
 ///   ...code...
 ///   ~~~
-fn parseMultiFileSource(allocator: Allocator, source_text: []const u8) ![]SourceFile {
+fn parseMultiFileSource(allocator: Allocator, source_text: []const u8) Allocator.Error![]SourceFile {
     var files = std.ArrayList(SourceFile).empty;
     errdefer files.deinit(allocator);
 
@@ -3923,7 +3928,7 @@ fn snapshotNativeEntrypoints(
     allocator: Allocator,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) ![]backend.Entrypoint {
+) Allocator.Error![]backend.Entrypoint {
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
@@ -4010,7 +4015,7 @@ fn processDevObjectSnapshot(
     content: Content,
     output_path: []const u8,
     config: *const Config,
-) !bool {
+) anyerror!bool {
     log("Processing dev_object snapshot: {s}", .{output_path});
 
     const source_files = try parseMultiFileSource(allocator, content.source);
@@ -4385,19 +4390,19 @@ const SnapshotReplParsedLine = struct {
     }
 };
 
-fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?SnapshotReplParsedLine {
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplParsedLine {
     const module_env = try allocator.create(ModuleEnv);
     errdefer allocator.destroy(module_env);
     module_env.* = try ModuleEnv.init(allocator, line);
     errdefer module_env.deinit();
     module_env.common.source = line;
 
-    const ast = single_module.parseSingleModule(
+    const ast = try single_module.parseSingleModule(
         allocator,
         module_env,
         .file,
         .{ .module_name = "repl" },
-    ) catch return null;
+    );
     errdefer ast.deinit();
     if (ast.hasErrors()) {
         ast.deinit();
@@ -4423,20 +4428,20 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) !?Snapsho
     };
 }
 
-fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) !?AST.Statement {
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) parse.Parser.Error!?AST.Statement {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch return null;
+    const ast = try parse.parseStatement(allocator, &env.common);
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
     return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
 }
 
-fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) !?SnapshotReplInputKind {
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplInputKind {
     var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
     const statement = if (maybe_file_parse) |*parsed| blk: {
         defer parsed.deinit();
@@ -4475,7 +4480,7 @@ fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) !?Snapsh
     };
 }
 
-fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) !?SnapshotReplDefinitionIdentity {
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplDefinitionIdentity {
     var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
     defer parsed.deinit();
 
@@ -4510,7 +4515,7 @@ fn writeSnapshotReplDefinitionsWithReplacement(
     session: *const SnapshotReplSession,
     replacement: ?SnapshotReplDefinitionIdentity,
     replacement_source: ?[]const u8,
-) !void {
+) error{WriteFailed}!void {
     var replaced = false;
     for (session.definitions.items) |definition| {
         if (replacement) |identity| {
@@ -4539,7 +4544,7 @@ fn buildSnapshotReplModuleSource(
     session: *const SnapshotReplSession,
     replacement: ?SnapshotReplDefinitionIdentity,
     replacement_source: ?[]const u8,
-) ![]u8 {
+) (Allocator.Error || error{WriteFailed})![]u8 {
     var source_writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer source_writer.deinit();
 
@@ -4553,7 +4558,7 @@ fn compileSnapshotReplInspectedModule(
     allocator: Allocator,
     source: []const u8,
     config: *const Config,
-) !eval_mod.test_helpers.CompiledProgram {
+) anyerror!eval_mod.test_helpers.CompiledProgram {
     if (config.builtin_modules_ref) |bm| {
         return eval_mod.test_helpers.compileInspectedProgramWithBuiltin(
             allocator,
@@ -4571,7 +4576,7 @@ fn compileSnapshotReplInspectedModule(
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});
 }
 
-fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) !eval_mod.test_helpers.CompiledProgram {
+fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) anyerror!eval_mod.test_helpers.CompiledProgram {
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .expr, source, &.{});
 }
 
@@ -4580,7 +4585,7 @@ fn renderSnapshotReplTypeProblems(
     source_kind: eval_mod.test_helpers.SourceKind,
     source: []const u8,
     config: *const Config,
-) ![]const u8 {
+) anyerror![]const u8 {
     const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
     var module_env = try single_module.ModuleEnv.init(allocator, source);
@@ -4657,7 +4662,7 @@ fn renderSnapshotReplTypeProblems(
     try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
 
     can_ir.imports.clearResolvedModules();
-    can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
+    try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
     can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
 
     var checker = try Check.init(
@@ -4726,7 +4731,7 @@ fn snapshotReplDefinitionStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
-) ![]const u8 {
+) anyerror![]const u8 {
     const maybe_identity = try snapshotReplDefinitionIdentity(allocator, input);
     const identity = maybe_identity orelse
         return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
@@ -4775,7 +4780,7 @@ fn compileAndEvaluateSnapshotReplExpr(
     allocator: Allocator,
     input: []const u8,
     config: *const Config,
-) ![]const u8 {
+) anyerror![]const u8 {
     var expr_compiled = compileSnapshotReplInspectedExpr(allocator, input) catch |expr_err| {
         return switch (expr_err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
@@ -4795,7 +4800,7 @@ fn snapshotReplExpressionStep(
     input: []const u8,
     config: *const Config,
     statement_body: bool,
-) ![]const u8 {
+) anyerror![]const u8 {
     const main_source = if (statement_body)
         try std.fmt.allocPrint(allocator, "main = {{\n    {s}\n}}", .{input})
     else
@@ -4855,7 +4860,7 @@ fn snapshotReplStep(
     session: *SnapshotReplSession,
     input: []const u8,
     config: *const Config,
-) ![]const u8 {
+) anyerror![]const u8 {
     const trimmed = std.mem.trim(u8, input, " \t\r\n");
     if (trimmed.len == 0) return try allocator.dupe(u8, "Parse error: UNEXPECTED TOKEN");
 
@@ -4870,7 +4875,7 @@ fn snapshotReplStep(
     };
 }
 
-fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) !bool {
+fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []const u8, config: *const Config) anyerror!bool {
     if (gpa_poisoned) return false;
 
     var success = true;
@@ -4918,7 +4923,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
     return success;
 }
 
-fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) !bool {
+fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, content: *const Content, config: *const Config) anyerror!bool {
     if (gpa_poisoned) return false;
 
     var success = true;
@@ -5055,7 +5060,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     return success;
 }
 
-fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
+fn generateReplProblemsSection(output: *DualOutput, _: *const Content) error{WriteFailed}!void {
     try output.begin_section("PROBLEMS");
     try output.md_writer.writer.writeAll("NIL\n");
 
@@ -5124,7 +5129,7 @@ fn searchDirectoryForBuiltin(
     dir: *std.Io.Dir,
     relative_path: []const u8,
     files_with_builtin: *std.array_list.Managed([]const u8),
-) !void {
+) anyerror!void {
     var iter = dir.iterate();
     while (try iter.next(std.testing.io)) |entry| {
         const full_path = if (relative_path.len > 0)
