@@ -3928,377 +3928,362 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 unreachable;
             },
         },
-        .expr_prefix => switch (dispatch_token) {
-            .UpperIdent,
-            => {
-                const start = self.pos;
-                const qual_result = try self.readQualificationChain();
-                self.pos = qual_result.final_token + 1;
-                const expr = if (qual_result.is_upper)
-                    try self.store.addExpr(.{ .tag = .{
-                        .token = qual_result.final_token,
-                        .qualifiers = qual_result.qualifiers,
-                        .region = .{ .start = start, .end = self.pos },
-                    } })
-                else
-                    try self.store.addExpr(.{ .ident = .{
-                        .token = qual_result.final_token,
-                        .qualifiers = qual_result.qualifiers,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .LowerIdent,
-            .NamedUnderscore,
-            => {
-                const start = self.pos;
-                self.advance();
-                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                const expr = try self.store.addExpr(.{ .ident = .{
-                    .token = start,
-                    .qualifiers = empty_qualifiers,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .Int,
-            => {
-                const start = self.pos;
-                self.advance();
-                const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
-                const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+        .expr_prefix => {
+            const tok = dispatch_token;
+            const tok_int = @intFromEnum(tok);
 
-                if (self.peek() == .NoSpaceDotInt) {
-                    last_expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
-                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = last_expr.? };
+            if (tok_int < @intFromEnum(Token.Tag.UpperIdent)) {
+                if (tok == .EndOfFile) {
+                    const start = self.pos;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_suffix;
                 }
+                if (tok == .Float) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
-                const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
-                    try self.store.addExpr(.{ .typed_int = .{
+                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                        try self.store.addExpr(.{ .typed_frac = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = deprecated_region,
+                        } })
+                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                            break :blk malformed;
+                        };
+                        break :blk try self.store.addExpr(.{ .typed_frac = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    } else try self.store.addExpr(.{ .frac = .{
                         .token = start,
-                        .type_ident = type_ident,
                         .literal = literal,
                         .region = deprecated_region,
-                    } })
-                else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                    const type_token = self.pos;
-                    self.advance();
-                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                        const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                        break :blk malformed;
-                    };
-                    break :blk try self.store.addExpr(.{ .typed_int = .{
-                        .token = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
-                        .region = .{ .start = start, .end = self.pos },
                     } });
-                } else try self.store.addExpr(.{ .int = .{
-                    .token = start,
-                    .literal = literal,
-                    .region = deprecated_region,
-                } });
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .Float,
-            => {
-                const start = self.pos;
-                self.advance();
-                const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
-                const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-
-                const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
-                    try self.store.addExpr(.{ .typed_frac = .{
-                        .token = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
-                        .region = deprecated_region,
-                    } })
-                else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                    const type_token = self.pos;
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
+                if (tok == .StringStart or tok == .MultilineStringStart) {
+                    const start = self.pos;
+                    const multiline = self.peek() == .MultilineStringStart;
                     self.advance();
-                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                        const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                        break :blk malformed;
-                    };
-                    break :blk try self.store.addExpr(.{ .typed_frac = .{
-                        .token = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                } else try self.store.addExpr(.{ .frac = .{
-                    .token = start,
-                    .literal = literal,
-                    .region = deprecated_region,
-                } });
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .SingleQuote,
-            => {
-                const start = self.pos;
-                self.advance();
-                const expr = try self.store.addExpr(.{ .single_quote = .{
-                    .token = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .StringStart,
-            .MultilineStringStart,
-            => {
-                const start = self.pos;
-                const multiline = self.peek() == .MultilineStringStart;
-                self.advance();
-                expr_string_state = .{
-                    .start = start,
-                    .min_bp = expr_state.min_bp,
-                    .scratch_top = self.store.scratchExprTop(),
-                    .multiline = multiline,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_string_next;
-            },
-            .OpenSquare,
-            => {
-                const start = self.pos;
-                self.advance();
-                try expr_collections.enter(open_allocator, .{
-                    .start = start,
-                    .min_bp = expr_state.min_bp,
-                    .scratch_top = self.store.scratchExprTop(),
-                    .end_token = .CloseSquare,
-                    .result = .list,
-                    .close_error = .expected_expr_close_square_or_comma,
-                });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_collection_next;
-            },
-            .NoSpaceOpenRound,
-            .OpenRound,
-            => {
-                const start = self.pos;
-                self.advance();
-                try expr_collections.enter(open_allocator, .{
-                    .start = start,
-                    .min_bp = expr_state.min_bp,
-                    .scratch_top = self.store.scratchExprTop(),
-                    .end_token = .CloseRound,
-                    .result = .tuple,
-                    .close_error = .expected_expr_close_round_or_comma,
-                });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_collection_next;
-            },
-            .TripleDot,
-            => {
-                const start = self.pos;
-                const expr = try self.store.addExpr(.{ .ellipsis = .{
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                self.advance();
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .OpUnaryMinus,
-            .OpBang,
-            => {
-                const start = self.pos;
-                const operator_token = start;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_unary, ExprAfterUnaryState, .{ .start = start, .min_bp = expr_state.min_bp, .operator = operator_token });
-                expr_state = .{ .start = self.pos, .min_bp = 100 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            .KwReturn,
-            => {
-                const start = self.pos;
-                const expr = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .EndOfFile,
-            => {
-                const start = self.pos;
-                const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
-                expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            .OpenCurly,
-            => {
-                const start = self.pos;
-                self.advance();
-
-                if (self.peek() == .CloseCurly) {
-                    expr_record_state = .{
+                    expr_string_state = .{
                         .start = start,
                         .min_bp = expr_state.min_bp,
-                        .scratch_top = self.store.scratchRecordFieldTop(),
-                        .ext = null,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .multiline = multiline,
                     };
                     dispatch_token = self.peek();
-                    continue :dispatch .expr_record_finish;
-                } else if (self.peek() == .DoubleDot) {
+                    continue :dispatch .expr_string_next;
+                }
+                if (tok == .SingleQuote) {
+                    const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_record_ext, ExprRecordExtState, .{
-                        .start = start,
-                        .min_bp = expr_state.min_bp,
-                    });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    const expr = try self.store.addExpr(.{ .single_quote = .{
+                        .token = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     dispatch_token = self.peek();
-                    continue :dispatch .expr_prefix;
-                } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
-                    var is_block = false;
-                    if (self.peekNext() == .OpColon) {
-                        var lookahead_pos = self.pos + 2;
-                        var depth: u32 = 0;
-                        while (lookahead_pos < self.tok_buf.tokens.len) {
-                            const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                            switch (tok) {
-                                .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
-                                .CloseRound, .CloseSquare, .CloseCurly => {
-                                    if (depth == 0) break;
-                                    depth -= 1;
-                                },
-                                .LowerIdent => if (depth == 0 and lookahead_pos + 1 < self.tok_buf.tokens.len and self.tok_buf.tokens.items(.tag)[lookahead_pos + 1] == .OpAssign) {
-                                    is_block = true;
-                                    break;
-                                },
-                                .EndOfFile => break,
-                                else => {},
-                            }
-                            lookahead_pos += 1;
-                        }
+                    continue :dispatch .expr_suffix;
+                }
+                if (tok == .Int) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+
+                    if (self.peek() == .NoSpaceDotInt) {
+                        last_expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
+                        expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = last_expr.? };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_suffix;
                     }
-                    if (is_block) {
+
+                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                        try self.store.addExpr(.{ .typed_int = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = deprecated_region,
+                        } })
+                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                            break :blk malformed;
+                        };
+                        break :blk try self.store.addExpr(.{ .typed_int = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    } else try self.store.addExpr(.{ .int = .{
+                        .token = start,
+                        .literal = literal,
+                        .region = deprecated_region,
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+                    const expr = if (qual_result.is_upper)
+                        try self.store.addExpr(.{ .tag = .{
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .region = .{ .start = start, .end = self.pos },
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    self.advance();
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    const expr = try self.store.addExpr(.{ .ident = .{
+                        .token = start,
+                        .qualifiers = empty_qualifiers,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    try expr_collections.enter(open_allocator, .{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .end_token = .CloseSquare,
+                        .result = .list,
+                        .close_error = .expected_expr_close_square_or_comma,
+                    });
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_collection_next;
+                }
+                if (tok == .NoSpaceOpenRound or tok == .OpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    try expr_collections.enter(open_allocator, .{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .end_token = .CloseRound,
+                        .result = .tuple,
+                        .close_error = .expected_expr_close_round_or_comma,
+                    });
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_collection_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+
+                    if (self.peek() == .CloseCurly) {
+                        expr_record_state = .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .scratch_top = self.store.scratchRecordFieldTop(),
+                            .ext = null,
+                        };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_record_finish;
+                    } else if (self.peek() == .DoubleDot) {
+                        self.advance();
+                        try open_syntax.push(open_allocator, .expr_record_ext, ExprRecordExtState, .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_prefix;
+                    } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
+                        var is_block = false;
+                        if (self.peekNext() == .OpColon) {
+                            var lookahead_pos = self.pos + 2;
+                            var depth: u32 = 0;
+                            while (lookahead_pos < self.tok_buf.tokens.len) {
+                                const lookahead_tag = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                                switch (lookahead_tag) {
+                                    .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
+                                    .CloseRound, .CloseSquare, .CloseCurly => {
+                                        if (depth == 0) break;
+                                        depth -= 1;
+                                    },
+                                    .LowerIdent => if (depth == 0 and lookahead_pos + 1 < self.tok_buf.tokens.len and self.tok_buf.tokens.items(.tag)[lookahead_pos + 1] == .OpAssign) {
+                                        is_block = true;
+                                        break;
+                                    },
+                                    .EndOfFile => break,
+                                    else => {},
+                                }
+                                lookahead_pos += 1;
+                            }
+                        }
+                        if (is_block) {
+                            expr_after_expr_state = .{ .start = start, .min_bp = expr_state.min_bp };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_block_begin_after_open;
+                        }
+                        expr_record_state = .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .scratch_top = self.store.scratchRecordFieldTop(),
+                            .ext = null,
+                        };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_record_fields_next;
+                    } else {
                         expr_after_expr_state = .{ .start = start, .min_bp = expr_state.min_bp };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_block_begin_after_open;
                     }
-                    expr_record_state = .{
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+                if (tok == .TripleDot) {
+                    const start = self.pos;
+                    const expr = try self.store.addExpr(.{ .ellipsis = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    self.advance();
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
+                if (tok == .OpUnaryMinus or tok == .OpBang) {
+                    const start = self.pos;
+                    const operator_token = start;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .expr_unary, ExprAfterUnaryState, .{ .start = start, .min_bp = expr_state.min_bp, .operator = operator_token });
+                    expr_state = .{ .start = self.pos, .min_bp = 100 };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_prefix;
+                }
+                if (tok == .OpBar) {
+                    const start = self.pos;
+                    self.advance();
+                    expr_lambda_args_state = .{
                         .start = start,
                         .min_bp = expr_state.min_bp,
-                        .scratch_top = self.store.scratchRecordFieldTop(),
-                        .ext = null,
+                        .scratch_top = self.store.scratchPatternTop(),
                     };
                     dispatch_token = self.peek();
-                    continue :dispatch .expr_record_fields_next;
-                } else {
-                    expr_after_expr_state = .{ .start = start, .min_bp = expr_state.min_bp };
+                    continue :dispatch .expr_lambda_after_args;
+                }
+            } else {
+                if (tok == .KwReturn) {
+                    const start = self.pos;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     dispatch_token = self.peek();
-                    continue :dispatch .expr_block_begin_after_open;
+                    continue :dispatch .expr_suffix;
                 }
-            },
-            .OpBar,
-            => {
-                const start = self.pos;
-                self.advance();
-                expr_lambda_args_state = .{
-                    .start = start,
-                    .min_bp = expr_state.min_bp,
-                    .scratch_top = self.store.scratchPatternTop(),
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_lambda_after_args;
-            },
-            .KwIf,
-            => {
-                const start = self.pos;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_if, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            .KwMatch,
-            => {
-                const start = self.pos;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_match, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            .KwDbg,
-            => {
-                const start = self.pos;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_dbg, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            .KwFor,
-            => {
-                const start = self.pos;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_for_pattern, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
-                pattern_root_state = .{
-                    .outer_start = self.pos,
-                    .scratch_top = self.store.scratchPatternTop(),
-                    .alternatives = .alternatives_forbidden,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_root_next;
-            },
-            else => {
-                const unexpected = self.peek();
-                const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos);
-                switch (unexpected) {
-                    .Comma,
-                    .CloseRound,
-                    .CloseSquare,
-                    .CloseCurly,
-                    .CloseStringInterpolation,
-                    .StringEnd,
-                    .EndOfFile,
-                    .KwElse,
-                    .OpArrow,
-                    .OpFatArrow,
-                    => {
-                        expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
-                    },
-                    .OpAnd,
-                    .OpOr,
-                    .NoSpaceDotInt,
-                    .NoSpaceDotLowerIdent,
-                    .NoSpaceDotUpperIdent,
-                    .MalformedNoSpaceDotUnicodeIdent,
-                    => {
-                        if (self.peek() == .EndOfFile) {
-                            expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
-                        } else {
-                            self.advance();
-                            last_expr = expr;
-                        }
-                    },
-                    else => {
-                        expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
-                    },
+                if (tok == .KwIf) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .expr_if, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_prefix;
                 }
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
+                if (tok == .KwMatch) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .expr_match, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_prefix;
+                }
+                if (tok == .KwDbg) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .expr_dbg, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_prefix;
+                }
+                if (tok == .KwFor) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .expr_for_pattern, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_root_next;
+                }
+            }
+
+            const unexpected = self.peek();
+            const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos);
+            switch (unexpected) {
+                .Comma,
+                .CloseRound,
+                .CloseSquare,
+                .CloseCurly,
+                .CloseStringInterpolation,
+                .StringEnd,
+                .EndOfFile,
+                .KwElse,
+                .OpArrow,
+                .OpFatArrow,
+                => {
+                    expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
+                },
+                .OpAnd,
+                .OpOr,
+                .NoSpaceDotInt,
+                .NoSpaceDotLowerIdent,
+                .NoSpaceDotUpperIdent,
+                .MalformedNoSpaceDotUnicodeIdent,
+                => {
+                    if (self.peek() == .EndOfFile) {
+                        expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
+                    } else {
+                        self.advance();
+                        last_expr = expr;
+                    }
+                },
+                else => {
+                    expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
+                },
+            }
+            dispatch_token = self.peek();
+            continue :dispatch .expr_suffix;
         },
         .expr_suffix => switch (dispatch_token) {
             .NoSpaceOpenRound,
