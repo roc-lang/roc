@@ -655,7 +655,7 @@ inline fn addDeclStatement(
     return idx;
 }
 
-inline fn recordValueDecl(
+fn recordValueDecl(
     self: *Parser,
     statement_idx: AST.Statement.Idx,
     pattern_idx: AST.Pattern.Idx,
