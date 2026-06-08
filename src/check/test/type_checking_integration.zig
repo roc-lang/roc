@@ -6364,17 +6364,15 @@ test "check type - tag union - ext hints 2" {
     );
 }
 
-// Userland reproduction of the `List.join_with` / `join_list_with` situation.
+// Userland reproduction of a recursive-constraint static-dispatch method that
+// cannot self-nest.
 //
-// `List.join_with : List(item), item -> item where [item.join_with : ...]` has a
-// recursive constraint. For a list-of-lists the element `List(_)` cannot satisfy
-// that constraint with the right shape, so the compiler reroutes to a *separately
-// named* builtin `join_list_with` via a hardcoded probe
-// (Check.zig:listJoinWithListItemsMethodDef, keyed on the `join_with`/`list`
-// idents). Static dispatch has no general overload resolution and the reroute is
-// hardcoded to those builtin idents, so a userland container cannot reproduce the
-// nesting: the base case (element implements the method) type-checks, but the
-// self-nested case has no second binding to resolve to.
+// A method like `join : Vec(a), a -> a where [a.join : Vec(a), a -> a]` has a
+// recursive constraint. For a nested `Vec(Vec(_))` the element `Vec(_)` cannot
+// satisfy that constraint with the right shape, and static dispatch has no
+// general overload resolution, so there is no second binding to resolve to: the
+// base case (element implements the method) type-checks, but the self-nested
+// case has no candidate and is a type error.
 test "static dispatch - userland recursive-constraint method cannot self-nest (no general overload)" {
     const source =
         \\Leaf := [L].{
