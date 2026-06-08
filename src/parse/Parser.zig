@@ -5924,64 +5924,37 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .pattern_root_next;
             },
         },
-        .pattern_complete => switch (dispatch_token) {
-            else => {
-                const completed = last_pattern orelse unreachable;
-                if (open_syntax.peekKind()) |kind| {
-                    switch (kind) {
-                        .pattern_root => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .pattern_root_after_one;
-                        },
-                        .pattern_tag_args => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .pattern_tag_args_after_item;
-                        },
-                        .pattern_list => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .pattern_list_after_item;
-                        },
-                        .pattern_tuple => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .pattern_tuple_after_item;
-                        },
-                        .pattern_record_field => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .pattern_record_field_after_value;
-                        },
-                        .expr_lambda_args => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_lambda_after_args;
-                        },
-                        .expr_for_pattern => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_for_after_pattern;
-                        },
-                        .expr_match_pattern => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_match_branch_after_pattern;
-                        },
-                        .statement_for_pattern => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .statement_for_after_pattern;
-                        },
-                        .statement_destructure_pattern => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .statement_destructure_after_pattern;
-                        },
-                        else => {
-                            if (entry.result_kind == .pattern) {
-                                return .{ .pattern = completed };
-                            }
-                            unreachable;
-                        },
+        .pattern_complete => {
+            const completed = last_pattern orelse unreachable;
+            if (open_syntax.peekKind()) |kind| {
+                const kind_int = @intFromEnum(kind);
+                if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_pattern)) {
+                    dispatch_token = self.peek();
+                    if (kind == .statement_for_pattern) continue :dispatch .statement_for_after_pattern;
+                    if (kind == .statement_destructure_pattern) continue :dispatch .statement_destructure_after_pattern;
+                    if (kind == .expr_match_pattern) continue :dispatch .expr_match_branch_after_pattern;
+                } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
+                    dispatch_token = self.peek();
+                    if (kind == .expr_for_pattern) continue :dispatch .expr_for_after_pattern;
+                    if (kind == .expr_lambda_args) continue :dispatch .expr_lambda_after_args;
+                } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_record)) {
+                    dispatch_token = self.peek();
+                    if (kind == .pattern_root) continue :dispatch .pattern_root_after_one;
+                    if (kind == .pattern_tag_args) continue :dispatch .pattern_tag_args_after_item;
+                    if (kind == .pattern_list) continue :dispatch .pattern_list_after_item;
+                    if (kind == .pattern_tuple) continue :dispatch .pattern_tuple_after_item;
+                } else {
+                    if (kind == .pattern_record_field) {
+                        dispatch_token = self.peek();
+                        continue :dispatch .pattern_record_field_after_value;
                     }
                 }
-                return switch (entry.result_kind) {
-                    .pattern => .{ .pattern = completed },
-                    else => .{ .pattern = completed },
-                };
-            },
+                if (entry.result_kind == .pattern) {
+                    return .{ .pattern = completed };
+                }
+                unreachable;
+            }
+            return .{ .pattern = completed };
         },
         .pattern_prefix => {
             const tok = dispatch_token;
