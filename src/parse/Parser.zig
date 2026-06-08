@@ -3856,6 +3856,50 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     dispatch_token = self.peek();
                     continue :dispatch .expr_suffix;
                 }
+                if (tok == .Int) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+
+                    if (self.peek() == .NoSpaceDotInt) {
+                        last_expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
+                        expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = last_expr.? };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_suffix;
+                    }
+
+                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                        try self.store.addExpr(.{ .typed_int = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = deprecated_region,
+                        } })
+                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                            break :blk malformed;
+                        };
+                        break :blk try self.store.addExpr(.{ .typed_int = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    } else try self.store.addExpr(.{ .int = .{
+                        .token = start,
+                        .literal = literal,
+                        .region = deprecated_region,
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
@@ -3912,50 +3956,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     const expr = try self.store.addExpr(.{ .single_quote = .{
                         .token = start,
                         .region = .{ .start = start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
-                if (tok == .Int) {
-                    const start = self.pos;
-                    self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
-                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-
-                    if (self.peek() == .NoSpaceDotInt) {
-                        last_expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
-                        expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = last_expr.? };
-                        dispatch_token = self.peek();
-                        continue :dispatch .expr_suffix;
-                    }
-
-                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
-                        try self.store.addExpr(.{ .typed_int = .{
-                            .token = start,
-                            .type_ident = type_ident,
-                            .literal = literal,
-                            .region = deprecated_region,
-                        } })
-                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                        const type_token = self.pos;
-                        self.advance();
-                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                            break :blk malformed;
-                        };
-                        break :blk try self.store.addExpr(.{ .typed_int = .{
-                            .token = start,
-                            .type_ident = type_ident,
-                            .literal = literal,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    } else try self.store.addExpr(.{ .int = .{
-                        .token = start,
-                        .literal = literal,
-                        .region = deprecated_region,
                     } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     dispatch_token = self.peek();
