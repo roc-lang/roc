@@ -2648,6 +2648,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = llvm_embedded_files.add("llvm_embedded.zig", llvm_embedded_source),
     });
     roc_exe.step.dependOn(&llvm_embedded_files.step);
+    roc_exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),

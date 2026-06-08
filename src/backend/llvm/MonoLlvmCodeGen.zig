@@ -3491,10 +3491,11 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.builtin_functions.get(name)) |func| return func;
         const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
-        const fn_name = if (self.builtin_symbol_mode == .native_object)
-            try self.exportedFunctionName(builder, name)
-        else
-            builder.strtabString(name) catch return error.OutOfMemory;
+        // Always use the plain builtin name so the IR global matches the symbol in
+        // the builtin bitcode linked in for inlining. LLVM still applies the target's
+        // symbol mangling (e.g. the macOS leading underscore) when emitting the final
+        // object, so non-inlined calls still resolve against roc_builtins.o at link.
+        const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         try self.builtin_functions.put(name, func);
         return func;

@@ -169,7 +169,49 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMDisposeModule(module: ?*anyopaque) void;
     extern fn LLVMDisposeTargetMachine(target_machine: ?*anyopaque) void;
     extern fn LLVMSetTarget(module: ?*anyopaque, triple: [*:0]const u8) void;
+    // Functions for linking builtin bitcode into the app module so the optimizer
+    // can inline builtin calls (e.g. list_append_unsafe) instead of leaving them
+    // as opaque external calls.
+    extern fn LLVMCreateMemoryBufferWithMemoryRangeCopy(data: [*]const u8, len: usize, name: [*:0]const u8) ?*anyopaque;
+    extern fn LLVMParseBitcode2(mem_buf: ?*anyopaque, out_module: *?*anyopaque) c_int;
+    extern fn LLVMLinkModules2(dest: ?*anyopaque, src: ?*anyopaque) c_int;
+    extern fn LLVMGetFirstFunction(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNextFunction(fn_val: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetValueName2(val: ?*anyopaque, len: *usize) [*]const u8;
+    extern fn LLVMIsDeclaration(global: ?*anyopaque) c_int;
+    extern fn LLVMSetLinkage(global: ?*anyopaque, linkage: c_int) void;
+    extern fn LLVMGetDataLayoutStr(module: ?*anyopaque) [*:0]const u8;
+    extern fn LLVMSetDataLayout(module: ?*anyopaque, data_layout: [*:0]const u8) void;
+    // @export wrappers are GlobalAliases (clean name -> dev_wrappers.* function).
+    // The inliner runs before LLVM resolves aliases, so we resolve them ourselves
+    // (replace uses with the aliasee) before optimization so calls become direct.
+    extern fn LLVMGetFirstGlobalAlias(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNextGlobalAlias(alias: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMAliasGetAliasee(alias: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMReplaceAllUsesWith(old_val: ?*anyopaque, new_val: ?*anyopaque) void;
+    // The builtins were compiled with explicit target-cpu/target-features; the app
+    // functions have none, and the inliner refuses to inline a callee whose features
+    // aren't a subset of the caller's. Strip them (the target machine still pins the
+    // CPU/features at codegen) so the builtins become inlinable.
+    extern fn LLVMRemoveStringAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, name: [*]const u8, len: c_uint) void;
 } else struct {};
+
+/// Embedded builtin bitcode, linked into each app module so builtin calls can be
+/// inlined by the optimizer. Stubbed out when LLVM is unavailable.
+const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
+    pub const builtins_bc: []const u8 = "";
+};
+
+/// LLVM-C linkage value for `available_externally`: the body is available for
+/// inlining but is not emitted (the real definition comes from roc_builtins.o).
+const LLVMAvailableExternallyLinkage: c_int = 1;
+
+/// LLVM-C linkage value for `internal`: a local definition, never an exported
+/// symbol, and discarded by global DCE when unused.
+const LLVMInternalLinkage: c_int = 8;
+
+/// LLVM-C attribute index for function-level attributes (`~0U`).
+const LLVMAttributeFunctionIndex: c_uint = 0xFFFFFFFF;
 
 /// Initialize LLVM targets (must be called once before using LLVM)
 pub fn initializeLLVM() void {
@@ -241,6 +283,76 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Setting target triple on module: {s}", .{target_triple});
     externs.LLVMSetTarget(module, target_triple_z.ptr);
     std.log.debug("Target triple set successfully", .{});
+
+    // Link the builtin bitcode into the app module so the optimizer can inline
+    // builtin calls (e.g. list_append_unsafe / list_with_capacity) into the app's
+    // hot loops. After linking, every function that came from the builtins module
+    // (i.e. wasn't an app definition before the link) is marked
+    // `available_externally`: its body is available for inlining but is never
+    // emitted, so non-inlined calls are resolved from roc_builtins.o at final link
+    // and there are no duplicate symbols. The linkage must be set AFTER linking,
+    // because LLVMLinkModules2 promotes available_externally back to external when
+    // it resolves an external declaration in the destination module.
+    {
+        const builtins_bc = llvm_embedded.builtins_bc;
+        if (builtins_bc.len > 0) {
+            // Record the app's own defined functions before linking.
+            var app_defs = std.StringHashMap(void).init(gpa);
+            defer {
+                var keys = app_defs.keyIterator();
+                while (keys.next()) |k| gpa.free(k.*);
+                app_defs.deinit();
+            }
+            var pre = externs.LLVMGetFirstFunction(module);
+            while (pre) |fv| : (pre = externs.LLVMGetNextFunction(fv)) {
+                if (externs.LLVMIsDeclaration(fv) != 0) continue;
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+                const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+                errdefer gpa.free(name);
+                try app_defs.put(name, {});
+            }
+
+            const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc_builtins_bc");
+            var builtins_module: ?*anyopaque = null;
+            if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
+                externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
+                externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
+                if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
+                    // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
+                    // so calls target the real function directly and can be inlined.
+                    // Then make each alias internal so the now-unused symbol is not
+                    // emitted (avoiding duplicate symbols vs roc_builtins.o).
+                    var alias = externs.LLVMGetFirstGlobalAlias(module);
+                    while (alias) |a| : (alias = externs.LLVMGetNextGlobalAlias(a)) {
+                        if (externs.LLVMAliasGetAliasee(a)) |aliasee| {
+                            externs.LLVMReplaceAllUsesWith(a, aliasee);
+                            externs.LLVMSetLinkage(a, LLVMInternalLinkage);
+                        }
+                    }
+
+                    var post = externs.LLVMGetFirstFunction(module);
+                    while (post) |fv| : (post = externs.LLVMGetNextFunction(fv)) {
+                        if (externs.LLVMIsDeclaration(fv) != 0) continue;
+                        var name_len: usize = 0;
+                        const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+                        if (!app_defs.contains(name_ptr[0..name_len])) {
+                            // Strip target-cpu/target-features so the inliner considers
+                            // the builtin compatible with the (feature-less) app functions.
+                            externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
+                            externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+                            externs.LLVMSetLinkage(fv, LLVMAvailableExternallyLinkage);
+                        }
+                    }
+                } else {
+                    std.log.warn("Failed to link builtin bitcode for inlining; builtin calls will not be inlined", .{});
+                }
+            } else {
+                std.log.warn("Failed to parse builtin bitcode for inlining; builtin calls will not be inlined", .{});
+            }
+        }
+    }
+
 
     // 5. Create target
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
