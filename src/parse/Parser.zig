@@ -451,8 +451,9 @@ fn enterDeclScope(
         .start = region.start,
         .end = region.end,
     });
-    if (kind == .associated) {
-        self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath());
+    switch (kind) {
+        .associated => self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath()),
+        else => {},
     }
     while (self.scope_pending_annos.items.len <= @intFromEnum(scope_idx)) {
         try self.scope_pending_annos.append(self.gpa, null);
@@ -2748,13 +2749,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var dispatch_token = self.peek();
     dispatch: switch (entry.initial_context) {
         .file_start => switch (dispatch_token) {
-            .KwApp,
-            .KwModule,
-            .KwHosted,
-            .KwPackage,
-            .KwPlatform,
-            .EndOfFile,
-            => {
+            .KwApp, .KwModule, .KwHosted, .KwPackage, .KwPlatform, .EndOfFile => {
                 self.store.emptyScratch();
                 const module_scope = try self.enterDeclScope(.module, .file, AST.TokenizedRegion.empty());
                 try self.store.addFile(.{
@@ -2776,8 +2771,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .file_after_header => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 file_state.scratch_top = self.store.scratchStatementTop();
                 dispatch_token = self.peek();
                 continue :dispatch .file_statement_next;
@@ -2788,8 +2782,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .file_statement_next => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 dispatch_token = self.peek();
                 continue :dispatch .file_finish;
             },
@@ -2801,8 +2794,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .file_after_statement => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const statement = last_statement orelse unreachable;
                 last_statement = null;
                 try self.store.addScratchStatement(statement);
@@ -2815,8 +2807,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .file_finish => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const header = last_header orelse unreachable;
                 last_header = null;
                 const file_region = AST.TokenizedRegion{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) };
@@ -2835,13 +2826,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_start => switch (dispatch_token) {
-            .KwApp,
-            .KwModule,
-            .KwHosted,
-            .KwPackage,
-            .KwPlatform,
-            .EndOfFile,
-            => {
+            .KwApp, .KwModule, .KwHosted, .KwPackage, .KwPlatform, .EndOfFile => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2855,8 +2840,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_type_module => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2869,8 +2853,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_app_start => switch (dispatch_token) {
-            .OpenSquare,
-            => {
+            .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2883,8 +2866,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_app_provides_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2897,8 +2879,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_app_packages_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2911,8 +2892,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_module_start => switch (dispatch_token) {
-            .OpenSquare,
-            => {
+            .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2925,8 +2905,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_module_exposes_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2939,8 +2918,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_hosted_start => switch (dispatch_token) {
-            .OpenSquare,
-            => {
+            .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2953,8 +2931,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_hosted_exposes_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2967,8 +2944,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_package_start => switch (dispatch_token) {
-            .OpenSquare,
-            => {
+            .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2981,8 +2957,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_package_exposes_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -2995,8 +2970,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_package_packages_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3009,8 +2983,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_platform_start => switch (dispatch_token) {
-            .StringStart,
-            => {
+            .StringStart => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3023,8 +2996,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_platform_requires_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3037,8 +3009,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_platform_exposes_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3051,8 +3022,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_platform_packages_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3065,8 +3035,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_platform_provides_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3079,8 +3048,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .header_platform_targets_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
                 if (entry.result_kind == .header) {
                     return .{ .header = last_header.? };
@@ -3093,8 +3061,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_start => switch (dispatch_token) {
-            .KwImport,
-            => {
+            .KwImport => {
                 if (statement_type == .top_level) {
                     last_statement = try self.parseImportStatementTokens();
                 } else {
@@ -3103,8 +3070,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
             },
-            .KwExpect,
-            => {
+            .KwExpect => {
                 const start = self.pos;
                 self.advance();
                 try root_expr_parents.set(open_allocator, .{ .statement_expect = start }, open_syntax.depth());
@@ -3112,8 +3078,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .KwFor,
-            => {
+            .KwFor => {
                 const start = self.pos;
                 self.advance();
                 try open_syntax.push(open_allocator, .statement_for_pattern, Token.Idx, start);
@@ -3125,8 +3090,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_root_next;
             },
-            .KwWhile,
-            => {
+            .KwWhile => {
                 const start = self.pos;
                 self.advance();
                 try root_expr_parents.set(open_allocator, .{ .statement_while_cond = start }, open_syntax.depth());
@@ -3134,8 +3098,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .KwCrash,
-            => {
+            .KwCrash => {
                 const start = self.pos;
                 self.advance();
                 try root_expr_parents.set(open_allocator, .{ .statement_crash = start }, open_syntax.depth());
@@ -3143,8 +3106,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .KwDbg,
-            => {
+            .KwDbg => {
                 const start = self.pos;
                 self.advance();
                 try root_expr_parents.set(open_allocator, .{ .statement_dbg = start }, open_syntax.depth());
@@ -3152,8 +3114,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .KwReturn,
-            => {
+            .KwReturn => {
                 const start = self.pos;
                 self.advance();
                 try root_expr_parents.set(open_allocator, .{ .statement_return = start }, open_syntax.depth());
@@ -3161,8 +3122,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .KwVar,
-            => {
+            .KwVar => {
                 const start = self.pos;
                 if (statement_type != .in_body) {
                     last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
@@ -3198,8 +3158,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .KwBreak,
-            => {
+            .KwBreak => {
                 const start = self.pos;
                 self.advance();
                 last_statement = try self.addStatement(.{ .@"break" = .{
@@ -3208,9 +3167,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
             },
-            .LowerIdent,
-            .NamedUnderscore,
-            => {
+            .LowerIdent, .NamedUnderscore => {
                 const start = self.pos;
                 if (self.peekNext() == .OpAssign) {
                     self.advance();
@@ -3250,8 +3207,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch .expr_prefix;
                 }
             },
-            .Underscore,
-            => {
+            .Underscore => {
                 const start = self.pos;
                 if (self.peekNext() == .OpAssign) {
                     self.advance();
@@ -3274,8 +3230,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch .expr_prefix;
                 }
             },
-            .UpperIdent,
-            => {
+            .UpperIdent => {
                 const start = self.pos;
                 const is_type_decl_context = statement_type == .top_level or
                     statement_type == .in_associated_block or
@@ -3332,9 +3287,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .type_prefix;
             },
-            .OpenCurly,
-            .OpenRound,
-            => {
+            .OpenCurly, .OpenRound => {
                 const isCurly = self.peek() == .OpenCurly;
                 const start = self.pos;
                 var is_destructure = false;
@@ -3374,8 +3327,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 last_statement = try self.addTopLevelUnexpectedStatement();
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
@@ -3430,8 +3382,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_expect_after_expr => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_expect;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -3448,8 +3399,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_for_after_pattern => switch (dispatch_token) {
-            .KwIn,
-            => {
+            .KwIn => {
                 const start = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
                 const patt = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -3468,9 +3418,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_for_after_expr => switch (dispatch_token) {
-            .OpenCurly,
-            .EndOfFile,
-            => {
+            .OpenCurly, .EndOfFile => {
                 const expr = last_expr orelse unreachable;
                 last_expr = null;
                 const for_expr_parent = root_expr_parents.take().statement_for_expr;
@@ -3489,8 +3437,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_for_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_for_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -3509,9 +3456,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_while_after_cond => switch (dispatch_token) {
-            .OpenCurly,
-            .EndOfFile,
-            => {
+            .OpenCurly, .EndOfFile => {
                 const cond = last_expr orelse unreachable;
                 last_expr = null;
                 const while_start = root_expr_parents.take().statement_while_cond;
@@ -3526,8 +3471,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_while_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_while_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -3545,8 +3489,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_crash_after_expr => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_crash;
                 const expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -3563,8 +3506,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_dbg_after_expr => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_dbg;
                 const expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -3581,8 +3523,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_return_after_expr => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_return;
                 const expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -3604,8 +3545,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_var_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_var_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -3623,8 +3563,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_decl_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_decl_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -3642,8 +3581,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_destructure_after_pattern => switch (dispatch_token) {
-            .OpAssign,
-            => {
+            .OpAssign => {
                 const start = open_syntax.popPayload(.statement_destructure_pattern, Token.Idx);
                 const pattern = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -3662,8 +3600,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_destructure_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_destructure_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -3681,8 +3618,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_final_expr => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const parent = root_expr_parents.take().statement_final_expr;
                 const expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -3704,9 +3640,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_after_anno => switch (dispatch_token) {
-            .KwWhere,
-            .EndOfFile,
-            => {
+            .KwWhere, .EndOfFile => {
                 statement_type_anno_state = open_syntax.popPayload(.statement_type_after_anno, TypeAnnoStatementProgress);
                 const anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -3726,10 +3660,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_decl_after_anno => switch (dispatch_token) {
-            .KwWhere,
-            .Dot,
-            .EndOfFile,
-            => {
+            .KwWhere, .Dot, .EndOfFile => {
                 statement_type_decl_anno_state = open_syntax.popPayload(.statement_type_decl_anno, TypeDeclAnnoProgress);
                 const anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -3779,8 +3710,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_decl_after_associated => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 statement_type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclProgress);
                 const assoc = last_associated orelse unreachable;
                 last_associated = null;
@@ -3814,8 +3744,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_associated_start => switch (dispatch_token) {
-            .OpenCurly,
-            => {
+            .OpenCurly => {
                 if (self.peek() == .OpenCurly) {
                     self.advance();
                 }
@@ -3840,9 +3769,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_associated_next => switch (dispatch_token) {
-            .CloseCurly,
-            .EndOfFile,
-            => {
+            .CloseCurly, .EndOfFile => {
                 dispatch_token = self.peek();
                 continue :dispatch .statement_type_associated_finish;
             },
@@ -3860,9 +3787,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_associated_after_statement => switch (dispatch_token) {
-            .CloseCurly,
-            .EndOfFile,
-            => {
+            .CloseCurly, .EndOfFile => {
                 statement_associated_statement_state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
                 const statement = last_statement orelse unreachable;
                 last_statement = null;
@@ -3899,9 +3824,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .statement_type_associated_finish => switch (dispatch_token) {
-            .CloseCurly,
-            .EndOfFile,
-            => {
+            .CloseCurly, .EndOfFile => {
                 if (self.peek() == .CloseCurly) {
                     self.advance();
                 } else {
@@ -4251,26 +4174,10 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             const unexpected = self.peek();
             const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos);
             switch (unexpected) {
-                .Comma,
-                .CloseRound,
-                .CloseSquare,
-                .CloseCurly,
-                .CloseStringInterpolation,
-                .StringEnd,
-                .EndOfFile,
-                .KwElse,
-                .OpArrow,
-                .OpFatArrow,
-                => {
+                .Comma, .CloseRound, .CloseSquare, .CloseCurly, .CloseStringInterpolation, .StringEnd, .EndOfFile, .KwElse, .OpArrow, .OpFatArrow => {
                     expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
                 },
-                .OpAnd,
-                .OpOr,
-                .NoSpaceDotInt,
-                .NoSpaceDotLowerIdent,
-                .NoSpaceDotUpperIdent,
-                .MalformedNoSpaceDotUnicodeIdent,
-                => {
+                .OpAnd, .OpOr, .NoSpaceDotInt, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .MalformedNoSpaceDotUnicodeIdent => {
                     if (self.peek() == .EndOfFile) {
                         expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
                     } else {
@@ -4619,64 +4526,82 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             if (open_syntax.peekKind()) |kind| {
                 const kind_int = @intFromEnum(kind);
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_if)) {
-                    if (kind == .statement_type_associated_statement) {
-                        if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
-                            dispatch_token = self.peek();
-                            const parent_int = @intFromEnum(std.meta.activeTag(parent));
-                            if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
-                                unreachable;
+                    switch (kind) {
+                        .statement_type_associated_statement => {
+                            if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
+                                dispatch_token = self.peek();
+                                const parent_int = @intFromEnum(std.meta.activeTag(parent));
+                                if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
+                                    unreachable;
+                                }
+                                if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
+                                    unreachable;
+                                }
+                                if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
+                                    unreachable;
+                                }
+                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
+                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
                             }
-                            if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
-                                unreachable;
-                            }
-                            if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
-                                unreachable;
-                            }
-                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
-                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
-                        }
-                        unreachable;
+                            unreachable;
+                        },
+                        else => {},
                     }
                     if (kind_int < @intFromEnum(OpenSyntaxKind.expr_record_ext)) {
                         dispatch_token = self.peek();
-                        if (kind == .expr_unary) continue :dispatch .expr_after_unary;
-                        if (kind == .expr_binary_rhs) continue :dispatch .expr_after_binary_rhs;
-                        if (kind == .expr_arrow_inner) continue :dispatch .expr_arrow_after_inner;
+                        switch (kind) {
+                            .expr_unary => continue :dispatch .expr_after_unary,
+                            .expr_binary_rhs => continue :dispatch .expr_after_binary_rhs,
+                            .expr_arrow_inner => continue :dispatch .expr_arrow_after_inner,
+                            else => {},
+                        }
                     } else {
                         dispatch_token = self.peek();
-                        if (kind == .expr_record_ext) continue :dispatch .expr_record_ext_after_expr;
-                        if (kind == .expr_record_field) continue :dispatch .expr_record_field_after_value;
-                        if (kind == .expr_string) continue :dispatch .expr_string_after_interp;
+                        switch (kind) {
+                            .expr_record_ext => continue :dispatch .expr_record_ext_after_expr,
+                            .expr_record_field => continue :dispatch .expr_record_field_after_value,
+                            .expr_string => continue :dispatch .expr_string_after_interp,
+                            else => {},
+                        }
                     }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_list)) {
                     dispatch_token = self.peek();
-                    if (kind == .expr_if) continue :dispatch .expr_if_after_condition;
-                    if (kind == .expr_if_then) continue :dispatch .expr_if_after_then;
-                    if (kind == .expr_if_else) continue :dispatch .expr_if_after_else;
-                    if (kind == .expr_match) continue :dispatch .expr_match_after_expr;
-                    if (kind == .expr_match_guard) continue :dispatch .expr_match_branch_after_guard;
-                    if (kind == .expr_match_body) continue :dispatch .expr_match_branch_after_body;
-                    if (kind == .expr_dbg) continue :dispatch .expr_dbg_after_expr;
+                    switch (kind) {
+                        .expr_if => continue :dispatch .expr_if_after_condition,
+                        .expr_if_then => continue :dispatch .expr_if_after_then,
+                        .expr_if_else => continue :dispatch .expr_if_after_else,
+                        .expr_match => continue :dispatch .expr_match_after_expr,
+                        .expr_match_guard => continue :dispatch .expr_match_branch_after_guard,
+                        .expr_match_body => continue :dispatch .expr_match_branch_after_body,
+                        .expr_dbg => continue :dispatch .expr_dbg_after_expr,
+                        else => {},
+                    }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
                     dispatch_token = self.peek();
-                    if (kind == .expr_for_list) continue :dispatch .expr_for_after_list;
-                    if (kind == .expr_for_body) continue :dispatch .expr_for_after_body;
-                    if (kind == .expr_lambda_body) continue :dispatch .expr_lambda_after_body;
+                    switch (kind) {
+                        .expr_for_list => continue :dispatch .expr_for_after_list,
+                        .expr_for_body => continue :dispatch .expr_for_after_body,
+                        .expr_lambda_body => continue :dispatch .expr_lambda_after_body,
+                        else => {},
+                    }
                 } else {
-                    if (kind == .pattern_string) {
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_string_after_expr;
+                    switch (kind) {
+                        .pattern_string => {
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_string_after_expr;
+                        },
+                        else => {},
                     }
                 }
                 if (entry.result_kind == .expr) {
@@ -4690,8 +4615,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             };
         },
         .expr_after_unary => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 expr_after_unary_state = open_syntax.popPayload(.expr_unary, ExprAfterUnaryState);
                 const operand = last_expr orelse unreachable;
                 last_expr = null;
@@ -4719,8 +4643,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_after_binary_rhs => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 open_syntax.popMarker(.expr_binary_rhs);
                 const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
                 const rhs = last_expr orelse unreachable;
@@ -4752,8 +4675,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_arrow_after_inner => switch (dispatch_token) {
-            .CloseRound,
-            => {
+            .CloseRound => {
                 expr_arrow_after_inner_state = open_syntax.popPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
                 const inner = last_expr orelse unreachable;
                 last_expr = null;
@@ -4791,8 +4713,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_arrow_app_next => switch (dispatch_token) {
-            .NoSpaceOpenRound,
-            => {
+            .NoSpaceOpenRound => {
                 self.advance();
                 try expr_collections.enter(open_allocator, .{
                     .start = expr_arrow_app_state.operator,
@@ -4824,9 +4745,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_collection_next => switch (dispatch_token) {
-            .CloseRound,
-            .CloseSquare,
-            => {
+            .CloseRound, .CloseSquare => {
                 const active_collection = expr_collections.active();
                 if (self.peek() == active_collection.end_token) {
                     self.advance();
@@ -4913,8 +4832,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_suffix;
             },
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const expr_collection_state = expr_collections.leave();
                 self.store.clearScratchExprsFrom(expr_collection_state.scratch_top);
                 const expr = try self.pushMalformed(AST.Expr.Idx, expr_collection_state.close_error, self.pos);
@@ -4930,10 +4848,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_collection_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseRound,
-            .CloseSquare,
-            => {
+            .Comma, .CloseRound, .CloseSquare => {
                 _ = root_expr_parents.take().expr_collection_item;
                 const item = last_expr orelse unreachable;
                 last_expr = null;
@@ -4955,8 +4870,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_string_next => switch (dispatch_token) {
-            .StringPart,
-            => {
+            .StringPart => {
                 const part_start = self.pos;
                 self.advance();
                 const index = try self.store.addExpr(.{ .string_part = .{
@@ -4967,16 +4881,12 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_string_next;
             },
-            .MalformedStringPart,
-            .MalformedInvalidUnicodeEscapeSequence,
-            .MalformedInvalidEscapeSequence,
-            => {
+            .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => {
                 self.advance();
                 dispatch_token = self.peek();
                 continue :dispatch .expr_string_next;
             },
-            .StringEnd,
-            => {
+            .StringEnd => {
                 if (expr_string_state.multiline) {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
                     expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
@@ -5000,8 +4910,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch .expr_complete;
                 }
             },
-            .MultilineStringStart,
-            => {
+            .MultilineStringStart => {
                 if (!expr_string_state.multiline) {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
                     expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
@@ -5012,16 +4921,14 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_string_next;
             },
-            .OpenStringInterpolation,
-            => {
+            .OpenStringInterpolation => {
                 self.advance();
                 try open_syntax.push(open_allocator, .expr_string, ExprStringState, expr_string_state);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             },
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 if (!expr_string_state.multiline) {
                     try self.pushDiagnostic(.string_unclosed, .{ .start = self.pos, .end = self.pos });
                 }
@@ -5073,8 +4980,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_string_after_interp => switch (dispatch_token) {
-            .CloseStringInterpolation,
-            => {
+            .CloseStringInterpolation => {
                 expr_string_state = open_syntax.popPayload(.expr_string, ExprStringState);
                 const ex = last_expr orelse unreachable;
                 last_expr = null;
@@ -5100,8 +5006,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_record_ext_after_expr => switch (dispatch_token) {
-            .Comma,
-            => {
+            .Comma => {
                 expr_record_ext_state = open_syntax.popPayload(.expr_record_ext, ExprRecordExtState);
                 const ext_expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -5137,13 +5042,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_record_fields_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_record_finish;
             },
-            .LowerIdent,
-            => {
+            .LowerIdent => {
                 const field_start = self.pos;
                 self.advance();
                 const name = field_start;
@@ -5175,8 +5078,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_record_finish;
             },
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 self.store.clearScratchRecordFieldsFrom(expr_record_state.scratch_top);
                 const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
@@ -5194,9 +5096,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_record_field_after_value => switch (dispatch_token) {
-            .Comma,
-            .CloseCurly,
-            => {
+            .Comma, .CloseCurly => {
                 expr_record_field_state = open_syntax.popPayload(.expr_record_field, ExprRecordFieldState);
                 const value = last_expr orelse unreachable;
                 last_expr = null;
@@ -5245,8 +5145,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_record_finish => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 self.advance();
                 const fields = try self.store.recordFieldSpanFrom(expr_record_state.scratch_top);
                 const expr = try self.finishRecordExpr(expr_record_state.start, fields, expr_record_state.ext);
@@ -5263,11 +5162,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_lambda_after_args => switch (dispatch_token) {
-            .OpBar,
-            => {
+            .OpBar => {
                 if (open_syntax.peekKind()) |kind| {
-                    if (kind == .expr_lambda_args) {
-                        expr_lambda_args_state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState);
+                    switch (kind) {
+                        .expr_lambda_args => expr_lambda_args_state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState),
+                        else => {},
                     }
                 }
                 if (last_pattern) |item| {
@@ -5288,8 +5187,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
             else => {
                 if (open_syntax.peekKind()) |kind| {
-                    if (kind == .expr_lambda_args) {
-                        expr_lambda_args_state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState);
+                    switch (kind) {
+                        .expr_lambda_args => expr_lambda_args_state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState),
+                        else => {},
                     }
                 }
                 if (last_pattern) |item| {
@@ -5314,8 +5214,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_lambda_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 open_syntax.popMarker(.expr_lambda_body);
                 const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
                 const body = last_expr orelse unreachable;
@@ -5345,8 +5244,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_if_after_condition => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
                 const condition = last_expr orelse unreachable;
                 last_expr = null;
@@ -5374,8 +5272,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_if_after_then => switch (dispatch_token) {
-            .KwElse,
-            => {
+            .KwElse => {
                 expr_if_after_then_state = open_syntax.popPayload(.expr_if_then, ExprIfAfterThenState);
                 const then_expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -5405,8 +5302,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_if_after_else => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 expr_if_after_else_state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
                 const else_expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -5436,8 +5332,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_match_after_expr => switch (dispatch_token) {
-            .OpenCurly,
-            => {
+            .OpenCurly => {
                 const state = open_syntax.popPayload(.expr_match, ExprAfterExprState);
                 const matched = last_expr orelse unreachable;
                 last_expr = null;
@@ -5461,8 +5356,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_match_branch_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 const branches = try self.store.matchBranchSpanFrom(expr_match_branch_state.scratch_top);
                 if (branches.span.len == 0) {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, expr_match_branch_state.start);
@@ -5504,8 +5398,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_match_branch_after_pattern => switch (dispatch_token) {
-            .KwIf,
-            => {
+            .KwIf => {
                 expr_match_branch_after_pattern_state = open_syntax.popPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
                 const pattern = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -5541,9 +5434,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_match_branch_after_guard => switch (dispatch_token) {
-            .OpFatArrow,
-            .OpArrow,
-            => {
+            .OpFatArrow, .OpArrow => {
                 expr_match_branch_after_guard_state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
                 const guard = if (last_expr) |g| blk: {
                     last_expr = null;
@@ -5588,8 +5479,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_match_branch_after_body => switch (dispatch_token) {
-            .Comma,
-            => {
+            .Comma => {
                 expr_match_branch_after_body_state = open_syntax.popPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -5632,8 +5522,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_dbg_after_expr => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const state = open_syntax.popPayload(.expr_dbg, ExprAfterExprState);
                 const e = last_expr orelse unreachable;
                 last_expr = null;
@@ -5659,8 +5548,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_for_after_pattern => switch (dispatch_token) {
-            .KwIn,
-            => {
+            .KwIn => {
                 const state = open_syntax.popPayload(.expr_for_pattern, ExprAfterExprState);
                 const pattern = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -5684,9 +5572,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_for_after_list => switch (dispatch_token) {
-            .OpenCurly,
-            .EndOfFile,
-            => {
+            .OpenCurly, .EndOfFile => {
                 expr_for_after_list_state = open_syntax.popPayload(.expr_for_list, ExprForAfterListState);
                 const list_expr = last_expr orelse unreachable;
                 last_expr = null;
@@ -5716,8 +5602,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_for_after_body => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 expr_for_after_body_state = open_syntax.popPayload(.expr_for_body, ExprForAfterBodyState);
                 const body = last_expr orelse unreachable;
                 last_expr = null;
@@ -5747,8 +5632,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_block_begin => switch (dispatch_token) {
-            .OpenCurly,
-            => {
+            .OpenCurly => {
                 if (self.peek() == .OpenCurly) {
                     self.advance();
                 }
@@ -5761,8 +5645,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_block_begin_after_open => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const previous_type_path_visible_start = self.type_path_stack_visible_start;
                 self.type_path_stack_visible_start = self.type_path_stack.items.len;
                 const block_scope = try self.enterDeclScope(.block, .none, .{ .start = expr_after_expr_state.start, .end = expr_after_expr_state.start });
@@ -5782,9 +5665,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_block_next => switch (dispatch_token) {
-            .CloseCurly,
-            .EndOfFile,
-            => {
+            .CloseCurly, .EndOfFile => {
                 dispatch_token = self.peek();
                 continue :dispatch .expr_block_finish;
             },
@@ -5796,9 +5677,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_block_after_statement => switch (dispatch_token) {
-            .CloseCurly,
-            .EndOfFile,
-            => {
+            .CloseCurly, .EndOfFile => {
                 const statement = last_statement orelse unreachable;
                 last_statement = null;
                 try self.store.addScratchStatement(statement);
@@ -5817,9 +5696,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .expr_block_finish => switch (dispatch_token) {
-            .CloseCurly,
-            .EndOfFile,
-            => {
+            .CloseCurly, .EndOfFile => {
                 if (self.peek() == .CloseCurly) {
                     self.advance();
                 } else {
@@ -5845,8 +5722,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_root_next => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 const pattern_count = self.store.scratchPatternTop() - pattern_root_state.scratch_top;
                 if (pattern_count == 0) {
                     last_pattern = try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = pattern_root_state.outer_start, .end = self.pos });
@@ -5873,8 +5749,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_root_after_one => switch (dispatch_token) {
-            .OpBar,
-            => {
+            .OpBar => {
                 open_syntax.popMarker(.pattern_root);
                 const state = pattern_roots.leave();
                 const p = last_pattern orelse unreachable;
@@ -5930,23 +5805,35 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const kind_int = @intFromEnum(kind);
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_pattern)) {
                     dispatch_token = self.peek();
-                    if (kind == .statement_for_pattern) continue :dispatch .statement_for_after_pattern;
-                    if (kind == .statement_destructure_pattern) continue :dispatch .statement_destructure_after_pattern;
-                    if (kind == .expr_match_pattern) continue :dispatch .expr_match_branch_after_pattern;
+                    switch (kind) {
+                        .statement_for_pattern => continue :dispatch .statement_for_after_pattern,
+                        .statement_destructure_pattern => continue :dispatch .statement_destructure_after_pattern,
+                        .expr_match_pattern => continue :dispatch .expr_match_branch_after_pattern,
+                        else => {},
+                    }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
                     dispatch_token = self.peek();
-                    if (kind == .expr_for_pattern) continue :dispatch .expr_for_after_pattern;
-                    if (kind == .expr_lambda_args) continue :dispatch .expr_lambda_after_args;
+                    switch (kind) {
+                        .expr_for_pattern => continue :dispatch .expr_for_after_pattern,
+                        .expr_lambda_args => continue :dispatch .expr_lambda_after_args,
+                        else => {},
+                    }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_record)) {
                     dispatch_token = self.peek();
-                    if (kind == .pattern_root) continue :dispatch .pattern_root_after_one;
-                    if (kind == .pattern_tag_args) continue :dispatch .pattern_tag_args_after_item;
-                    if (kind == .pattern_list) continue :dispatch .pattern_list_after_item;
-                    if (kind == .pattern_tuple) continue :dispatch .pattern_tuple_after_item;
+                    switch (kind) {
+                        .pattern_root => continue :dispatch .pattern_root_after_one,
+                        .pattern_tag_args => continue :dispatch .pattern_tag_args_after_item,
+                        .pattern_list => continue :dispatch .pattern_list_after_item,
+                        .pattern_tuple => continue :dispatch .pattern_tuple_after_item,
+                        else => {},
+                    }
                 } else {
-                    if (kind == .pattern_record_field) {
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_record_field_after_value;
+                    switch (kind) {
+                        .pattern_record_field => {
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_record_field_after_value;
+                        },
+                        else => {},
                     }
                 }
                 if (entry.result_kind == .pattern) {
@@ -6185,8 +6072,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             continue :dispatch .pattern_complete;
         },
         .pattern_tag_args_next => switch (dispatch_token) {
-            .CloseRound,
-            => {
+            .CloseRound => {
                 self.advance();
                 const args = try self.store.patternSpanFrom(pattern_tag_args_state.scratch_top);
                 last_pattern = try self.store.addPattern(.{ .tag = .{
@@ -6216,9 +6102,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_tag_args_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseRound,
-            => {
+            .Comma, .CloseRound => {
                 pattern_tag_args_state = open_syntax.popPayload(.pattern_tag_args, PatternTagArgsState);
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -6243,13 +6127,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_list_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_list_finish;
             },
-            .DoubleDot,
-            => {
+            .DoubleDot => {
                 const rest_start = self.pos;
                 self.advance();
                 var rest_name: ?Token.Idx = null;
@@ -6295,9 +6177,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_list_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseSquare,
-            => {
+            .Comma, .CloseSquare => {
                 pattern_list_state = open_syntax.popPayload(.pattern_list, PatternListState);
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -6322,8 +6202,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_list_finish => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 self.advance();
                 const patterns = try self.store.patternSpanFrom(pattern_list_state.scratch_top);
                 last_pattern = try self.store.addPattern(.{ .list = .{
@@ -6341,13 +6220,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_record_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_record_finish;
             },
-            .DoubleDot,
-            => {
+            .DoubleDot => {
                 const field_start = self.pos;
                 self.advance();
                 var name: u32 = 0;
@@ -6370,8 +6247,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_record_finish;
             },
-            .LowerIdent,
-            => {
+            .LowerIdent => {
                 const field_start = self.pos;
                 const name = self.pos;
                 self.advance();
@@ -6432,9 +6308,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_record_field_after_value => switch (dispatch_token) {
-            .Comma,
-            .CloseCurly,
-            => {
+            .Comma, .CloseCurly => {
                 pattern_record_field_state = open_syntax.popPayload(.pattern_record_field, PatternRecordFieldState);
                 const value = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -6483,8 +6357,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_record_finish => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 const fields = try self.store.patternRecordFieldSpanFrom(pattern_record_state.scratch_top);
                 self.advance();
                 last_pattern = try self.store.addPattern(.{ .record = .{
@@ -6501,8 +6374,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_tuple_next => switch (dispatch_token) {
-            .CloseRound,
-            => {
+            .CloseRound => {
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_tuple_finish;
             },
@@ -6524,9 +6396,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_tuple_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseRound,
-            => {
+            .Comma, .CloseRound => {
                 pattern_tuple_state = open_syntax.popPayload(.pattern_tuple, PatternTupleState);
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
@@ -6551,8 +6421,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_tuple_finish => switch (dispatch_token) {
-            .CloseRound,
-            => {
+            .CloseRound => {
                 self.advance();
                 const patterns = try self.store.patternSpanFrom(pattern_tuple_state.scratch_top);
                 last_pattern = try self.store.addPattern(.{ .tuple = .{
@@ -6570,8 +6439,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .pattern_string_after_expr => switch (dispatch_token) {
-            .StringEnd,
-            => {
+            .StringEnd => {
                 pattern_string_state = open_syntax.popPayload(.pattern_string, PatternStringState);
                 const inner = last_expr orelse unreachable;
                 last_expr = null;
@@ -6746,88 +6614,62 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 }
             },
         },
-        .type_complete => switch (dispatch_token) {
-            else => {
-                const completed = last_type_anno orelse unreachable;
-                if (open_syntax.peekKind()) |kind| {
+        .type_complete => {
+            const completed = last_type_anno orelse unreachable;
+            if (open_syntax.peekKind()) |kind| {
+                const kind_int = @intFromEnum(kind);
+                if (kind_int < @intFromEnum(OpenSyntaxKind.expr_unary)) {
+                    dispatch_token = self.peek();
                     switch (kind) {
-                        .type_apply => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_apply_after_item;
-                        },
-                        .type_paren_item => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_paren_after_item;
-                        },
-                        .type_paren_fn_ret => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_paren_fn_after_ret;
-                        },
-                        .type_zero_arg_fn_ret => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_zero_arg_fn_after_ret;
-                        },
-                        .type_record_ext => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_record_after_named_ext;
-                        },
-                        .type_record_field => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_record_field_after_ty;
-                        },
-                        .type_tag_union_ext => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_tag_union_after_named_ext;
-                        },
-                        .type_tag_union_item => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_tag_union_after_item;
-                        },
-                        .type_fn_arg => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_fn_after_arg;
-                        },
-                        .type_fn_ret => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .type_fn_after_ret;
-                        },
-                        .statement_var_type => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .statement_var_after_type;
-                        },
-                        .statement_type_after_anno => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .statement_type_after_anno;
-                        },
-                        .statement_type_decl_anno => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .statement_type_decl_after_anno;
-                        },
-                        .header_requires_type => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .header_platform_requires_next;
-                        },
-                        .header_where_clause_type => {
-                            dispatch_token = self.peek();
-                            continue :dispatch .statement_type_after_where;
-                        },
-                        else => {
-                            if (entry.result_kind == .type_anno) {
-                                return .{ .type_anno = completed };
-                            }
-                            unreachable;
-                        },
+                        .header_requires_type => continue :dispatch .header_platform_requires_next,
+                        .header_where_clause_type => continue :dispatch .statement_type_after_where,
+                        .statement_var_type => continue :dispatch .statement_var_after_type,
+                        .statement_type_after_anno => continue :dispatch .statement_type_after_anno,
+                        .statement_type_decl_anno => continue :dispatch .statement_type_decl_after_anno,
+                        else => {},
+                    }
+                } else if (kind_int >= @intFromEnum(OpenSyntaxKind.type_apply)) {
+                    if (kind_int < @intFromEnum(OpenSyntaxKind.type_record)) {
+                        dispatch_token = self.peek();
+                        switch (kind) {
+                            .type_apply => continue :dispatch .type_apply_after_item,
+                            .type_paren_item => continue :dispatch .type_paren_after_item,
+                            .type_paren_fn_ret => continue :dispatch .type_paren_fn_after_ret,
+                            .type_zero_arg_fn_ret => continue :dispatch .type_zero_arg_fn_after_ret,
+                            else => {},
+                        }
+                    } else if (kind_int < @intFromEnum(OpenSyntaxKind.type_tag_union)) {
+                        dispatch_token = self.peek();
+                        switch (kind) {
+                            .type_record_ext => continue :dispatch .type_record_after_named_ext,
+                            .type_record_field => continue :dispatch .type_record_field_after_ty,
+                            else => {},
+                        }
+                    } else if (kind_int < @intFromEnum(OpenSyntaxKind.type_fn)) {
+                        dispatch_token = self.peek();
+                        switch (kind) {
+                            .type_tag_union_ext => continue :dispatch .type_tag_union_after_named_ext,
+                            .type_tag_union_item => continue :dispatch .type_tag_union_after_item,
+                            else => {},
+                        }
+                    } else {
+                        dispatch_token = self.peek();
+                        switch (kind) {
+                            .type_fn_arg => continue :dispatch .type_fn_after_arg,
+                            .type_fn_ret => continue :dispatch .type_fn_after_ret,
+                            else => {},
+                        }
                     }
                 }
-                return switch (entry.result_kind) {
-                    .type_anno => .{ .type_anno = completed },
-                    else => .{ .type_anno = completed },
-                };
-            },
+                if (entry.result_kind == .type_anno) {
+                    return .{ .type_anno = completed };
+                }
+                unreachable;
+            }
+            return .{ .type_anno = completed };
         },
         .type_apply_next => switch (dispatch_token) {
-            .CloseRound,
-            => {
+            .CloseRound => {
                 self.advance();
                 last_type_anno = try self.store.addTypeAnno(.{ .apply = .{
                     .region = .{ .start = type_apply_state.start, .end = self.pos },
@@ -6851,9 +6693,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_apply_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseRound,
-            => {
+            .Comma, .CloseRound => {
                 type_apply_state = open_syntax.popPayload(.type_apply, TypeApplyState);
                 const item = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -6878,9 +6718,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_paren_next => switch (dispatch_token) {
-            .OpArrow,
-            .OpFatArrow,
-            => {
+            .OpArrow, .OpFatArrow => {
                 const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance();
@@ -6896,8 +6734,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .type_prefix;
             },
-            .CloseRound,
-            => {
+            .CloseRound => {
                 const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
                 if ((self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and args.span.len == 0) {
                     self.advance();
@@ -6951,9 +6788,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_paren_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseRound,
-            => {
+            .Comma, .CloseRound => {
                 type_paren_after_item_state = open_syntax.popPayload(.type_paren_item, TypeParenAfterItemState);
                 const item = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -6993,8 +6828,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_paren_fn_after_ret => switch (dispatch_token) {
-            .CloseRound,
-            => {
+            .CloseRound => {
                 type_paren_fn_ret_state = open_syntax.popPayload(.type_paren_fn_ret, TypeParenFnRetState);
                 const ret = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -7040,8 +6874,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_zero_arg_fn_after_ret => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 type_zero_arg_fn_ret_state = open_syntax.popPayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
                 const ret = last_type_anno orelse unreachable;
                 last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
@@ -7069,13 +6902,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_record_next => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 dispatch_token = self.peek();
                 continue :dispatch .type_record_finish;
             },
-            .DoubleDot,
-            => {
+            .DoubleDot => {
                 const double_dot_start = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
@@ -7093,8 +6924,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 dispatch_token = self.peek();
                 continue :dispatch .type_record_finish;
             },
-            .LowerIdent,
-            => {
+            .LowerIdent => {
                 const field_start = self.pos;
                 const name = self.pos;
                 self.advance();
@@ -7139,9 +6969,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_record_after_named_ext => switch (dispatch_token) {
-            .Comma,
-            .CloseCurly,
-            => {
+            .Comma, .CloseCurly => {
                 type_record_ext_state = open_syntax.popPayload(.type_record_ext, TypeRecordExtState);
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -7173,9 +7001,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_record_field_after_ty => switch (dispatch_token) {
-            .Comma,
-            .CloseCurly,
-            => {
+            .Comma, .CloseCurly => {
                 type_record_field_state = open_syntax.popPayload(.type_record_field, TypeRecordFieldState);
                 const ty = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -7224,8 +7050,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_record_finish => switch (dispatch_token) {
-            .CloseCurly,
-            => {
+            .CloseCurly => {
                 self.advance();
                 const fields = try self.store.annoRecordFieldSpanFrom(type_record_state.scratch_top);
                 last_type_anno = try self.store.addTypeAnno(.{ .record = .{
@@ -7245,13 +7070,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_tag_union_next => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 dispatch_token = self.peek();
                 continue :dispatch .type_tag_union_finish;
             },
-            .DoubleDot,
-            => {
+            .DoubleDot => {
                 const double_dot_pos = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
@@ -7291,9 +7114,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_tag_union_after_named_ext => switch (dispatch_token) {
-            .Comma,
-            .CloseSquare,
-            => {
+            .Comma, .CloseSquare => {
                 type_tag_union_ext_state = open_syntax.popPayload(.type_tag_union_ext, TypeTagUnionExtState);
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -7325,9 +7146,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_tag_union_after_item => switch (dispatch_token) {
-            .Comma,
-            .CloseSquare,
-            => {
+            .Comma, .CloseSquare => {
                 type_tag_union_item_state = open_syntax.popPayload(.type_tag_union_item, TypeTagUnionItemState);
                 const tag = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -7374,8 +7193,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_tag_union_finish => switch (dispatch_token) {
-            .CloseSquare,
-            => {
+            .CloseSquare => {
                 self.advance();
                 const tags = try self.store.typeAnnoSpanFrom(type_tag_union_state.scratch_top);
                 last_type_anno = try self.store.addTypeAnno(.{ .tag_union = .{
@@ -7395,17 +7213,14 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_fn_args_next => switch (dispatch_token) {
-            .Comma,
-            => {
+            .Comma => {
                 self.advance();
                 try open_syntax.push(open_allocator, .type_fn_arg, TypeFnArgsState, type_fn_args_state);
                 type_args = .looking_for_args;
                 dispatch_token = self.peek();
                 continue :dispatch .type_prefix;
             },
-            .OpArrow,
-            .OpFatArrow,
-            => {
+            .OpArrow, .OpFatArrow => {
                 const args = try self.store.typeAnnoSpanFrom(type_fn_args_state.scratch_top);
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance();
@@ -7426,10 +7241,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_fn_after_arg => switch (dispatch_token) {
-            .Comma,
-            .OpArrow,
-            .OpFatArrow,
-            => {
+            .Comma, .OpArrow, .OpFatArrow => {
                 type_fn_args_state = open_syntax.popPayload(.type_fn_arg, TypeFnArgsState);
                 const arg = last_type_anno orelse unreachable;
                 last_type_anno = null;
@@ -7447,8 +7259,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .type_fn_after_ret => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 type_fn_after_ret_state = open_syntax.popPayload(.type_fn_ret, TypeFnAfterRetState);
                 const ret = last_type_anno orelse unreachable;
                 last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
@@ -7474,8 +7285,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .recovery_line => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 if (self.peek() != .EndOfFile) {
                     self.advance();
                 }
@@ -7494,10 +7304,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .recovery_delimited => switch (dispatch_token) {
-            .CloseCurly,
-            .CloseRound,
-            .CloseSquare,
-            => {
+            .CloseCurly, .CloseRound, .CloseSquare => {
                 if (self.peek() != .EndOfFile) {
                     self.advance();
                 }
@@ -7516,8 +7323,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
         },
         .recovery_statement => switch (dispatch_token) {
-            .EndOfFile,
-            => {
+            .EndOfFile => {
                 if (self.peek() != .EndOfFile) {
                     self.advance();
                 }
