@@ -4383,6 +4383,35 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         const kind_int = @intFromEnum(kind);
                         if (kind_int < @intFromEnum(OpenSyntaxKind.expr_if)) {
                             if (kind == .statement_type_associated_statement) {
+                                if (root_expr_parents.current) |parent_frame| {
+                                    if (parent_frame.open_depth == open_depth) {
+                                        dispatch_token = self.peek();
+                                        const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
+                                        if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
+                                            unreachable;
+                                        }
+                                        if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
+                                            unreachable;
+                                        }
+                                        if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
+                                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
+                                            unreachable;
+                                        }
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
+                                        unreachable;
+                                    }
+                                }
                                 unreachable;
                             }
                             dispatch_token = self.peek();
@@ -4478,6 +4507,35 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_if)) {
                     switch (kind) {
                         .statement_type_associated_statement => {
+                            if (root_expr_parents.current) |parent_frame| {
+                                if (parent_frame.open_depth == open_depth) {
+                                    dispatch_token = self.peek();
+                                    const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
+                                    if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
+                                        unreachable;
+                                    }
+                                    if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
+                                        unreachable;
+                                    }
+                                    if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
+                                        unreachable;
+                                    }
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
+                                    unreachable;
+                                }
+                            }
                             unreachable;
                         },
                         else => {},
