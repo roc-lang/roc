@@ -640,6 +640,74 @@ fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx
     return try self.addStatementWithTypeDependencies(statement, DeclIndex.Span.empty());
 }
 
+fn addDeclStatement(
+    self: *Parser,
+    pattern: AST.Pattern.Idx,
+    body: AST.Expr.Idx,
+    region: AST.TokenizedRegion,
+) Error!AST.Statement.Idx {
+    const idx = try self.store.addStatement(.{ .decl = .{
+        .pattern = pattern,
+        .body = body,
+        .region = region,
+    } });
+    try self.recordValueDecl(idx, pattern, body, region);
+    return idx;
+}
+
+fn recordValueDecl(
+    self: *Parser,
+    statement_idx: AST.Statement.Idx,
+    pattern_idx: AST.Pattern.Idx,
+    body_idx: AST.Expr.Idx,
+    region: AST.TokenizedRegion,
+) Error!void {
+    const scope_idx = self.decl_index.currentScope() orelse return;
+    const owner_type_path = self.currentAssociatedOwnerPath();
+
+    const pattern = self.store.getPattern(pattern_idx);
+    const name_tok: ?Token.Idx = if (pattern == .ident)
+        pattern.ident.ident_tok
+    else
+        null;
+    const body = self.store.getExpr(body_idx);
+    const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = switch (body) {
+        .lambda => |lambda| .{
+            .lambda,
+            @intCast(self.store.patternSlice(lambda.args).len),
+        },
+        else => .{ .none, 0 },
+    };
+
+    var record = DeclIndex.Decl{
+        .scope = scope_idx,
+        .statement = @intFromEnum(statement_idx),
+        .kind = .value,
+        .value_form = value_form,
+        .value_arity = value_arity,
+        .name_tok = name_tok,
+        .owner_type_path = owner_type_path,
+        .pattern = @intFromEnum(pattern_idx),
+        .anno = null,
+        .region = .{ .start = region.start, .end = region.end },
+    };
+
+    if (record.name_tok) |tok| {
+        record.name_ident = self.tok_buf.resolveIdentifier(tok);
+    }
+
+    const decl_idx = try self.decl_index.addDecl(record);
+    if (self.currentPendingAnno()) |pending| {
+        if (pending.*) |anno_idx| {
+            const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
+            if (anno.kind == .value_anno and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+                self.decl_index.pairAnnotation(anno_idx, decl_idx);
+            }
+        }
+        pending.* = null;
+    }
+}
+
 fn addStatementWithTypeDependencies(
     self: *Parser,
     statement: AST.Statement,
@@ -3516,11 +3584,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const parent = root_expr_parents.take().statement_decl_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
-                last_statement = try self.addStatement(.{ .decl = .{
-                    .pattern = parent.pattern,
-                    .body = body,
-                    .region = .{ .start = parent.start, .end = self.pos },
-                } });
+                last_statement = try self.addDeclStatement(parent.pattern, body, .{ .start = parent.start, .end = self.pos });
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
             },
@@ -3553,11 +3617,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const parent = root_expr_parents.take().statement_destructure_body;
                 const body = last_expr orelse unreachable;
                 last_expr = null;
-                last_statement = try self.addStatement(.{ .decl = .{
-                    .pattern = parent.pattern,
-                    .body = body,
-                    .region = .{ .start = parent.start, .end = self.pos },
-                } });
+                last_statement = try self.addDeclStatement(parent.pattern, body, .{ .start = parent.start, .end = self.pos });
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
             },
