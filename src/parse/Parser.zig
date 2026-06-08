@@ -3665,7 +3665,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
                 const type_dependencies = blk: {
-                    if (self.store.getTypeAnno(anno) == .malformed) {
+                    if (self.store.typeAnnoIsMalformed(anno)) {
                         self.decl_index.clearTypeDependenciesFrom(statement_type_decl_anno_state.type_dependencies_start);
                         break :blk DeclIndex.Span.empty();
                     }
@@ -6973,7 +6973,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 type_record_ext_state = open_syntax.popPayload(.type_record_ext, TypeRecordExtState);
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
-                const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
+                const anno_region = self.store.typeAnnoRegion(named_anno);
                 if (self.peek() == .Comma) self.advance();
                 type_record_state = .{
                     .start = type_record_ext_state.start,
@@ -6988,7 +6988,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 type_record_ext_state = open_syntax.popPayload(.type_record_ext, TypeRecordExtState);
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
-                const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
+                const anno_region = self.store.typeAnnoRegion(named_anno);
                 self.expect(.Comma) catch {};
                 type_record_state = .{
                     .start = type_record_ext_state.start,
@@ -7118,7 +7118,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 type_tag_union_ext_state = open_syntax.popPayload(.type_tag_union_ext, TypeTagUnionExtState);
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
-                const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
+                const anno_region = self.store.typeAnnoRegion(named_anno);
                 if (self.peek() == .Comma) self.advance();
                 type_tag_union_state = .{
                     .start = type_tag_union_ext_state.start,
@@ -7133,7 +7133,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 type_tag_union_ext_state = open_syntax.popPayload(.type_tag_union_ext, TypeTagUnionExtState);
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
-                const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
+                const anno_region = self.store.typeAnnoRegion(named_anno);
                 self.expect(.Comma) catch {};
                 type_tag_union_state = .{
                     .start = type_tag_union_ext_state.start,

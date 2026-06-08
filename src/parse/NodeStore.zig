@@ -2116,6 +2116,18 @@ pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.An
     };
 }
 
+/// Returns the source region for a stored type annotation without reconstructing the full AST union.
+pub fn typeAnnoRegion(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TokenizedRegion {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
+    return node.region;
+}
+
+/// Returns whether a stored type annotation is malformed without reconstructing the full AST union.
+pub fn typeAnnoIsMalformed(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) bool {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
+    return node.tag == .malformed;
+}
+
 /// Get a WhereClause node from the store, using a type-safe index to the node.
 pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
