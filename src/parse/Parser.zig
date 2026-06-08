@@ -2001,6 +2001,10 @@ const RootExprParents = struct {
         self.current = self.stack.pop();
         return current.parent;
     }
+
+    fn depth(self: *const RootExprParents) usize {
+        return self.stack.items.len + @intFromBool(self.current != null);
+    }
 };
 
 const RootStatementParents = struct {
@@ -2061,6 +2065,7 @@ const ExprBinaryRhsStack = struct {
     const Frame = struct {
         state: ExprAfterBinaryRhsState,
         open_depth: usize,
+        root_expr_depth: usize,
     };
 
     current: ?Frame = null,
@@ -2070,11 +2075,11 @@ const ExprBinaryRhsStack = struct {
         self.stack.deinit(allocator);
     }
 
-    fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState, open_depth: usize) Error!void {
+    fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState, open_depth: usize, root_expr_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
-        self.current = .{ .state = state, .open_depth = open_depth };
+        self.current = .{ .state = state, .open_depth = open_depth, .root_expr_depth = root_expr_depth };
     }
 
     fn leave(self: *ExprBinaryRhsStack) ExprAfterBinaryRhsState {
@@ -4347,7 +4352,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             .min_bp = expr_finish_state.min_bp,
                             .left = expr_finish_state.expr,
                             .operator = op_pos,
-                        }, open_syntax.entries.items.len);
+                        }, open_syntax.entries.items.len, root_expr_parents.depth());
                         expr_state = .{ .start = self.pos, .min_bp = bp.right };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
@@ -4355,7 +4360,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     last_expr = expr_finish_state.expr;
                     const open_depth = open_syntax.entries.items.len;
                     if (expr_binary_rhs_stack.current) |frame| {
-                        if (frame.open_depth == open_depth) {
+                        if (frame.open_depth == open_depth and frame.root_expr_depth == root_expr_parents.depth()) {
                             dispatch_token = self.peek();
                             continue :dispatch .expr_after_binary_rhs;
                         }
@@ -4468,7 +4473,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         .min_bp = expr_finish_state.min_bp,
                         .left = expr_finish_state.expr,
                         .operator = op_pos,
-                    }, open_syntax.entries.items.len);
+                    }, open_syntax.entries.items.len, root_expr_parents.depth());
                     expr_state = .{ .start = self.pos, .min_bp = bp.right };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -4482,7 +4487,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             const completed = last_expr orelse unreachable;
             const open_depth = open_syntax.entries.items.len;
             if (expr_binary_rhs_stack.current) |frame| {
-                if (frame.open_depth == open_depth) {
+                if (frame.open_depth == open_depth and frame.root_expr_depth == root_expr_parents.depth()) {
                     dispatch_token = self.peek();
                     continue :dispatch .expr_after_binary_rhs;
                 }
