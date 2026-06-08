@@ -4028,8 +4028,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .OpenCurly) {
                     const start = self.pos;
                     self.advance();
+                    const after_open = self.peek();
 
-                    if (self.peek() == .CloseCurly) {
+                    if (after_open == .CloseCurly) {
                         expr_record_state = .{
                             .start = start,
                             .min_bp = expr_state.min_bp,
@@ -4038,7 +4039,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_record_finish;
-                    } else if (self.peek() == .DoubleDot) {
+                    } else if (after_open == .DoubleDot) {
                         self.advance();
                         try open_syntax.push(open_allocator, .expr_record_ext, ExprRecordExtState, .{
                             .start = start,
@@ -4047,9 +4048,15 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
-                    } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
+                    } else if (after_open == .LowerIdent) {
+                        const next_tok = self.peekNext();
+                        if (next_tok != .Comma and next_tok != .OpColon) {
+                            expr_after_expr_state = .{ .start = start, .min_bp = expr_state.min_bp };
+                            dispatch_token = after_open;
+                            continue :dispatch .expr_block_begin_after_open;
+                        }
                         var is_block = false;
-                        if (self.peekNext() == .OpColon) {
+                        if (next_tok == .OpColon) {
                             var lookahead_pos = self.pos + 2;
                             var depth: u32 = 0;
                             while (lookahead_pos < self.tok_buf.tokens.len) {
