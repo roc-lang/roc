@@ -4359,118 +4359,93 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     last_expr = expr_finish_state.expr;
                     if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
                         dispatch_token = self.peek();
-                        switch (parent) {
-                            .expr_collection_item => continue :dispatch .expr_collection_after_item,
-                            .statement_expect => continue :dispatch .statement_expect_after_expr,
-                            .statement_for_expr => continue :dispatch .statement_for_after_expr,
-                            .statement_for_body => continue :dispatch .statement_for_after_body,
-                            .statement_while_cond => continue :dispatch .statement_while_after_cond,
-                            .statement_while_body => continue :dispatch .statement_while_after_body,
-                            .statement_crash => continue :dispatch .statement_crash_after_expr,
-                            .statement_dbg => continue :dispatch .statement_dbg_after_expr,
-                            .statement_return => continue :dispatch .statement_return_after_expr,
-                            .statement_var_body => continue :dispatch .statement_var_after_body,
-                            .statement_decl_body => continue :dispatch .statement_decl_after_body,
-                            .statement_destructure_body => continue :dispatch .statement_destructure_after_body,
-                            .statement_final_expr => continue :dispatch .statement_final_expr,
-                            .none => unreachable,
+                        const parent_int = @intFromEnum(std.meta.activeTag(parent));
+                        if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
+                            unreachable;
                         }
+                        if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
+                            unreachable;
+                        }
+                        if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
+                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
+                            unreachable;
+                        }
+                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
+                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
+                        unreachable;
                     }
                     if (open_syntax.peekKind()) |kind| {
-                        switch (kind) {
-                            .expr_unary => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_after_unary;
-                            },
-                            .expr_binary_rhs => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_after_binary_rhs;
-                            },
-                            .expr_arrow_inner => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_arrow_after_inner;
-                            },
-                            .expr_record_ext => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_record_ext_after_expr;
-                            },
-                            .expr_record_field => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_record_field_after_value;
-                            },
-                            .expr_if => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_if_after_condition;
-                            },
-                            .expr_if_then => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_if_after_then;
-                            },
-                            .expr_if_else => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_if_after_else;
-                            },
-                            .expr_match => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_match_after_expr;
-                            },
-                            .expr_match_guard => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_match_branch_after_guard;
-                            },
-                            .expr_match_body => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_match_branch_after_body;
-                            },
-                            .expr_dbg => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_dbg_after_expr;
-                            },
-                            .expr_for_list => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_for_after_list;
-                            },
-                            .expr_for_body => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_for_after_body;
-                            },
-                            .expr_lambda_body => {
-                                dispatch_token = self.peek();
-                                continue :dispatch .expr_lambda_after_body;
-                            },
-                            .statement_type_associated_statement => {
+                        const kind_int = @intFromEnum(kind);
+                        if (kind_int < @intFromEnum(OpenSyntaxKind.expr_if)) {
+                            if (kind == .statement_type_associated_statement) {
                                 if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
                                     dispatch_token = self.peek();
-                                    switch (parent) {
-                                        .expr_collection_item => continue :dispatch .expr_collection_after_item,
-                                        .statement_expect => continue :dispatch .statement_expect_after_expr,
-                                        .statement_for_expr => continue :dispatch .statement_for_after_expr,
-                                        .statement_for_body => continue :dispatch .statement_for_after_body,
-                                        .statement_while_cond => continue :dispatch .statement_while_after_cond,
-                                        .statement_while_body => continue :dispatch .statement_while_after_body,
-                                        .statement_crash => continue :dispatch .statement_crash_after_expr,
-                                        .statement_dbg => continue :dispatch .statement_dbg_after_expr,
-                                        .statement_return => continue :dispatch .statement_return_after_expr,
-                                        .statement_var_body => continue :dispatch .statement_var_after_body,
-                                        .statement_decl_body => continue :dispatch .statement_decl_after_body,
-                                        .statement_destructure_body => continue :dispatch .statement_destructure_after_body,
-                                        .statement_final_expr => continue :dispatch .statement_final_expr,
-                                        .none => unreachable,
+                                    const parent_int = @intFromEnum(std.meta.activeTag(parent));
+                                    if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
+                                        unreachable;
                                     }
+                                    if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
+                                        unreachable;
+                                    }
+                                    if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
+                                        unreachable;
+                                    }
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
                                 }
                                 unreachable;
-                            },
-                            .pattern_string => {
+                            }
+                            dispatch_token = self.peek();
+                            if (kind == .expr_unary) continue :dispatch .expr_after_unary;
+                            if (kind == .expr_binary_rhs) continue :dispatch .expr_after_binary_rhs;
+                            if (kind == .expr_arrow_inner) continue :dispatch .expr_arrow_after_inner;
+                            if (kind == .expr_record_ext) continue :dispatch .expr_record_ext_after_expr;
+                            if (kind == .expr_record_field) continue :dispatch .expr_record_field_after_value;
+                        } else if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_list)) {
+                            dispatch_token = self.peek();
+                            if (kind == .expr_if) continue :dispatch .expr_if_after_condition;
+                            if (kind == .expr_if_then) continue :dispatch .expr_if_after_then;
+                            if (kind == .expr_if_else) continue :dispatch .expr_if_after_else;
+                            if (kind == .expr_match) continue :dispatch .expr_match_after_expr;
+                            if (kind == .expr_match_guard) continue :dispatch .expr_match_branch_after_guard;
+                            if (kind == .expr_match_body) continue :dispatch .expr_match_branch_after_body;
+                            if (kind == .expr_dbg) continue :dispatch .expr_dbg_after_expr;
+                        } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
+                            dispatch_token = self.peek();
+                            if (kind == .expr_for_list) continue :dispatch .expr_for_after_list;
+                            if (kind == .expr_for_body) continue :dispatch .expr_for_after_body;
+                            if (kind == .expr_lambda_body) continue :dispatch .expr_lambda_after_body;
+                        } else {
+                            if (kind == .pattern_string) {
                                 dispatch_token = self.peek();
                                 continue :dispatch .pattern_string_after_expr;
-                            },
-                            else => {
-                                if (entry.result_kind == .expr) {
-                                    return .{ .expr = expr_finish_state.expr };
-                                }
-                                unreachable;
-                            },
+                            }
                         }
+                        if (entry.result_kind == .expr) {
+                            return .{ .expr = expr_finish_state.expr };
+                        }
+                        unreachable;
                     }
                     return .{ .expr = expr_finish_state.expr };
                 }
