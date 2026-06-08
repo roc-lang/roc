@@ -1603,7 +1603,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runStatementKernelDirect(statementType);
+    return try self.runStatementDirect(statementType);
 }
 
 fn addTopLevelUnexpectedStatement(self: *Parser) Error!AST.Statement.Idx {
@@ -1624,7 +1624,7 @@ pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.I
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runPatternKernelDirect(alternatives);
+    return try self.runPatternRootDirect(alternatives);
 }
 
 fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
@@ -2784,19 +2784,19 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     return try self.runExprStatementKernel(.expr, min_bp, undefined, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runStatementKernelDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
+fn runStatementDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
     return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runAssociatedBlockKernelDirect(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+fn runAssociatedBlockDirect(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
     return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
 }
 
-fn runPatternKernelDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+fn runPatternRootDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
 }
 
-fn runTypeAnnoKernelDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
+fn runTypeAnnoRootDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
 }
 
@@ -6042,7 +6042,7 @@ pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runTypeAnnoKernelDirect(looking_for_args);
+    return try self.runTypeAnnoRootDirect(looking_for_args);
 }
 
 fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
@@ -6177,7 +6177,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    return try self.runAssociatedBlockKernelDirect(start, owner_type_path);
+    return try self.runAssociatedBlockDirect(start, owner_type_path);
 }
 
 fn finishRecordExpr(
