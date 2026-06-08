@@ -4,7 +4,7 @@ on: [pull_request]
 
 jobs:
   debug:
-    runs-on: windows-11-arm
+    runs-on: windows-2025
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
