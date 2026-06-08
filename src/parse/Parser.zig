@@ -4353,22 +4353,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 }
             }
 
-            if (getTokenBP(self.peek())) |bp| {
-                if (bp.left >= expr_finish_state.min_bp) {
-                    const op_pos = self.pos;
-                    self.advance();
-                    try expr_binary_rhs_stack.enter(open_allocator, .{
-                        .start = expr_finish_state.start,
-                        .min_bp = expr_finish_state.min_bp,
-                        .left = expr_finish_state.expr,
-                        .operator = op_pos,
-                    });
-                    try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
-                    expr_state = .{ .start = self.pos, .min_bp = bp.right };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_prefix;
-                }
-            }
             last_expr = expr_finish_state.expr;
             dispatch_token = self.peek();
             continue :dispatch .expr_complete;
