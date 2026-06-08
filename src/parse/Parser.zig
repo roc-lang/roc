@@ -4374,21 +4374,22 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     if (root_expr_parents.current) |parent_frame| {
                         if (parent_frame.open_depth == open_depth) {
                             dispatch_token = self.peek();
-                            const after = parent_frame.after;
-                            if (after == .statement_final_expr) continue :dispatch .statement_final_expr;
-                            if (after == .statement_decl_after_body) continue :dispatch .statement_decl_after_body;
-                            if (after == .expr_collection_after_item) continue :dispatch .expr_collection_after_item;
-                            if (after == .statement_var_after_body) continue :dispatch .statement_var_after_body;
-                            if (after == .statement_return_after_expr) continue :dispatch .statement_return_after_expr;
-                            if (after == .statement_expect_after_expr) continue :dispatch .statement_expect_after_expr;
-                            if (after == .statement_for_after_expr) continue :dispatch .statement_for_after_expr;
-                            if (after == .statement_for_after_body) continue :dispatch .statement_for_after_body;
-                            if (after == .statement_while_after_cond) continue :dispatch .statement_while_after_cond;
-                            if (after == .statement_while_after_body) continue :dispatch .statement_while_after_body;
-                            if (after == .statement_crash_after_expr) continue :dispatch .statement_crash_after_expr;
-                            if (after == .statement_dbg_after_expr) continue :dispatch .statement_dbg_after_expr;
-                            if (after == .statement_destructure_after_body) continue :dispatch .statement_destructure_after_body;
-                            unreachable;
+                            switch (parent_frame.after) {
+                                .expr_collection_after_item => continue :dispatch .expr_collection_after_item,
+                                .statement_expect_after_expr => continue :dispatch .statement_expect_after_expr,
+                                .statement_for_after_expr => continue :dispatch .statement_for_after_expr,
+                                .statement_for_after_body => continue :dispatch .statement_for_after_body,
+                                .statement_while_after_cond => continue :dispatch .statement_while_after_cond,
+                                .statement_while_after_body => continue :dispatch .statement_while_after_body,
+                                .statement_crash_after_expr => continue :dispatch .statement_crash_after_expr,
+                                .statement_dbg_after_expr => continue :dispatch .statement_dbg_after_expr,
+                                .statement_return_after_expr => continue :dispatch .statement_return_after_expr,
+                                .statement_var_after_body => continue :dispatch .statement_var_after_body,
+                                .statement_decl_after_body => continue :dispatch .statement_decl_after_body,
+                                .statement_destructure_after_body => continue :dispatch .statement_destructure_after_body,
+                                .statement_final_expr => continue :dispatch .statement_final_expr,
+                                else => unreachable,
+                            }
                         }
                     }
                     if (open_depth != 0) {
@@ -4399,21 +4400,22 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                                 if (root_expr_parents.current) |parent_frame| {
                                     if (parent_frame.open_depth == open_depth) {
                                         dispatch_token = self.peek();
-                                        const after = parent_frame.after;
-                                        if (after == .statement_final_expr) continue :dispatch .statement_final_expr;
-                                        if (after == .statement_decl_after_body) continue :dispatch .statement_decl_after_body;
-                                        if (after == .expr_collection_after_item) continue :dispatch .expr_collection_after_item;
-                                        if (after == .statement_var_after_body) continue :dispatch .statement_var_after_body;
-                                        if (after == .statement_return_after_expr) continue :dispatch .statement_return_after_expr;
-                                        if (after == .statement_expect_after_expr) continue :dispatch .statement_expect_after_expr;
-                                        if (after == .statement_for_after_expr) continue :dispatch .statement_for_after_expr;
-                                        if (after == .statement_for_after_body) continue :dispatch .statement_for_after_body;
-                                        if (after == .statement_while_after_cond) continue :dispatch .statement_while_after_cond;
-                                        if (after == .statement_while_after_body) continue :dispatch .statement_while_after_body;
-                                        if (after == .statement_crash_after_expr) continue :dispatch .statement_crash_after_expr;
-                                        if (after == .statement_dbg_after_expr) continue :dispatch .statement_dbg_after_expr;
-                                        if (after == .statement_destructure_after_body) continue :dispatch .statement_destructure_after_body;
-                                        unreachable;
+                                        switch (parent_frame.after) {
+                                            .expr_collection_after_item => continue :dispatch .expr_collection_after_item,
+                                            .statement_expect_after_expr => continue :dispatch .statement_expect_after_expr,
+                                            .statement_for_after_expr => continue :dispatch .statement_for_after_expr,
+                                            .statement_for_after_body => continue :dispatch .statement_for_after_body,
+                                            .statement_while_after_cond => continue :dispatch .statement_while_after_cond,
+                                            .statement_while_after_body => continue :dispatch .statement_while_after_body,
+                                            .statement_crash_after_expr => continue :dispatch .statement_crash_after_expr,
+                                            .statement_dbg_after_expr => continue :dispatch .statement_dbg_after_expr,
+                                            .statement_return_after_expr => continue :dispatch .statement_return_after_expr,
+                                            .statement_var_after_body => continue :dispatch .statement_var_after_body,
+                                            .statement_decl_after_body => continue :dispatch .statement_decl_after_body,
+                                            .statement_destructure_after_body => continue :dispatch .statement_destructure_after_body,
+                                            .statement_final_expr => continue :dispatch .statement_final_expr,
+                                            else => unreachable,
+                                        }
                                     }
                                 }
                                 unreachable;
@@ -4479,21 +4481,22 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             if (root_expr_parents.current) |parent_frame| {
                 if (parent_frame.open_depth == open_depth) {
                     dispatch_token = self.peek();
-                    const after = parent_frame.after;
-                    if (after == .statement_final_expr) continue :dispatch .statement_final_expr;
-                    if (after == .statement_decl_after_body) continue :dispatch .statement_decl_after_body;
-                    if (after == .expr_collection_after_item) continue :dispatch .expr_collection_after_item;
-                    if (after == .statement_var_after_body) continue :dispatch .statement_var_after_body;
-                    if (after == .statement_return_after_expr) continue :dispatch .statement_return_after_expr;
-                    if (after == .statement_expect_after_expr) continue :dispatch .statement_expect_after_expr;
-                    if (after == .statement_for_after_expr) continue :dispatch .statement_for_after_expr;
-                    if (after == .statement_for_after_body) continue :dispatch .statement_for_after_body;
-                    if (after == .statement_while_after_cond) continue :dispatch .statement_while_after_cond;
-                    if (after == .statement_while_after_body) continue :dispatch .statement_while_after_body;
-                    if (after == .statement_crash_after_expr) continue :dispatch .statement_crash_after_expr;
-                    if (after == .statement_dbg_after_expr) continue :dispatch .statement_dbg_after_expr;
-                    if (after == .statement_destructure_after_body) continue :dispatch .statement_destructure_after_body;
-                    unreachable;
+                    switch (parent_frame.after) {
+                        .expr_collection_after_item => continue :dispatch .expr_collection_after_item,
+                        .statement_expect_after_expr => continue :dispatch .statement_expect_after_expr,
+                        .statement_for_after_expr => continue :dispatch .statement_for_after_expr,
+                        .statement_for_after_body => continue :dispatch .statement_for_after_body,
+                        .statement_while_after_cond => continue :dispatch .statement_while_after_cond,
+                        .statement_while_after_body => continue :dispatch .statement_while_after_body,
+                        .statement_crash_after_expr => continue :dispatch .statement_crash_after_expr,
+                        .statement_dbg_after_expr => continue :dispatch .statement_dbg_after_expr,
+                        .statement_return_after_expr => continue :dispatch .statement_return_after_expr,
+                        .statement_var_after_body => continue :dispatch .statement_var_after_body,
+                        .statement_decl_after_body => continue :dispatch .statement_decl_after_body,
+                        .statement_destructure_after_body => continue :dispatch .statement_destructure_after_body,
+                        .statement_final_expr => continue :dispatch .statement_final_expr,
+                        else => unreachable,
+                    }
                 }
             }
             if (open_depth != 0) {
@@ -4505,21 +4508,22 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             if (root_expr_parents.current) |parent_frame| {
                                 if (parent_frame.open_depth == open_depth) {
                                     dispatch_token = self.peek();
-                                    const after = parent_frame.after;
-                                    if (after == .statement_final_expr) continue :dispatch .statement_final_expr;
-                                    if (after == .statement_decl_after_body) continue :dispatch .statement_decl_after_body;
-                                    if (after == .expr_collection_after_item) continue :dispatch .expr_collection_after_item;
-                                    if (after == .statement_var_after_body) continue :dispatch .statement_var_after_body;
-                                    if (after == .statement_return_after_expr) continue :dispatch .statement_return_after_expr;
-                                    if (after == .statement_expect_after_expr) continue :dispatch .statement_expect_after_expr;
-                                    if (after == .statement_for_after_expr) continue :dispatch .statement_for_after_expr;
-                                    if (after == .statement_for_after_body) continue :dispatch .statement_for_after_body;
-                                    if (after == .statement_while_after_cond) continue :dispatch .statement_while_after_cond;
-                                    if (after == .statement_while_after_body) continue :dispatch .statement_while_after_body;
-                                    if (after == .statement_crash_after_expr) continue :dispatch .statement_crash_after_expr;
-                                    if (after == .statement_dbg_after_expr) continue :dispatch .statement_dbg_after_expr;
-                                    if (after == .statement_destructure_after_body) continue :dispatch .statement_destructure_after_body;
-                                    unreachable;
+                                    switch (parent_frame.after) {
+                                        .expr_collection_after_item => continue :dispatch .expr_collection_after_item,
+                                        .statement_expect_after_expr => continue :dispatch .statement_expect_after_expr,
+                                        .statement_for_after_expr => continue :dispatch .statement_for_after_expr,
+                                        .statement_for_after_body => continue :dispatch .statement_for_after_body,
+                                        .statement_while_after_cond => continue :dispatch .statement_while_after_cond,
+                                        .statement_while_after_body => continue :dispatch .statement_while_after_body,
+                                        .statement_crash_after_expr => continue :dispatch .statement_crash_after_expr,
+                                        .statement_dbg_after_expr => continue :dispatch .statement_dbg_after_expr,
+                                        .statement_return_after_expr => continue :dispatch .statement_return_after_expr,
+                                        .statement_var_after_body => continue :dispatch .statement_var_after_body,
+                                        .statement_decl_after_body => continue :dispatch .statement_decl_after_body,
+                                        .statement_destructure_after_body => continue :dispatch .statement_destructure_after_body,
+                                        .statement_final_expr => continue :dispatch .statement_final_expr,
+                                        else => unreachable,
+                                    }
                                 }
                             }
                             unreachable;
@@ -4738,21 +4742,22 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             if (root_expr_parents.current) |parent_frame| {
                                 if (parent_frame.open_depth == open_depth) {
                                     dispatch_token = self.peek();
-                                    const after = parent_frame.after;
-                                    if (after == .statement_final_expr) continue :dispatch .statement_final_expr;
-                                    if (after == .statement_decl_after_body) continue :dispatch .statement_decl_after_body;
-                                    if (after == .expr_collection_after_item) continue :dispatch .expr_collection_after_item;
-                                    if (after == .statement_var_after_body) continue :dispatch .statement_var_after_body;
-                                    if (after == .statement_return_after_expr) continue :dispatch .statement_return_after_expr;
-                                    if (after == .statement_expect_after_expr) continue :dispatch .statement_expect_after_expr;
-                                    if (after == .statement_for_after_expr) continue :dispatch .statement_for_after_expr;
-                                    if (after == .statement_for_after_body) continue :dispatch .statement_for_after_body;
-                                    if (after == .statement_while_after_cond) continue :dispatch .statement_while_after_cond;
-                                    if (after == .statement_while_after_body) continue :dispatch .statement_while_after_body;
-                                    if (after == .statement_crash_after_expr) continue :dispatch .statement_crash_after_expr;
-                                    if (after == .statement_dbg_after_expr) continue :dispatch .statement_dbg_after_expr;
-                                    if (after == .statement_destructure_after_body) continue :dispatch .statement_destructure_after_body;
-                                    unreachable;
+                                    switch (parent_frame.after) {
+                                        .expr_collection_after_item => continue :dispatch .expr_collection_after_item,
+                                        .statement_expect_after_expr => continue :dispatch .statement_expect_after_expr,
+                                        .statement_for_after_expr => continue :dispatch .statement_for_after_expr,
+                                        .statement_for_after_body => continue :dispatch .statement_for_after_body,
+                                        .statement_while_after_cond => continue :dispatch .statement_while_after_cond,
+                                        .statement_while_after_body => continue :dispatch .statement_while_after_body,
+                                        .statement_crash_after_expr => continue :dispatch .statement_crash_after_expr,
+                                        .statement_dbg_after_expr => continue :dispatch .statement_dbg_after_expr,
+                                        .statement_return_after_expr => continue :dispatch .statement_return_after_expr,
+                                        .statement_var_after_body => continue :dispatch .statement_var_after_body,
+                                        .statement_decl_after_body => continue :dispatch .statement_decl_after_body,
+                                        .statement_destructure_after_body => continue :dispatch .statement_destructure_after_body,
+                                        .statement_final_expr => continue :dispatch .statement_final_expr,
+                                        else => unreachable,
+                                    }
                                 }
                             }
                             return .{ .expr = expr };
