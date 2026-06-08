@@ -1962,6 +1962,7 @@ const StatementAssociatedStatementState = struct {
 
 const RootExprParent = union(enum) {
     none,
+    expr_collection_item,
     statement_expect: Token.Idx,
     statement_for_expr: StatementForExprState,
     statement_for_body: StatementForBodyState,
@@ -2000,27 +2001,6 @@ const RootExprParents = struct {
         const current = self.current orelse unreachable;
         self.current = self.stack.pop();
         return current.parent;
-    }
-};
-
-const ExprCollectionItemParents = struct {
-    current: ?usize = null,
-    stack: std.ArrayList(usize) = .empty,
-
-    fn deinit(self: *ExprCollectionItemParents, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    fn set(self: *ExprCollectionItemParents, allocator: std.mem.Allocator, open_depth: usize) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
-        }
-        self.current = open_depth;
-    }
-
-    fn take(self: *ExprCollectionItemParents) void {
-        _ = self.current orelse unreachable;
-        self.current = self.stack.pop();
     }
 };
 
@@ -2672,8 +2652,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     defer root_statement_parents.deinit(open_allocator);
     var root_expr_parents: RootExprParents = .{};
     defer root_expr_parents.deinit(open_allocator);
-    var expr_collection_item_parents: ExprCollectionItemParents = .{};
-    defer expr_collection_item_parents.deinit(open_allocator);
     var pattern_alternatives = entry.pattern_alternatives;
     var type_args = entry.type_args;
     var statement_type = entry.statement_type;
@@ -4371,17 +4349,12 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     last_expr = expr_finish_state.expr;
                     const open_depth = open_syntax.entries.items.len;
-                    if (expr_collection_item_parents.current) |collection_open_depth| {
-                        if (collection_open_depth == open_depth) {
-                            dispatch_token = self.peek();
-                            continue :dispatch .expr_collection_after_item;
-                        }
-                    }
                     if (root_expr_parents.current) |parent_frame| {
                         if (parent_frame.open_depth == open_depth) {
                             dispatch_token = self.peek();
                             const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
                             if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
                                 if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
                                 if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
                                 if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
@@ -4470,17 +4443,12 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         .expr_complete => {
             const completed = last_expr orelse unreachable;
             const open_depth = open_syntax.entries.items.len;
-            if (expr_collection_item_parents.current) |collection_open_depth| {
-                if (collection_open_depth == open_depth) {
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_collection_after_item;
-                }
-            }
             if (root_expr_parents.current) |parent_frame| {
                 if (parent_frame.open_depth == open_depth) {
                     dispatch_token = self.peek();
                     const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
                     if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
                         if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
                         if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
                         if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
@@ -4723,17 +4691,12 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             }
                             last_expr = expr;
                             const open_depth = open_syntax.entries.items.len;
-                            if (expr_collection_item_parents.current) |collection_open_depth| {
-                                if (collection_open_depth == open_depth) {
-                                    dispatch_token = self.peek();
-                                    continue :dispatch .expr_collection_after_item;
-                                }
-                            }
                             if (root_expr_parents.current) |parent_frame| {
                                 if (parent_frame.open_depth == open_depth) {
                                     dispatch_token = self.peek();
                                     const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
                                     if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                        if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
                                         if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
                                         if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
                                         if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
@@ -4813,7 +4776,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .expr_suffix;
             },
             else => {
-                try expr_collection_item_parents.set(open_allocator, open_syntax.entries.items.len);
+                try root_expr_parents.set(open_allocator, .expr_collection_item, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -4821,7 +4784,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         },
         .expr_collection_after_item => switch (dispatch_token) {
             .Comma, .CloseRound, .CloseSquare => {
-                expr_collection_item_parents.take();
+                _ = root_expr_parents.take().expr_collection_item;
                 const item = last_expr orelse unreachable;
                 last_expr = null;
                 try self.store.addScratchExpr(item);
@@ -4830,7 +4793,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .expr_collection_next;
             },
             else => {
-                expr_collection_item_parents.take();
+                _ = root_expr_parents.take().expr_collection_item;
                 const item = last_expr orelse unreachable;
                 last_expr = null;
                 try self.store.addScratchExpr(item);
