@@ -640,7 +640,7 @@ fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx
     return try self.addStatementWithTypeDependencies(statement, DeclIndex.Span.empty());
 }
 
-fn addDeclStatement(
+inline fn addDeclStatement(
     self: *Parser,
     pattern: AST.Pattern.Idx,
     body: AST.Expr.Idx,
