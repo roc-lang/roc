@@ -446,12 +446,19 @@ const Lowerer = struct {
                 .value = try self.lowerExpr(let_.value),
                 .rest = try self.lowerExpr(let_.rest),
             } },
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached Lambda Mono"),
             .fn_ref => |target| try self.lowerCallableValue(expr_id, target, ty),
             .call_value => |call| try self.lowerValueCall(ty, call),
-            .call_proc => |call| .{ .direct_call = .{
-                .target = try self.ensureOwnFnSpec(call.callee, .finite),
-                .args = try self.lowerDirectCallArgs(call.callee, call.args),
-            } },
+            .call_proc => |call| blk: {
+                const callee = Lifted.callProcCallee(call);
+                break :blk .{ .direct_call = .{
+                    .target = try self.ensureOwnFnSpec(callee, .finite),
+                    .args = try self.lowerDirectCallArgs(callee, call.args),
+                } };
+            },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = try self.lowerExprSpan(call.args),

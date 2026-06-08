@@ -32,7 +32,7 @@ pub const ModuleNode = struct {
     /// Build depth from root (lower = closer to root)
     depth: u32,
 
-    pub fn init(allocator: Allocator, path: []const u8, name: []const u8) !ModuleNode {
+    pub fn init(allocator: Allocator, path: []const u8, name: []const u8) Allocator.Error!ModuleNode {
         return .{
             .path = try allocator.dupe(u8, path),
             .name = try allocator.dupe(u8, name),
@@ -57,11 +57,11 @@ pub const ModuleNode = struct {
         self.dependents.deinit(allocator);
     }
 
-    pub fn addImport(self: *ModuleNode, allocator: Allocator, import_path: []const u8) !void {
+    pub fn addImport(self: *ModuleNode, allocator: Allocator, import_path: []const u8) Allocator.Error!void {
         try self.imports.append(allocator, try allocator.dupe(u8, import_path));
     }
 
-    pub fn addDependent(self: *ModuleNode, allocator: Allocator, dependent_path: []const u8) !void {
+    pub fn addDependent(self: *ModuleNode, allocator: Allocator, dependent_path: []const u8) Allocator.Error!void {
         try self.dependents.append(allocator, try allocator.dupe(u8, dependent_path));
     }
 };
@@ -120,7 +120,7 @@ pub const DependencyGraph = struct {
     }
 
     /// Get or create a module node for the given path
-    pub fn getOrCreateModule(self: *DependencyGraph, path: []const u8, name: []const u8) !*ModuleNode {
+    pub fn getOrCreateModule(self: *DependencyGraph, path: []const u8, name: []const u8) Allocator.Error!*ModuleNode {
         const gop = try self.modules.getOrPut(path);
         if (!gop.found_existing) {
             gop.value_ptr.* = try ModuleNode.init(self.allocator, path, name);
@@ -136,7 +136,7 @@ pub const DependencyGraph = struct {
     }
 
     /// Update the content hash for a module (creates module if it doesn't exist)
-    pub fn setContentHash(self: *DependencyGraph, path: []const u8, hash: [32]u8) !void {
+    pub fn setContentHash(self: *DependencyGraph, path: []const u8, hash: [32]u8) Allocator.Error!void {
         const node = try self.getOrCreateModule(path, std.fs.path.basename(path));
         node.content_hash = hash;
     }
@@ -184,7 +184,7 @@ pub const DependencyGraph = struct {
 
     /// Build the dependency graph from a PackageEnv after a successful build.
     /// This extracts module relationships from the compiler's internal state.
-    pub fn buildFromPackageEnv(self: *DependencyGraph, pkg_env: *compile.package.PackageEnv) !void {
+    pub fn buildFromPackageEnv(self: *DependencyGraph, pkg_env: *compile.package.PackageEnv) Allocator.Error!void {
         // First pass: create all module nodes
         for (pkg_env.modules.items) |*module_state| {
             const node = try self.getOrCreateModule(module_state.path, module_state.name);
@@ -212,7 +212,7 @@ pub const DependencyGraph = struct {
 
     /// Get all modules that would be affected if the given module changes.
     /// Returns a list of paths that need to be rebuilt (transitively).
-    pub fn getStaleModules(self: *const DependencyGraph, changed_path: []const u8) ![]const []const u8 {
+    pub fn getStaleModules(self: *const DependencyGraph, changed_path: []const u8) Allocator.Error![]const []const u8 {
         var stale: std.ArrayList([]const u8) = .empty;
         errdefer stale.deinit(self.allocator);
 
@@ -267,7 +267,7 @@ pub const DependencyGraph = struct {
     /// but not when only internal implementation changes.
     ///
     /// The hash is computed from sorted export names for stability.
-    pub fn computeExportsHash(allocator: Allocator, module_env: *const @import("can").ModuleEnv) ![32]u8 {
+    pub fn computeExportsHash(allocator: Allocator, module_env: *const @import("can").ModuleEnv) Allocator.Error![32]u8 {
         // Collect all exported symbol names
         var export_names: std.ArrayList([]const u8) = .empty;
         defer export_names.deinit(allocator);

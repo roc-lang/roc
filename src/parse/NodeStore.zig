@@ -4,6 +4,7 @@
 //! the AST.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const base = @import("base");
 
@@ -274,7 +275,7 @@ pub fn debug(store: *NodeStore, writer: *std.Io.Writer) void {
 }
 
 /// Writes debug information about all nodes and scratch buffers to the given writer.
-pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) !void {
+pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) error{WriteFailed}!void {
     try writer.print("\n==> IR.NodeStore DEBUG <==\n", .{});
     try writer.print("Nodes:\n", .{});
     var nodes_iter = store.nodes.iterIndices();
@@ -2099,7 +2100,7 @@ pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.M
 }
 
 /// Retrieves type header data from a stored type header node.
-pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) !AST.TypeHeader {
+pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) error{MalformedNode}!AST.TypeHeader {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
 
     if (node.tag != .ty_header) {
@@ -2117,7 +2118,7 @@ pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) !A
 }
 
 /// Retrieves annotation record field data from a stored annotation record field node.
-pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) !AST.AnnoRecordField {
+pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) error{MalformedNode}!AST.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
 
     if (node.tag == .malformed) {

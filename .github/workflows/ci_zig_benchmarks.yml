@@ -32,7 +32,7 @@ jobs:
       - name: Build main branch release binary
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release'"
+          command: "nix develop ./src/ -c bash -c 'zig build build-release'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -50,7 +50,7 @@ jobs:
       - name: Build PR branch release binary
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release'"
+          command: "nix develop ./src/ -c bash -c 'zig build build-release'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 

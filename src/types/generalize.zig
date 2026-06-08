@@ -47,6 +47,7 @@
 //! - `Generalizer.generalize()` - Generalize all variables at a given rank
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 const TypesStore = @import("store.zig").Store;
@@ -190,7 +191,7 @@ pub const Generalizer = struct {
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Safe to generalize
-                    self.store.setDescRank(resolved.desc_idx, Rank.generalized);
+                    try self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
         }
@@ -282,7 +283,7 @@ pub const Generalizer = struct {
             break :blk resolved.desc.rank.min(group_rank);
         };
 
-        self.store.setDescRank(resolved.desc_idx, new_rank);
+        try self.store.setDescRank(resolved.desc_idx, new_rank);
         return new_rank;
     }
 
@@ -496,7 +497,7 @@ pub const VarPool = struct {
         }
     }
 
-    pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) !void {
+    pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) Allocator.Error!void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
                 std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
@@ -505,7 +506,7 @@ pub const VarPool = struct {
         try self.ranks.items[@intFromEnum(rank)].append(variable);
     }
 
-    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) !void {
+    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) Allocator.Error!void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
                 std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
@@ -530,7 +531,7 @@ fn mkVar(n: u32) Var {
     return @enumFromInt(n);
 }
 
-fn expectVarsEqual(actual: []Var, expected: []const Var) !void {
+fn expectVarsEqual(actual: []Var, expected: []const Var) anyerror!void {
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |e, a| {
         try std.testing.expectEqual(e, a);

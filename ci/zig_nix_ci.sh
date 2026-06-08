@@ -29,5 +29,5 @@ if [[ "$build_only" -eq 1 ]]; then
     exit 0
 fi
 
-zig build snapshot "$@"
-zig build test "$@"
+zig build run-check-snapshots "$@"
+zig build run-test-zig "$@"

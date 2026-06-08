@@ -2,6 +2,7 @@
 //! reports to LSP diagnostics.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const build_options = @import("build_options");
@@ -34,18 +35,12 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
 
+pub const DebugFlags = @import("debug.zig").DebugFlags;
+
 const MethodOwnerLookup = struct {
     owner: CIR.Statement.Idx,
     type_ident: base.Ident.Idx,
     builtin_origin: bool,
-};
-
-/// Flags allowing granular debugging
-pub const DebugFlags = struct {
-    build: bool = false,
-    syntax: bool = false,
-    server: bool = false,
-    completion: bool = false,
 };
 
 /// Runs BuildEnv-backed syntax/type checks and converts reports to LSP diagnostics.
@@ -73,12 +68,53 @@ pub const SyntaxChecker = struct {
     const owner_previous = "previous_build_env";
     const owner_snapshot = "snapshot";
 
+    const DocumentIdentity = struct {
+        absolute_path: [:0]u8,
+        content_hash: [32]u8,
+
+        fn deinit(self: *DocumentIdentity, allocator: Allocator) void {
+            allocator.free(self.absolute_path);
+        }
+    };
+
+    const DocumentBuild = struct {
+        checker: *SyntaxChecker,
+        identity: ?DocumentIdentity,
+        session: ?BuildSession,
+        env: *BuildEnv,
+        absolute_path: []const u8,
+        build_succeeded: bool,
+        has_reports: bool,
+        reused: bool,
+
+        fn deinit(self: *DocumentBuild) void {
+            if (self.session) |*session| {
+                session.deinit();
+            }
+            if (self.identity) |*identity| {
+                identity.deinit(self.checker.allocator);
+            }
+        }
+
+        fn getModuleEnv(self: *DocumentBuild) ?*ModuleEnv {
+            if (self.reused) {
+                return self.checker.getModuleEnvByPathInEnv(self.env, self.absolute_path);
+            }
+            return self.session.?.getModuleEnv();
+        }
+    };
+
     pub fn init(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
+        var cache_config = CacheConfig{ .roc_ctx = CoreCtx.default(allocator, allocator, std_io) };
+        if (builtin.is_test) {
+            cache_config.enabled = false;
+        }
+
         return .{
             .allocator = allocator,
             .std_io = std_io,
             .dependency_graph = DependencyGraph.init(allocator),
-            .cache_config = .{ .roc_ctx = CoreCtx.default(allocator, allocator, std_io) },
+            .cache_config = cache_config,
             .debug = debug,
             .log_file = log_file,
         };
@@ -110,8 +146,102 @@ pub const SyntaxChecker = struct {
         self.dependency_graph.deinit();
     }
 
+    fn documentIdentityFromText(self: *SyntaxChecker, uri: []const u8, text: []const u8) Allocator.Error!DocumentIdentity {
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch
+            try self.allocator.dupeZ(u8, path);
+
+        return .{
+            .absolute_path = absolute_path,
+            .content_hash = DependencyGraph.computeContentHash(text),
+        };
+    }
+
+    fn matchingBuildEnvHandle(self: *SyntaxChecker, absolute_path: []const u8, content_hash: [32]u8) ?*BuildEnvHandle {
+        if (self.build_env) |handle| {
+            if (handle.matchesDocumentContent(absolute_path, content_hash)) {
+                return handle;
+            }
+        }
+
+        if (self.snapshot_envs.get(absolute_path)) |handle| {
+            if (handle.matchesDocumentContent(absolute_path, content_hash)) {
+                return handle;
+            }
+        }
+
+        if (self.previous_build_env) |handle| {
+            if (handle.matchesDocumentContent(absolute_path, content_hash)) {
+                return handle;
+            }
+        }
+
+        return null;
+    }
+
+    fn documentHasReports(_: *SyntaxChecker, absolute_path: []const u8, drained_reports: ?[]BuildEnv.DrainedModuleReports) bool {
+        const drained = drained_reports orelse return true;
+        for (drained) |entry| {
+            if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn prepareDocumentBuild(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8) anyerror!DocumentBuild {
+        var identity: ?DocumentIdentity = if (override_text) |text|
+            try self.documentIdentityFromText(uri, text)
+        else
+            null;
+        errdefer if (identity) |*document| document.deinit(self.allocator);
+
+        if (identity) |document| {
+            if (self.matchingBuildEnvHandle(document.absolute_path, document.content_hash)) |handle| {
+                const env = handle.envPtr();
+                return .{
+                    .checker = self,
+                    .identity = identity,
+                    .session = null,
+                    .env = env,
+                    .absolute_path = document.absolute_path,
+                    .build_succeeded = self.getModuleEnvByPathInEnv(env, document.absolute_path) != null,
+                    .has_reports = handle.hasDocumentReports(),
+                    .reused = true,
+                };
+            }
+        }
+
+        const env_handle = try self.createFreshBuildEnv();
+        const env = env_handle.envPtr();
+
+        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
+        errdefer session.deinit();
+
+        const has_reports = self.documentHasReports(session.absolute_path, session.drained_reports);
+
+        if (identity) |document| {
+            env_handle.setDocumentContent(document.absolute_path, document.content_hash, has_reports) catch |err| {
+                self.logDebug(.build, "Failed to record document content: {s}", .{@errorName(err)});
+            };
+        }
+
+        return .{
+            .checker = self,
+            .identity = identity,
+            .session = session,
+            .env = env,
+            .absolute_path = session.absolute_path,
+            .build_succeeded = session.build_succeeded,
+            .has_reports = has_reports,
+            .reused = false,
+        };
+    }
+
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
+    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) anyerror![]Diagnostics.PublishDiagnostics {
         _ = workspace_root; // Reserved for future use
 
         self.mutex.lockUncancelable(self.std_io);
@@ -164,6 +294,12 @@ pub const SyntaxChecker = struct {
         defer session.deinit();
 
         const absolute_path = session.absolute_path;
+
+        if (override_text) |text| {
+            env_handle.setDocumentContent(absolute_path, DependencyGraph.computeContentHash(text), self.documentHasReports(absolute_path, session.drained_reports)) catch |err| {
+                self.logDebug(.build, "Failed to record document content: {s}", .{@errorName(err)});
+            };
+        }
 
         // Update dependency graph from successful build
         try self.updateDependencyGraph(env);
@@ -239,7 +375,7 @@ pub const SyntaxChecker = struct {
 
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
-    fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnvHandle {
+    fn createFreshBuildEnv(self: *SyntaxChecker) anyerror!*BuildEnvHandle {
         self.logDebug(.build, "createFreshBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
 
         // Release the previous_build_env owner first.
@@ -284,7 +420,7 @@ pub const SyntaxChecker = struct {
         return handle;
     }
 
-    fn sharedBuiltinModules(self: *SyntaxChecker) !*eval.BuiltinModules {
+    fn sharedBuiltinModules(self: *SyntaxChecker) anyerror!*eval.BuiltinModules {
         if (self.builtin_modules) |builtin_modules| return builtin_modules;
 
         const builtin_modules = try self.allocator.create(eval.BuiltinModules);
@@ -436,7 +572,7 @@ pub const SyntaxChecker = struct {
     /// Get all imported ModuleEnvs for a given module.
     /// Returns a slice of ModuleEnv pointers for the module's imports.
     /// Caller must free the returned slice.
-    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) !?[]*ModuleEnv {
+    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) Allocator.Error!?[]*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
 
         // First, find the module and its scheduler
@@ -475,28 +611,6 @@ pub const SyntaxChecker = struct {
         // TODO: Handle external_imports (cross-package) when needed
 
         return try imported_envs.toOwnedSlice(self.allocator);
-    }
-
-    /// Free drained reports. If `free_reports` is true, also deinit each report.
-    /// The `check` function processes reports itself, so uses free_reports=false.
-    /// Other functions like `getDefinitionAtPosition` don't process reports, so use free_reports=true.
-    fn freeDrainedEx(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports, free_reports: bool) void {
-        for (drained) |*entry| {
-            self.allocator.free(entry.abs_path);
-            if (free_reports) {
-                // Free the reports themselves - each Report has owned allocations
-                for (entry.reports) |*report| {
-                    @constCast(report).deinit();
-                }
-                self.allocator.free(entry.reports);
-            }
-        }
-        self.allocator.free(drained);
-    }
-
-    fn freeDrainedWithReports(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports) void {
-        // Free reports too (for functions that don't process reports)
-        self.freeDrainedEx(drained, true);
     }
 
     /// Update the dependency graph from a successful build.
@@ -557,7 +671,7 @@ pub const SyntaxChecker = struct {
         });
     }
 
-    fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) !Diagnostics.Diagnostic {
+    fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
         const range = self.rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
@@ -730,25 +844,24 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?HoverResult {
+    ) anyerror!?HoverResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
-        const env_handle = try self.createFreshBuildEnv();
-        const env = env_handle.envPtr();
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
 
-        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
-        defer session.deinit();
+        const env = build.env;
 
-        self.logDebug(.build, "hover: building {s}", .{session.absolute_path});
+        self.logDebug(.build, "hover: document {s} reused={}", .{ build.absolute_path, build.reused });
 
-        if (!session.build_succeeded) {
-            self.logDebug(.build, "hover: build failed for {s}", .{session.absolute_path});
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "hover: build unavailable for {s}", .{build.absolute_path});
             return null;
         }
 
         // Get module environment
-        const module_env = session.getModuleEnv() orelse return null;
+        const module_env = build.getModuleEnv() orelse return null;
 
         // Convert LSP position (0-based line/col) to byte offset
         // LSP uses 0-based line and UTF-16 code units for character
@@ -911,7 +1024,7 @@ pub const SyntaxChecker = struct {
     /// Find documentation comments for the symbol at the given region/offset.
     /// First checks if the cursor is on a lookup expression and resolves it to
     /// the actual definition. Otherwise searches defs and statements by region.
-    fn findDocumentationForRegion(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, region: Region, target_offset: u32) !?[]const u8 {
+    fn findDocumentationForRegion(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, region: Region, target_offset: u32) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
@@ -1270,25 +1383,22 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?DefinitionResult {
+    ) anyerror!?DefinitionResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
-        const env_handle = try self.createFreshBuildEnv();
-        const env = env_handle.envPtr();
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
 
-        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
-        defer session.deinit();
+        self.logDebug(.build, "definition: document {s} reused={}", .{ build.absolute_path, build.reused });
 
-        self.logDebug(.build, "definition: building {s}", .{session.absolute_path});
-
-        if (!session.build_succeeded) {
-            self.logDebug(.build, "definition: build failed for {s}", .{session.absolute_path});
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "definition: build unavailable for {s}", .{build.absolute_path});
             return null;
         }
 
         // Get module environment
-        const module_env = session.getModuleEnv() orelse return null;
+        const module_env = build.getModuleEnv() orelse return null;
 
         // Convert LSP position to byte offset
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
@@ -1894,25 +2004,22 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?HighlightResult {
+    ) anyerror!?HighlightResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
-        const env_handle = try self.createFreshBuildEnv();
-        const env = env_handle.envPtr();
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
 
-        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
-        defer session.deinit();
+        self.logDebug(.build, "highlights: document {s} reused={}", .{ build.absolute_path, build.reused });
 
-        self.logDebug(.build, "highlights: building {s}", .{session.absolute_path});
-
-        if (!session.build_succeeded) {
-            self.logDebug(.build, "highlights: build failed for {s}", .{session.absolute_path});
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "highlights: build unavailable for {s}", .{build.absolute_path});
             return null;
         }
 
         // Get module environment
-        const module_env = session.getModuleEnv() orelse return null;
+        const module_env = build.getModuleEnv() orelse return null;
 
         // Convert LSP position to byte offset
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
@@ -1948,63 +2055,23 @@ pub const SyntaxChecker = struct {
         allocator: std.mem.Allocator,
         uri: []const u8,
         source: []const u8,
-    ) ![]document_symbol_handler.SymbolInformation {
+    ) anyerror![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
-        const env_handle = try self.createFreshBuildEnv();
-        const env = env_handle.envPtr();
+        var build = try self.prepareDocumentBuild(uri, source);
+        defer build.deinit();
 
-        // Convert URI to absolute path to match against module paths
-        const path = try uri_util.uriToPath(allocator, uri);
-        defer allocator.free(path);
+        self.logDebug(.build, "symbols: document {s} reused={}", .{ build.absolute_path, build.reused });
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => try allocator.dupeZ(u8, path),
-        };
-        defer allocator.free(absolute_path);
-
-        // Override readFile for the current file so in-memory source is used.
-        var override = CoreCtx.ReadFileOverride{ .path = absolute_path, .content = source, .base = env.filesystem };
-        const saved_io = env.filesystem;
-        env.filesystem = override.io();
-        defer env.filesystem = saved_io;
-
-        self.logDebug(.build, "symbols: building {s}", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "symbols: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "symbols: build unavailable for {s}", .{build.absolute_path});
             return &[_]SymbolInformation{};
-        };
+        }
 
-        // Drain reports but ignore them for symbols (must still free to avoid leaks)
-        const drained = try env.drainReports();
-        defer self.freeDrainedWithReports(drained);
-
-        // Get the module env from the scheduler
-        const module_env = blk: {
-            // Try "app" scheduler first
-            if (env.schedulers.get("app")) |sched| {
-                if (sched.getRootModule()) |rm| {
-                    if (rm.moduleEnv()) |e| {
-                        break :blk e;
-                    }
-                }
-            }
-            // Fallback: try any scheduler with a root module
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                if (sched.getRootModule()) |rm| {
-                    if (rm.moduleEnv()) |e| {
-                        break :blk e;
-                    }
-                }
-            }
-            return &[_]SymbolInformation{};
-        };
+        const module_env = build.getModuleEnv() orelse return &[_]SymbolInformation{};
 
         // Build line offset table
         const line_offsets = try pos.buildLineOffsets(allocator, source);
@@ -2325,30 +2392,19 @@ pub const SyntaxChecker = struct {
         override_text: ?[]const u8,
         line: u32,
         character: u32,
-    ) !?completion_handler.CompletionResult {
+    ) anyerror!?completion_handler.CompletionResult {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
-        const env_handle = try self.createFreshBuildEnv();
-        const env = env_handle.envPtr();
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
 
-        var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text);
-        defer session.deinit();
+        const env = build.env;
 
-        self.logDebug(.completion, "completion: building {s}", .{session.absolute_path});
-        self.logDebug(.completion, "completion: build_succeeded={}", .{session.build_succeeded});
+        self.logDebug(.completion, "completion: document {s} reused={}", .{ build.absolute_path, build.reused });
+        self.logDebug(.completion, "completion: build_succeeded={}", .{build.build_succeeded});
 
-        var build_has_reports = false;
-
-        // Check if we have reports for this file
-        if (session.drained_reports) |drained| {
-            for (drained) |entry| {
-                if (std.mem.eql(u8, entry.abs_path, session.absolute_path) and entry.reports.len > 0) {
-                    build_has_reports = true;
-                    break;
-                }
-            }
-        }
+        const build_has_reports = build.has_reports;
 
         // Detect completion context from source
         const source = override_text orelse "";
@@ -2377,8 +2433,14 @@ pub const SyntaxChecker = struct {
         // lookups stay consistent with snapshot/previous envs.
         var module_lookup_env: *BuildEnv = env;
         const module_env_opt: ?*ModuleEnv = blk: {
-            if (self.snapshot_envs.get(session.absolute_path)) |snapshot_handle| {
-                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_handle.envPtr(), session.absolute_path);
+            if (!build_has_reports) {
+                if (build.getModuleEnv()) |module_env| {
+                    break :blk module_env;
+                }
+            }
+
+            if (self.snapshot_envs.get(build.absolute_path)) |snapshot_handle| {
+                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_handle.envPtr(), build.absolute_path);
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = snapshot_handle.envPtr();
@@ -2388,7 +2450,7 @@ pub const SyntaxChecker = struct {
 
             // Fall back to previous build env if snapshot not available
             if (self.previous_build_env) |previous_handle| {
-                const prev_module_env = self.getModuleEnvByPathInEnv(previous_handle.envPtr(), session.absolute_path);
+                const prev_module_env = self.getModuleEnvByPathInEnv(previous_handle.envPtr(), build.absolute_path);
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = previous_handle.envPtr();
@@ -2397,20 +2459,20 @@ pub const SyntaxChecker = struct {
             }
 
             // Fall back to current build only if no snapshot available and build succeeded
-            if (session.build_succeeded and !build_has_reports) {
-                if (self.getModuleEnvByPath(session.absolute_path)) |module_env| {
+            if (build.build_succeeded and !build_has_reports) {
+                if (self.getModuleEnvByPath(build.absolute_path)) |module_env| {
                     module_lookup_env = env;
                     break :blk module_env;
                 }
 
                 module_lookup_env = env;
-                break :blk session.getModuleEnv();
+                break :blk build.getModuleEnv();
             }
 
             break :blk null;
         };
 
-        self.logDebug(.completion, "completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}", .{ context, module_env_opt != null, session.build_succeeded, used_snapshot });
+        self.logDebug(.completion, "completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}", .{ context, module_env_opt != null, build.build_succeeded, used_snapshot });
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.

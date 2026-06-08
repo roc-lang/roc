@@ -143,7 +143,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     return 0;
 }
 
-fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) !void {
+fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) error{StaticDataHostCheckFailed}!void {
     try expectEqualI64(roc__answer, 42, "answer");
     try expectEqualU8(roc__flag, 1, "flag True discriminant");
     try expectListOfBool(roc__flags, &.{ 0, 1, 0 }, roc_ops, "flags");
@@ -180,7 +180,7 @@ fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) !void {
     try expectEqualUsize(host_env.dealloc_count, 0, "static checks did not dealloc");
 }
 
-fn expectTree(tree: Tree, roc_ops: *RocOps) !void {
+fn expectTree(tree: Tree, roc_ops: *RocOps) error{StaticDataHostCheckFailed}!void {
     try expectEqualU8(tree.discriminant, 1, "tree is Node");
 
     const node: *const TreeNodePayload = payloadAs(TreeNodePayload, &tree.payload);
@@ -191,14 +191,14 @@ fn expectTree(tree: Tree, roc_ops: *RocOps) !void {
     try expectBranchPair(node.right.*, 7, 11, roc_ops, "tree.right");
 }
 
-fn expectBranchLeaf(branch: Branch, expected: i64, roc_ops: *RocOps, label: []const u8) !void {
+fn expectBranchLeaf(branch: Branch, expected: i64, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {
     _ = roc_ops;
     try expectEqualU8(branch.discriminant, 0, label);
     const value: *const i64 = payloadAs(i64, &branch.payload);
     try expectEqualI64(value.*, expected, label);
 }
 
-fn expectBranchPair(branch: Branch, first_expected: i64, second_expected: i64, roc_ops: *RocOps, label: []const u8) !void {
+fn expectBranchPair(branch: Branch, first_expected: i64, second_expected: i64, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {
     try expectEqualU8(branch.discriminant, 1, label);
 
     const pair: *const BranchPairPayload = payloadAs(BranchPairPayload, &branch.payload);
@@ -208,7 +208,7 @@ fn expectBranchPair(branch: Branch, first_expected: i64, second_expected: i64, r
     try expectEqualI64(pair.second.*, second_expected, label);
 }
 
-fn expectListOfListOfStr(list: RocList, expected: []const []const []const u8, roc_ops: *RocOps, label: []const u8) !void {
+fn expectListOfListOfStr(list: RocList, expected: []const []const []const u8, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {
     try expectStaticList(list, @alignOf(RocList), @sizeOf(RocList), true, expected.len, roc_ops, label);
 
     if (expected.len == 0) return;
@@ -220,7 +220,7 @@ fn expectListOfListOfStr(list: RocList, expected: []const []const []const u8, ro
     }
 }
 
-fn expectListOfStr(list: RocList, expected: []const []const u8, roc_ops: *RocOps, label: []const u8) !void {
+fn expectListOfStr(list: RocList, expected: []const []const u8, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {
     try expectStaticList(list, @alignOf(RocStr), @sizeOf(RocStr), true, expected.len, roc_ops, label);
 
     if (expected.len == 0) return;
@@ -232,7 +232,7 @@ fn expectListOfStr(list: RocList, expected: []const []const u8, roc_ops: *RocOps
     }
 }
 
-fn expectListOfBool(list: RocList, expected: []const u8, roc_ops: *RocOps, label: []const u8) !void {
+fn expectListOfBool(list: RocList, expected: []const u8, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {
     try expectStaticList(list, @alignOf(u8), @sizeOf(u8), false, expected.len, roc_ops, label);
 
     if (expected.len == 0) return;
@@ -244,7 +244,7 @@ fn expectListOfBool(list: RocList, expected: []const u8, roc_ops: *RocOps, label
     }
 }
 
-fn expectStr(str: RocStr, expected: []const u8, roc_ops: *RocOps, label: []const u8) !void {
+fn expectStr(str: RocStr, expected: []const u8, roc_ops: *RocOps, label: []const u8) error{StaticDataHostCheckFailed}!void {
     var local = str;
     if (!std.mem.eql(u8, local.asSlice(), expected)) {
         std.debug.print("expected {s} to equal \"{s}\", got \"{s}\"\n", .{ label, expected, local.asSlice() });
@@ -270,7 +270,7 @@ fn expectStaticList(
     expected_len: usize,
     roc_ops: *RocOps,
     label: []const u8,
-) !void {
+) error{StaticDataHostCheckFailed}!void {
     try expectEqualUsize(list.len(), expected_len, label);
     if (expected_len == 0) return;
 
@@ -293,7 +293,7 @@ fn expectStaticAllocationPtr(
     contains_refcounted: bool,
     roc_ops: *RocOps,
     label: []const u8,
-) !void {
+) error{StaticDataHostCheckFailed}!void {
     const data_ptr = ptrToDataPtr(ptr);
     try expectStaticDataPtr(data_ptr, label);
     const before = try readRefcount(data_ptr);
@@ -307,7 +307,7 @@ const I64ToI64Args = extern struct {
     arg0: i64,
 };
 
-fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) !void {
+fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckFailed}!void {
     const ptr = boxed orelse return fail("expected boxed_add_one static data pointer");
     try expectStaticDataPtr(ptr, "boxed_add_one");
 
@@ -330,19 +330,19 @@ fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) !void {
     try expectEqualIsize(try readRefcount(ptr), before, "boxed_add_one decref keeps static refcount");
 }
 
-fn expectStaticDataPtr(data_ptr: ?[*]u8, label: []const u8) !void {
+fn expectStaticDataPtr(data_ptr: ?[*]u8, label: []const u8) error{StaticDataHostCheckFailed}!void {
     const refcount = try readRefcount(data_ptr);
     try expectEqualIsize(refcount, builtins.utils.REFCOUNT_STATIC_DATA, label);
 }
 
-fn readRefcount(data_ptr: ?[*]u8) !isize {
+fn readRefcount(data_ptr: ?[*]u8) error{StaticDataHostCheckFailed}!isize {
     const ptr = data_ptr orelse return fail("expected static data pointer");
     const unmasked = unmaskedDataAddress(ptr);
     const refcount_ptr: *const isize = @ptrFromInt(unmasked - @sizeOf(usize));
     return refcount_ptr.*;
 }
 
-fn readAllocationElementCount(data_ptr: ?[*]u8) !usize {
+fn readAllocationElementCount(data_ptr: ?[*]u8) error{StaticDataHostCheckFailed}!usize {
     const ptr = data_ptr orelse return fail("expected allocation element count pointer");
     const unmasked = unmaskedDataAddress(ptr);
     const count_ptr: *const usize = @ptrFromInt(unmasked - 2 * @sizeOf(usize));
@@ -362,28 +362,28 @@ fn payloadAs(comptime T: type, payload: *const [16]u8) *const T {
     return @ptrCast(@alignCast(payload));
 }
 
-fn expectEqualI64(actual: i64, expected: i64, label: []const u8) !void {
+fn expectEqualI64(actual: i64, expected: i64, label: []const u8) error{StaticDataHostCheckFailed}!void {
     if (actual != expected) {
         std.debug.print("expected {s} = {d}, got {d}\n", .{ label, expected, actual });
         return CheckError.StaticDataHostCheckFailed;
     }
 }
 
-fn expectEqualIsize(actual: isize, expected: isize, label: []const u8) !void {
+fn expectEqualIsize(actual: isize, expected: isize, label: []const u8) error{StaticDataHostCheckFailed}!void {
     if (actual != expected) {
         std.debug.print("expected {s} = {d}, got {d}\n", .{ label, expected, actual });
         return CheckError.StaticDataHostCheckFailed;
     }
 }
 
-fn expectEqualU8(actual: u8, expected: u8, label: []const u8) !void {
+fn expectEqualU8(actual: u8, expected: u8, label: []const u8) error{StaticDataHostCheckFailed}!void {
     if (actual != expected) {
         std.debug.print("expected {s} = {d}, got {d}\n", .{ label, expected, actual });
         return CheckError.StaticDataHostCheckFailed;
     }
 }
 
-fn expectEqualUsize(actual: usize, expected: usize, label: []const u8) !void {
+fn expectEqualUsize(actual: usize, expected: usize, label: []const u8) error{StaticDataHostCheckFailed}!void {
     if (actual != expected) {
         std.debug.print("expected {s} = {d}, got {d}\n", .{ label, expected, actual });
         return CheckError.StaticDataHostCheckFailed;

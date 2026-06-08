@@ -1,7 +1,7 @@
 //! Tests for the LSP document store.
 
 const std = @import("std");
-const DocumentStore = @import("../document_store.zig").DocumentStore;
+const DocumentStore = @import("lsp").document_store.DocumentStore;
 
 test "document store upserts and retrieves documents" {
     const allocator = std.testing.allocator;

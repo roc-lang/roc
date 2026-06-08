@@ -2,6 +2,7 @@
 //! This data structure tracks pending work between one iteration and the next.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const types = @import("types");
 const layout = @import("./layout.zig");
 const Ident = @import("base").Ident;
@@ -145,7 +146,7 @@ pub const Work = struct {
         resolved_fields_start: u32,
     };
 
-    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Work {
+    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) Allocator.Error!Work {
         var pending_containers = std.MultiArrayList(PendingContainerItem){};
         try pending_containers.ensureTotalCapacity(allocator, capacity);
 

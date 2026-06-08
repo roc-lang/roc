@@ -6,6 +6,7 @@
 //!
 //! Entry point: make_glue : List Types -> Result (List File) Str
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const base = @import("base");
@@ -534,7 +535,7 @@ fn parseTypesJson(
     allocator: std.mem.Allocator,
     json_str: []const u8,
     roc_ops: *builtins.host_abi.RocOps,
-) !RocList {
+) Allocator.Error!RocList {
     const host: *HostEnv = @ptrCast(@alignCast(roc_ops.env));
     // Parse the JSON
     const parsed = std.json.parseFromSlice([]const JsonModuleTypeInfo, allocator, json_str, .{}) catch |err| {
@@ -638,7 +639,7 @@ fn parseTypesJson(
 /// Platform host entrypoint
 /// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
 /// If no entry point names are provided, defaults to ["main"].
-fn platform_main(args: [][*:0]u8, std_io: std.Io) !c_int {
+fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ MissingPlatformPath, MissingEntrypointNames })!c_int {
     if (args.len < 1) {
         return error.MissingPlatformPath;
     }

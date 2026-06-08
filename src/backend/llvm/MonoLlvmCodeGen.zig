@@ -94,6 +94,13 @@ fn getLlvmTriple(target: std.Target) []const u8 {
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
+    pub const Entrypoint = struct {
+        symbol_name: []const u8,
+        proc: LirProcSpecId,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    };
+
     allocator: Allocator,
     target: std.Target,
     triple: []const u8,
@@ -261,7 +268,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn generateEntrypointModule(
         self: *MonoLlvmCodeGen,
         module_name: []const u8,
-        entrypoints: anytype,
+        entrypoints: []const Entrypoint,
     ) Error!ModuleBitcodeResult {
         self.reset();
 
@@ -275,7 +282,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.compileAllProcSpecs(procs);
         try self.compilePendingRcHelpers();
 
-        inline for (entrypoints) |entrypoint| {
+        for (entrypoints) |entrypoint| {
             try self.generateEntrypointWrapper(
                 entrypoint.symbol_name,
                 entrypoint.proc,
@@ -424,8 +431,10 @@ pub const MonoLlvmCodeGen = struct {
         if (self.target.os.tag != .macos) {
             return builder.strtabString(name) catch return error.OutOfMemory;
         }
-        const exact_name = try std.fmt.allocPrint(self.allocator, "\x01_{s}", .{name});
-        defer self.allocator.free(exact_name);
+        var exact_name_sfa = std.heap.stackFallback(128, self.allocator);
+        const exact_name_alloc = exact_name_sfa.get();
+        const exact_name = try std.fmt.allocPrint(exact_name_alloc, "\x01_{s}", .{name});
+        defer exact_name_alloc.free(exact_name);
         return builder.strtabString(exact_name) catch return error.OutOfMemory;
     }
 
@@ -1753,12 +1762,12 @@ pub const MonoLlvmCodeGen = struct {
             self.values.deinit(allocator);
         }
 
-        fn append(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) !void {
+        fn append(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) Allocator.Error!void {
             try self.types.append(allocator, ty);
             try self.values.append(allocator, value);
         }
 
-        fn prepend(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) !void {
+        fn prepend(self: *CallArgs, allocator: Allocator, ty: LlvmBuilder.Type, value: LlvmBuilder.Value) Allocator.Error!void {
             try self.types.insert(allocator, 0, ty);
             try self.values.insert(allocator, 0, value);
         }

@@ -577,11 +577,10 @@ const result2 = await sendMessage({type: "REPL_STEP", input: "y"});
 // Shows that y automatically uses the new value of x
 ```
 
-## Build Requirements
+## Build
 
-Built with Zig 0.14.0 targeting WASM32:
 ```bash
-zig build playground
+zig build build-playground
 ```
 
 Output: `zig-out/bin/playground.wasm`

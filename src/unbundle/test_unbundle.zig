@@ -6,6 +6,8 @@
 //! - Error handling
 
 const std = @import("std");
+const collections = @import("collections");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
 const base58 = @import("base58");
@@ -134,7 +136,7 @@ test "validateBase58Hash - valid and invalid hashes" {
 test "BufferExtractWriter - basic functionality" {
     const allocator = testing.allocator;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
     var writer = unbundle.BufferExtractWriter.init(alloc);
@@ -298,7 +300,7 @@ test "validateBase58Hash - edge cases" {
 test "BufferExtractWriter - overwrite existing file" {
     const allocator = testing.allocator;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
     var writer = unbundle.BufferExtractWriter.init(alloc);
@@ -386,7 +388,7 @@ test "downloadAndExtract with bad archive returns error without crash" {
             };
         }
 
-        fn runImpl(ctx: *@This()) !void {
+        fn runImpl(ctx: *@This()) anyerror!void {
             const thread_io = testing.io;
 
             const stream = ctx.server.accept(thread_io) catch return;

@@ -48,7 +48,7 @@ pub const BuildSession = struct {
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
-    ) !BuildSession {
+    ) Allocator.Error!BuildSession {
         // Convert URI to path
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);

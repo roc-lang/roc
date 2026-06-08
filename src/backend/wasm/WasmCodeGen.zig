@@ -390,7 +390,7 @@ fn localFunctionIndexFromGlobal(self: *const Self, global_func_idx: u32) LocalFu
 }
 
 /// Register shared wasm types used by RocOps and hosted-function indirect calls.
-pub fn registerIndirectCallTypes(self: *Self) !void {
+pub fn registerIndirectCallTypes(self: *Self) Allocator.Error!void {
     if (self.indirect_call_types_registered) return;
 
     self.roc_ops_type_idx = try self.module.addFuncType(
@@ -407,7 +407,7 @@ pub fn registerIndirectCallTypes(self: *Self) !void {
 
 /// Register host function imports. Must be called before any addFunction calls
 /// because wasm imports must come before locally-defined functions.
-fn registerHostImports(self: *Self) !void {
+fn registerHostImports(self: *Self) Allocator.Error!void {
     // roc_dec_mul: (i32 lhs_ptr, i32 rhs_ptr, i32 result_ptr) -> void
     // Takes pointers to 16-byte Dec values in linear memory,
     // stores the result at result_ptr.

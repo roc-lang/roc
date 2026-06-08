@@ -42,7 +42,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
             extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
         };
 
-        fn open(allocator: Allocator, path: []const u8) !@This() {
+        fn open(allocator: Allocator, path: []const u8) anyerror!@This() {
             const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
             defer allocator.free(wide_path);
             const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
@@ -55,13 +55,13 @@ const EvalDynLib = switch (builtin.target.os.tag) {
 
         fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
             const proc = kernel32.GetProcAddress(self.handle, name.ptr) orelse return null;
-            return @ptrCast(proc);
+            return @ptrCast(@alignCast(proc));
         }
     },
     else => struct {
         inner: std.DynLib,
 
-        fn open(_: Allocator, path: []const u8) !@This() {
+        fn open(_: Allocator, path: []const u8) anyerror!@This() {
             return .{ .inner = try std.DynLib.open(path) };
         }
 
@@ -86,11 +86,11 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
     fixed_buffer: std.heap.FixedBufferAllocator,
     page_size: usize,
 
-    fn getSystemPageSize() !usize {
+    fn getSystemPageSize() anyerror!usize {
         return 64 * 1024;
     }
 
-    fn create(_: anytype, size: usize, page_size: usize) !@This() {
+    fn create(_: anytype, size: usize, page_size: usize) anyerror!@This() {
         const aligned_size = std.mem.alignForward(usize, size, page_size);
         const buffer = try std.heap.wasm_allocator.alignedAlloc(
             u8,
@@ -107,7 +107,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         };
     }
 
-    fn createWithMinSize(_: std.Io, preferred_size: usize, _: usize, page_size: usize) !@This() {
+    fn createWithMinSize(_: std.Io, preferred_size: usize, _: usize, page_size: usize) anyerror!@This() {
         return create({}, preferred_size, page_size);
     }
 
@@ -128,7 +128,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
 
 /// Monotonic stage timer (std.time.Timer was removed in Zig 0.16).
 const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
-    fn start() !@This() {
+    fn start() anyerror!@This() {
         return .{};
     }
 
@@ -171,13 +171,13 @@ const StageTimer = if (builtin.target.os.tag == .freestanding) struct {
     }
 };
 
-/// Public `SourceKind` declaration.
+/// Whether the source is a standalone expression or a full module.
 pub const SourceKind = enum {
     expr,
     module,
 };
 
-/// Public `ModuleSource` declaration.
+/// A named module with its source text, used to supply additional imports.
 pub const ModuleSource = struct {
     name: []const u8,
     source: []const u8,
@@ -194,7 +194,7 @@ const ModuleValidation = enum {
     checked_artifact,
 };
 
-/// Public `CheckedModule` declaration.
+/// Compiler stage outputs (parse, canonicalize, typecheck) for a single module.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -209,17 +209,20 @@ pub const CheckedModule = struct {
     typecheck_ns: u64 = 0,
 };
 
-/// Public `ProblemResources` declaration.
+/// Groups a checked module with its builtin and extra modules for problem reporting.
 pub const ProblemResources = struct {
     main: CheckedModule,
-    builtin_module: builtin_loading.LoadedModule,
+    /// Locally-loaded Builtin; null when the caller supplied a pre-published
+    /// Builtin via `parseAndCheckProgramForProblemsWithBuiltin` and retains
+    /// ownership of the borrowed env.
+    builtin_module: ?builtin_loading.LoadedModule,
     extra_modules: []CheckedModule,
 
     pub fn deinit(self: *ProblemResources, allocator: Allocator) void {
         cleanupCheckedModule(allocator, self.main);
         for (self.extra_modules) |module| cleanupCheckedModule(allocator, module);
         allocator.free(self.extra_modules);
-        self.builtin_module.deinit();
+        if (self.builtin_module) |*lm| lm.deinit();
     }
 };
 
@@ -233,7 +236,7 @@ pub const PrePublishedBuiltin = struct {
     artifact: *check.CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Public `ParsedResources` declaration.
+/// Fully parsed, canonicalized, and type-checked module ready for LIR lowering.
 pub const ParsedResources = struct {
     module_env: *ModuleEnv,
     parse_ast: *parse.AST,
@@ -310,7 +313,7 @@ fn configuredSharedMemorySize() usize {
     return @intCast(build_options.shared_memory_size);
 }
 
-/// Public `LirImageProgram` declaration.
+/// LIR image stored in shared memory, ready for an eval backend to execute.
 pub const LirImageProgram = struct {
     shm: SharedMemoryAllocator,
     image_header: *LirImage.Header,
@@ -334,10 +337,41 @@ pub const LirImageProgram = struct {
     }
 };
 
-/// Public `LoweredProgram` declaration.
+/// Type alias for LirImageProgram.
 pub const LoweredProgram = LirImageProgram;
 
-/// Public `CompiledProgram` declaration.
+/// Describes a single boolean-returning proc used as a test root.
+pub const BoolRoot = struct {
+    symbol_name: [:0]const u8,
+    proc: LirProcSpecId,
+    arg_layouts: []const LayoutIdx,
+    ret_layout: LayoutIdx,
+};
+
+/// Result of evaluating a bool-returning test root: passed (bool) or crashed (message).
+pub const BoolRootEvalResult = union(enum) {
+    passed: bool,
+    crashed: []const u8,
+};
+
+/// LLVM optimization level for test compilation.
+pub const LlvmTestOpt = enum {
+    size,
+    speed,
+};
+
+/// Free all crash messages and the results slice.
+pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalResult) void {
+    for (results) |result| {
+        switch (result) {
+            .passed => {},
+            .crashed => |message| allocator.free(message),
+        }
+    }
+    allocator.free(results);
+}
+
+/// Parsed resources plus native and wasm LIR lowerings.
 pub const CompiledProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
@@ -350,7 +384,7 @@ pub const CompiledProgram = struct {
     }
 };
 
-/// Public `CompiledTargetProgram` declaration.
+/// Parsed resources plus a single-target LIR lowering.
 pub const CompiledTargetProgram = struct {
     resources: ParsedResources,
     lowered: LoweredProgram,
@@ -361,16 +395,16 @@ pub const CompiledTargetProgram = struct {
     }
 };
 
-/// Public `CompiledInspectedExpr` declaration.
+/// Type alias for CompiledProgram used for inspect-wrapped expressions.
 pub const CompiledInspectedExpr = CompiledProgram;
 
-/// Public `parseAndCanonicalizeProgram` function.
+/// Parse, canonicalize, and type-check a program without inspect wrapping.
 pub fn parseAndCanonicalizeProgram(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-) !ParsedResources {
+) anyerror!ParsedResources {
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
 }
 
@@ -382,7 +416,7 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
-) !ParsedResources {
+) anyerror!ParsedResources {
     return parseAndCanonicalizeProgramWithRootMode(
         allocator,
         source_kind,
@@ -394,26 +428,61 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     );
 }
 
-/// Public `parseAndCanonicalizeExpr` function.
-pub fn parseAndCanonicalizeExpr(allocator: Allocator, source: []const u8) !ParsedResources {
+/// Parse and canonicalize a single expression (no imports).
+pub fn parseAndCanonicalizeExpr(allocator: Allocator, source: []const u8) anyerror!ParsedResources {
     return parseAndCanonicalizeProgram(allocator, .expr, source, &.{});
 }
 
-/// Public `parseAndCheckProgramForProblems` function.
+/// Parse and type-check a program, returning resources for problem reporting.
 pub fn parseAndCheckProgramForProblems(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-) !ProblemResources {
-    const builtin_indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
-    var builtin_module = try builtin_loading.loadCompiledModule(
-        allocator,
-        compiled_builtins.builtin_bin,
-        "Builtin",
-        compiled_builtins.builtin_source,
-    );
-    errdefer builtin_module.deinit();
+) anyerror!ProblemResources {
+    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, null);
+}
+
+/// Same as `parseAndCheckProgramForProblems` but reuses a Builtin module the
+/// caller has already loaded. The returned `ProblemResources` borrows the
+/// builtin env (its `builtin_module` is null) and never deinits it.
+pub fn parseAndCheckProgramForProblemsWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) anyerror!ProblemResources {
+    return parseAndCheckProgramForProblemsImpl(allocator, source_kind, source, imports, pre_published_builtin);
+}
+
+fn parseAndCheckProgramForProblemsImpl(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: ?PrePublishedBuiltin,
+) anyerror!ProblemResources {
+    const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
+        ppb.indices
+    else
+        try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
+
+    var loaded_builtin: ?builtin_loading.LoadedModule = if (pre_published_builtin == null)
+        try builtin_loading.loadCompiledModule(
+            allocator,
+            compiled_builtins.builtin_bin,
+            "Builtin",
+            compiled_builtins.builtin_source,
+        )
+    else
+        null;
+    errdefer if (loaded_builtin) |*lm| lm.deinit();
+
+    const builtin_env: *const ModuleEnv = if (pre_published_builtin) |ppb|
+        ppb.env
+    else
+        loaded_builtin.?.env;
 
     var extra_modules = std.ArrayList(CheckedModule).empty;
     errdefer {
@@ -441,7 +510,7 @@ pub fn parseAndCheckProgramForProblems(
             true,
             .checked_artifact,
             &.{},
-            builtin_module.env,
+            builtin_env,
             builtin_indices,
             available_imports,
         );
@@ -467,7 +536,7 @@ pub fn parseAndCheckProgramForProblems(
         false,
         .checked_artifact,
         &.{},
-        builtin_module.env,
+        builtin_env,
         builtin_indices,
         main_imports,
     );
@@ -476,7 +545,7 @@ pub fn parseAndCheckProgramForProblems(
     var all_module_envs = try allocator.alloc(*ModuleEnv, extra_modules.items.len + 2);
     defer allocator.free(all_module_envs);
     all_module_envs[0] = main_checked.module_env;
-    all_module_envs[1] = builtin_module.env;
+    all_module_envs[1] = @constCast(builtin_env);
     for (extra_modules.items, 0..) |extra, i| {
         all_module_envs[i + 2] = extra.module_env;
     }
@@ -484,19 +553,19 @@ pub fn parseAndCheckProgramForProblems(
 
     return .{
         .main = main_checked,
-        .builtin_module = builtin_module,
+        .builtin_module = loaded_builtin,
         .extra_modules = try extra_modules.toOwnedSlice(allocator),
     };
 }
 
-/// Public `compileProgram` function.
+/// Parse, canonicalize, type-check, and lower to native and wasm LIR.
 pub fn compileProgram(
     allocator: Allocator,
     io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-) !CompiledProgram {
+) anyerror!CompiledProgram {
     var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
@@ -519,7 +588,7 @@ pub fn compileProgram(
     };
 }
 
-/// Public `compileProgramForTarget` function.
+/// Parse, canonicalize, type-check, and lower to LIR for a specific target.
 pub fn compileProgramForTarget(
     allocator: Allocator,
     io: std.Io,
@@ -527,12 +596,25 @@ pub fn compileProgramForTarget(
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
-) !CompiledTargetProgram {
-    return compileProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null);
+) anyerror!CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
+    errdefer {
+        var owned = lowered;
+        owned.deinit(allocator);
+    }
+
+    return .{
+        .resources = resources,
+        .lowered = lowered,
+    };
 }
 
 /// Same as `compileProgramForTarget` but reuses a pre-published Builtin
-/// artifact owned by the caller.
+/// artifact owned by the caller instead of loading it from the embedded
+/// builtin blob on every call.
 pub fn compileProgramForTargetWithBuiltin(
     allocator: Allocator,
     io: std.Io,
@@ -541,19 +623,7 @@ pub fn compileProgramForTargetWithBuiltin(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
-) !CompiledTargetProgram {
-    return compileProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin);
-}
-
-fn compileProgramForTargetImpl(
-    allocator: Allocator,
-    io: std.Io,
-    source_kind: SourceKind,
-    source: []const u8,
-    imports: []const ModuleSource,
-    target_usize: base.target.TargetUsize,
-    pre_published_builtin: ?PrePublishedBuiltin,
-) !CompiledTargetProgram {
+) anyerror!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
         source_kind,
@@ -577,14 +647,14 @@ fn compileProgramForTargetImpl(
     };
 }
 
-/// Public `compileInspectedProgram` function.
+/// Compile a program with inspect wrapping so the main proc returns a Str.
 pub fn compileInspectedProgram(
     allocator: Allocator,
     io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-) !CompiledProgram {
+) anyerror!CompiledProgram {
     return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, null);
 }
 
@@ -597,7 +667,7 @@ pub fn compileInspectedProgramWithBuiltin(
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: PrePublishedBuiltin,
-) !CompiledProgram {
+) anyerror!CompiledProgram {
     return compileInspectedProgramImpl(allocator, io, source_kind, source, imports, pre_published_builtin);
 }
 
@@ -608,7 +678,7 @@ fn compileInspectedProgramImpl(
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
-) !CompiledProgram {
+) anyerror!CompiledProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
         source_kind,
@@ -639,7 +709,7 @@ fn compileInspectedProgramImpl(
     };
 }
 
-/// Public `compileInspectedProgramForTarget` function.
+/// Compile an inspect-wrapped program for a specific target pointer size.
 pub fn compileInspectedProgramForTarget(
     allocator: Allocator,
     io: std.Io,
@@ -647,7 +717,7 @@ pub fn compileInspectedProgramForTarget(
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
-) !CompiledTargetProgram {
+) anyerror!CompiledTargetProgram {
     return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null);
 }
 
@@ -661,7 +731,7 @@ pub fn compileInspectedProgramForTargetWithBuiltin(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
-) !CompiledTargetProgram {
+) anyerror!CompiledTargetProgram {
     return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin);
 }
 
@@ -673,7 +743,7 @@ fn compileInspectedProgramForTargetImpl(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
     pre_published_builtin: ?PrePublishedBuiltin,
-) !CompiledTargetProgram {
+) anyerror!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
         source_kind,
@@ -697,35 +767,35 @@ fn compileInspectedProgramForTargetImpl(
     };
 }
 
-/// Public `compileInspectedExpr` function.
-pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8) !CompiledInspectedExpr {
+/// Compile a single expression with inspect wrapping, returning a Str result.
+pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8) anyerror!CompiledInspectedExpr {
     return compileInspectedProgram(allocator, io, .expr, source, &.{});
 }
 
-/// Public `cleanupParseAndCanonical` function.
+/// Free all resources held by a ParsedResources value.
 pub fn cleanupParseAndCanonical(allocator: Allocator, resources: ParsedResources) void {
     var owned = resources;
     owned.deinit(allocator);
 }
 
-/// Public `parseAndCanonicalizeProgramWrapped` function.
+/// Parse and canonicalize a program, optionally wrapping it for inspect output.
 pub fn parseAndCanonicalizeProgramWrapped(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     inspect_wrap: bool,
-) !ParsedResources {
+) anyerror!ParsedResources {
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, inspect_wrap, .{ .eval_root = inspect_wrap }, null);
 }
 
-/// Public `parseAndCanonicalizeProgramPublishedRoots` function.
+/// Parse and canonicalize a program using published-roots-only root selection.
 pub fn parseAndCanonicalizeProgramPublishedRoots(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-) !ParsedResources {
+) anyerror!ParsedResources {
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null);
 }
 
@@ -756,7 +826,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     inspect_wrap: bool,
     root_mode: PublishedRootMode,
     pre_published_builtin: ?PrePublishedBuiltin,
-) !ParsedResources {
+) anyerror!ParsedResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
     else
@@ -950,7 +1020,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
     };
 }
 
-/// Public `parseCheckModule` function.
+/// Run parse, canonicalize, and typecheck for a single named module.
 pub fn parseCheckModule(
     allocator: Allocator,
     module_name: []const u8,
@@ -963,7 +1033,7 @@ pub fn parseCheckModule(
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
     available_imports: []const AvailableImport,
-) !CheckedModule {
+) anyerror!CheckedModule {
     const owned_source = try makeModuleSource(allocator, source_kind, source, inspect_wrap);
     errdefer allocator.free(owned_source);
 
@@ -1089,7 +1159,7 @@ fn lowerParsedProgramToLir(
     io: std.Io,
     resources: *ParsedResources,
     target_usize: base.target.TargetUsize,
-) !LoweredProgram {
+) anyerror!LoweredProgram {
     if (resources.borrowed_builtin_artifact == null) {
         return lowerCheckedModuleSetToLir(allocator, io, &resources.checked_artifact, resources.import_artifacts, target_usize);
     }
@@ -1112,7 +1182,7 @@ pub fn lowerCheckedModuleSetToLir(
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
     import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
     target_usize: base.target.TargetUsize,
-) !LoweredProgram {
+) anyerror!LoweredProgram {
     const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_modules.len);
     defer allocator.free(import_views);
     for (import_modules, 0..) |*module, i| {
@@ -1127,7 +1197,7 @@ fn lowerCheckedRootWithViews(
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
     import_views: []const check.CheckedArtifact.ImportedModuleView,
     target_usize: base.target.TargetUsize,
-) !LoweredProgram {
+) anyerror!LoweredProgram {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.createWithMinSize(io, EVAL_SHARED_MEMORY_SIZE, EVAL_SHARED_MEMORY_MIN_SIZE, page_size);
     errdefer shm.deinit(allocator);
@@ -1179,7 +1249,7 @@ fn publishImportArtifacts(
     extra_modules: []CheckedModule,
     builtin_module_owned_by_artifact: *bool,
     pre_published_builtin: ?PrePublishedBuiltin,
-) ![]check.CheckedArtifact.CheckedModuleArtifact {
+) anyerror![]check.CheckedArtifact.CheckedModuleArtifact {
     const extra_module_count = extra_modules.len;
     var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
     errdefer {
@@ -1308,7 +1378,7 @@ fn publishImportKeysWithBuiltin(
     allocator: Allocator,
     artifacts: []const check.CheckedArtifact.CheckedModuleArtifact,
     pre_published_builtin: ?PrePublishedBuiltin,
-) ![]check.CheckedArtifact.PublishImportArtifact {
+) anyerror![]check.CheckedArtifact.PublishImportArtifact {
     const borrowed_builtin_count: usize = if (pre_published_builtin == null) 0 else 1;
     const imports = try allocator.alloc(check.CheckedArtifact.PublishImportArtifact, artifacts.len + borrowed_builtin_count);
     if (pre_published_builtin) |ppb| {
@@ -1335,7 +1405,7 @@ pub fn renderProblems(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
-) ![]u8 {
+) anyerror![]u8 {
     return try renderProblemsWithConfig(allocator, source_kind, source, reporting.ReportingConfig.initColorTerminal());
 }
 
@@ -1345,7 +1415,7 @@ pub fn renderProblemsWithConfig(
     source_kind: SourceKind,
     source: []const u8,
     config: reporting.ReportingConfig,
-) ![]u8 {
+) anyerror![]u8 {
     var resources = try parseAndCheckProgramForProblems(allocator, source_kind, source, &.{});
     defer resources.deinit(allocator);
 
@@ -1357,7 +1427,7 @@ fn renderCheckedModuleProblemsWithConfig(
     main: *const CheckedModule,
     filename: []const u8,
     config: reporting.ReportingConfig,
-) ![]u8 {
+) anyerror![]u8 {
     var reports = std.array_list.Managed(reporting.Report).init(allocator);
     defer {
         for (reports.items) |*r| r.deinit();
@@ -1433,7 +1503,7 @@ fn makeModuleSource(
     source_kind: SourceKind,
     source: []const u8,
     inspect_wrap: bool,
-) ![]u8 {
+) anyerror![]u8 {
     return switch (source_kind) {
         .expr => if (inspect_wrap)
             std.fmt.allocPrint(allocator, "main = || Str.inspect(({s}))", .{source})
@@ -1496,8 +1566,8 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     }
 }
 
-/// Public `mainProcArgLayouts` function.
-pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) ![]LayoutIdx {
+/// Return the layout indices for the main proc's arguments.
+pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) anyerror![]LayoutIdx {
     const proc = lowered.view.store.getProcSpec(lowered.mainProc());
     const arg_locals = lowered.view.store.getLocalSpan(proc.args);
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
@@ -1507,9 +1577,8 @@ pub fn mainProcArgLayouts(allocator: Allocator, lowered: *const LoweredProgram) 
     return arg_layouts;
 }
 
-/// Public `entrypointParamSlotSize` function.
-pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
-    const layouts = &lowered.view.layouts;
+/// Compute the entrypoint calling-convention slot size for a layout.
+pub fn entrypointParamSlotSizeForLayouts(layouts: *const LayoutStore, layout_idx: LayoutIdx) u32 {
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
@@ -1528,12 +1597,17 @@ pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: Layou
     return if (size == 0) 0 else 8;
 }
 
-/// Public `zeroedEntrypointArgBuffer` function.
-pub fn zeroedEntrypointArgBuffer(
+/// Entrypoint slot size for a layout, looked up from a lowered program.
+pub fn entrypointParamSlotSize(lowered: *const LoweredProgram, layout_idx: LayoutIdx) u32 {
+    return entrypointParamSlotSizeForLayouts(&lowered.view.layouts, layout_idx);
+}
+
+/// Allocate a zeroed, alignment-sorted entrypoint argument buffer, or null if no args.
+pub fn zeroedEntrypointArgBufferForLayouts(
     allocator: Allocator,
-    lowered: *const LoweredProgram,
+    layouts: *const LayoutStore,
     arg_layouts: []const LayoutIdx,
-) !?[]align(collections.max_roc_alignment.toByteUnits()) u8 {
+) anyerror!?[]align(collections.max_roc_alignment.toByteUnits()) u8 {
     const EntrypointArgOrder = struct {
         index: usize,
         alignment: u32,
@@ -1547,10 +1621,8 @@ pub fn zeroedEntrypointArgBuffer(
         defer allocator.free(ordered);
 
         for (arg_layouts, 0..) |arg_layout, i| {
-            const size_align = lowered.view.layouts.layoutSizeAlign(
-                lowered.view.layouts.getLayout(arg_layout),
-            );
-            const slot_size = entrypointParamSlotSize(lowered, arg_layout);
+            const size_align = layouts.layoutSizeAlign(layouts.getLayout(arg_layout));
+            const slot_size = entrypointParamSlotSizeForLayouts(layouts, arg_layout);
             ordered[i] = .{
                 .index = i,
                 .alignment = @intCast(size_align.alignment.toByteUnits()),
@@ -1577,7 +1649,7 @@ pub fn zeroedEntrypointArgBuffer(
 
     var total_size: usize = 0;
     for (arg_layouts, 0..) |arg_layout, i| {
-        total_size = @max(total_size, @as(usize, arg_offsets[i]) + entrypointParamSlotSize(lowered, arg_layout));
+        total_size = @max(total_size, @as(usize, arg_offsets[i]) + entrypointParamSlotSizeForLayouts(layouts, arg_layout));
     }
 
     if (total_size == 0) return null;
@@ -1587,14 +1659,247 @@ pub fn zeroedEntrypointArgBuffer(
     return buffer;
 }
 
-/// Public `lirInterpreterInspectedStr` function.
-pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+/// Zeroed entrypoint arg buffer using layout info from a lowered program.
+pub fn zeroedEntrypointArgBuffer(
+    allocator: Allocator,
+    lowered: *const LoweredProgram,
+    arg_layouts: []const LayoutIdx,
+) anyerror!?[]align(collections.max_roc_alignment.toByteUnits()) u8 {
+    return zeroedEntrypointArgBufferForLayouts(allocator, &lowered.view.layouts, arg_layouts);
+}
+
+fn boolRootRetBuffer(
+    allocator: Allocator,
+    layouts: *const LayoutStore,
+    ret_layout: LayoutIdx,
+) anyerror![]align(collections.max_roc_alignment.toByteUnits()) u8 {
+    const size_align = layouts.layoutSizeAlign(layouts.getLayout(ret_layout));
+    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
+    @memset(ret_buf, 0);
+    return ret_buf;
+}
+
+fn copyRuntimeCrashMessage(allocator: Allocator, runtime_env: *const RuntimeHostEnv) anyerror![]const u8 {
+    return switch (runtime_env.crashState()) {
+        .did_not_crash => try allocator.dupe(u8, "Roc crashed"),
+        .crashed => |msg| try allocator.dupe(u8, msg),
+    };
+}
+
+fn deinitPartialBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalResult, len: usize) void {
+    for (results[0..len]) |result| {
+        switch (result) {
+            .passed => {},
+            .crashed => |message| allocator.free(message),
+        }
+    }
+    allocator.free(results);
+}
+
+fn runExecutableBoolRoot(
+    allocator: Allocator,
+    layouts: *const LayoutStore,
+    executable: *const ExecutableMemory,
+    root: BoolRoot,
+    runtime_env: *RuntimeHostEnv,
+) anyerror!BoolRootEvalResult {
+    runtime_env.resetObservation();
+    runtime_env.resetAllocationTracker();
+
+    const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
+
+    const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
+    defer allocator.free(ret_buf);
+
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    const sj = crash_boundary.set();
+    if (sj == 0) {
+        executable.callRocABI(
+            @ptrCast(runtime_env.get_ops()),
+            @ptrCast(ret_buf.ptr),
+            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        );
+    }
+
+    const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
+        .did_not_crash => .{ .passed = ret_buf[0] != 0 },
+        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+    };
+    runtime_env.resetAllocationTracker();
+    return result;
+}
+
+/// JIT-compile and run bool-returning test roots via the dev backend.
+pub fn devEvalBoolRoots(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    roots: []const BoolRoot,
+) anyerror![]BoolRootEvalResult {
+    if (comptime !backend.host_lir_codegen_available) {
+        return error.DevBackendUnavailable;
+    } else {
+        var codegen = try HostLirCodeGen.init(allocator, store, layouts, &.{});
+        defer codegen.deinit();
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+        var runtime_env = RuntimeHostEnv.init(allocator);
+        defer runtime_env.deinit();
+
+        const results = try allocator.alloc(BoolRootEvalResult, roots.len);
+        var result_len: usize = 0;
+        errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
+
+        for (roots, 0..) |root, i| {
+            const entrypoint = try codegen.generateEntrypointWrapper(
+                root.symbol_name,
+                root.proc,
+                root.arg_layouts,
+                root.ret_layout,
+            );
+            var executable = try ExecutableMemory.initWithEntryOffset(
+                codegen.getGeneratedCode(),
+                entrypoint.offset,
+            );
+            defer executable.deinit();
+
+            results[i] = try runExecutableBoolRoot(allocator, layouts, &executable, root, &runtime_env);
+            result_len += 1;
+        }
+
+        return results;
+    }
+}
+
+fn llvmCompileOptions(opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
+    const llvm_compile = @import("llvm_compile");
+    return switch (opt) {
+        .size => .{
+            .function_sections = false,
+            .use_module_target_triple = true,
+            .opt_level = llvm_compile.bindings.CodeGenOptLevel.Default,
+            .is_small = true,
+        },
+        .speed => .{
+            .function_sections = false,
+            .use_module_target_triple = true,
+            .opt_level = llvm_compile.bindings.CodeGenOptLevel.Aggressive,
+            .is_small = false,
+        },
+    };
+}
+
+fn callLlvmBoolRoot(
+    allocator: Allocator,
+    layouts: *const LayoutStore,
+    entry: *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void,
+    root: BoolRoot,
+    runtime_env: *RuntimeHostEnv,
+) anyerror!BoolRootEvalResult {
+    runtime_env.resetObservation();
+    runtime_env.resetAllocationTracker();
+
+    const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
+    defer if (arg_buffer) |buf| allocator.free(buf);
+
+    const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
+    defer allocator.free(ret_buf);
+
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    const sj = crash_boundary.set();
+    if (sj == 0) {
+        entry(
+            runtime_env.get_ops(),
+            ret_buf.ptr,
+            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        );
+    }
+
+    const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
+        .did_not_crash => .{ .passed = ret_buf[0] != 0 },
+        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+    };
+    runtime_env.resetAllocationTracker();
+    return result;
+}
+
+/// Compile and run bool-returning test roots via the LLVM backend.
+pub fn llvmEvalBoolRoots(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    roots: []const BoolRoot,
+    opt: LlvmTestOpt,
+) anyerror![]BoolRootEvalResult {
+    if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
+
+    const llvm_compile = @import("llvm_compile");
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, store);
+    codegen.layout_store = layouts;
+    defer codegen.deinit();
+
+    const entrypoints = try allocator.alloc(llvm_compile.MonoLlvmCodeGen.Entrypoint, roots.len);
+    defer allocator.free(entrypoints);
+    for (roots, 0..) |root, i| {
+        entrypoints[i] = .{
+            .symbol_name = root.symbol_name,
+            .proc = root.proc,
+            .arg_layouts = root.arg_layouts,
+            .ret_layout = root.ret_layout,
+        };
+    }
+
+    const bitcode = try codegen.generateEntrypointModule("roc_test_module", entrypoints);
+    defer {
+        var owned = bitcode;
+        owned.deinit();
+    }
+
+    const dylib_path = try llvm_compile.compileToSharedLibrary(
+        allocator,
+        std.Options.debug_io,
+        bitcode.bitcode,
+        llvmCompileOptions(opt),
+    );
+    defer {
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        allocator.free(dylib_path);
+    }
+
+    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
+    defer lib.close();
+
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
+        runtime_env.setLongjmpOnCrash(false);
+    }
+
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const results = try allocator.alloc(BoolRootEvalResult, roots.len);
+    var result_len: usize = 0;
+    errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
+
+    for (roots, 0..) |root, i| {
+        const entry = lib.lookup(EntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable;
+        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env);
+        result_len += 1;
+    }
+
+    return results;
+}
+
+/// Evaluate a lowered program via the LIR interpreter and return the output string.
+pub fn lirInterpreterInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) anyerror![]u8 {
     const result = try lirInterpreterStrWithStats(allocator, lowered);
     return result.output;
 }
 
-/// Public `lirInterpreterStrWithStats` function.
-pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
+/// Evaluate via the LIR interpreter, returning output string and allocation count.
+pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) anyerror!EvalRunResult {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
@@ -1631,14 +1936,14 @@ pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredP
     };
 }
 
-/// Public `devEvaluatorInspectedStr` function.
-pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+/// Evaluate a lowered program via the dev JIT backend and return the output string.
+pub fn devEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) anyerror![]u8 {
     const result = try devEvaluatorStrWithStats(allocator, lowered);
     return result.output;
 }
 
-/// Public `devEvaluatorStrWithStats` function.
-pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
+/// Evaluate via the dev JIT backend, returning output string and allocation count.
+pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) anyerror!EvalRunResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
@@ -1708,8 +2013,8 @@ pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPro
     }
 }
 
-/// Public `llvmEvaluatorInspectedStr` function.
-pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+/// Evaluate a lowered program via the LLVM backend and return the output string.
+pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) anyerror![]u8 {
     if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
     const llvm_compile = @import("llvm_compile");
@@ -1788,14 +2093,14 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     );
 }
 
-/// Public `wasmEvaluatorInspectedStr` function.
-pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) ![]u8 {
+/// Evaluate a lowered program via the wasm backend and return the output string.
+pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) anyerror![]u8 {
     const result = try wasmEvaluatorStrWithStats(allocator, lowered);
     return result.output;
 }
 
-/// Public `wasmEvaluatorStrWithStats` function.
-pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) !EvalRunResult {
+/// Evaluate via the wasm backend, returning output string and allocation count.
+pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) anyerror!EvalRunResult {
     if (@import("builtin").target.os.tag == .freestanding) return error.WasmExecFailed;
     var codegen = backend.wasm.WasmCodeGen.init(
         allocator,
@@ -1821,7 +2126,7 @@ fn copyReturnedRocStr(
     ret_layout: LayoutIdx,
     value_ptr: [*]u8,
     roc_ops: ?*builtins.host_abi.RocOps,
-) ![]u8 {
+) anyerror![]u8 {
     const layout_val = layout_store.getLayout(ret_layout);
     const is_str =
         ret_layout == .str or

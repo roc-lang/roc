@@ -8,6 +8,7 @@
 //! - aarch64: Linux and macOS (AAPCS64)
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
@@ -85,7 +86,7 @@ pub fn DevBackend(
             allocator: std.mem.Allocator,
             target: base.target.Target,
             layout_store: *layout.Store,
-        ) !Self {
+        ) Allocator.Error!Self {
             return Self{
                 .allocator = allocator,
                 .target = target,
@@ -186,7 +187,7 @@ pub fn Storage(
         /// Claim a general-purpose register for a symbol.
         /// Panics if no registers are free.
         /// TODO: Implement register spilling/reload.
-        pub fn claimGeneralReg(self: *Self, symbol: u32) !GeneralReg {
+        pub fn claimGeneralReg(self: *Self, symbol: u32) Allocator.Error!GeneralReg {
             const reg = self.general_free.popOrNull() orelse
                 @panic("TODO: no free general registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .general_reg = reg });
@@ -196,7 +197,7 @@ pub fn Storage(
         /// Claim a floating-point register for a symbol.
         /// Panics if no registers are free.
         /// TODO: Implement register spilling/reload.
-        pub fn claimFloatReg(self: *Self, symbol: u32) !FloatReg {
+        pub fn claimFloatReg(self: *Self, symbol: u32) Allocator.Error!FloatReg {
             const reg = self.float_free.popOrNull() orelse
                 @panic("TODO: no free float registers; spilling/reload is not implemented");
             try self.symbol_storage.put(symbol, .{ .float_reg = reg });
@@ -204,7 +205,7 @@ pub fn Storage(
         }
 
         /// Free the storage for a symbol (when it's no longer needed)
-        pub fn freeSymbol(self: *Self, symbol: u32) !void {
+        pub fn freeSymbol(self: *Self, symbol: u32) Allocator.Error!void {
             if (self.symbol_storage.fetchRemove(symbol)) |entry| {
                 switch (entry.value) {
                     .general_reg => |reg| try self.general_free.append(self.allocator, reg),

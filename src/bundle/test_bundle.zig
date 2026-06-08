@@ -8,6 +8,8 @@
 //! - Memory-based file system for testing
 
 const std = @import("std");
+const collections = @import("collections");
+const Allocator = std.mem.Allocator;
 const bundle = @import("bundle.zig");
 const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
@@ -529,7 +531,7 @@ test "bundle and unbundle over socket stream" {
         ready: std.Io.Semaphore = .{},
         done: std.Io.Semaphore = .{},
 
-        fn run(ctx: *@This()) !void {
+        fn run(ctx: *@This()) anyerror!void {
             const thread_io = std.testing.io;
             const unix_addr = try std.Io.net.UnixAddress.init(ctx.socket_path);
             var listener = try unix_addr.listen(thread_io, .{});
@@ -1488,7 +1490,7 @@ test "download from local server" {
             };
         }
 
-        fn runImpl(ctx: *@This()) !void {
+        fn runImpl(ctx: *@This()) anyerror!void {
             const thread_io = std.testing.io;
             const stream = try ctx.server.accept(thread_io);
             defer stream.close(thread_io);
@@ -1640,7 +1642,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
 
     // Now unbundle using BufferExtractWriter (same as WASM uses)
     // Use arena allocator for BufferExtractWriter to simplify memory management
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
@@ -1726,7 +1728,7 @@ test "unbundleStream with large file (multi-block zstd)" {
     const expected_hash = (try unbundle_mod.validateBase58Hash(hash_str)).?;
 
     // Use arena allocator for BufferExtractWriter to simplify memory management
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

@@ -36,14 +36,12 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
-const EvalBackend = eval_mod.EvalBackend;
 
 /// Arguments for glue code generation.
 pub const GlueArgs = struct {
     glue_spec: []const u8,
     output_dir: []const u8,
     platform_path: []const u8,
-    backend: EvalBackend = .dev,
 };
 
 /// Error types for glue generation operations.
@@ -178,10 +176,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer build_env.deinit();
 
     build_env.build(synthetic_app_path) catch {
-        _ = build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
-    _ = build_env.renderDiagnostics(stderr);
+    _ = try build_env.renderDiagnostics(stderr);
 
     const modules = build_env.getModulesInSerializationOrder(gpa) catch {
         return error.ModuleRetrieval;
@@ -284,10 +282,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer glue_build_env.deinit();
 
     glue_build_env.build(glue_spec_abs) catch {
-        _ = glue_build_env.renderDiagnostics(stderr);
+        _ = try glue_build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
-    _ = glue_build_env.renderDiagnostics(stderr);
+    _ = try glue_build_env.renderDiagnostics(stderr);
 
     const root_artifact = glue_build_env.executableRootCheckedArtifact();
     const imported_artifacts = glue_build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
@@ -639,7 +637,7 @@ pub const PlatformHeaderInfo = struct {
 };
 
 /// Parse a platform header to extract requires entries and validate it's a platform file.
-fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) !PlatformHeaderInfo {
+fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
     // Read source file
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,

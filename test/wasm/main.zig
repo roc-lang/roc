@@ -3,9 +3,10 @@
 //! This test compiles a Roc WASM app and verifies it produces the expected output.
 //! It follows the pattern from test/playground-integration/main.zig.
 //!
-//! Run with: zig build test-wasm-static-lib
+//! Run with: zig build run-test-wasm-static-lib
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 
 /// Custom error type that host functions can return to signal a trap.
@@ -102,8 +103,8 @@ const HostContext = struct {
 var global_host_context: HostContext = .{};
 
 /// Initialize WASM module from file.
-fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8) !WasmInterface {
-    const wasm_data = std.Io.Dir.cwd().readFileAlloc(arena, wasm_path, std.math.maxInt(usize)) catch |err| {
+fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8) anyerror!WasmInterface {
+    const wasm_data = std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
     };
@@ -146,7 +147,7 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
 }
 
 /// Call wasm_main() and get the result string.
-fn callWasmMain(wasm: *const WasmInterface) ![]const u8 {
+fn callWasmMain(wasm: *const WasmInterface) anyerror![]const u8 {
     // Call wasm_main() which returns a pointer to the result string
     var params_main: [0]bytebox.Val = undefined;
     var returns_main: [1]bytebox.Val = undefined;
@@ -178,8 +179,8 @@ fn callWasmMain(wasm: *const WasmInterface) ![]const u8 {
 }
 
 /// Run a single test case.
-fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const u8, expected_output: []const u8) TestResult {
-    var wasm = setupWasm(gpa, arena, wasm_path) catch |err| {
+fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8, expected_output: []const u8) TestResult {
+    var wasm = setupWasm(gpa, arena, io, wasm_path) catch |err| {
         return .{
             .name = wasm_path,
             .passed = false,
@@ -211,7 +212,7 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []const 
     }
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) anyerror!void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
@@ -221,7 +222,7 @@ pub fn main() !void {
     const arena = arena_impl.allocator();
 
     // Handle CLI arguments
-    const args = try std.process.argsAlloc(arena);
+    const args = try init.minimal.args.toSlice(arena);
 
     var wasm_path: []const u8 = "test/wasm/app.wasm";
     var expected_output: []const u8 = "Hello from Roc WASM!";
@@ -230,7 +231,7 @@ pub fn main() !void {
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--help")) {
-            std.debug.print("Usage: test-wasm-static-lib [options]\n", .{});
+            std.debug.print("Usage: zig build run-test-wasm-static-lib -- [options]\n", .{});
             std.debug.print("Options:\n", .{});
             std.debug.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
             std.debug.print("  --expected OUTPUT    Expected output string\n", .{});
@@ -257,7 +258,7 @@ pub fn main() !void {
     std.debug.print("WASM file: {s}\n", .{wasm_path});
     std.debug.print("Expected output: \"{s}\"\n\n", .{expected_output});
 
-    const result = runTest(gpa, arena, wasm_path, expected_output);
+    const result = runTest(gpa, arena, init.io, wasm_path, expected_output);
 
     if (result.passed) {
         std.debug.print("PASSED: {s}\n", .{result.name});
@@ -272,14 +273,14 @@ pub fn main() !void {
 }
 
 test "wasm static lib - hello world" {
-    // This test is run via `zig build test-wasm-static-lib`
+    // This test is run via `zig build run-test-wasm-static-lib`
     // It requires the WASM file to be built first
     const gpa = std.testing.allocator;
     var arena_impl = std.heap.ArenaAllocator.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    const result = runTest(gpa, arena, "test/wasm/app.wasm", "Hello from Roc WASM!");
+    const result = runTest(gpa, arena, std.testing.io, "test/wasm/app.wasm", "Hello from Roc WASM!");
     if (!result.passed) {
         std.debug.print("Test failed: {s}\n", .{result.message});
     }

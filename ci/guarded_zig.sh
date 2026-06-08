@@ -12,7 +12,7 @@ fi
 
 if [[ "$#" -eq 0 ]]; then
   echo "usage: ci/guarded_zig.sh <command> [args...]" >&2
-  echo "example: ci/guarded_zig.sh zig build test-eval" >&2
+  echo "example: ci/guarded_zig.sh zig build run-test-eval" >&2
   exit 2
 fi
 
@@ -39,10 +39,10 @@ run_perl_checks() {
 }
 
 run_perl_checks
-run_check zig build check-fmt
-run_check zig run ci/zig_lints.zig
-run_check zig run ci/tidy.zig
-run_check zig run ci/check_test_wiring.zig
+run_check zig build run-check-zig-format
+run_check zig build run-check-zig-lints
+run_check zig build run-check-tidy
+run_check zig build run-check-test-wiring
 
 printf '\n==> '
 printf '%q ' "$@"

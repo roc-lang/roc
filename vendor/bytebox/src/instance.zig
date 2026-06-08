@@ -744,6 +744,7 @@ pub const VM = struct {
 
     allocator: std.mem.Allocator,
     mem: []u8, // VM and impl memory live here
+    mem_alignment: std.mem.Alignment, // alignment `mem` was allocated with, so it can be freed symmetrically
 
     impl: *anyopaque,
 
@@ -753,7 +754,7 @@ pub const VM = struct {
         const impl_alloc_size = std.mem.alignForward(usize, @sizeOf(T), alignment);
         const total_alloc_size = vm_alloc_size + impl_alloc_size;
 
-        var mem = try allocator.alloc(u8, total_alloc_size);
+        var mem = try allocator.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(alignment), total_alloc_size);
 
         var vm: *VM = @as(*VM, @ptrCast(@alignCast(mem.ptr)));
         const impl: *T = @as(*T, @ptrCast(@alignCast(mem[vm_alloc_size..].ptr)));
@@ -769,6 +770,7 @@ pub const VM = struct {
         vm.resolve_func_ref_fn = T.resolveFuncRef;
         vm.allocator = allocator;
         vm.mem = mem;
+        vm.mem_alignment = comptime std.mem.Alignment.fromByteUnits(alignment);
         vm.impl = impl;
 
         T.init(vm);
@@ -781,7 +783,8 @@ pub const VM = struct {
 
         var allocator = vm.allocator;
         const mem = vm.mem;
-        allocator.free(mem);
+        const alignment = vm.mem_alignment;
+        allocator.rawFree(mem, alignment, @returnAddress());
     }
 
     fn instantiate(vm: *VM, module: *ModuleInstance, opts: ModuleInstantiateOpts) InstantiateError!void {

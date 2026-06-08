@@ -78,7 +78,7 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
 
         /// Allocate with a size prefix so realloc/dealloc can recover the old length.
         fn rocAlloc(alloc_args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             const total = alloc_args.length + size_prefix;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(alloc_args.alignment, @alignOf(usize)));
             const raw = alloc.rawAlloc(total, align_enum, @returnAddress()) orelse {
@@ -93,12 +93,18 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             alloc_args.answer = @ptrCast(raw + size_prefix);
         }
 
-        fn rocDealloc(_: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-            // No-op for simplicity — short-lived process, pages freed on exit
+        fn rocDealloc(dealloc_args: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
+            // Recover the length rocAlloc stored in the prefix, then free the whole block.
+            const user_ptr: [*]u8 = @ptrCast(dealloc_args.ptr);
+            const raw = user_ptr - size_prefix;
+            const length = @as(*const usize, @ptrCast(@alignCast(raw))).*;
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(dealloc_args.alignment, @alignOf(usize)));
+            alloc.rawFree(raw[0 .. length + size_prefix], align_enum, @returnAddress());
         }
 
         fn rocRealloc(realloc_args: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
-            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
+            const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             const align_enum = std.mem.Alignment.fromByteUnits(@max(realloc_args.alignment, @alignOf(usize)));
 
             // Read old size from prefix
@@ -125,6 +131,9 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             if (copy_len > 0) {
                 @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
             }
+
+            // Free the old block now that its contents have been copied.
+            alloc.rawFree(old_raw[0 .. old_size + size_prefix], align_enum, @returnAddress());
 
             realloc_args.answer = @ptrCast(new_ptr);
         }
@@ -188,12 +197,15 @@ pub fn buildCliArgs(app_args: []const []const u8, roc_ops: *host_abi.RocOps) std
     if (comptime is_wasm) return RocList.empty();
     if (app_args.len == 0) return RocList.empty();
 
-    const allocator = std.heap.page_allocator;
+    const allocator = std.heap.smp_allocator;
     const roc_strs = try allocator.alloc(RocStr, app_args.len);
+    defer allocator.free(roc_strs);
 
     for (app_args, 0..) |arg, i| {
         const sanitized = try sanitizeUtf8(arg, allocator);
         roc_strs[i] = RocStr.fromSlice(sanitized, roc_ops);
+        // fromSlice copied the bytes into Roc memory, so the host scratch is done.
+        if (sanitized.ptr != arg.ptr) allocator.free(sanitized);
     }
 
     return RocList.fromSlice(RocStr, roc_strs, true, roc_ops);
@@ -239,18 +251,14 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) std.mem.Allocat
             in_i += 1;
         }
     }
-    const resized = allocator.resize(buf, out_i);
-    if (!resized) {
-        // resize can fail but the buffer remains valid; keep original allocation
-    }
-    return buf[0..out_i];
+    // realloc to the exact length so the returned slice is the whole allocation
+    // and callers can free it (a plain resize can decline a shrink, e.g. across
+    // smp size classes, which would leave the returned sub-slice unfreeable).
+    return allocator.realloc(buf, out_i) catch buf[0..out_i];
 }
 
 const testing = std.testing;
-// sanitizeUtf8 uses allocator.resize which page_allocator supports but
-// testing.allocator (DebugAllocator) does not handle well with
-// sub-slice frees. Use page_allocator to match production behavior.
-const test_allocator = std.heap.page_allocator;
+const test_allocator = std.testing.allocator;
 
 test "sanitizeUtf8: valid ASCII passes through unchanged" {
     const input = "hello world";
@@ -269,29 +277,34 @@ test "sanitizeUtf8: valid multibyte UTF-8 passes through unchanged" {
 
 test "sanitizeUtf8: single invalid byte becomes replacement char" {
     const result = try sanitizeUtf8("\xff", test_allocator);
+    defer test_allocator.free(result);
     try testing.expectEqualStrings("\xef\xbf\xbd", result); // U+FFFD
 }
 
 test "sanitizeUtf8: invalid byte surrounded by valid ASCII" {
     const result = try sanitizeUtf8("a\xffb", test_allocator);
+    defer test_allocator.free(result);
     try testing.expectEqualStrings("a\xef\xbf\xbdb", result);
 }
 
 test "sanitizeUtf8: truncated 2-byte sequence" {
     // 0xC3 starts a 2-byte sequence but there's no continuation byte
     const result = try sanitizeUtf8("a\xc3", test_allocator);
+    defer test_allocator.free(result);
     try testing.expectEqualStrings("a\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: truncated 3-byte sequence" {
     // 0xE2 starts a 3-byte sequence but only one continuation follows
     const result = try sanitizeUtf8("\xe2\x9c", test_allocator);
+    defer test_allocator.free(result);
     // Each byte of the truncated sequence is replaced individually
     try testing.expectEqualStrings("\xef\xbf\xbd\xef\xbf\xbd", result);
 }
 
 test "sanitizeUtf8: multiple consecutive invalid bytes" {
     const result = try sanitizeUtf8("\xff\xfe\xfd", test_allocator);
+    defer test_allocator.free(result);
     // Each invalid byte gets its own replacement char
     try testing.expectEqualStrings("\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd", result);
 }
