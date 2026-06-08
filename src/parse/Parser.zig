@@ -2011,14 +2011,14 @@ const ExprCollectionItemParents = struct {
         self.stack.deinit(allocator);
     }
 
-    fn set(self: *ExprCollectionItemParents, allocator: std.mem.Allocator, open_depth: usize) Error!void {
+    inline fn set(self: *ExprCollectionItemParents, allocator: std.mem.Allocator, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
         self.current = open_depth;
     }
 
-    fn take(self: *ExprCollectionItemParents) void {
+    inline fn take(self: *ExprCollectionItemParents) void {
         _ = self.current orelse unreachable;
         self.current = self.stack.pop();
     }
