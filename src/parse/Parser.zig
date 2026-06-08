@@ -4528,64 +4528,82 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             if (open_syntax.peekKind()) |kind| {
                 const kind_int = @intFromEnum(kind);
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_if)) {
-                    if (kind == .statement_type_associated_statement) {
-                        if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
-                            dispatch_token = self.peek();
-                            const parent_int = @intFromEnum(std.meta.activeTag(parent));
-                            if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
-                                unreachable;
+                    switch (kind) {
+                        .statement_type_associated_statement => {
+                            if (root_expr_parents.activeParent(open_syntax.depth())) |parent| {
+                                dispatch_token = self.peek();
+                                const parent_int = @intFromEnum(std.meta.activeTag(parent));
+                                if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) {
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).expr_collection_item)) continue :dispatch .expr_collection_after_item;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_expect)) continue :dispatch .statement_expect_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_expr)) continue :dispatch .statement_for_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_for_body)) continue :dispatch .statement_for_after_body;
+                                    unreachable;
+                                }
+                                if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
+                                    unreachable;
+                                }
+                                if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
+                                    if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
+                                    unreachable;
+                                }
+                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
+                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
                             }
-                            if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) {
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_cond)) continue :dispatch .statement_while_after_cond;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_while_body)) continue :dispatch .statement_while_after_body;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_crash)) continue :dispatch .statement_crash_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_dbg)) continue :dispatch .statement_dbg_after_expr;
-                                unreachable;
-                            }
-                            if (parent_int <= @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) {
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_return)) continue :dispatch .statement_return_after_expr;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_var_body)) continue :dispatch .statement_var_after_body;
-                                if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_decl_body)) continue :dispatch .statement_decl_after_body;
-                                unreachable;
-                            }
-                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_destructure_body)) continue :dispatch .statement_destructure_after_body;
-                            if (parent_int == @intFromEnum(std.meta.Tag(RootExprParent).statement_final_expr)) continue :dispatch .statement_final_expr;
-                        }
-                        unreachable;
+                            unreachable;
+                        },
+                        else => {},
                     }
                     if (kind_int < @intFromEnum(OpenSyntaxKind.expr_record_ext)) {
                         dispatch_token = self.peek();
-                        if (kind == .expr_unary) continue :dispatch .expr_after_unary;
-                        if (kind == .expr_binary_rhs) continue :dispatch .expr_after_binary_rhs;
-                        if (kind == .expr_arrow_inner) continue :dispatch .expr_arrow_after_inner;
+                        switch (kind) {
+                            .expr_unary => continue :dispatch .expr_after_unary,
+                            .expr_binary_rhs => continue :dispatch .expr_after_binary_rhs,
+                            .expr_arrow_inner => continue :dispatch .expr_arrow_after_inner,
+                            else => {},
+                        }
                     } else {
                         dispatch_token = self.peek();
-                        if (kind == .expr_record_ext) continue :dispatch .expr_record_ext_after_expr;
-                        if (kind == .expr_record_field) continue :dispatch .expr_record_field_after_value;
-                        if (kind == .expr_string) continue :dispatch .expr_string_after_interp;
+                        switch (kind) {
+                            .expr_record_ext => continue :dispatch .expr_record_ext_after_expr,
+                            .expr_record_field => continue :dispatch .expr_record_field_after_value,
+                            .expr_string => continue :dispatch .expr_string_after_interp,
+                            else => {},
+                        }
                     }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_list)) {
                     dispatch_token = self.peek();
-                    if (kind == .expr_if) continue :dispatch .expr_if_after_condition;
-                    if (kind == .expr_if_then) continue :dispatch .expr_if_after_then;
-                    if (kind == .expr_if_else) continue :dispatch .expr_if_after_else;
-                    if (kind == .expr_match) continue :dispatch .expr_match_after_expr;
-                    if (kind == .expr_match_guard) continue :dispatch .expr_match_branch_after_guard;
-                    if (kind == .expr_match_body) continue :dispatch .expr_match_branch_after_body;
-                    if (kind == .expr_dbg) continue :dispatch .expr_dbg_after_expr;
+                    switch (kind) {
+                        .expr_if => continue :dispatch .expr_if_after_condition,
+                        .expr_if_then => continue :dispatch .expr_if_after_then,
+                        .expr_if_else => continue :dispatch .expr_if_after_else,
+                        .expr_match => continue :dispatch .expr_match_after_expr,
+                        .expr_match_guard => continue :dispatch .expr_match_branch_after_guard,
+                        .expr_match_body => continue :dispatch .expr_match_branch_after_body,
+                        .expr_dbg => continue :dispatch .expr_dbg_after_expr,
+                        else => {},
+                    }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
                     dispatch_token = self.peek();
-                    if (kind == .expr_for_list) continue :dispatch .expr_for_after_list;
-                    if (kind == .expr_for_body) continue :dispatch .expr_for_after_body;
-                    if (kind == .expr_lambda_body) continue :dispatch .expr_lambda_after_body;
+                    switch (kind) {
+                        .expr_for_list => continue :dispatch .expr_for_after_list,
+                        .expr_for_body => continue :dispatch .expr_for_after_body,
+                        .expr_lambda_body => continue :dispatch .expr_lambda_after_body,
+                        else => {},
+                    }
                 } else {
-                    if (kind == .pattern_string) {
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_string_after_expr;
+                    switch (kind) {
+                        .pattern_string => {
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_string_after_expr;
+                        },
+                        else => {},
                     }
                 }
                 if (entry.result_kind == .expr) {
@@ -5789,23 +5807,35 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const kind_int = @intFromEnum(kind);
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_pattern)) {
                     dispatch_token = self.peek();
-                    if (kind == .statement_for_pattern) continue :dispatch .statement_for_after_pattern;
-                    if (kind == .statement_destructure_pattern) continue :dispatch .statement_destructure_after_pattern;
-                    if (kind == .expr_match_pattern) continue :dispatch .expr_match_branch_after_pattern;
+                    switch (kind) {
+                        .statement_for_pattern => continue :dispatch .statement_for_after_pattern,
+                        .statement_destructure_pattern => continue :dispatch .statement_destructure_after_pattern,
+                        .expr_match_pattern => continue :dispatch .expr_match_branch_after_pattern,
+                        else => {},
+                    }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
                     dispatch_token = self.peek();
-                    if (kind == .expr_for_pattern) continue :dispatch .expr_for_after_pattern;
-                    if (kind == .expr_lambda_args) continue :dispatch .expr_lambda_after_args;
+                    switch (kind) {
+                        .expr_for_pattern => continue :dispatch .expr_for_after_pattern,
+                        .expr_lambda_args => continue :dispatch .expr_lambda_after_args,
+                        else => {},
+                    }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_record)) {
                     dispatch_token = self.peek();
-                    if (kind == .pattern_root) continue :dispatch .pattern_root_after_one;
-                    if (kind == .pattern_tag_args) continue :dispatch .pattern_tag_args_after_item;
-                    if (kind == .pattern_list) continue :dispatch .pattern_list_after_item;
-                    if (kind == .pattern_tuple) continue :dispatch .pattern_tuple_after_item;
+                    switch (kind) {
+                        .pattern_root => continue :dispatch .pattern_root_after_one,
+                        .pattern_tag_args => continue :dispatch .pattern_tag_args_after_item,
+                        .pattern_list => continue :dispatch .pattern_list_after_item,
+                        .pattern_tuple => continue :dispatch .pattern_tuple_after_item,
+                        else => {},
+                    }
                 } else {
-                    if (kind == .pattern_record_field) {
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_record_field_after_value;
+                    switch (kind) {
+                        .pattern_record_field => {
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_record_field_after_value;
+                        },
+                        else => {},
                     }
                 }
                 if (entry.result_kind == .pattern) {
@@ -6592,30 +6622,45 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const kind_int = @intFromEnum(kind);
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_unary)) {
                     dispatch_token = self.peek();
-                    if (kind == .header_requires_type) continue :dispatch .header_platform_requires_next;
-                    if (kind == .header_where_clause_type) continue :dispatch .statement_type_after_where;
-                    if (kind == .statement_var_type) continue :dispatch .statement_var_after_type;
-                    if (kind == .statement_type_after_anno) continue :dispatch .statement_type_after_anno;
-                    if (kind == .statement_type_decl_anno) continue :dispatch .statement_type_decl_after_anno;
+                    switch (kind) {
+                        .header_requires_type => continue :dispatch .header_platform_requires_next,
+                        .header_where_clause_type => continue :dispatch .statement_type_after_where,
+                        .statement_var_type => continue :dispatch .statement_var_after_type,
+                        .statement_type_after_anno => continue :dispatch .statement_type_after_anno,
+                        .statement_type_decl_anno => continue :dispatch .statement_type_decl_after_anno,
+                        else => {},
+                    }
                 } else if (kind_int >= @intFromEnum(OpenSyntaxKind.type_apply)) {
                     if (kind_int < @intFromEnum(OpenSyntaxKind.type_record)) {
                         dispatch_token = self.peek();
-                        if (kind == .type_apply) continue :dispatch .type_apply_after_item;
-                        if (kind == .type_paren_item) continue :dispatch .type_paren_after_item;
-                        if (kind == .type_paren_fn_ret) continue :dispatch .type_paren_fn_after_ret;
-                        if (kind == .type_zero_arg_fn_ret) continue :dispatch .type_zero_arg_fn_after_ret;
+                        switch (kind) {
+                            .type_apply => continue :dispatch .type_apply_after_item,
+                            .type_paren_item => continue :dispatch .type_paren_after_item,
+                            .type_paren_fn_ret => continue :dispatch .type_paren_fn_after_ret,
+                            .type_zero_arg_fn_ret => continue :dispatch .type_zero_arg_fn_after_ret,
+                            else => {},
+                        }
                     } else if (kind_int < @intFromEnum(OpenSyntaxKind.type_tag_union)) {
                         dispatch_token = self.peek();
-                        if (kind == .type_record_ext) continue :dispatch .type_record_after_named_ext;
-                        if (kind == .type_record_field) continue :dispatch .type_record_field_after_ty;
+                        switch (kind) {
+                            .type_record_ext => continue :dispatch .type_record_after_named_ext,
+                            .type_record_field => continue :dispatch .type_record_field_after_ty,
+                            else => {},
+                        }
                     } else if (kind_int < @intFromEnum(OpenSyntaxKind.type_fn)) {
                         dispatch_token = self.peek();
-                        if (kind == .type_tag_union_ext) continue :dispatch .type_tag_union_after_named_ext;
-                        if (kind == .type_tag_union_item) continue :dispatch .type_tag_union_after_item;
+                        switch (kind) {
+                            .type_tag_union_ext => continue :dispatch .type_tag_union_after_named_ext,
+                            .type_tag_union_item => continue :dispatch .type_tag_union_after_item,
+                            else => {},
+                        }
                     } else {
                         dispatch_token = self.peek();
-                        if (kind == .type_fn_arg) continue :dispatch .type_fn_after_arg;
-                        if (kind == .type_fn_ret) continue :dispatch .type_fn_after_ret;
+                        switch (kind) {
+                            .type_fn_arg => continue :dispatch .type_fn_after_arg,
+                            .type_fn_ret => continue :dispatch .type_fn_after_ret,
+                            else => {},
+                        }
                     }
                 }
                 if (entry.result_kind == .type_anno) {
