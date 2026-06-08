@@ -1990,7 +1990,7 @@ const RootExprParents = struct {
         self.stack.deinit(allocator);
     }
 
-    fn set(self: *RootExprParents, allocator: std.mem.Allocator, parent: RootExprParent, open_depth: usize) Error!void {
+    inline fn set(self: *RootExprParents, allocator: std.mem.Allocator, parent: RootExprParent, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
@@ -2017,7 +2017,7 @@ const RootStatementParents = struct {
         self.stack.deinit(allocator);
     }
 
-    fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: DirectContext, open_depth: usize) Error!void {
+    inline fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: DirectContext, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
