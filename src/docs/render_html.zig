@@ -7,6 +7,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const DocModel = @import("DocModel.zig");
+const collections = @import("collections");
 const DocType = DocModel.DocType;
 
 // Static assets embedded at compile time
@@ -109,7 +110,7 @@ const RenderContext = struct {
     /// `anchor_arena`.
     all_anchors: std.StringHashMapUnmanaged(void) = .empty,
     /// Backing storage for `all_anchors` keys.
-    anchor_arena: std.heap.ArenaAllocator,
+    anchor_arena: collections.SingleThreadArena,
     /// When non-null, broken `[Name]` references are appended here as they
     /// are encountered. The list and its strings are allocated with
     /// `broken_links_gpa`; the caller owns and must free them.
@@ -142,7 +143,7 @@ const RenderContext = struct {
             if (std.mem.eql(u8, mod.name, "Builtin")) documenting_builtin = true;
         }
 
-        var arena = std.heap.ArenaAllocator.init(gpa);
+        var arena = collections.SingleThreadArena.init(gpa);
         errdefer arena.deinit();
         var anchors = std.StringHashMapUnmanaged(void).empty;
         errdefer anchors.deinit(gpa);

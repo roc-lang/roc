@@ -16,6 +16,7 @@ const lir = @import("lir");
 const eval = @import("eval");
 const check = @import("check");
 const base = @import("base");
+const collections = @import("collections");
 const host_abi = @import("builtins").host_abi;
 const roc_target = @import("roc_target");
 
@@ -27,14 +28,14 @@ const CoreCtx = @import("ctx").CoreCtx;
 // function pointers.
 fn testRocAlloc(args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
     const align_enum = std.mem.Alignment.fromByteUnits(@max(args.alignment, @alignOf(usize)));
-    const raw = std.heap.page_allocator.rawAlloc(args.length, align_enum, @returnAddress()) orelse {
+    const raw = base.defaultGpa().rawAlloc(args.length, align_enum, @returnAddress()) orelse {
         std.debug.panic("embedding smoke test roc_alloc OOM", .{});
     };
     args.answer = @ptrCast(raw);
 }
 
 fn testRocDealloc(_: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
-    // No-op for the smoke test — page_allocator pages are reclaimed at exit.
+    // No-op for the smoke test — pages are reclaimed at exit.
 }
 
 fn testRocRealloc(_: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
@@ -53,7 +54,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     const app_path = "test/cli/simple_success.roc";
 
     const gpa = std.testing.allocator;
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

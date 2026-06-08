@@ -8382,8 +8382,10 @@ pub fn canonicalizeExpr(
                     if (can_guard_result.free_vars.len > 0) {
                         // Copy before clearing — clearFrom poisons memory in debug mode
                         const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
-                        const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
-                        defer self.env.gpa.free(guard_free_vars_copy);
+                        var guard_fv_sfa = std.heap.stackFallback(16 * @sizeOf(Pattern.Idx), self.env.gpa);
+                        const guard_fv_alloc = guard_fv_sfa.get();
+                        const guard_free_vars_copy = try guard_fv_alloc.alloc(Pattern.Idx, guard_fv_slice.len);
+                        defer guard_fv_alloc.free(guard_free_vars_copy);
                         @memcpy(guard_free_vars_copy, guard_fv_slice);
 
                         self.scratch_free_vars.clearFrom(body_free_vars_start);
@@ -8423,8 +8425,10 @@ pub fn canonicalizeExpr(
                     // because clearFrom poisons the memory in debug mode (Zig 0.16)
                     // and the slice points into the same ArrayList we're clearing.
                     const body_fv_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
-                    const body_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, body_fv_slice.len);
-                    defer self.env.gpa.free(body_free_vars_copy);
+                    var body_fv_sfa = std.heap.stackFallback(16 * @sizeOf(Pattern.Idx), self.env.gpa);
+                    const body_fv_alloc = body_fv_sfa.get();
+                    const body_free_vars_copy = try body_fv_alloc.alloc(Pattern.Idx, body_fv_slice.len);
+                    defer body_fv_alloc.free(body_free_vars_copy);
                     @memcpy(body_free_vars_copy, body_fv_slice);
 
                     // Clear back to before body canonicalization
@@ -15372,22 +15376,26 @@ fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error
         const hint_name = self.env.getIdent(h);
         // Use # prefix which can't appear in user code (reserved for comments)
         // Format: #N_hint where N is the counter
+        var tag_name_sfa = std.heap.stackFallback(64, self.env.gpa);
+        const tag_name_alloc = tag_name_sfa.get();
         const tag_name = try std.fmt.allocPrint(
-            self.env.gpa,
+            tag_name_alloc,
             "#{d}_{s}",
             .{ self.closure_counter, hint_name },
         );
-        defer self.env.gpa.free(tag_name);
+        defer tag_name_alloc.free(tag_name);
         return try self.env.insertIdent(base.Ident.for_text(tag_name));
     }
 
     // Otherwise generate a numeric name
+    var tag_name_sfa = std.heap.stackFallback(16, self.env.gpa);
+    const tag_name_alloc = tag_name_sfa.get();
     const tag_name = try std.fmt.allocPrint(
-        self.env.gpa,
+        tag_name_alloc,
         "#{d}",
         .{self.closure_counter},
     );
-    defer self.env.gpa.free(tag_name);
+    defer tag_name_alloc.free(tag_name);
     return try self.env.insertIdent(base.Ident.for_text(tag_name));
 }
 

@@ -466,6 +466,10 @@ pub const RocModules = struct {
         // Setup module dependencies using our generic helper
         self.setupModuleDependencies();
 
+        // `embedded_lld` is created outside the dependency table above; it only
+        // needs `collections` for the single-threaded arena.
+        self.embedded_lld.addImport("collections", self.collections);
+
         return self;
     }
 

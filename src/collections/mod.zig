@@ -36,6 +36,10 @@ pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuil
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
 
+/// Single-threaded arena allocator; the non-atomic counterpart to
+/// `std.heap.ArenaAllocator`.
+pub const SingleThreadArena = @import("SingleThreadArena.zig");
+
 /// Serialization format definitions for embedded module data.
 pub const serialization = @import("serialization.zig");
 pub const SerializedHeader = serialization.SerializedHeader;
@@ -130,4 +134,5 @@ test "collections tests" {
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
+    std.testing.refAllDecls(@import("SingleThreadArena.zig"));
 }

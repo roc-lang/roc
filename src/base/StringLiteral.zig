@@ -455,7 +455,7 @@ test "Store empty CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -507,7 +507,7 @@ test "Store basic CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using CompactWriter with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -573,7 +573,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -624,7 +624,7 @@ test "Store CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -660,7 +660,7 @@ test "Store.Serialized roundtrip" {
     const idx3 = try original.insert(gpa, "foo bar baz");
 
     // Create a CompactWriter and arena
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
@@ -728,7 +728,7 @@ test "Store edge case indices CompactWriter roundtrip" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 

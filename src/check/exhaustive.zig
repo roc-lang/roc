@@ -3216,7 +3216,7 @@ pub fn checkMatch(
     overall_region: Region,
 ) PatternResolveError!CheckResult {
     // Use an arena for all intermediate allocations to avoid leaks
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

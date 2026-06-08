@@ -431,8 +431,10 @@ pub const MonoLlvmCodeGen = struct {
         if (self.target.os.tag != .macos) {
             return builder.strtabString(name) catch return error.OutOfMemory;
         }
-        const exact_name = try std.fmt.allocPrint(self.allocator, "\x01_{s}", .{name});
-        defer self.allocator.free(exact_name);
+        var exact_name_sfa = std.heap.stackFallback(128, self.allocator);
+        const exact_name_alloc = exact_name_sfa.get();
+        const exact_name = try std.fmt.allocPrint(exact_name_alloc, "\x01_{s}", .{name});
+        defer exact_name_alloc.free(exact_name);
         return builder.strtabString(exact_name) catch return error.OutOfMemory;
     }
 
