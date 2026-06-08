@@ -3489,375 +3489,377 @@ fn runExprStatementKernel(
         .complete => {
             const completed = last_expr orelse unreachable;
             if (open_syntax.peekExpr()) |kind| {
-                if (kind == .expr_collection_item) {
-                    open_syntax.popExprMarker(.expr_collection_item);
-                    last_expr = null;
-                    try self.store.addScratchExpr(completed);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                    }
-                    continue :expr_kernel .collection_next;
-                }
-                if (kind == .expr_binary_rhs) {
-                    open_syntax.popExprMarker(.expr_binary_rhs);
-                    const state = expr_binary_rhs_stack.leave();
-                    last_expr = null;
-                    const expr = try self.store.addExpr(.{ .bin_op = .{
-                        .left = state.left,
-                        .right = completed,
-                        .operator = state.operator,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_unary) {
-                    const state = open_syntax.popExprPayload(.expr_unary, ExprAfterUnaryState);
-                    last_expr = null;
-                    const expr = try self.store.addExpr(.{ .unary_op = .{
-                        .operator = state.operator,
-                        .expr = completed,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_arrow_inner) {
-                    const state = open_syntax.popExprPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
-                    last_expr = null;
-                    if (self.peek() != .CloseRound) {
-                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                switch (kind) {
+                    .expr_collection_item => {
+                        open_syntax.popExprMarker(.expr_collection_item);
+                        last_expr = null;
+                        try self.store.addScratchExpr(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        continue :expr_kernel .collection_next;
+                    },
+                    .expr_binary_rhs => {
+                        open_syntax.popExprMarker(.expr_binary_rhs);
+                        const state = expr_binary_rhs_stack.leave();
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .bin_op = .{
+                            .left = state.left,
+                            .right = completed,
+                            .operator = state.operator,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
-                    }
-                    self.advance();
-                    expr_arrow_app_state = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .left = state.left,
-                        .operator = state.operator,
-                        .rhs = completed,
-                    };
-                    continue :expr_kernel .arrow_app_next;
-                }
-                if (kind == .expr_record_ext) {
-                    const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
-                    last_expr = null;
-                    if (self.peek() != .Comma) {
-                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
+                    },
+                    .expr_unary => {
+                        const state = open_syntax.popExprPayload(.expr_unary, ExprAfterUnaryState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .unary_op = .{
+                            .operator = state.operator,
+                            .expr = completed,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
-                    }
-                    self.advance();
-                    expr_record_state = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .scratch_top = self.store.scratchRecordFieldTop(),
-                        .ext = completed,
-                    };
-                    continue :expr_kernel .record_fields_next;
-                }
-                if (kind == .expr_record_field) {
-                    const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
-                    last_expr = null;
-                    const field = try self.store.addRecordField(.{
-                        .name = state.name,
-                        .value = completed,
-                        .region = .{ .start = state.field_start, .end = self.pos },
-                    });
-                    try self.store.addScratchRecordField(field);
-                    expr_record_state = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                    };
-                    if (self.peek() == .Comma) {
+                    },
+                    .expr_arrow_inner => {
+                        const state = open_syntax.popExprPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
+                        last_expr = null;
+                        if (self.peek() != .CloseRound) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
                         self.advance();
-                        continue :expr_kernel .record_fields_next;
-                    }
-                    if (self.peek() == .CloseCurly) {
-                        continue :expr_kernel .record_finish;
-                    }
-                    continue :expr_kernel .record_fields_next;
-                }
-                if (kind == .expr_string) {
-                    expr_string_state = open_syntax.popExprPayload(.expr_string, ExprStringState);
-                    last_expr = null;
-                    try self.store.addScratchExpr(completed);
-                    if (self.peek() != .CloseStringInterpolation) {
-                        const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
-                        expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    }
-                    self.advance();
-                    continue :expr_kernel .string_next;
-                }
-                if (kind == .expr_if) {
-                    const state = open_syntax.popExprPayload(.expr_if, ExprAfterExprState);
-                    last_expr = null;
-                    try open_syntax.pushExpr(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .condition = completed,
-                    });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
-                    continue :expr_kernel .prefix;
-                }
-                if (kind == .expr_if_then) {
-                    const state = open_syntax.popExprPayload(.expr_if_then, ExprIfAfterThenState);
-                    last_expr = null;
-                    if (self.peek() == .KwElse) {
-                        self.advance();
-                        try open_syntax.pushExpr(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
+                        expr_arrow_app_state = .{
                             .start = state.start,
                             .min_bp = state.min_bp,
-                            .condition = state.condition,
-                            .then = completed,
+                            .left = state.left,
+                            .operator = state.operator,
+                            .rhs = completed,
+                        };
+                        continue :expr_kernel .arrow_app_next;
+                    },
+                    .expr_record_ext => {
+                        const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
+                        last_expr = null;
+                        if (self.peek() != .Comma) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        expr_record_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .scratch_top = self.store.scratchRecordFieldTop(),
+                            .ext = completed,
+                        };
+                        continue :expr_kernel .record_fields_next;
+                    },
+                    .expr_record_field => {
+                        const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
+                        last_expr = null;
+                        const field = try self.store.addRecordField(.{
+                            .name = state.name,
+                            .value = completed,
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                        });
+                        try self.store.addScratchRecordField(field);
+                        expr_record_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .record_fields_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :expr_kernel .record_finish;
+                        }
+                        continue :expr_kernel .record_fields_next;
+                    },
+                    .expr_string => {
+                        expr_string_state = open_syntax.popExprPayload(.expr_string, ExprStringState);
+                        last_expr = null;
+                        try self.store.addScratchExpr(completed);
+                        if (self.peek() != .CloseStringInterpolation) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
+                            expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        continue :expr_kernel .string_next;
+                    },
+                    .expr_if => {
+                        const state = open_syntax.popExprPayload(.expr_if, ExprAfterExprState);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .condition = completed,
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
-                    }
-                    const expr = try self.store.addExpr(.{ .if_without_else = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .condition = state.condition,
-                        .then = completed,
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_if_else) {
-                    const state = open_syntax.popExprPayload(.expr_if_else, ExprIfAfterElseState);
-                    last_expr = null;
-                    const expr = try self.store.addExpr(.{ .if_then_else = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .condition = state.condition,
-                        .then = state.then,
-                        .@"else" = completed,
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_match) {
-                    const state = open_syntax.popExprPayload(.expr_match, ExprAfterExprState);
-                    last_expr = null;
-                    if (self.peek() == .OpenCurly) {
-                        self.advance();
-                        expr_match_branch_state = .{
-                            .start = state.start,
+                    },
+                    .expr_if_then => {
+                        const state = open_syntax.popExprPayload(.expr_if_then, ExprIfAfterThenState);
+                        last_expr = null;
+                        if (self.peek() == .KwElse) {
+                            self.advance();
+                            try open_syntax.pushExpr(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .condition = state.condition,
+                                .then = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        const expr = try self.store.addExpr(.{ .if_without_else = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .condition = state.condition,
+                            .then = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_if_else => {
+                        const state = open_syntax.popExprPayload(.expr_if_else, ExprIfAfterElseState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .if_then_else = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .condition = state.condition,
+                            .then = state.then,
+                            .@"else" = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_match => {
+                        const state = open_syntax.popExprPayload(.expr_match, ExprAfterExprState);
+                        last_expr = null;
+                        if (self.peek() == .OpenCurly) {
+                            self.advance();
+                            expr_match_branch_state = .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .matched = completed,
+                                .scratch_top = self.store.scratchMatchBranchTop(),
+                            };
+                            continue :expr_kernel .match_branch_next;
+                        }
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_match_guard => {
+                        const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                        expr_match_guard_depth -= 1;
+                        last_expr = null;
+                        if (self.peek() == .OpArrow) {
+                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                            self.advance();
+                        } else {
+                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                            .match_start = state.match_start,
                             .min_bp = state.min_bp,
-                            .matched = completed,
-                            .scratch_top = self.store.scratchMatchBranchTop(),
+                            .matched = state.matched,
+                            .scratch_top = state.scratch_top,
+                            .branch_start = state.branch_start,
+                            .pattern = state.pattern,
+                            .guard = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .expr_match_body => {
+                        const state = open_syntax.popExprPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
+                        last_expr = null;
+                        const branch = try self.store.addMatchBranch(.{
+                            .region = .{ .start = state.branch_start, .end = self.pos },
+                            .pattern = state.pattern,
+                            .body = completed,
+                            .guard = state.guard,
+                        });
+                        try self.store.addScratchMatchBranch(branch);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        expr_match_branch_state = .{
+                            .start = state.match_start,
+                            .min_bp = state.min_bp,
+                            .matched = state.matched,
+                            .scratch_top = state.scratch_top,
                         };
                         continue :expr_kernel .match_branch_next;
-                    }
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_match_guard) {
-                    const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                    expr_match_guard_depth -= 1;
-                    last_expr = null;
-                    if (self.peek() == .OpArrow) {
-                        try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                    }
-                    if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
-                        self.advance();
-                    } else {
-                        try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
-                    }
-                    try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
-                        .match_start = state.match_start,
-                        .min_bp = state.min_bp,
-                        .matched = state.matched,
-                        .scratch_top = state.scratch_top,
-                        .branch_start = state.branch_start,
-                        .pattern = state.pattern,
-                        .guard = completed,
-                    });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
-                    continue :expr_kernel .prefix;
-                }
-                if (kind == .expr_match_body) {
-                    const state = open_syntax.popExprPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
-                    last_expr = null;
-                    const branch = try self.store.addMatchBranch(.{
-                        .region = .{ .start = state.branch_start, .end = self.pos },
-                        .pattern = state.pattern,
-                        .body = completed,
-                        .guard = state.guard,
-                    });
-                    try self.store.addScratchMatchBranch(branch);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                    }
-                    expr_match_branch_state = .{
-                        .start = state.match_start,
-                        .min_bp = state.min_bp,
-                        .matched = state.matched,
-                        .scratch_top = state.scratch_top,
-                    };
-                    continue :expr_kernel .match_branch_next;
-                }
-                if (kind == .expr_dbg) {
-                    const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
-                    last_expr = null;
-                    const expr = try self.store.addExpr(.{ .dbg = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .expr = completed,
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_for_list) {
-                    const state = open_syntax.popExprPayload(.expr_for_list, ExprForAfterListState);
-                    last_expr = null;
-                    try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .pattern = state.pattern,
-                        .list_expr = completed,
-                    });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
-                    continue :expr_kernel .prefix;
-                }
-                if (kind == .expr_for_body) {
-                    const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
-                    last_expr = null;
-                    const expr = try self.store.addExpr(.{ .for_expr = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .patt = state.pattern,
-                        .expr = state.list_expr,
-                        .body = completed,
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .expr_lambda_body) {
-                    open_syntax.popExprMarker(.expr_lambda_body);
-                    const state = expr_lambda_body_stack.leave();
-                    last_expr = null;
-                    const expr = try self.store.addExpr(.{ .lambda = .{
-                        .body = completed,
-                        .args = state.args,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                    continue :expr_kernel .suffix;
-                }
-                if (kind == .statement_expr_body) {
-                    const start = open_syntax.popExprPayload(.statement_expr_body, Token.Idx);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .expr = .{
-                        .expr = completed,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_decl_body) {
-                    const state = open_syntax.popExprPayload(.statement_decl_body, StatementDeclBodyState);
-                    last_expr = null;
-                    last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_var_body) {
-                    const state = open_syntax.popExprPayload(.statement_var_body, StatementVarBodyState);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .@"var" = .{
-                        .name = state.name,
-                        .body = completed,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_expect_body) {
-                    const start = open_syntax.popExprPayload(.statement_expect_body, Token.Idx);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .expect = .{
-                        .body = completed,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_for_expr) {
-                    const state = open_syntax.popExprPayload(.statement_for_expr, StatementForExprState);
-                    last_expr = null;
-                    try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
-                        .start = state.start,
-                        .patt = state.patt,
-                        .expr = completed,
-                    });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
-                    continue :expr_kernel .prefix;
-                }
-                if (kind == .statement_for_body) {
-                    const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .@"for" = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .patt = state.patt,
-                        .expr = state.expr,
-                        .body = completed,
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_while_cond) {
-                    const start = open_syntax.popExprPayload(.statement_while_cond, Token.Idx);
-                    last_expr = null;
-                    try open_syntax.pushExpr(open_allocator, .statement_while_body, StatementWhileBodyState, .{
-                        .start = start,
-                        .cond = completed,
-                    });
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
-                    continue :expr_kernel .prefix;
-                }
-                if (kind == .statement_while_body) {
-                    const state = open_syntax.popExprPayload(.statement_while_body, StatementWhileBodyState);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .@"while" = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .cond = state.cond,
-                        .body = completed,
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_crash_body) {
-                    const start = open_syntax.popExprPayload(.statement_crash_body, Token.Idx);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .crash = .{
-                        .expr = completed,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_dbg_body) {
-                    const start = open_syntax.popExprPayload(.statement_dbg_body, Token.Idx);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .dbg = .{
-                        .expr = completed,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_return_body) {
-                    const start = open_syntax.popExprPayload(.statement_return_body, Token.Idx);
-                    last_expr = null;
-                    last_statement = try self.addStatement(.{ .@"return" = .{
-                        .expr = completed,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .pattern_string) {
-                    pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
-                    last_expr = null;
-                    last_pattern = try self.store.addPattern(.{ .string = .{
-                        .string_tok = pattern_string_state.start,
-                        .region = .{ .start = pattern_string_state.start, .end = self.pos },
-                        .expr = completed,
-                    } });
-                    continue :expr_kernel .pattern_complete;
+                    },
+                    .expr_dbg => {
+                        const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .dbg = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .expr = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_for_list => {
+                        const state = open_syntax.popExprPayload(.expr_for_list, ExprForAfterListState);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .pattern = state.pattern,
+                            .list_expr = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .expr_for_body => {
+                        const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .for_expr = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .patt = state.pattern,
+                            .expr = state.list_expr,
+                            .body = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_lambda_body => {
+                        open_syntax.popExprMarker(.expr_lambda_body);
+                        const state = expr_lambda_body_stack.leave();
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .lambda = .{
+                            .body = completed,
+                            .args = state.args,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .statement_expr_body => {
+                        const start = open_syntax.popExprPayload(.statement_expr_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .expr = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_decl_body => {
+                        const state = open_syntax.popExprPayload(.statement_decl_body, StatementDeclBodyState);
+                        last_expr = null;
+                        last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_var_body => {
+                        const state = open_syntax.popExprPayload(.statement_var_body, StatementVarBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"var" = .{
+                            .name = state.name,
+                            .body = completed,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_expect_body => {
+                        const start = open_syntax.popExprPayload(.statement_expect_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .expect = .{
+                            .body = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_for_expr => {
+                        const state = open_syntax.popExprPayload(.statement_for_expr, StatementForExprState);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
+                            .start = state.start,
+                            .patt = state.patt,
+                            .expr = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_for_body => {
+                        const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"for" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .patt = state.patt,
+                            .expr = state.expr,
+                            .body = completed,
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_while_cond => {
+                        const start = open_syntax.popExprPayload(.statement_while_cond, Token.Idx);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .statement_while_body, StatementWhileBodyState, .{
+                            .start = start,
+                            .cond = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_while_body => {
+                        const state = open_syntax.popExprPayload(.statement_while_body, StatementWhileBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"while" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .cond = state.cond,
+                            .body = completed,
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_crash_body => {
+                        const start = open_syntax.popExprPayload(.statement_crash_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .crash = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_dbg_body => {
+                        const start = open_syntax.popExprPayload(.statement_dbg_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .dbg = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_return_body => {
+                        const start = open_syntax.popExprPayload(.statement_return_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"return" = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .pattern_string => {
+                        pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
+                        last_expr = null;
+                        last_pattern = try self.store.addPattern(.{ .string = .{
+                            .string_tok = pattern_string_state.start,
+                            .region = .{ .start = pattern_string_state.start, .end = self.pos },
+                            .expr = completed,
+                        } });
+                        continue :expr_kernel .pattern_complete;
+                    },
                 }
             }
             if (root == .expr) {
