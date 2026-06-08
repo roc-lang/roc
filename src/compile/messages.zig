@@ -63,6 +63,10 @@ pub const ParseTask = struct {
     module_name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
+    /// Source-relative import base directory. Distinct from `dirname(path)` when
+    /// the module is staged elsewhere (e.g. a default app written to a temp dir),
+    /// so sibling imports resolve against the user's original directory.
+    source_dir: []const u8,
     /// Compiler role for this source module
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
@@ -413,6 +417,7 @@ test "WorkerTask accessors" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/path/to/Main.roc",
+            .source_dir = "/path/to",
             .depth = 0,
             .module_role = .user,
         },
