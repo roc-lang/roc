@@ -6110,7 +6110,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
                 try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) self.advance();
+                if (dispatch_token == .Comma) self.advance();
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_list_next;
             },
@@ -6119,12 +6119,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
                 try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .CloseSquare) {} else {
-                    self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
-                }
+                self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_complete;
             },
@@ -6252,7 +6248,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .scratch_top = pattern_record_field_state.scratch_top,
                     .alternatives = pattern_record_field_state.alternatives,
                 };
-                if (self.peek() == .Comma) {
+                if (dispatch_token == .Comma) {
                     self.advance();
                     dispatch_token = self.peek();
                     continue :dispatch .pattern_record_next;
@@ -6276,11 +6272,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .scratch_top = pattern_record_field_state.scratch_top,
                     .alternatives = pattern_record_field_state.alternatives,
                 };
-                if (self.peek() == .Comma) self.advance();
                 dispatch_token = self.peek();
-                if (self.peek() == .CloseCurly) {
-                    continue :dispatch .pattern_record_finish;
-                }
                 continue :dispatch .pattern_record_next;
             },
         },
@@ -6329,7 +6321,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
                 try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) self.advance();
+                if (dispatch_token == .Comma) self.advance();
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_tuple_next;
             },
@@ -6338,12 +6330,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_pattern orelse unreachable;
                 last_pattern = null;
                 try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .CloseRound) {} else {
-                    self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
-                }
+                self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_complete;
             },
@@ -6626,7 +6614,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_type_anno orelse unreachable;
                 last_type_anno = null;
                 try self.store.addScratchTypeAnno(item);
-                if (self.peek() == .Comma) self.advance();
+                if (dispatch_token == .Comma) self.advance();
                 dispatch_token = self.peek();
                 continue :dispatch .type_apply_next;
             },
@@ -6635,12 +6623,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_type_anno orelse unreachable;
                 last_type_anno = null;
                 try self.store.addScratchTypeAnno(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .CloseRound) {} else {
-                    self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
-                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
-                }
+                self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
                 dispatch_token = self.peek();
                 continue :dispatch .type_complete;
             },
@@ -6725,11 +6709,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .start = type_paren_after_item_state.start,
                     .after_round = type_paren_after_item_state.after_round,
                     .scratch_top = type_paren_after_item_state.scratch_top,
-                    .saw_comma = type_paren_after_item_state.saw_comma or self.peek() == .Comma,
-                    .expect_close = self.peek() != .Comma,
+                    .saw_comma = type_paren_after_item_state.saw_comma or dispatch_token == .Comma,
+                    .expect_close = dispatch_token != .Comma,
                     .looking_for_args = type_paren_after_item_state.looking_for_args,
                 };
-                if (self.peek() == .Comma) self.advance();
+                if (dispatch_token == .Comma) self.advance();
                 dispatch_token = self.peek();
                 continue :dispatch .type_paren_next;
             },
@@ -6746,11 +6730,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .expect_close = true,
                     .looking_for_args = type_paren_after_item_state.looking_for_args,
                 };
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    type_paren_state.saw_comma = true;
-                    type_paren_state.expect_close = false;
-                }
                 dispatch_token = self.peek();
                 continue :dispatch .type_paren_next;
             },
@@ -6902,7 +6881,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
                 const anno_region = self.store.typeAnnoRegion(named_anno);
-                if (self.peek() == .Comma) self.advance();
+                if (dispatch_token == .Comma) self.advance();
                 type_record_state = .{
                     .start = type_record_ext_state.start,
                     .scratch_top = type_record_ext_state.scratch_top,
@@ -6945,7 +6924,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .ext = type_record_field_state.ext,
                     .looking_for_args = type_record_field_state.looking_for_args,
                 };
-                if (self.peek() == .Comma) {
+                if (dispatch_token == .Comma) {
                     self.advance();
                     dispatch_token = self.peek();
                     continue :dispatch .type_record_next;
@@ -6969,11 +6948,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .ext = type_record_field_state.ext,
                     .looking_for_args = type_record_field_state.looking_for_args,
                 };
-                if (self.peek() == .Comma) self.advance();
                 dispatch_token = self.peek();
-                if (self.peek() == .CloseCurly) {
-                    continue :dispatch .type_record_finish;
-                }
                 continue :dispatch .type_record_next;
             },
         },
@@ -7047,7 +7022,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const named_anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
                 const anno_region = self.store.typeAnnoRegion(named_anno);
-                if (self.peek() == .Comma) self.advance();
+                if (dispatch_token == .Comma) self.advance();
                 type_tag_union_state = .{
                     .start = type_tag_union_ext_state.start,
                     .scratch_top = type_tag_union_ext_state.scratch_top,
@@ -7089,7 +7064,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .ext = type_tag_union_item_state.ext,
                     .looking_for_args = type_tag_union_item_state.looking_for_args,
                 };
-                if (self.peek() == .Comma) {
+                if (dispatch_token == .Comma) {
                     self.advance();
                     dispatch_token = self.peek();
                     continue :dispatch .type_tag_union_next;
@@ -7112,11 +7087,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .ext = type_tag_union_item_state.ext,
                     .looking_for_args = type_tag_union_item_state.looking_for_args,
                 };
-                if (self.peek() == .Comma) self.advance();
                 dispatch_token = self.peek();
-                if (self.peek() == .CloseSquare) {
-                    continue :dispatch .type_tag_union_finish;
-                }
                 continue :dispatch .type_tag_union_next;
             },
         },
@@ -7150,7 +7121,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
             .OpArrow, .OpFatArrow => {
                 const args = try self.store.typeAnnoSpanFrom(type_fn_args_state.scratch_top);
-                const effectful = self.peek() == .OpFatArrow;
+                const effectful = dispatch_token == .OpFatArrow;
                 self.advance();
                 try open_syntax.push(open_allocator, .type_fn_ret, TypeFnAfterRetState, .{
                     .start = type_fn_args_state.start,
