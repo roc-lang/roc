@@ -6649,116 +6649,112 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .pattern_complete;
             },
         },
-        .type_prefix => switch (dispatch_token) {
-            .UpperIdent,
-            .LowerIdent,
-            => {
-                const start = self.pos;
-                const first_token_tag = self.peek();
-                const qual_result = try self.readQualificationChain();
-                self.pos = qual_result.final_token + 1;
+        .type_prefix => {
+            const tok = dispatch_token;
+            const tok_int = @intFromEnum(tok);
 
-                const base_anno = if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0)
-                    try self.store.addTypeAnno(.{ .ty_var = .{
-                        .tok = qual_result.final_token,
-                        .region = .{ .start = qual_result.final_token, .end = self.pos },
-                    } })
-                else blk: {
-                    const anno = try self.store.addTypeAnno(.{ .ty = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .token = qual_result.final_token,
-                        .qualifiers = qual_result.qualifiers,
-                    } });
-                    if (self.collect_type_dependencies and qual_result.is_upper) {
-                        try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent or tok == .LowerIdent) {
+                    const start = self.pos;
+                    const first_token_tag = self.peek();
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+
+                    const base_anno = if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0)
+                        try self.store.addTypeAnno(.{ .ty_var = .{
+                            .tok = qual_result.final_token,
+                            .region = .{ .start = qual_result.final_token, .end = self.pos },
+                        } })
+                    else blk: {
+                        const anno = try self.store.addTypeAnno(.{ .ty = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                        if (self.collect_type_dependencies and qual_result.is_upper) {
+                            try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+                        }
+                        break :blk anno;
+                    };
+
+                    const can_apply = !(first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0);
+                    if (can_apply and self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        const scratch_top = self.store.scratchTypeAnnoTop();
+                        try self.store.addScratchTypeAnno(base_anno);
+                        type_apply_state = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = type_args };
+                        dispatch_token = self.peek();
+                        continue :dispatch .type_apply_next;
                     }
-                    break :blk anno;
-                };
-
-                const can_apply = !(first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0);
-                if (can_apply and self.peek() == .NoSpaceOpenRound) {
-                    self.advance();
-                    const scratch_top = self.store.scratchTypeAnnoTop();
-                    try self.store.addScratchTypeAnno(base_anno);
-                    type_apply_state = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = type_args };
+                    last_type_anno = base_anno;
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
                     dispatch_token = self.peek();
-                    continue :dispatch .type_apply_next;
+                    continue :dispatch .type_after_primary;
                 }
-                last_type_anno = base_anno;
-                type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
-                dispatch_token = self.peek();
-                continue :dispatch .type_after_primary;
-            },
-            .NamedUnderscore,
-            => {
-                const start = self.pos;
-                last_type_anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
-                    .tok = self.pos,
-                    .region = .{ .start = start, .end = self.pos + 1 },
-                } });
-                self.advance();
-                type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
-                dispatch_token = self.peek();
-                continue :dispatch .type_after_primary;
-            },
-            .OpenRound,
-            .NoSpaceOpenRound,
-            => {
-                const start = self.pos;
-                self.advance();
-                type_paren_state = .{
-                    .start = start,
-                    .after_round = self.pos,
-                    .scratch_top = self.store.scratchTypeAnnoTop(),
-                    .saw_comma = false,
-                    .expect_close = false,
-                    .looking_for_args = type_args,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .type_paren_next;
-            },
-            .OpenCurly,
-            => {
-                const start = self.pos;
-                self.advance();
-                type_record_state = .{
-                    .start = start,
-                    .scratch_top = self.store.scratchAnnoRecordFieldTop(),
-                    .ext = .closed,
-                    .looking_for_args = type_args,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .type_record_next;
-            },
-            .OpenSquare,
-            => {
-                const start = self.pos;
-                self.advance();
-                type_tag_union_state = .{
-                    .start = start,
-                    .scratch_top = self.store.scratchTypeAnnoTop(),
-                    .ext = .closed,
-                    .looking_for_args = type_args,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .type_tag_union_next;
-            },
-            .Underscore,
-            => {
-                const start = self.pos;
-                last_type_anno = try self.store.addTypeAnno(.{ .underscore = .{
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                self.advance();
-                type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
-                dispatch_token = self.peek();
-                continue :dispatch .type_after_primary;
-            },
-            else => {
-                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
-                dispatch_token = self.peek();
-                continue :dispatch .type_complete;
-            },
+                if (tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    last_type_anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
+                        .tok = self.pos,
+                        .region = .{ .start = start, .end = self.pos + 1 },
+                    } });
+                    self.advance();
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_after_primary;
+                }
+                if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    type_paren_state = .{
+                        .start = start,
+                        .after_round = self.pos,
+                        .scratch_top = self.store.scratchTypeAnnoTop(),
+                        .saw_comma = false,
+                        .expect_close = false,
+                        .looking_for_args = type_args,
+                    };
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_paren_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+                    type_record_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchAnnoRecordFieldTop(),
+                        .ext = .closed,
+                        .looking_for_args = type_args,
+                    };
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_record_next;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    type_tag_union_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchTypeAnnoTop(),
+                        .ext = .closed,
+                        .looking_for_args = type_args,
+                    };
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_tag_union_next;
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    last_type_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    self.advance();
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    dispatch_token = self.peek();
+                    continue :dispatch .type_after_primary;
+                }
+            }
+
+            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
+            dispatch_token = self.peek();
+            continue :dispatch .type_complete;
         },
         .type_after_primary => switch (dispatch_token) {
             else => {
