@@ -1772,7 +1772,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runStatementDirect(statementType);
+    return try self.runStatementKernelDirect(statementType);
 }
 
 fn addTopLevelUnexpectedStatement(self: *Parser) Error!AST.Statement.Idx {
@@ -2692,318 +2692,15 @@ const TyFnArgs = enum {
     looking_for_type_arg,
 };
 
-fn runStatementDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
-    const tok = self.peek();
-    const tok_int = @intFromEnum(tok);
+const ExprKernelRoot = union(enum) {
+    expr: u8,
+    statement: StatementType,
+};
 
-    if (tok == .EndOfFile) {
-        return try self.addTopLevelUnexpectedStatement();
-    }
-
-    if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpenRound)) {
-        if (tok == .LowerIdent or tok == .NamedUnderscore) {
-            const start = self.pos;
-            const next_tok = self.peekNext();
-            if (next_tok == .OpAssign) {
-                self.advance();
-                const patt_idx = try self.store.addPattern(.{ .ident = .{
-                    .ident_tok = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                self.advance();
-                const body = try self.runExprDirect(0);
-                return try self.addDeclStatement(patt_idx, body, .{ .start = start, .end = self.pos });
-            } else if (next_tok == .OpColon) {
-                if (tok == .LowerIdent and self.isVarIdent(start)) {
-                    return try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
-                }
-                self.advance();
-                self.advance();
-                const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
-                return try self.addStatement(.{ .type_anno = .{
-                    .anno = anno,
-                    .name = start,
-                    .where = try self.parseWhereConstraintTokens(),
-                    .is_var = false,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            } else if (statement_type == .top_level) {
-                return try self.addTopLevelUnexpectedStatement();
-            } else {
-                const expr = try self.runExprDirect(0);
-                return try self.addStatement(.{ .expr = .{
-                    .expr = expr,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            }
-        }
-        if (tok == .Underscore) {
-            const start = self.pos;
-            const next_tok = self.peekNext();
-            if (next_tok == .OpAssign) {
-                self.advance();
-                const patt_idx = try self.store.addPattern(.{ .underscore = .{
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                self.advance();
-                const body = try self.runExprDirect(0);
-                return try self.addDeclStatement(patt_idx, body, .{ .start = start, .end = self.pos });
-            } else if (statement_type == .top_level) {
-                return try self.addTopLevelUnexpectedStatement();
-            } else {
-                const expr = try self.runExprDirect(0);
-                return try self.addStatement(.{ .expr = .{
-                    .expr = expr,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            }
-        }
-        if (tok == .UpperIdent) {
-            const start = self.pos;
-            const is_type_decl_context = statement_type == .top_level or
-                statement_type == .in_associated_block or
-                (statement_type == .in_body and self.looksLikeTypeDecl());
-            if (!is_type_decl_context) {
-                if (statement_type == .top_level) {
-                    return try self.addTopLevelUnexpectedStatement();
-                }
-                const expr = try self.runExprDirect(0);
-                return try self.addStatement(.{ .expr = .{
-                    .expr = expr,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            }
-
-            const header = try self.parseTypeHeaderTokens();
-            const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
-            if (header_node.tag == .malformed) {
-                self.recoverMalformedTypeDeclLine(start);
-                const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
-                return try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
-            }
-
-            const type_path = blk_path: {
-                const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
-                const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
-                const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
-                break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
-            };
-
-            if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
-                return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
-            }
-            const kind: AST.TypeDeclKind = switch (self.peek()) {
-                .OpColonEqual => .nominal,
-                .OpDoubleColon => .@"opaque",
-                else => .alias,
-            };
-            self.advance();
-
-            const type_dependencies_start = self.decl_index.typeDependencyTop();
-            const was_collecting_type_dependencies = self.collect_type_dependencies;
-            self.collect_type_dependencies = true;
-            const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
-            const type_dependencies = blk: {
-                if (self.store.typeAnnoIsMalformed(anno)) {
-                    self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
-                    break :blk DeclIndex.Span.empty();
-                }
-                break :blk self.decl_index.typeDependencySpanFrom(type_dependencies_start);
-            };
-            self.collect_type_dependencies = was_collecting_type_dependencies;
-
-            const where_clause = try self.parseWhereConstraintTokens();
-            if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
-                const dot_pos = self.pos;
-                self.advance();
-                self.advance();
-                const associated = try self.runStatementOnlyBlockDirect(self.pos - 1, type_path);
-                if (kind == .alias) {
-                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
-                        .start = dot_pos,
-                        .end = dot_pos + 1,
-                    });
-                }
-                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
-                    .header = header,
-                    .anno = anno,
-                    .kind = kind,
-                    .where = where_clause,
-                    .associated = associated,
-                    .region = .{ .start = start, .end = self.pos },
-                } }, type_dependencies, type_path);
-                self.decl_index.setScopeOwner(associated.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
-                return statement_idx;
-            }
-
-            return try self.addTypeDeclStatement(.{ .type_decl = .{
-                .header = header,
-                .anno = anno,
-                .kind = kind,
-                .where = where_clause,
-                .associated = null,
-                .region = .{ .start = start, .end = self.pos },
-            } }, type_dependencies, type_path);
-        }
-    } else if (tok == .OpenCurly or tok == .OpenRound) {
-        const isCurly = self.peek() == .OpenCurly;
-        const start = self.pos;
-        var is_destructure = false;
-        var lookahead_pos = self.pos + 1;
-        var depth: u32 = 0;
-        while (lookahead_pos < self.tok_buf.tokens.len) {
-            const lookahead_tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-            if ((isCurly and lookahead_tok == .OpenCurly) or (!isCurly and (lookahead_tok == .OpenRound or lookahead_tok == .NoSpaceOpenRound))) {
-                depth += 1;
-            } else if ((isCurly and lookahead_tok == .CloseCurly) or (!isCurly and lookahead_tok == .CloseRound)) {
-                if (depth == 0) {
-                    const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
-                    if (token_after_close == .OpAssign) is_destructure = true;
-                    break;
-                }
-                depth -= 1;
-            } else if (lookahead_tok == .EndOfFile) break;
-            lookahead_pos += 1;
-        }
-        if (is_destructure) {
-            const pattern = try self.runPatternDirect(.alternatives_forbidden);
-            if (self.peek() == .OpAssign) {
-                self.advance();
-                const body = try self.runExprDirect(0);
-                return try self.addDeclStatement(pattern, body, .{ .start = start, .end = self.pos });
-            }
-            return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
-        }
-        if (statement_type == .top_level) {
-            return try self.addTopLevelUnexpectedStatement();
-        }
-        const expr = try self.runExprDirect(0);
-        return try self.addStatement(.{ .expr = .{
-            .expr = expr,
-            .region = .{ .start = start, .end = self.pos },
-        } });
-    } else if (tok_int >= @intFromEnum(Token.Tag.KwApp) and tok_int <= @intFromEnum(Token.Tag.KwBreak)) {
-        if (tok == .KwVar) {
-            const start = self.pos;
-            if (statement_type != .in_body) {
-                return try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
-            }
-            self.advance();
-            if (self.peek() != .LowerIdent) {
-                return try self.pushMalformed(AST.Statement.Idx, .var_must_have_ident, self.pos);
-            }
-            const name = self.pos;
-            self.advance();
-            if (self.peek() == .OpColon) {
-                self.advance();
-                const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
-                return try self.addStatement(.{ .type_anno = .{
-                    .anno = anno,
-                    .name = name,
-                    .where = try self.parseWhereConstraintTokens(),
-                    .is_var = true,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-            }
-            self.expect(.OpAssign) catch {
-                return try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
-            };
-            const body = try self.runExprDirect(0);
-            return try self.addStatement(.{ .@"var" = .{
-                .name = name,
-                .body = body,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        if (tok == .KwImport) {
-            if (statement_type == .top_level) {
-                return try self.parseImportStatementTokens();
-            }
-            return try self.pushMalformed(AST.Statement.Idx, .import_must_be_top_level, self.pos);
-        }
-        if (tok == .KwExpect) {
-            const start = self.pos;
-            self.advance();
-            const body = try self.runExprDirect(0);
-            return try self.addStatement(.{ .expect = .{
-                .body = body,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        if (tok == .KwFor) {
-            const start = self.pos;
-            self.advance();
-            const pattern = try self.runPatternDirect(.alternatives_forbidden);
-            if (self.peek() != .KwIn) {
-                return try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
-            }
-            self.advance();
-            const expr = try self.runExprDirect(0);
-            const body = try self.runExprDirect(0);
-            return try self.addStatement(.{ .@"for" = .{
-                .region = .{ .start = start, .end = self.pos },
-                .patt = pattern,
-                .expr = expr,
-                .body = body,
-            } });
-        }
-        if (tok == .KwWhile) {
-            const start = self.pos;
-            self.advance();
-            const cond = try self.runExprDirect(0);
-            const body = try self.runExprDirect(0);
-            return try self.addStatement(.{ .@"while" = .{
-                .region = .{ .start = start, .end = self.pos },
-                .cond = cond,
-                .body = body,
-            } });
-        }
-        if (tok == .KwCrash) {
-            const start = self.pos;
-            self.advance();
-            const expr = try self.runExprDirect(0);
-            return try self.addStatement(.{ .crash = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        if (tok == .KwDbg) {
-            const start = self.pos;
-            self.advance();
-            const expr = try self.runExprDirect(0);
-            return try self.addStatement(.{ .dbg = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        if (tok == .KwReturn) {
-            const start = self.pos;
-            self.advance();
-            const expr = try self.runExprDirect(0);
-            return try self.addStatement(.{ .@"return" = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        if (tok == .KwBreak) {
-            const start = self.pos;
-            self.advance();
-            return try self.addStatement(.{ .@"break" = .{
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-    }
-
-    if (statement_type == .top_level) {
-        return try self.addTopLevelUnexpectedStatement();
-    }
-    const start = self.pos;
-    const expr = try self.runExprDirect(0);
-    return try self.addStatement(.{ .expr = .{
-        .expr = expr,
-        .region = .{ .start = start, .end = self.pos },
-    } });
-}
+const ExprKernelResult = union(enum) {
+    expr: AST.Expr.Idx,
+    statement: AST.Statement.Idx,
+};
 
 fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
@@ -3369,7 +3066,7 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
                     else => unreachable,
                 }
             }
-            return completed;
+            return .{ .expr = completed };
         },
         .string_next => switch (self.peek()) {
             .StringPart => {
@@ -3659,6 +3356,22 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
 }
 
 fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+    const result = try self.runExprStatementKernel(.{ .expr = min_bp });
+    return switch (result) {
+        .expr => |expr| expr,
+        .statement => unreachable,
+    };
+}
+
+fn runStatementKernelDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
+    const result = try self.runExprStatementKernel(.{ .statement = statement_type });
+    return switch (result) {
+        .expr => unreachable,
+        .statement => |statement| statement,
+    };
+}
+
+fn runExprStatementKernel(self: *Parser, root: ExprKernelRoot) Error!ExprKernelResult {
     const open_allocator = self.gpa;
     const expr_scratch = &self.expr_kernel_scratch;
     std.debug.assert(expr_scratch.isEmpty());
@@ -3693,7 +3406,10 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         associated_finish,
     };
 
-    var expr_state = ExprState{ .start = self.pos, .min_bp = min_bp };
+    var expr_state = ExprState{ .start = self.pos, .min_bp = switch (root) {
+        .expr => |min_bp| min_bp,
+        .statement => 0,
+    } };
     var expr_finish_state: ExprFinishState = undefined;
     const expr_collections = &expr_scratch.collections;
     const expr_binary_rhs_stack = &expr_scratch.binary_rhs;
@@ -3717,11 +3433,17 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     var pattern_alternatives = Alternatives.alternatives_forbidden;
     var pattern_string_state: PatternStringState = undefined;
     var last_pattern: ?AST.Pattern.Idx = null;
-    var statement_type = StatementType.in_body;
+    var statement_type = switch (root) {
+        .expr => StatementType.in_body,
+        .statement => |root_statement_type| root_statement_type,
+    };
     var last_statement: ?AST.Statement.Idx = null;
     const associated_blocks = &expr_scratch.associated_blocks;
 
-    expr_kernel: switch (ExprLabel.prefix) {
+    expr_kernel: switch (switch (root) {
+        .expr => ExprLabel.prefix,
+        .statement => ExprLabel.statement_start,
+    }) {
         .prefix => {
             const tok = self.peek();
             const tok_int = @intFromEnum(tok);
@@ -4646,7 +4368,7 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     else => unreachable,
                 }
             }
-            return completed;
+            return .{ .expr = completed };
         },
         .arrow_app_next => switch (self.peek()) {
             .NoSpaceOpenRound => {
@@ -5308,6 +5030,14 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 }
                 try self.store.addScratchStatement(completed);
                 continue :expr_kernel .associated_next;
+            }
+            switch (root) {
+                .expr => {},
+                .statement => {
+                    if (expr_blocks.isEmpty() and associated_blocks.isEmpty()) {
+                        return .{ .statement = completed };
+                    }
+                },
             }
             try self.store.addScratchStatement(completed);
             continue :expr_kernel .block_next;
