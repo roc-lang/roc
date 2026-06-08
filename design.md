@@ -119,10 +119,10 @@ metadata, for diagnostics, literal decoding, and identifier interning.
 
 The parser is a direct token-dispatch machine. Hot parser code is organized as
 grammar kernels that walk the token buffer with local token dispatch and ordinary
-lexical control flow. The hot path must not route every transition through a
-generic parser-context enum. A broad `switch (ParserContext)` loop is still an
-interpreter loop even when the cases contain token switches, because optimized
-code can lower the context transition to a central indirect branch.
+lexical control flow. The hot path must not route grammar progress through a
+central parser-state interpreter loop, even when the cases contain token
+switches, because optimized code can lower that transition pattern to a central
+indirect branch.
 
 This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
 simdjson's stage-2 parser walks a precomputed structural stream with concrete
