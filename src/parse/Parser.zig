@@ -388,102 +388,57 @@ const OpenSyntaxStack = struct {
         payload_start: u32,
     };
 
-    entries: []Entry = &.{},
-    entries_len: u32 = 0,
-    payload_words: []usize = &.{},
-    payload_len: u32 = 0,
+    entries: std.ArrayList(Entry) = .empty,
+    payloads: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
-        allocator.free(self.entries);
-        allocator.free(self.payload_words);
-    }
-
-    fn ensureEntryCapacity(self: *OpenSyntaxStack, allocator: std.mem.Allocator, needed: usize) Error!void {
-        if (needed <= self.entries.len) return;
-
-        var new_cap: usize = if (self.entries.len == 0) 32 else self.entries.len * 2;
-        while (new_cap < needed) {
-            new_cap *= 2;
-        }
-
-        self.entries = if (self.entries.len == 0)
-            try allocator.alloc(Entry, new_cap)
-        else
-            try allocator.realloc(self.entries, new_cap);
-    }
-
-    fn ensurePayloadCapacity(self: *OpenSyntaxStack, allocator: std.mem.Allocator, needed_bytes: usize) Error!void {
-        const word_size = @sizeOf(usize);
-        const needed_words = std.mem.alignForward(usize, needed_bytes, word_size) / word_size;
-        if (needed_words <= self.payload_words.len) return;
-
-        var new_cap: usize = if (self.payload_words.len == 0) 64 else self.payload_words.len * 2;
-        while (new_cap < needed_words) {
-            new_cap *= 2;
-        }
-
-        self.payload_words = if (self.payload_words.len == 0)
-            try allocator.alloc(usize, new_cap)
-        else
-            try allocator.realloc(self.payload_words, new_cap);
-    }
-
-    fn payloadBytes(self: *OpenSyntaxStack) []u8 {
-        return std.mem.sliceAsBytes(self.payload_words);
+        self.entries.deinit(allocator);
+        self.payloads.deinit(allocator);
     }
 
     fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
-        comptime std.debug.assert(@alignOf(Payload) <= @alignOf(usize));
-        const start = std.mem.alignForward(usize, self.payload_len, @max(@alignOf(Payload), 1));
+        const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
         const end = start + @sizeOf(Payload);
-        try self.ensurePayloadCapacity(allocator, end);
-        @memcpy(self.payloadBytes()[start..end], std.mem.asBytes(&payload));
-        self.payload_len = @intCast(end);
-        try self.ensureEntryCapacity(allocator, @as(usize, self.entries_len) + 1);
-        self.entries[self.entries_len] = .{ .kind = kind, .payload_start = @intCast(start) };
-        self.entries_len += 1;
+        try self.payloads.resize(allocator, end);
+        @memcpy(self.payloads.items[start..end], std.mem.asBytes(&payload));
+        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(start) });
     }
 
     fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
-        try self.ensureEntryCapacity(allocator, @as(usize, self.entries_len) + 1);
-        self.entries[self.entries_len] = .{ .kind = kind, .payload_start = self.payload_len };
-        self.entries_len += 1;
+        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
     }
 
     fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
-        if (self.entries_len == 0) return null;
-        return self.entries[self.entries_len - 1].kind;
+        if (self.entries.items.len == 0) return null;
+        return self.entries.items[self.entries.items.len - 1].kind;
     }
 
     fn depth(self: *const OpenSyntaxStack) usize {
-        return self.entries_len;
+        return self.entries.items.len;
     }
 
     fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
-        for (self.entries[0..self.entries_len]) |entry| {
+        for (self.entries.items) |entry| {
             if (entry.kind == kind) return true;
         }
         return false;
     }
 
     fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
-        comptime std.debug.assert(@alignOf(Payload) <= @alignOf(usize));
-        self.entries_len -= 1;
-        const entry = self.entries[self.entries_len];
+        const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
         const start: usize = @intCast(entry.payload_start);
         const end = start + @sizeOf(Payload);
         var payload: Payload = undefined;
-        @memcpy(std.mem.asBytes(&payload), self.payloadBytes()[start..end]);
-        self.payload_len = entry.payload_start;
+        @memcpy(std.mem.asBytes(&payload), self.payloads.items[start..end]);
+        self.payloads.shrinkRetainingCapacity(start);
         return payload;
     }
 
     fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
-        self.entries_len -= 1;
-        const entry = self.entries[self.entries_len];
+        const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
-        self.payload_len = entry.payload_start;
+        self.payloads.shrinkRetainingCapacity(@intCast(entry.payload_start));
     }
 };
 
