@@ -2245,6 +2245,133 @@ const ExprBlockState = struct {
     previous_type_path_visible_start: usize,
 };
 
+const ExprOpenSyntaxStack = struct {
+    kinds: std.ArrayList(OpenSyntaxKind) = .empty,
+    expr_after_unary: std.ArrayList(ExprAfterUnaryState) = .empty,
+    expr_arrow_after_inner: std.ArrayList(ExprArrowAfterInnerState) = .empty,
+    expr_string: std.ArrayList(ExprStringState) = .empty,
+    expr_record_ext: std.ArrayList(ExprRecordExtState) = .empty,
+    expr_record_field: std.ArrayList(ExprRecordFieldState) = .empty,
+    expr_after_expr: std.ArrayList(ExprAfterExprState) = .empty,
+    expr_if_after_then: std.ArrayList(ExprIfAfterThenState) = .empty,
+    expr_if_after_else: std.ArrayList(ExprIfAfterElseState) = .empty,
+    expr_match_after_pattern: std.ArrayList(ExprMatchBranchAfterPatternState) = .empty,
+    expr_match_after_guard: std.ArrayList(ExprMatchBranchAfterGuardState) = .empty,
+    expr_match_after_body: std.ArrayList(ExprMatchBranchAfterBodyState) = .empty,
+    expr_for_after_list: std.ArrayList(ExprForAfterListState) = .empty,
+    expr_for_after_body: std.ArrayList(ExprForAfterBodyState) = .empty,
+    expr_lambda_args: std.ArrayList(ExprLambdaArgsState) = .empty,
+    statement_token: std.ArrayList(Token.Idx) = .empty,
+    statement_decl_body: std.ArrayList(StatementDeclBodyState) = .empty,
+    statement_var_body: std.ArrayList(StatementVarBodyState) = .empty,
+    statement_for_expr: std.ArrayList(StatementForExprState) = .empty,
+    statement_for_body: std.ArrayList(StatementForBodyState) = .empty,
+    statement_while_body: std.ArrayList(StatementWhileBodyState) = .empty,
+    statement_type_decl_associated: std.ArrayList(TypeDeclAssociatedState) = .empty,
+    statement_type_associated_statement: std.ArrayList(StatementAssociatedStatementState) = .empty,
+    pattern_string: std.ArrayList(PatternStringState) = .empty,
+    pattern_tag_args: std.ArrayList(PatternTagArgsState) = .empty,
+    pattern_list: std.ArrayList(PatternListState) = .empty,
+    pattern_tuple: std.ArrayList(PatternTupleState) = .empty,
+    pattern_record_field: std.ArrayList(PatternRecordFieldState) = .empty,
+
+    fn deinit(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator) void {
+        self.kinds.deinit(allocator);
+        self.expr_after_unary.deinit(allocator);
+        self.expr_arrow_after_inner.deinit(allocator);
+        self.expr_string.deinit(allocator);
+        self.expr_record_ext.deinit(allocator);
+        self.expr_record_field.deinit(allocator);
+        self.expr_after_expr.deinit(allocator);
+        self.expr_if_after_then.deinit(allocator);
+        self.expr_if_after_else.deinit(allocator);
+        self.expr_match_after_pattern.deinit(allocator);
+        self.expr_match_after_guard.deinit(allocator);
+        self.expr_match_after_body.deinit(allocator);
+        self.expr_for_after_list.deinit(allocator);
+        self.expr_for_after_body.deinit(allocator);
+        self.expr_lambda_args.deinit(allocator);
+        self.statement_token.deinit(allocator);
+        self.statement_decl_body.deinit(allocator);
+        self.statement_var_body.deinit(allocator);
+        self.statement_for_expr.deinit(allocator);
+        self.statement_for_body.deinit(allocator);
+        self.statement_while_body.deinit(allocator);
+        self.statement_type_decl_associated.deinit(allocator);
+        self.statement_type_associated_statement.deinit(allocator);
+        self.pattern_string.deinit(allocator);
+        self.pattern_tag_args.deinit(allocator);
+        self.pattern_list.deinit(allocator);
+        self.pattern_tuple.deinit(allocator);
+        self.pattern_record_field.deinit(allocator);
+    }
+
+    inline fn payloadStack(self: *ExprOpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
+        if (Payload == ExprAfterUnaryState) return &self.expr_after_unary;
+        if (Payload == ExprArrowAfterInnerState) return &self.expr_arrow_after_inner;
+        if (Payload == ExprStringState) return &self.expr_string;
+        if (Payload == ExprRecordExtState) return &self.expr_record_ext;
+        if (Payload == ExprRecordFieldState) return &self.expr_record_field;
+        if (Payload == ExprAfterExprState) return &self.expr_after_expr;
+        if (Payload == ExprIfAfterThenState) return &self.expr_if_after_then;
+        if (Payload == ExprIfAfterElseState) return &self.expr_if_after_else;
+        if (Payload == ExprMatchBranchAfterPatternState) return &self.expr_match_after_pattern;
+        if (Payload == ExprMatchBranchAfterGuardState) return &self.expr_match_after_guard;
+        if (Payload == ExprMatchBranchAfterBodyState) return &self.expr_match_after_body;
+        if (Payload == ExprForAfterListState) return &self.expr_for_after_list;
+        if (Payload == ExprForAfterBodyState) return &self.expr_for_after_body;
+        if (Payload == ExprLambdaArgsState) return &self.expr_lambda_args;
+        if (Payload == Token.Idx) return &self.statement_token;
+        if (Payload == StatementDeclBodyState) return &self.statement_decl_body;
+        if (Payload == StatementVarBodyState) return &self.statement_var_body;
+        if (Payload == StatementForExprState) return &self.statement_for_expr;
+        if (Payload == StatementForBodyState) return &self.statement_for_body;
+        if (Payload == StatementWhileBodyState) return &self.statement_while_body;
+        if (Payload == TypeDeclAssociatedState) return &self.statement_type_decl_associated;
+        if (Payload == StatementAssociatedStatementState) return &self.statement_type_associated_statement;
+        if (Payload == PatternStringState) return &self.pattern_string;
+        if (Payload == PatternTagArgsState) return &self.pattern_tag_args;
+        if (Payload == PatternListState) return &self.pattern_list;
+        if (Payload == PatternTupleState) return &self.pattern_tuple;
+        if (Payload == PatternRecordFieldState) return &self.pattern_record_field;
+        @compileError("unsupported expression open syntax payload: " ++ @typeName(Payload));
+    }
+
+    inline fn push(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
+        const stack = self.payloadStack(Payload);
+        try stack.append(allocator, payload);
+        errdefer _ = stack.pop();
+        try self.kinds.append(allocator, kind);
+    }
+
+    inline fn pushMarker(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
+        try self.kinds.append(allocator, kind);
+    }
+
+    inline fn peekKind(self: *const ExprOpenSyntaxStack) ?OpenSyntaxKind {
+        if (self.kinds.items.len == 0) return null;
+        return self.kinds.items[self.kinds.items.len - 1];
+    }
+
+    inline fn containsKind(self: *const ExprOpenSyntaxStack, kind: OpenSyntaxKind) bool {
+        for (self.kinds.items) |entry| {
+            if (entry == kind) return true;
+        }
+        return false;
+    }
+
+    inline fn popPayload(self: *ExprOpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
+        const kind = self.kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popMarker(self: *ExprOpenSyntaxStack, expected: OpenSyntaxKind) void {
+        const kind = self.kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+    }
+};
+
 const TypeAfterPrimaryState = struct {
     start: Token.Idx,
     looking_for_args: TyFnArgs,
@@ -3375,7 +3502,7 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
 fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
     const open_allocator = open_allocator_state.get();
-    var open_syntax: OpenSyntaxStack = .{};
+    var open_syntax: ExprOpenSyntaxStack = .{};
     defer open_syntax.deinit(open_allocator);
 
     const ExprLabel = enum {
