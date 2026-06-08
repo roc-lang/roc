@@ -173,9 +173,9 @@ the slice is not accepted and must be reshaped before more grammar is converted.
 Current parser audit result:
 
 ```text
-commit: 2c01d7e190 Clarify unified parser wrapper names
+commit: 27165e02fd Fix pattern root parser instantiation
 binary: zig-out/bin/roc
-version: release-fast-2c01d7e1
+version: release-fast-27165e02
 build: zig build roc -Doptimize=ReleaseFast -Dstrip=false --summary all --color off
 ```
 
@@ -189,9 +189,9 @@ kernels. Static source and symbol checks must not find `OpenSyntaxKind`,
 The current ReleaseFast audit disassembled these parser kernel instantiations:
 
 ```text
-_Parser.runExprStatementKernel__anon_169990
-_Parser.runExprStatementKernel__anon_175152
-_Parser.runExprStatementKernel__anon_175403
+_Parser.runExprStatementKernel__anon_169991
+_Parser.runExprStatementKernel__anon_175153
+_Parser.runExprStatementKernel__anon_175404
 ```
 
 Searching those disassemblies for indirect branch-table dispatch found no
