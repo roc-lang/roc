@@ -3864,7 +3864,7 @@ fn runExprStatementKernel(
                 return completed;
             }
             if (root == .pattern) {
-                return completed;
+                unreachable;
             }
             unreachable;
         },
