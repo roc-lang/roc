@@ -260,7 +260,7 @@ pub const Interpreter = struct {
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
     /// Arena for interpreter-allocated memory (temporaries, copies).
-    arena: std.heap.ArenaAllocator,
+    arena: base.SingleThreadArena,
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
@@ -465,7 +465,7 @@ pub const Interpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
                 .env = @ptrCast(roc_env),

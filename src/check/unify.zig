@@ -178,7 +178,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .context = opts.context,
         } });
         // Only `poison_to_err` reaches here (`write_no_report` returned above).
-        env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+        try env.types.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
         return Result{ .problem = problem_idx };
     };
 
@@ -241,12 +241,12 @@ const Unifier = struct {
 
     /// Link the variables & updated the content in the type_store
     /// In the old compiler, this function was called "merge"
-    fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
+    fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!void {
         const is_flex = switch (new_content) {
             .flex => true,
             else => false,
         };
-        self.types_store.union_(vars.a.var_, vars.b.var_, .{
+        try self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
             .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
@@ -393,7 +393,7 @@ const Unifier = struct {
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
-            .err => self.merge(vars, .err),
+            .err => try self.merge(vars, .err),
         }
     }
 
@@ -430,7 +430,7 @@ const Unifier = struct {
                 };
 
                 const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
-                self.merge(vars, Content{ .flex = .{
+                try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
                 } });
@@ -440,11 +440,11 @@ const Unifier = struct {
                     self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
-                self.merge(vars, .{ .rigid = b_rigid });
+                try self.merge(vars, .{ .rigid = b_rigid });
             },
             .alias => |b_alias| {
                 if (a_flex.constraints.len() == 0) {
-                    self.merge(vars, b_content);
+                    try self.merge(vars, b_content);
                 } else {
                     // Merge against backing var, so we don't loose static dispatch constraints
                     const backing_var = self.types_store.getAliasBackingVar(b_alias);
@@ -456,9 +456,9 @@ const Unifier = struct {
                     self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
-                self.merge(vars, b_content);
+                try self.merge(vars, b_content);
             },
-            .err => self.merge(vars, .err),
+            .err => try self.merge(vars, .err),
         }
     }
 
@@ -475,7 +475,7 @@ const Unifier = struct {
                     self.types_store.from_numeral_flex_count -|= 1;
                 }
                 try self.recordDeferredConstraintOn(vars.a.var_, b_flex.constraints);
-                self.merge(vars, .{ .rigid = a_rigid });
+                try self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
             .alias => |b_alias| {
@@ -486,7 +486,7 @@ const Unifier = struct {
                 try self.unifyGuarded(backing_var, vars.a.var_);
             },
             .structure => return error.TypeMismatch,
-            .err => self.merge(vars, .err),
+            .err => try self.merge(vars, .err),
         }
     }
 
@@ -502,7 +502,7 @@ const Unifier = struct {
         switch (b_content) {
             .flex => |b_flex| {
                 if (b_flex.constraints.len() == 0) {
-                    self.merge(vars, Content{ .alias = a_alias });
+                    try self.merge(vars, Content{ .alias = a_alias });
                 } else {
                     // Merge against backing var, so we don't loose static dispatch constraints
                     try self.unifyGuarded(backing_var, vars.b.var_);
@@ -525,7 +525,7 @@ const Unifier = struct {
                 // presentation data, not union-find representative shape.
                 try self.unifyGuarded(vars.b.var_, backing_var);
             },
-            .err => self.merge(vars, .err),
+            .err => try self.merge(vars, .err),
         }
     }
 
@@ -584,7 +584,7 @@ const Unifier = struct {
         };
 
         // Ensure the target variable has slots for the alias arguments
-        self.merge(vars, vars.b.desc.content);
+        try self.merge(vars, vars.b.desc.content);
     }
 
     // Unify structure //
@@ -602,7 +602,7 @@ const Unifier = struct {
         switch (b_content) {
             .flex => |b_flex| {
                 try self.recordDeferredConstraint(vars, b_flex.constraints);
-                self.merge(vars, Content{ .structure = a_flat_type });
+                try self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid => return error.TypeMismatch,
             .alias => |b_alias| {
@@ -615,7 +615,7 @@ const Unifier = struct {
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
             },
-            .err => self.merge(vars, .err),
+            .err => try self.merge(vars, .err),
         }
     }
 
@@ -642,7 +642,7 @@ const Unifier = struct {
                 const a_backing_var = self.types_store.getNominalBackingVar(a_type);
                 const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
                 if (a_backing_resolved.desc.content == .err) {
-                    self.merge(vars, .err);
+                    try self.merge(vars, .err);
                     return;
                 }
 
@@ -651,7 +651,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, .err);
+                            try self.merge(vars, .err);
                             return;
                         }
 
@@ -670,7 +670,7 @@ const Unifier = struct {
                         if (a_backing_resolved.desc.content == .structure and
                             a_backing_resolved.desc.content.structure == .empty_tag_union)
                         {
-                            self.merge(vars, vars.a.desc.content);
+                            try self.merge(vars, vars.a.desc.content);
                         } else {
                             return error.TypeMismatch;
                         }
@@ -692,7 +692,7 @@ const Unifier = struct {
                         if (a_backing_resolved.desc.content == .structure and
                             a_backing_resolved.desc.content.structure == .empty_record)
                         {
-                            self.merge(vars, vars.a.desc.content);
+                            try self.merge(vars, vars.a.desc.content);
                         } else {
                             return error.TypeMismatch;
                         }
@@ -704,12 +704,12 @@ const Unifier = struct {
                 switch (b_flat_type) {
                     .fn_pure => |b_func| {
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.a.desc.content);
+                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_unbound => |b_func| {
                         // pure unifies with unbound -> pure
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.a.desc.content);
+                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_effectful => {
                         // pure cannot unify with effectful
@@ -722,12 +722,12 @@ const Unifier = struct {
                 switch (b_flat_type) {
                     .fn_effectful => |b_func| {
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.a.desc.content);
+                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_unbound => |b_func| {
                         // effectful unifies with unbound -> effectful
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.a.desc.content);
+                        try self.merge(vars, vars.a.desc.content);
                     },
                     .fn_pure => {
                         // effectful cannot unify with pure
@@ -741,17 +741,17 @@ const Unifier = struct {
                     .fn_pure => |b_func| {
                         // unbound unifies with pure -> pure
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.b.desc.content);
+                        try self.merge(vars, vars.b.desc.content);
                     },
                     .fn_effectful => |b_func| {
                         // unbound unifies with effectful -> effectful
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.b.desc.content);
+                        try self.merge(vars, vars.b.desc.content);
                     },
                     .fn_unbound => |b_func| {
                         // unbound unifies with unbound -> unbound
                         try self.unifyFunc(vars, a_func, b_func);
-                        self.merge(vars, vars.a.desc.content);
+                        try self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -793,7 +793,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, .err);
+                            try self.merge(vars, .err);
                             return;
                         }
                         try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
@@ -806,7 +806,7 @@ const Unifier = struct {
                     .empty_record => {
                         if (a_fields.len() == 0) {
                             // Both are empty, merge as empty_record
-                            self.merge(vars, Content{ .structure = .empty_record });
+                            try self.merge(vars, Content{ .structure = .empty_record });
                         } else {
                             return error.TypeMismatch;
                         }
@@ -839,7 +839,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, .err);
+                            try self.merge(vars, .err);
                             return;
                         }
                         try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_fields, .unbound, .b_is_nominal);
@@ -850,7 +850,7 @@ const Unifier = struct {
             .empty_record => {
                 switch (b_flat_type) {
                     .empty_record => {
-                        self.merge(vars, Content{ .structure = .empty_record });
+                        try self.merge(vars, Content{ .structure = .empty_record });
                     },
                     .record => |b_record| {
                         if (b_record.fields.len() == 0) {
@@ -862,7 +862,7 @@ const Unifier = struct {
                     .record_unbound => |b_fields| {
                         if (b_fields.len() == 0) {
                             // Both are empty, merge as empty_record
-                            self.merge(vars, Content{ .structure = .empty_record });
+                            try self.merge(vars, Content{ .structure = .empty_record });
                         } else {
                             return error.TypeMismatch;
                         }
@@ -872,7 +872,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, .err);
+                            try self.merge(vars, .err);
                             return;
                         }
 
@@ -889,7 +889,7 @@ const Unifier = struct {
                         };
                         if (backing_is_empty) {
                             // Both are empty, unify with the nominal
-                            self.merge(vars, vars.b.desc.content);
+                            try self.merge(vars, vars.b.desc.content);
                         } else {
                             // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
@@ -920,7 +920,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, .err);
+                            try self.merge(vars, .err);
                             return;
                         }
                         try self.unifyTagUnionWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_tag_union, .b_is_nominal);
@@ -931,7 +931,7 @@ const Unifier = struct {
             .empty_tag_union => {
                 switch (b_flat_type) {
                     .empty_tag_union => {
-                        self.merge(vars, Content{ .structure = .empty_tag_union });
+                        try self.merge(vars, Content{ .structure = .empty_tag_union });
                     },
                     .tag_union => |b_tag_union| {
                         if (b_tag_union.tags.len() == 0) {
@@ -945,7 +945,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, .err);
+                            try self.merge(vars, .err);
                             return;
                         }
 
@@ -954,7 +954,7 @@ const Unifier = struct {
                             b_backing_resolved.desc.content.structure == .empty_tag_union)
                         {
                             // Both are empty, unify with the nominal
-                            self.merge(vars, vars.b.desc.content);
+                            try self.merge(vars, vars.b.desc.content);
                         } else {
                             // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
@@ -994,7 +994,7 @@ const Unifier = struct {
         }
 
         // Merge after all checks pass
-        self.merge(vars, vars.b.desc.content);
+        try self.merge(vars, vars.b.desc.content);
     }
 
     // Unify nominal type //
@@ -1011,7 +1011,7 @@ const Unifier = struct {
         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
         if (a_backing_resolved.desc.content == .err or b_backing_resolved.desc.content == .err) {
             // Invalid nominal type - propagate the error
-            self.merge(vars, .err);
+            try self.merge(vars, .err);
             return;
         }
 
@@ -1038,7 +1038,7 @@ const Unifier = struct {
         // unification time over-constrains row-polymorphic nominals like Try.
         // Lowering substitutes formal nominal params into backing types
         // explicitly when it strips nominal wrappers.
-        self.merge(vars, vars.b.desc.content);
+        try self.merge(vars, vars.b.desc.content);
     }
 
     fn unifyTagUnionWithNominal(
@@ -1076,8 +1076,8 @@ const Unifier = struct {
 
                 // Merge to the NOMINAL type (not the tag union)
                 switch (direction) {
-                    .a_is_nominal => self.merge(vars, vars.a.desc.content),
-                    .b_is_nominal => self.merge(vars, vars.b.desc.content),
+                    .a_is_nominal => try self.merge(vars, vars.a.desc.content),
+                    .b_is_nominal => try self.merge(vars, vars.b.desc.content),
                 }
                 return;
             } else {
@@ -1132,11 +1132,11 @@ const Unifier = struct {
         switch (direction) {
             .a_is_nominal => {
                 // Merge to a (which is the nominal)
-                self.merge(vars, vars.a.desc.content);
+                try self.merge(vars, vars.a.desc.content);
             },
             .b_is_nominal => {
                 // Merge to b (which is the nominal)
-                self.merge(vars, vars.b.desc.content);
+                try self.merge(vars, vars.b.desc.content);
             },
         }
     }
@@ -1174,8 +1174,8 @@ const Unifier = struct {
             if (anon_record_fields.len() == 0) {
                 // Both are empty - merge to the NOMINAL type
                 switch (direction) {
-                    .a_is_nominal => self.merge(vars, vars.a.desc.content),
-                    .b_is_nominal => self.merge(vars, vars.b.desc.content),
+                    .a_is_nominal => try self.merge(vars, vars.a.desc.content),
+                    .b_is_nominal => try self.merge(vars, vars.b.desc.content),
                 }
                 return;
             } else {
@@ -1207,11 +1207,11 @@ const Unifier = struct {
         switch (direction) {
             .a_is_nominal => {
                 // Merge to a (which is the nominal)
-                self.merge(vars, vars.a.desc.content);
+                try self.merge(vars, vars.a.desc.content);
             },
             .b_is_nominal => {
                 // Merge to b (which is the nominal)
-                self.merge(vars, vars.b.desc.content);
+                try self.merge(vars, vars.b.desc.content);
             },
         }
     }
@@ -1725,7 +1725,7 @@ const Unifier = struct {
         }
 
         // Merge vars - now the range correctly contains only THIS record's fields
-        self.merge(vars, Content{ .structure = FlatType{ .record = .{
+        try self.merge(vars, Content{ .structure = FlatType{ .record = .{
             .fields = self.types_store.record_fields.rangeToEnd(range_start),
             .ext = ext,
         } } });
@@ -2189,7 +2189,7 @@ const Unifier = struct {
         }
 
         // Merge vars (sorting happens in merge() for all tag unions)
-        self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
+        try self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
             .tags = self.types_store.tags.rangeToEnd(range_start),
             .ext = ext,
         } } });

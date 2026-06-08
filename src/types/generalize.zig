@@ -191,7 +191,7 @@ pub const Generalizer = struct {
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Safe to generalize
-                    self.store.setDescRank(resolved.desc_idx, Rank.generalized);
+                    try self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
         }
@@ -283,7 +283,7 @@ pub const Generalizer = struct {
             break :blk resolved.desc.rank.min(group_rank);
         };
 
-        self.store.setDescRank(resolved.desc_idx, new_rank);
+        try self.store.setDescRank(resolved.desc_idx, new_rank);
         return new_rank;
     }
 

@@ -693,7 +693,7 @@ pub fn main(init: std.process.Init) anyerror!void {
                 \\Options:
                 \\  --verbose       Enable verbose logging
                 \\  --html          Generate HTML output files
-                \\  --debug         Use DebugAllocator for debugging (default: c_allocator)
+                \\  --debug         Disable per-thread arenas to surface allocation bugs
                 \\  --trace-eval    Enable interpreter trace output (only works with single REPL snapshot)
                 \\  --linecol       Include line/column information in output
                 \\  --threads <n>   Number of threads to use (0 = auto, capped at 4; 1 = single-threaded). Default: 0.
@@ -1015,7 +1015,7 @@ fn processSnapshotContent(
     }
 
     // Process the content through the compilation pipeline
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     // Extract module name from custom filename if provided, otherwise from output path
@@ -1295,7 +1295,7 @@ fn processSnapshotContent(
         const original_sexpr_items = original_sexpr_aw.writer.buffer[0..original_sexpr_aw.writer.end];
 
         // Create arena for serialization
-        var cache_arena = std.heap.ArenaAllocator.init(allocator);
+        var cache_arena = base.SingleThreadArena.init(allocator);
         defer cache_arena.deinit();
 
         // Create and serialize MmapCache
@@ -1306,7 +1306,7 @@ fn processSnapshotContent(
         var loaded_cache = try CacheModule.fromMappedMemory(cache_data);
 
         // Create arena for restore operation to handle temporary allocations
-        var restore_arena = std.heap.ArenaAllocator.init(allocator);
+        var restore_arena = base.SingleThreadArena.init(allocator);
         defer restore_arena.deinit();
 
         // Restore ModuleEnv

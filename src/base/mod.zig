@@ -1,5 +1,6 @@
 //! Basic types that are useful throughout the compiler.
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const SExprTree = @import("SExprTree.zig");
 pub const Ident = @import("Ident.zig");
@@ -10,6 +11,10 @@ pub const RegionInfo = @import("RegionInfo.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
+
+/// Single-threaded arena allocator, re-exported from `collections` for callers
+/// that already depend on `base`.
+pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
 pub const safe_memory = @import("safe_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
@@ -25,6 +30,17 @@ pub const CommonEnv = @import("CommonEnv.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+
+/// The default general-purpose allocator for the current target (fast, not leak-checking).
+/// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
+/// it's the allocator LLVM already uses) — except on musl, whose malloc is slow,
+/// where smp_allocator wins. Falls back to smp_allocator without libc, and to
+/// wasm_allocator on freestanding.
+pub fn defaultGpa() std.mem.Allocator {
+    if (builtin.target.os.tag == .freestanding) return std.heap.wasm_allocator;
+    if (builtin.link_libc and !builtin.target.abi.isMusl()) return std.heap.c_allocator;
+    return std.heap.smp_allocator;
+}
 
 test {
     const ident = @import("Ident.zig");
