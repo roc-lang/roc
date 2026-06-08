@@ -2695,12 +2695,14 @@ const TyFnArgs = enum {
 const ExprKernelRoot = enum {
     expr,
     statement,
+    associated_block,
 };
 
 fn ExprKernelReturn(comptime root: ExprKernelRoot) type {
     return switch (root) {
         .expr => AST.Expr.Idx,
         .statement => AST.Statement.Idx,
+        .associated_block => AST.Associated,
     };
 }
 
@@ -3358,14 +3360,25 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
 }
 
 fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
-    return try self.runExprStatementKernel(.expr, min_bp, undefined);
+    return try self.runExprStatementKernel(.expr, min_bp, undefined, undefined, null);
 }
 
 fn runStatementKernelDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
-    return try self.runExprStatementKernel(.statement, 0, statement_type);
+    return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null);
 }
 
-fn runExprStatementKernel(self: *Parser, comptime root: ExprKernelRoot, min_bp: u8, root_statement_type: StatementType) Error!ExprKernelReturn(root) {
+fn runAssociatedBlockKernelDirect(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+    return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path);
+}
+
+fn runExprStatementKernel(
+    self: *Parser,
+    comptime root: ExprKernelRoot,
+    min_bp: u8,
+    root_statement_type: StatementType,
+    associated_start: Token.Idx,
+    owner_type_path: ?DeclIndex.TypePathIdx,
+) Error!ExprKernelReturn(root) {
     const open_allocator = self.gpa;
     const expr_scratch = &self.expr_kernel_scratch;
     std.debug.assert(expr_scratch.isEmpty());
@@ -3424,11 +3437,38 @@ fn runExprStatementKernel(self: *Parser, comptime root: ExprKernelRoot, min_bp: 
     var pattern_alternatives = Alternatives.alternatives_forbidden;
     var pattern_string_state: PatternStringState = undefined;
     var last_pattern: ?AST.Pattern.Idx = null;
-    var statement_type = if (root == .statement) root_statement_type else StatementType.in_body;
+    var statement_type = switch (root) {
+        .statement, .associated_block => root_statement_type,
+        .expr => StatementType.in_body,
+    };
     var last_statement: ?AST.Statement.Idx = null;
     const associated_blocks = &expr_scratch.associated_blocks;
 
-    expr_kernel: switch (if (root == .expr) ExprLabel.prefix else ExprLabel.statement_start) {
+    if (root == .associated_block) {
+        if (self.peek() == .OpenCurly) {
+            self.advance();
+        }
+
+        var pushed_type_path = false;
+        if (owner_type_path) |path| {
+            try self.type_path_stack.append(self.gpa, path);
+            pushed_type_path = true;
+        }
+
+        const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = associated_start, .end = associated_start });
+        try associated_blocks.enter(open_allocator, .{
+            .start = associated_start,
+            .scope = assoc_scope,
+            .scratch_top = self.store.scratchStatementTop(),
+            .pushed_type_path = pushed_type_path,
+        });
+    }
+
+    expr_kernel: switch (switch (root) {
+        .expr => ExprLabel.prefix,
+        .statement => ExprLabel.statement_start,
+        .associated_block => ExprLabel.associated_next,
+    }) {
         .prefix => {
             const tok = self.peek();
             const tok_int = @intFromEnum(tok);
@@ -4818,7 +4858,7 @@ fn runExprStatementKernel(self: *Parser, comptime root: ExprKernelRoot, min_bp: 
                         const dot_pos = self.pos;
                         self.advance();
                         self.advance();
-                        const associated_start = self.pos - 1;
+                        const nested_associated_start = self.pos - 1;
 
                         try open_syntax.push(open_allocator, .statement_type_decl_associated, TypeDeclAssociatedState, .{
                             .start = start,
@@ -4836,9 +4876,9 @@ fn runExprStatementKernel(self: *Parser, comptime root: ExprKernelRoot, min_bp: 
                             try self.type_path_stack.append(self.gpa, path);
                             pushed_type_path = true;
                         }
-                        const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = associated_start, .end = associated_start });
+                        const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = nested_associated_start, .end = nested_associated_start });
                         try associated_blocks.enter(open_allocator, .{
-                            .start = associated_start,
+                            .start = nested_associated_start,
                             .scope = assoc_scope,
                             .scratch_top = self.store.scratchStatementTop(),
                             .pushed_type_path = pushed_type_path,
@@ -5053,6 +5093,10 @@ fn runExprStatementKernel(self: *Parser, comptime root: ExprKernelRoot, min_bp: 
                     .scope = associated_state.scope,
                     .region = assoc_region,
                 };
+
+                if (root == .associated_block and open_syntax.peekKind() != .statement_type_decl_associated) {
+                    return associated;
+                }
 
                 const type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
                 if (type_decl_state.kind == .alias) {
@@ -6327,405 +6371,6 @@ fn runTypeAnnoDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
     }
 }
 
-fn runStatementOnlyBlockDirect(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
-    const open_allocator = open_allocator_state.get();
-    var open_syntax: OpenSyntaxStack = .{};
-    defer open_syntax.deinit(open_allocator);
-    var associated_blocks: StatementAssociatedBlockStack = .{};
-    defer associated_blocks.deinit(open_allocator);
-    var last_statement: ?AST.Statement.Idx = null;
-
-    if (self.peek() == .OpenCurly) {
-        self.advance();
-    }
-
-    var pushed_type_path = false;
-    if (owner_type_path) |path| {
-        try self.type_path_stack.append(self.gpa, path);
-        pushed_type_path = true;
-    }
-
-    const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = start, .end = start });
-    try associated_blocks.enter(open_allocator, .{
-        .start = start,
-        .scope = assoc_scope,
-        .scratch_top = self.store.scratchStatementTop(),
-        .pushed_type_path = pushed_type_path,
-    });
-
-    const AssociatedLabel = enum {
-        next,
-        finish,
-        statement_start,
-        statement_complete,
-    };
-
-    associated_kernel: switch (AssociatedLabel.next) {
-        .next => switch (self.peek()) {
-            .CloseCurly, .EndOfFile => continue :associated_kernel .finish,
-            else => {
-                try open_syntax.push(open_allocator, .statement_type_associated_statement, StatementAssociatedStatementState, .{
-                    .statement_pos = self.pos,
-                });
-                continue :associated_kernel .statement_start;
-            },
-        },
-        .finish => switch (self.peek()) {
-            .CloseCurly, .EndOfFile => {
-                if (self.peek() == .CloseCurly) {
-                    self.advance();
-                } else {
-                    try self.pushDiagnostic(.expected_expr_close_curly, .{ .start = self.pos, .end = self.pos });
-                }
-
-                const associated_state = associated_blocks.leave();
-                const assoc_region = AST.TokenizedRegion{ .start = associated_state.start, .end = self.pos };
-                try self.exitDeclScope(associated_state.scope, assoc_region);
-                if (associated_state.pushed_type_path) {
-                    _ = self.type_path_stack.pop();
-                }
-                const associated = AST.Associated{
-                    .statements = try self.store.statementSpanFrom(associated_state.scratch_top),
-                    .scope = associated_state.scope,
-                    .region = assoc_region,
-                };
-
-                if (open_syntax.peekKind() == .statement_type_decl_associated) {
-                    const type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
-                    if (type_decl_state.kind == .alias) {
-                        try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
-                            .start = type_decl_state.dot_pos,
-                            .end = type_decl_state.dot_pos + 1,
-                        });
-                    }
-                    const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
-                        .header = type_decl_state.header,
-                        .anno = type_decl_state.anno,
-                        .kind = type_decl_state.kind,
-                        .where = type_decl_state.where_clause,
-                        .associated = associated,
-                        .region = .{ .start = type_decl_state.start, .end = self.pos },
-                    } }, type_decl_state.type_dependencies, type_decl_state.type_path);
-                    self.decl_index.setScopeOwner(associated.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
-                    last_statement = statement_idx;
-                    continue :associated_kernel .statement_complete;
-                }
-
-                return associated;
-            },
-            else => unreachable,
-        },
-        .statement_start => {
-            const tok = self.peek();
-            const tok_int = @intFromEnum(tok);
-
-            if (tok == .EndOfFile) {
-                last_statement = try self.addTopLevelUnexpectedStatement();
-                continue :associated_kernel .statement_complete;
-            }
-
-            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpenRound)) {
-                if (tok == .LowerIdent or tok == .NamedUnderscore) {
-                    const stmt_start = self.pos;
-                    const next_tok = self.peekNext();
-                    if (next_tok == .OpAssign) {
-                        self.advance();
-                        const patt_idx = try self.store.addPattern(.{ .ident = .{
-                            .ident_tok = stmt_start,
-                            .region = .{ .start = stmt_start, .end = self.pos },
-                        } });
-                        self.advance();
-                        const body = try self.runExprDirect(0);
-                        last_statement = try self.addDeclStatement(patt_idx, body, .{ .start = stmt_start, .end = self.pos });
-                        continue :associated_kernel .statement_complete;
-                    } else if (next_tok == .OpColon) {
-                        if (tok == .LowerIdent and self.isVarIdent(stmt_start)) {
-                            last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, stmt_start);
-                            continue :associated_kernel .statement_complete;
-                        }
-                        self.advance();
-                        self.advance();
-                        const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
-                        last_statement = try self.addStatement(.{ .type_anno = .{
-                            .anno = anno,
-                            .name = stmt_start,
-                            .where = try self.parseWhereConstraintTokens(),
-                            .is_var = false,
-                            .region = .{ .start = stmt_start, .end = self.pos },
-                        } });
-                        continue :associated_kernel .statement_complete;
-                    } else {
-                        const expr = try self.runExprDirect(0);
-                        last_statement = try self.addStatement(.{ .expr = .{
-                            .expr = expr,
-                            .region = .{ .start = stmt_start, .end = self.pos },
-                        } });
-                        continue :associated_kernel .statement_complete;
-                    }
-                }
-                if (tok == .Underscore) {
-                    const stmt_start = self.pos;
-                    const next_tok = self.peekNext();
-                    if (next_tok == .OpAssign) {
-                        self.advance();
-                        const patt_idx = try self.store.addPattern(.{ .underscore = .{
-                            .region = .{ .start = stmt_start, .end = self.pos },
-                        } });
-                        self.advance();
-                        const body = try self.runExprDirect(0);
-                        last_statement = try self.addDeclStatement(patt_idx, body, .{ .start = stmt_start, .end = self.pos });
-                        continue :associated_kernel .statement_complete;
-                    } else {
-                        const expr = try self.runExprDirect(0);
-                        last_statement = try self.addStatement(.{ .expr = .{
-                            .expr = expr,
-                            .region = .{ .start = stmt_start, .end = self.pos },
-                        } });
-                        continue :associated_kernel .statement_complete;
-                    }
-                }
-                if (tok == .UpperIdent) {
-                    const stmt_start = self.pos;
-                    const header = try self.parseTypeHeaderTokens();
-                    const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
-                    if (header_node.tag == .malformed) {
-                        self.recoverMalformedTypeDeclLine(stmt_start);
-                        const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
-                        last_statement = try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = stmt_start, .end = self.pos });
-                        continue :associated_kernel .statement_complete;
-                    }
-
-                    const type_path = blk_path: {
-                        const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
-                        const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
-                        const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
-                        break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
-                    };
-
-                    if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
-                        continue :associated_kernel .statement_complete;
-                    }
-                    const kind: AST.TypeDeclKind = switch (self.peek()) {
-                        .OpColonEqual => .nominal,
-                        .OpDoubleColon => .@"opaque",
-                        else => .alias,
-                    };
-                    self.advance();
-
-                    const type_dependencies_start = self.decl_index.typeDependencyTop();
-                    const was_collecting_type_dependencies = self.collect_type_dependencies;
-                    self.collect_type_dependencies = true;
-                    const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
-                    const type_dependencies = blk: {
-                        if (self.store.typeAnnoIsMalformed(anno)) {
-                            self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
-                            break :blk DeclIndex.Span.empty();
-                        }
-                        break :blk self.decl_index.typeDependencySpanFrom(type_dependencies_start);
-                    };
-                    self.collect_type_dependencies = was_collecting_type_dependencies;
-
-                    const where_clause = try self.parseWhereConstraintTokens();
-                    if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
-                        const dot_pos = self.pos;
-                        self.advance();
-                        self.advance();
-                        const associated_start = self.pos - 1;
-                        try open_syntax.push(open_allocator, .statement_type_decl_associated, TypeDeclAssociatedState, .{
-                            .start = stmt_start,
-                            .header = header,
-                            .anno = anno,
-                            .kind = kind,
-                            .where_clause = where_clause,
-                            .type_dependencies = type_dependencies,
-                            .type_path = type_path,
-                            .dot_pos = dot_pos,
-                        });
-
-                        var nested_pushed_type_path = false;
-                        if (type_path) |path| {
-                            try self.type_path_stack.append(self.gpa, path);
-                            nested_pushed_type_path = true;
-                        }
-                        const nested_scope = try self.enterDeclScope(.associated, .none, .{ .start = associated_start, .end = associated_start });
-                        try associated_blocks.enter(open_allocator, .{
-                            .start = associated_start,
-                            .scope = nested_scope,
-                            .scratch_top = self.store.scratchStatementTop(),
-                            .pushed_type_path = nested_pushed_type_path,
-                        });
-                        continue :associated_kernel .next;
-                    }
-
-                    last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
-                        .header = header,
-                        .anno = anno,
-                        .kind = kind,
-                        .where = where_clause,
-                        .associated = null,
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                    } }, type_dependencies, type_path);
-                    continue :associated_kernel .statement_complete;
-                }
-            } else if (tok == .OpenCurly or tok == .OpenRound) {
-                const isCurly = self.peek() == .OpenCurly;
-                const stmt_start = self.pos;
-                var is_destructure = false;
-                var lookahead_pos = self.pos + 1;
-                var depth: u32 = 0;
-                while (lookahead_pos < self.tok_buf.tokens.len) {
-                    const lookahead_tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                    if ((isCurly and lookahead_tok == .OpenCurly) or (!isCurly and (lookahead_tok == .OpenRound or lookahead_tok == .NoSpaceOpenRound))) {
-                        depth += 1;
-                    } else if ((isCurly and lookahead_tok == .CloseCurly) or (!isCurly and lookahead_tok == .CloseRound)) {
-                        if (depth == 0) {
-                            const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
-                            if (token_after_close == .OpAssign) is_destructure = true;
-                            break;
-                        }
-                        depth -= 1;
-                    } else if (lookahead_tok == .EndOfFile) break;
-                    lookahead_pos += 1;
-                }
-                if (is_destructure) {
-                    const pattern = try self.runPatternDirect(.alternatives_forbidden);
-                    if (self.peek() == .OpAssign) {
-                        self.advance();
-                        const body = try self.runExprDirect(0);
-                        last_statement = try self.addDeclStatement(pattern, body, .{ .start = stmt_start, .end = self.pos });
-                        continue :associated_kernel .statement_complete;
-                    }
-                    last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
-                    continue :associated_kernel .statement_complete;
-                }
-                const expr = try self.runExprDirect(0);
-                last_statement = try self.addStatement(.{ .expr = .{
-                    .expr = expr,
-                    .region = .{ .start = stmt_start, .end = self.pos },
-                } });
-                continue :associated_kernel .statement_complete;
-            } else if (tok_int >= @intFromEnum(Token.Tag.KwApp) and tok_int <= @intFromEnum(Token.Tag.KwBreak)) {
-                if (tok == .KwVar) {
-                    last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwImport) {
-                    last_statement = try self.pushMalformed(AST.Statement.Idx, .import_must_be_top_level, self.pos);
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwExpect) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    const body = try self.runExprDirect(0);
-                    last_statement = try self.addStatement(.{ .expect = .{
-                        .body = body,
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwFor) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    const pattern = try self.runPatternDirect(.alternatives_forbidden);
-                    if (self.peek() != .KwIn) {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
-                        continue :associated_kernel .statement_complete;
-                    }
-                    self.advance();
-                    const expr = try self.runExprDirect(0);
-                    const body = try self.runExprDirect(0);
-                    last_statement = try self.addStatement(.{ .@"for" = .{
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                        .patt = pattern,
-                        .expr = expr,
-                        .body = body,
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwWhile) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    const cond = try self.runExprDirect(0);
-                    const body = try self.runExprDirect(0);
-                    last_statement = try self.addStatement(.{ .@"while" = .{
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                        .cond = cond,
-                        .body = body,
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwCrash) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    const expr = try self.runExprDirect(0);
-                    last_statement = try self.addStatement(.{ .crash = .{
-                        .expr = expr,
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwDbg) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    const expr = try self.runExprDirect(0);
-                    last_statement = try self.addStatement(.{ .dbg = .{
-                        .expr = expr,
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwReturn) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    const expr = try self.runExprDirect(0);
-                    last_statement = try self.addStatement(.{ .@"return" = .{
-                        .expr = expr,
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-                if (tok == .KwBreak) {
-                    const stmt_start = self.pos;
-                    self.advance();
-                    last_statement = try self.addStatement(.{ .@"break" = .{
-                        .region = .{ .start = stmt_start, .end = self.pos },
-                    } });
-                    continue :associated_kernel .statement_complete;
-                }
-            }
-
-            const stmt_start = self.pos;
-            const expr = try self.runExprDirect(0);
-            last_statement = try self.addStatement(.{ .expr = .{
-                .expr = expr,
-                .region = .{ .start = stmt_start, .end = self.pos },
-            } });
-            continue :associated_kernel .statement_complete;
-        },
-        .statement_complete => {
-            const completed = last_statement orelse unreachable;
-            last_statement = null;
-            if (open_syntax.peekKind() == .statement_type_associated_statement) {
-                const state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    const stmt = self.store.getStatement(completed);
-                    if (stmt == .expr and self.peek() == .CloseCurly) {
-                        try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
-                            .start = state.statement_pos,
-                            .end = self.pos,
-                        });
-                    }
-                }
-                try self.store.addScratchStatement(completed);
-                continue :associated_kernel .next;
-            }
-            unreachable;
-        },
-    }
-}
-
 /// Run the direct token dispatch with a type-annotation goal and return the completed type.
 pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
@@ -6866,7 +6511,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    return try self.runStatementOnlyBlockDirect(start, owner_type_path);
+    return try self.runAssociatedBlockKernelDirect(start, owner_type_path);
 }
 
 fn finishRecordExpr(
