@@ -6009,250 +6009,233 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 };
             },
         },
-        .pattern_prefix => switch (dispatch_token) {
-            .LowerIdent,
-            => {
-                const start = self.pos;
-                self.advance();
-                last_pattern = try self.store.addPattern(.{ .ident = .{
-                    .ident_tok = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .KwVar,
-            => {
-                const start = self.pos;
-                self.advance();
-                if (self.peek() != .LowerIdent) {
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
-                    dispatch_token = self.peek();
-                    continue :dispatch .pattern_complete;
-                }
-                const ident_tok = self.pos;
-                self.advance();
-                last_pattern = try self.store.addPattern(.{ .var_ident = .{
-                    .ident_tok = ident_tok,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .NamedUnderscore,
-            => {
-                const start = self.pos;
-                self.advance();
-                last_pattern = try self.store.addPattern(.{ .ident = .{
-                    .ident_tok = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .UpperIdent,
-            => {
-                const start = self.pos;
-                const qual_result = try self.readQualificationChain();
-                self.pos = qual_result.final_token + 1;
-                if (!qual_result.is_upper) {
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                    dispatch_token = self.peek();
-                    continue :dispatch .pattern_complete;
-                }
-                if (self.peek() == .NoSpaceOpenRound) {
+        .pattern_prefix => {
+            const tok = dispatch_token;
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int < @intFromEnum(Token.Tag.UpperIdent)) {
+                if (tok == .Float) {
+                    const start = self.pos;
                     self.advance();
-                    pattern_tag_args_state = .{
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                        last_pattern = try self.store.addPattern(.{ .typed_frac = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_complete;
+                        };
+                        last_pattern = try self.store.addPattern(.{ .typed_frac = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else {
+                        last_pattern = try self.store.addPattern(.{ .frac = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .literal = literal,
+                        } });
+                    }
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
+                }
+                if (tok == .StringStart) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
+                    expr_string_state = .{
                         .start = start,
-                        .final_token = qual_result.final_token,
-                        .qualifiers = qual_result.qualifiers,
-                        .scratch_top = self.store.scratchPatternTop(),
+                        .min_bp = null,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .multiline = false,
                     };
                     dispatch_token = self.peek();
-                    continue :dispatch .pattern_tag_args_next;
+                    continue :dispatch .expr_string_next;
                 }
-                last_pattern = try self.store.addPattern(.{ .tag = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .args = .{ .span = .{ .start = 0, .len = 0 } },
-                    .tag_tok = qual_result.final_token,
-                    .qualifiers = qual_result.qualifiers,
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .StringStart,
-            => {
-                const start = self.pos;
-                self.advance();
-                try open_syntax.push(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
-                expr_string_state = .{
-                    .start = start,
-                    .min_bp = null,
-                    .scratch_top = self.store.scratchExprTop(),
-                    .multiline = false,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_string_next;
-            },
-            .SingleQuote,
-            => {
-                const start = self.pos;
-                self.advance();
-                last_pattern = try self.store.addPattern(.{ .single_quote = .{
-                    .token = start,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .Int,
-            => {
-                const start = self.pos;
-                self.advance();
-                const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
-                const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-                if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
-                    last_pattern = try self.store.addPattern(.{ .typed_int = .{
-                        .region = deprecated_region,
-                        .number_tok = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
-                    } });
-                } else if (self.peek() == .NoSpaceDotUpperIdent) {
-                    const type_token = self.pos;
+                if (tok == .SingleQuote) {
+                    const start = self.pos;
                     self.advance();
-                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_complete;
-                    };
-                    last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                    last_pattern = try self.store.addPattern(.{ .single_quote = .{
+                        .token = start,
                         .region = .{ .start = start, .end = self.pos },
-                        .number_tok = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
                     } });
-                } else {
-                    last_pattern = try self.store.addPattern(.{ .int = .{
-                        .region = deprecated_region,
-                        .number_tok = start,
-                        .literal = literal,
-                    } });
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
                 }
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .Float,
-            => {
-                const start = self.pos;
-                self.advance();
-                const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
-                const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-                if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
-                    last_pattern = try self.store.addPattern(.{ .typed_frac = .{
-                        .region = deprecated_region,
-                        .number_tok = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
-                    } });
-                } else if (self.peek() == .NoSpaceDotUpperIdent) {
-                    const type_token = self.pos;
+                if (tok == .Int) {
+                    const start = self.pos;
                     self.advance();
-                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_complete;
-                    };
-                    last_pattern = try self.store.addPattern(.{ .typed_frac = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .number_tok = start,
-                        .type_ident = type_ident,
-                        .literal = literal,
-                    } });
-                } else {
-                    last_pattern = try self.store.addPattern(.{ .frac = .{
-                        .region = deprecated_region,
-                        .number_tok = start,
-                        .literal = literal,
-                    } });
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                        last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_complete;
+                        };
+                        last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else {
+                        last_pattern = try self.store.addPattern(.{ .int = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .literal = literal,
+                        } });
+                    }
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
                 }
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .OpenSquare,
-            => {
-                const start = self.pos;
-                self.advance();
-                pattern_list_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_list_next;
-            },
-            .OpenCurly,
-            => {
-                const start = self.pos;
-                self.advance();
-                pattern_record_state = .{
-                    .start = start,
-                    .scratch_top = self.store.scratchPatternRecordFieldTop(),
-                    .alternatives = pattern_alternatives,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_record_next;
-            },
-            .DoubleDot,
-            => {
-                const start = self.pos;
-                var name: ?Token.Idx = null;
-                self.advance();
-                if (self.peek() == .KwAs) {
-                    self.advance();
-                    if (self.peek() != .LowerIdent) {
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+                    if (!qual_result.is_upper) {
                         last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                         dispatch_token = self.peek();
                         continue :dispatch .pattern_complete;
                     }
-                    name = self.pos;
-                    self.advance();
-                } else if (self.peek() == .LowerIdent) {
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
+                    if (self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        pattern_tag_args_state = .{
+                            .start = start,
+                            .final_token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .scratch_top = self.store.scratchPatternTop(),
+                        };
+                        dispatch_token = self.peek();
+                        continue :dispatch .pattern_tag_args_next;
+                    }
+                    last_pattern = try self.store.addPattern(.{ .tag = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .args = .{ .span = .{ .start = 0, .len = 0 } },
+                        .tag_tok = qual_result.final_token,
+                        .qualifiers = qual_result.qualifiers,
+                    } });
                     dispatch_token = self.peek();
                     continue :dispatch .pattern_complete;
                 }
-                last_pattern = try self.store.addPattern(.{ .list_rest = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .name = name,
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .Underscore,
-            => {
-                const start = self.pos;
-                self.advance();
-                last_pattern = try self.store.addPattern(.{ .underscore = .{
-                    .region = .{ .start = start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            .OpenRound,
-            .NoSpaceOpenRound,
-            => {
-                const start = self.pos;
-                self.advance();
-                pattern_tuple_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_tuple_next;
-            },
-            else => {
-                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .ident = .{
+                        .ident_tok = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .underscore = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
+                }
+                if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_tuple_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_tuple_next;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_list_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_list_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_record_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchPatternRecordFieldTop(),
+                        .alternatives = pattern_alternatives,
+                    };
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_record_next;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+                if (tok == .DoubleDot) {
+                    const start = self.pos;
+                    var name: ?Token.Idx = null;
+                    self.advance();
+                    if (self.peek() == .KwAs) {
+                        self.advance();
+                        if (self.peek() != .LowerIdent) {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_complete;
+                        }
+                        name = self.pos;
+                        self.advance();
+                    } else if (self.peek() == .LowerIdent) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
+                        dispatch_token = self.peek();
+                        continue :dispatch .pattern_complete;
+                    }
+                    last_pattern = try self.store.addPattern(.{ .list_rest = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .name = name,
+                    } });
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
+                }
+            } else {
+                if (tok == .KwVar) {
+                    const start = self.pos;
+                    self.advance();
+                    if (self.peek() != .LowerIdent) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
+                        dispatch_token = self.peek();
+                        continue :dispatch .pattern_complete;
+                    }
+                    const ident_tok = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .var_ident = .{
+                        .ident_tok = ident_tok,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    dispatch_token = self.peek();
+                    continue :dispatch .pattern_complete;
+                }
+            }
+
+            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
+            dispatch_token = self.peek();
+            continue :dispatch .pattern_complete;
         },
         .pattern_tag_args_next => switch (dispatch_token) {
             .CloseRound,
