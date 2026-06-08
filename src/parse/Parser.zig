@@ -243,7 +243,6 @@ const ParserContext = enum(u16) {
     expr_record_fields_next,
     expr_record_field_after_value,
     expr_record_finish,
-    expr_lambda_after_args,
     expr_lambda_after_body,
     expr_if_after_condition,
     expr_if_after_then,
@@ -2640,7 +2639,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     var expr_arrow_app_state: ExprArrowAppState = undefined;
     var expr_string_state: ExprStringState = undefined;
     var expr_record_state: ExprRecordState = undefined;
-    var expr_lambda_args_state: ExprLambdaArgsState = undefined;
     var expr_lambda_body_stack: ExprLambdaBodyStack = .{};
     defer expr_lambda_body_stack.deinit(open_allocator);
     var expr_after_expr_state: ExprAfterExprState = undefined;
@@ -2694,7 +2692,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     _ = &expr_arrow_app_state;
     _ = &expr_string_state;
     _ = &expr_record_state;
-    _ = &expr_lambda_args_state;
     _ = &expr_lambda_body_stack;
     _ = &expr_after_expr_state;
     _ = &expr_match_branch_state;
@@ -3840,13 +3837,32 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 if (tok == .OpBar) {
                     const start = self.pos;
                     self.advance();
-                    expr_lambda_args_state = .{
+                    const lambda_args_state: ExprLambdaArgsState = .{
                         .start = start,
                         .min_bp = expr_state.min_bp,
                         .scratch_top = self.store.scratchPatternTop(),
                     };
+                    if (self.peek() == .OpBar) {
+                        self.advance();
+                        const args = try self.store.patternSpanFrom(lambda_args_state.scratch_top);
+                        try expr_lambda_body_stack.enter(open_allocator, .{
+                            .start = lambda_args_state.start,
+                            .min_bp = lambda_args_state.min_bp,
+                            .args = args,
+                        });
+                        try open_syntax.pushMarker(open_allocator, .expr_lambda_body);
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        dispatch_token = self.peek();
+                        continue :dispatch .expr_prefix;
+                    }
+                    try open_syntax.push(open_allocator, .expr_lambda_args, ExprLambdaArgsState, lambda_args_state);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
                     dispatch_token = self.peek();
-                    continue :dispatch .expr_lambda_after_args;
+                    continue :dispatch .pattern_root_next;
                 }
                 if (tok == .TripleDot) {
                     const start = self.pos;
@@ -4758,58 +4774,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .expr_suffix;
             },
         },
-        .expr_lambda_after_args => switch (dispatch_token) {
-            .OpBar => {
-                if (open_syntax.peekKind()) |kind| {
-                    switch (kind) {
-                        .expr_lambda_args => expr_lambda_args_state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState),
-                        else => {},
-                    }
-                }
-                if (last_pattern) |item| {
-                    last_pattern = null;
-                    try self.store.addScratchPattern(item);
-                }
-                self.advance();
-                const args = try self.store.patternSpanFrom(expr_lambda_args_state.scratch_top);
-                try expr_lambda_body_stack.enter(open_allocator, .{
-                    .start = expr_lambda_args_state.start,
-                    .min_bp = expr_lambda_args_state.min_bp,
-                    .args = args,
-                });
-                try open_syntax.pushMarker(open_allocator, .expr_lambda_body);
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                if (open_syntax.peekKind()) |kind| {
-                    switch (kind) {
-                        .expr_lambda_args => expr_lambda_args_state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState),
-                        else => {},
-                    }
-                }
-                if (last_pattern) |item| {
-                    last_pattern = null;
-                    try self.store.addScratchPattern(item);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                    }
-                }
-                if (self.peek() == .OpBar) {
-                    dispatch_token = .OpBar;
-                    continue :dispatch .expr_lambda_after_args;
-                }
-                try open_syntax.push(open_allocator, .expr_lambda_args, ExprLambdaArgsState, expr_lambda_args_state);
-                pattern_root_state = .{
-                    .outer_start = self.pos,
-                    .scratch_top = self.store.scratchPatternTop(),
-                    .alternatives = .alternatives_forbidden,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_root_next;
-            },
-        },
         .expr_lambda_after_body => switch (dispatch_token) {
             .EndOfFile => {
                 open_syntax.popMarker(.expr_lambda_body);
@@ -5394,7 +5358,35 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                             expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                             continue :dispatch .expr_suffix;
                         },
-                        .expr_lambda_args => continue :dispatch .expr_lambda_after_args,
+                        .expr_lambda_args => {
+                            const state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState);
+                            last_pattern = null;
+                            try self.store.addScratchPattern(completed);
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            if (self.peek() == .OpBar) {
+                                self.advance();
+                                const args = try self.store.patternSpanFrom(state.scratch_top);
+                                try expr_lambda_body_stack.enter(open_allocator, .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .args = args,
+                                });
+                                try open_syntax.pushMarker(open_allocator, .expr_lambda_body);
+                                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_prefix;
+                            }
+                            try open_syntax.push(open_allocator, .expr_lambda_args, ExprLambdaArgsState, state);
+                            pattern_root_state = .{
+                                .outer_start = self.pos,
+                                .scratch_top = self.store.scratchPatternTop(),
+                                .alternatives = .alternatives_forbidden,
+                            };
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_root_next;
+                        },
                         else => {},
                     }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_record)) {
