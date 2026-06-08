@@ -218,10 +218,7 @@ const ParserContext = enum(u16) {
 
     statement_start,
     statement_complete,
-    statement_type_after_anno,
-    statement_type_decl_after_anno,
     statement_type_decl_after_associated,
-    statement_type_after_where,
     statement_type_associated_start,
     statement_type_associated_next,
     statement_type_associated_after_statement,
@@ -271,8 +268,6 @@ const ParserContext = enum(u16) {
 const OpenSyntaxKind = enum(u8) {
     header,
     header_record_field,
-    header_requires_type,
-    header_where_clause_type,
     statement_for_pattern,
     statement_destructure_pattern,
     statement_type_after_anno,
@@ -1907,20 +1902,6 @@ const HeaderRecordFieldState = struct {
     name: Token.Idx,
 };
 
-const HeaderRequiresTypeState = struct {
-    entry_start: Token.Idx,
-    entrypoint_name: Token.Idx,
-    type_aliases: AST.ForClauseTypeAlias.Span,
-    requires_top: u32,
-};
-
-const HeaderWhereClauseTypeState = struct {
-    start: Token.Idx,
-    var_tok: Token.Idx,
-    name_tok: Token.Idx,
-    args_start: Token.Idx,
-};
-
 const StatementForExprState = struct {
     start: Token.Idx,
     patt: AST.Pattern.Idx,
@@ -2592,8 +2573,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
 
     var file_state: FileState = undefined;
     var header_record_field_state: HeaderRecordFieldState = undefined;
-    var header_requires_type_state: HeaderRequiresTypeState = undefined;
-    var header_where_clause_type_state: HeaderWhereClauseTypeState = undefined;
     var expr_min_bp = entry.expr_min_bp;
     var expr_state = ExprState{ .start = self.pos, .min_bp = entry.expr_min_bp };
     var expr_finish_state: ExprFinishState = undefined;
@@ -2647,8 +2626,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     _ = &open_syntax;
     _ = &file_state;
     _ = &header_record_field_state;
-    _ = &header_requires_type_state;
-    _ = &header_where_clause_type_state;
     _ = &expr_min_bp;
     _ = &expr_state;
     _ = &expr_finish_state;
@@ -3319,76 +3296,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
             },
         },
-        .statement_type_after_anno => switch (dispatch_token) {
-            .KwWhere, .EndOfFile => {
-                const statement_type_anno_state = open_syntax.popPayload(.statement_type_after_anno, TypeAnnoStatementProgress);
-                const anno = last_type_anno orelse unreachable;
-                last_type_anno = null;
-                last_statement = try self.addStatement(.{ .type_anno = .{
-                    .anno = anno,
-                    .name = statement_type_anno_state.name,
-                    .where = try self.parseWhereConstraintTokens(),
-                    .is_var = statement_type_anno_state.is_var,
-                    .region = .{ .start = statement_type_anno_state.start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_type_after_anno;
-            },
-        },
-        .statement_type_decl_after_anno => switch (dispatch_token) {
-            .KwWhere, .Dot, .EndOfFile => {
-                const statement_type_decl_anno_state = open_syntax.popPayload(.statement_type_decl_anno, TypeDeclAnnoProgress);
-                const anno = last_type_anno orelse unreachable;
-                last_type_anno = null;
-                const type_dependencies = blk: {
-                    if (self.store.typeAnnoIsMalformed(anno)) {
-                        self.decl_index.clearTypeDependenciesFrom(statement_type_decl_anno_state.type_dependencies_start);
-                        break :blk DeclIndex.Span.empty();
-                    }
-                    break :blk self.decl_index.typeDependencySpanFrom(statement_type_decl_anno_state.type_dependencies_start);
-                };
-                self.collect_type_dependencies = statement_type_decl_anno_state.was_collecting_type_dependencies;
-                const where_clause = try self.parseWhereConstraintTokens();
-                if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
-                    const dot_pos = self.pos;
-                    self.advance();
-                    self.advance();
-                    const assoc_start = self.pos - 1;
-                    try open_syntax.push(open_allocator, .statement_type_decl_associated, TypeDeclProgress, .{
-                        .start = statement_type_decl_anno_state.start,
-                        .header = statement_type_decl_anno_state.header,
-                        .anno = anno,
-                        .kind = statement_type_decl_anno_state.kind,
-                        .where_clause = where_clause,
-                        .type_dependencies = type_dependencies,
-                        .type_path = statement_type_decl_anno_state.type_path,
-                        .dot_pos = dot_pos,
-                    });
-                    associated_start = assoc_start;
-                    associated_owner_type_path = statement_type_decl_anno_state.type_path;
-                    dispatch_token = self.peek();
-                    continue :dispatch .statement_type_associated_start;
-                }
-                last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
-                    .header = statement_type_decl_anno_state.header,
-                    .anno = anno,
-                    .kind = statement_type_decl_anno_state.kind,
-                    .where = where_clause,
-                    .associated = null,
-                    .region = .{ .start = statement_type_decl_anno_state.start, .end = self.pos },
-                } }, type_dependencies, statement_type_decl_anno_state.type_path);
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_type_decl_after_anno;
-            },
-        },
         .statement_type_decl_after_associated => switch (dispatch_token) {
             .EndOfFile => {
                 statement_type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclProgress);
@@ -3416,11 +3323,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
             else => {
                 dispatch_token = .EndOfFile;
                 continue :dispatch .statement_type_decl_after_associated;
-            },
-        },
-        .statement_type_after_where => switch (dispatch_token) {
-            else => {
-                unreachable;
             },
         },
         .statement_type_associated_start => switch (dispatch_token) {
@@ -5812,10 +5714,62 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_unary)) {
                     dispatch_token = self.peek();
                     switch (kind) {
-                        .header_requires_type => continue :dispatch .header_platform_requires_next,
-                        .header_where_clause_type => continue :dispatch .statement_type_after_where,
-                        .statement_type_after_anno => continue :dispatch .statement_type_after_anno,
-                        .statement_type_decl_anno => continue :dispatch .statement_type_decl_after_anno,
+                        .statement_type_after_anno => {
+                            const state = open_syntax.popPayload(.statement_type_after_anno, TypeAnnoStatementProgress);
+                            last_type_anno = null;
+                            last_statement = try self.addStatement(.{ .type_anno = .{
+                                .anno = completed,
+                                .name = state.name,
+                                .where = try self.parseWhereConstraintTokens(),
+                                .is_var = state.is_var,
+                                .region = .{ .start = state.start, .end = self.pos },
+                            } });
+                            dispatch_token = self.peek();
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_type_decl_anno => {
+                            const state = open_syntax.popPayload(.statement_type_decl_anno, TypeDeclAnnoProgress);
+                            last_type_anno = null;
+                            const type_dependencies = blk: {
+                                if (self.store.typeAnnoIsMalformed(completed)) {
+                                    self.decl_index.clearTypeDependenciesFrom(state.type_dependencies_start);
+                                    break :blk DeclIndex.Span.empty();
+                                }
+                                break :blk self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
+                            };
+                            self.collect_type_dependencies = state.was_collecting_type_dependencies;
+                            const where_clause = try self.parseWhereConstraintTokens();
+                            if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                                const dot_pos = self.pos;
+                                self.advance();
+                                self.advance();
+                                const assoc_start = self.pos - 1;
+                                try open_syntax.push(open_allocator, .statement_type_decl_associated, TypeDeclProgress, .{
+                                    .start = state.start,
+                                    .header = state.header,
+                                    .anno = completed,
+                                    .kind = state.kind,
+                                    .where_clause = where_clause,
+                                    .type_dependencies = type_dependencies,
+                                    .type_path = state.type_path,
+                                    .dot_pos = dot_pos,
+                                });
+                                associated_start = assoc_start;
+                                associated_owner_type_path = state.type_path;
+                                dispatch_token = self.peek();
+                                continue :dispatch .statement_type_associated_start;
+                            }
+                            last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
+                                .header = state.header,
+                                .anno = completed,
+                                .kind = state.kind,
+                                .where = where_clause,
+                                .associated = null,
+                                .region = .{ .start = state.start, .end = self.pos },
+                            } }, type_dependencies, state.type_path);
+                            dispatch_token = self.peek();
+                            continue :dispatch .statement_complete;
+                        },
                         else => {},
                     }
                 } else if (kind_int >= @intFromEnum(OpenSyntaxKind.type_apply)) {
