@@ -1939,6 +1939,32 @@ const ExprCollectionStack = struct {
     }
 };
 
+const StatementAssociatedBlockStack = struct {
+    current: ?StatementAssociatedBlockState = null,
+    stack: std.ArrayList(StatementAssociatedBlockState) = .empty,
+
+    fn deinit(self: *StatementAssociatedBlockStack, allocator: std.mem.Allocator) void {
+        self.stack.deinit(allocator);
+    }
+
+    inline fn enter(self: *StatementAssociatedBlockStack, allocator: std.mem.Allocator, state: StatementAssociatedBlockState) Error!void {
+        if (self.current) |current| {
+            try self.stack.append(allocator, current);
+        }
+        self.current = state;
+    }
+
+    inline fn active(self: *StatementAssociatedBlockStack) *StatementAssociatedBlockState {
+        return &self.current.?;
+    }
+
+    inline fn leave(self: *StatementAssociatedBlockStack) StatementAssociatedBlockState {
+        const state = self.current orelse unreachable;
+        self.current = self.stack.pop();
+        return state;
+    }
+};
+
 const PatternRootState = struct {
     outer_start: Token.Idx,
     scratch_top: u32,
@@ -2004,6 +2030,28 @@ const StatementVarBodyState = struct {
 const StatementDeclBodyState = struct {
     start: Token.Idx,
     pattern: AST.Pattern.Idx,
+};
+
+const TypeDeclAssociatedState = struct {
+    start: Token.Idx,
+    header: AST.TypeHeader.Idx,
+    anno: AST.TypeAnno.Idx,
+    kind: AST.TypeDeclKind,
+    where_clause: ?AST.Collection.Idx,
+    type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
+    dot_pos: Token.Idx,
+};
+
+const StatementAssociatedBlockState = struct {
+    start: Token.Idx,
+    scope: DeclIndex.ScopeIdx,
+    scratch_top: u32,
+    pushed_type_path: bool,
+};
+
+const StatementAssociatedStatementState = struct {
+    statement_pos: Token.Idx,
 };
 
 const ExprState = struct {
@@ -3354,6 +3402,8 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         pattern_tuple_finish,
         statement_start,
         statement_complete,
+        associated_next,
+        associated_finish,
     };
 
     var expr_state = ExprState{ .start = self.pos, .min_bp = min_bp };
@@ -3387,6 +3437,8 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = StatementType.in_body;
     var last_statement: ?AST.Statement.Idx = null;
+    var associated_blocks: StatementAssociatedBlockStack = .{};
+    defer associated_blocks.deinit(open_allocator);
 
     expr_kernel: switch (ExprLabel.prefix) {
         .prefix => {
@@ -4775,24 +4827,32 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                         const dot_pos = self.pos;
                         self.advance();
                         self.advance();
-                        const associated = try self.runStatementOnlyBlockDirect(self.pos - 1, type_path);
-                        if (kind == .alias) {
-                            try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
-                                .start = dot_pos,
-                                .end = dot_pos + 1,
-                            });
-                        }
-                        const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
+                        const associated_start = self.pos - 1;
+
+                        try open_syntax.push(open_allocator, .statement_type_decl_associated, TypeDeclAssociatedState, .{
+                            .start = start,
                             .header = header,
                             .anno = anno,
                             .kind = kind,
-                            .where = where_clause,
-                            .associated = associated,
-                            .region = .{ .start = start, .end = self.pos },
-                        } }, type_dependencies, type_path);
-                        self.decl_index.setScopeOwner(associated.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
-                        last_statement = statement_idx;
-                        continue :expr_kernel .statement_complete;
+                            .where_clause = where_clause,
+                            .type_dependencies = type_dependencies,
+                            .type_path = type_path,
+                            .dot_pos = dot_pos,
+                        });
+
+                        var pushed_type_path = false;
+                        if (type_path) |path| {
+                            try self.type_path_stack.append(self.gpa, path);
+                            pushed_type_path = true;
+                        }
+                        const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = associated_start, .end = associated_start });
+                        try associated_blocks.enter(open_allocator, .{
+                            .start = associated_start,
+                            .scope = assoc_scope,
+                            .scratch_top = self.store.scratchStatementTop(),
+                            .pushed_type_path = pushed_type_path,
+                        });
+                        continue :expr_kernel .associated_next;
                     }
 
                     last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
@@ -4954,8 +5014,72 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         .statement_complete => {
             const completed = last_statement orelse unreachable;
             last_statement = null;
+            if (open_syntax.peekKind() == .statement_type_associated_statement) {
+                const state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
+                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
+                    const stmt = self.store.getStatement(completed);
+                    if (stmt == .expr and self.peek() == .CloseCurly) {
+                        try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
+                            .start = state.statement_pos,
+                            .end = self.pos,
+                        });
+                    }
+                }
+                try self.store.addScratchStatement(completed);
+                continue :expr_kernel .associated_next;
+            }
             try self.store.addScratchStatement(completed);
             continue :expr_kernel .block_next;
+        },
+        .associated_next => switch (self.peek()) {
+            .CloseCurly, .EndOfFile => continue :expr_kernel .associated_finish,
+            else => {
+                try open_syntax.push(open_allocator, .statement_type_associated_statement, StatementAssociatedStatementState, .{
+                    .statement_pos = self.pos,
+                });
+                statement_type = .in_associated_block;
+                continue :expr_kernel .statement_start;
+            },
+        },
+        .associated_finish => switch (self.peek()) {
+            .CloseCurly, .EndOfFile => {
+                if (self.peek() == .CloseCurly) {
+                    self.advance();
+                } else {
+                    try self.pushDiagnostic(.expected_expr_close_curly, .{ .start = self.pos, .end = self.pos });
+                }
+                const associated_state = associated_blocks.leave();
+                const assoc_region = AST.TokenizedRegion{ .start = associated_state.start, .end = self.pos };
+                try self.exitDeclScope(associated_state.scope, assoc_region);
+                if (associated_state.pushed_type_path) {
+                    _ = self.type_path_stack.pop();
+                }
+                const associated = AST.Associated{
+                    .statements = try self.store.statementSpanFrom(associated_state.scratch_top),
+                    .scope = associated_state.scope,
+                    .region = assoc_region,
+                };
+
+                const type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
+                if (type_decl_state.kind == .alias) {
+                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                        .start = type_decl_state.dot_pos,
+                        .end = type_decl_state.dot_pos + 1,
+                    });
+                }
+                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
+                    .header = type_decl_state.header,
+                    .anno = type_decl_state.anno,
+                    .kind = type_decl_state.kind,
+                    .where = type_decl_state.where_clause,
+                    .associated = associated,
+                    .region = .{ .start = type_decl_state.start, .end = self.pos },
+                } }, type_decl_state.type_dependencies, type_decl_state.type_path);
+                self.decl_index.setScopeOwner(associated.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
+                last_statement = statement_idx;
+                continue :expr_kernel .statement_complete;
+            },
+            else => unreachable,
         },
         .pattern_root_next => switch (self.peek()) {
             .EndOfFile => {
