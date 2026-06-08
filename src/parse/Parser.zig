@@ -3962,6 +3962,19 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     continue :dispatch .expr_suffix;
                 }
             } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    self.advance();
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    const expr = try self.store.addExpr(.{ .ident = .{
+                        .token = start,
+                        .qualifiers = empty_qualifiers,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
+                }
                 if (tok == .UpperIdent) {
                     const start = self.pos;
                     const qual_result = try self.readQualificationChain();
@@ -3978,19 +3991,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                             .qualifiers = qual_result.qualifiers,
                             .region = .{ .start = start, .end = self.pos },
                         } });
-                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
-                if (tok == .LowerIdent or tok == .NamedUnderscore) {
-                    const start = self.pos;
-                    self.advance();
-                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                    const expr = try self.store.addExpr(.{ .ident = .{
-                        .token = start,
-                        .qualifiers = empty_qualifiers,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_suffix;
