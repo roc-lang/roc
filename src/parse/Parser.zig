@@ -2692,15 +2692,17 @@ const TyFnArgs = enum {
     looking_for_type_arg,
 };
 
-const ExprKernelRoot = union(enum) {
-    expr: u8,
-    statement: StatementType,
+const ExprKernelRoot = enum {
+    expr,
+    statement,
 };
 
-const ExprKernelResult = union(enum) {
-    expr: AST.Expr.Idx,
-    statement: AST.Statement.Idx,
-};
+fn ExprKernelReturn(comptime root: ExprKernelRoot) type {
+    return switch (root) {
+        .expr => AST.Expr.Idx,
+        .statement => AST.Statement.Idx,
+    };
+}
 
 fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
@@ -3066,7 +3068,7 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
                     else => unreachable,
                 }
             }
-            return .{ .expr = completed };
+            return completed;
         },
         .string_next => switch (self.peek()) {
             .StringPart => {
@@ -3356,22 +3358,14 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
 }
 
 fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
-    const result = try self.runExprStatementKernel(.{ .expr = min_bp });
-    return switch (result) {
-        .expr => |expr| expr,
-        .statement => unreachable,
-    };
+    return try self.runExprStatementKernel(.expr, min_bp, undefined);
 }
 
 fn runStatementKernelDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
-    const result = try self.runExprStatementKernel(.{ .statement = statement_type });
-    return switch (result) {
-        .expr => unreachable,
-        .statement => |statement| statement,
-    };
+    return try self.runExprStatementKernel(.statement, 0, statement_type);
 }
 
-fn runExprStatementKernel(self: *Parser, root: ExprKernelRoot) Error!ExprKernelResult {
+fn runExprStatementKernel(self: *Parser, comptime root: ExprKernelRoot, min_bp: u8, root_statement_type: StatementType) Error!ExprKernelReturn(root) {
     const open_allocator = self.gpa;
     const expr_scratch = &self.expr_kernel_scratch;
     std.debug.assert(expr_scratch.isEmpty());
@@ -3406,10 +3400,7 @@ fn runExprStatementKernel(self: *Parser, root: ExprKernelRoot) Error!ExprKernelR
         associated_finish,
     };
 
-    var expr_state = ExprState{ .start = self.pos, .min_bp = switch (root) {
-        .expr => |min_bp| min_bp,
-        .statement => 0,
-    } };
+    var expr_state = ExprState{ .start = self.pos, .min_bp = if (root == .expr) min_bp else 0 };
     var expr_finish_state: ExprFinishState = undefined;
     const expr_collections = &expr_scratch.collections;
     const expr_binary_rhs_stack = &expr_scratch.binary_rhs;
@@ -3433,17 +3424,11 @@ fn runExprStatementKernel(self: *Parser, root: ExprKernelRoot) Error!ExprKernelR
     var pattern_alternatives = Alternatives.alternatives_forbidden;
     var pattern_string_state: PatternStringState = undefined;
     var last_pattern: ?AST.Pattern.Idx = null;
-    var statement_type = switch (root) {
-        .expr => StatementType.in_body,
-        .statement => |root_statement_type| root_statement_type,
-    };
+    var statement_type = if (root == .statement) root_statement_type else StatementType.in_body;
     var last_statement: ?AST.Statement.Idx = null;
     const associated_blocks = &expr_scratch.associated_blocks;
 
-    expr_kernel: switch (switch (root) {
-        .expr => ExprLabel.prefix,
-        .statement => ExprLabel.statement_start,
-    }) {
+    expr_kernel: switch (if (root == .expr) ExprLabel.prefix else ExprLabel.statement_start) {
         .prefix => {
             const tok = self.peek();
             const tok_int = @intFromEnum(tok);
@@ -4368,7 +4353,10 @@ fn runExprStatementKernel(self: *Parser, root: ExprKernelRoot) Error!ExprKernelR
                     else => unreachable,
                 }
             }
-            return .{ .expr = completed };
+            if (root == .expr) {
+                return completed;
+            }
+            unreachable;
         },
         .arrow_app_next => switch (self.peek()) {
             .NoSpaceOpenRound => {
@@ -5031,13 +5019,8 @@ fn runExprStatementKernel(self: *Parser, root: ExprKernelRoot) Error!ExprKernelR
                 try self.store.addScratchStatement(completed);
                 continue :expr_kernel .associated_next;
             }
-            switch (root) {
-                .expr => {},
-                .statement => {
-                    if (expr_blocks.isEmpty() and associated_blocks.isEmpty()) {
-                        return .{ .statement = completed };
-                    }
-                },
+            if (root == .statement and expr_blocks.isEmpty() and associated_blocks.isEmpty()) {
+                return completed;
             }
             try self.store.addScratchStatement(completed);
             continue :expr_kernel .block_next;
