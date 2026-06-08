@@ -5684,13 +5684,13 @@ fn runExprStatementKernel(
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
                             continue :expr_kernel .prefix;
                         }
-                        if (self.peek() == .OpArrow) {
-                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                        }
-                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
-                            self.advance();
-                        } else {
-                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                        switch (self.peek()) {
+                            .OpArrow => {
+                                try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                                self.advance();
+                            },
+                            .OpFatArrow => self.advance(),
+                            else => try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos }),
                         }
                         _ = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
                         expr_match_guard_depth -= 1;
