@@ -3691,6 +3691,7 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     } else {
                         self.advance();
                         last_expr = expr;
+                        continue :expr_kernel .complete;
                     }
                 },
                 else => {
