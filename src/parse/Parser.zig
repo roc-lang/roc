@@ -262,62 +262,6 @@ const OpenSyntaxKind = enum(u8) {
     type_fn_ret,
 };
 
-const OpenSyntaxStack = struct {
-    const Entry = struct {
-        kind: OpenSyntaxKind,
-        payload_start: u32,
-    };
-
-    entries: std.ArrayList(Entry) = .empty,
-    payloads: std.ArrayList(u8) = .empty,
-
-    fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
-        self.entries.deinit(allocator);
-        self.payloads.deinit(allocator);
-    }
-
-    fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
-        const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
-        const end = start + @sizeOf(Payload);
-        try self.payloads.resize(allocator, end);
-        @memcpy(self.payloads.items[start..end], std.mem.asBytes(&payload));
-        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(start) });
-    }
-
-    fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
-        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
-    }
-
-    fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
-        if (self.entries.items.len == 0) return null;
-        return self.entries.items[self.entries.items.len - 1].kind;
-    }
-
-    fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
-        for (self.entries.items) |entry| {
-            if (entry.kind == kind) return true;
-        }
-        return false;
-    }
-
-    fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
-        const entry = self.entries.pop() orelse unreachable;
-        std.debug.assert(entry.kind == expected);
-        const start: usize = @intCast(entry.payload_start);
-        const end = start + @sizeOf(Payload);
-        var payload: Payload = undefined;
-        @memcpy(std.mem.asBytes(&payload), self.payloads.items[start..end]);
-        self.payloads.shrinkRetainingCapacity(start);
-        return payload;
-    }
-
-    fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
-        const entry = self.entries.pop() orelse unreachable;
-        std.debug.assert(entry.kind == expected);
-        self.payloads.shrinkRetainingCapacity(@intCast(entry.payload_start));
-    }
-};
-
 fn enterDeclScope(
     self: *Parser,
     kind: DeclIndex.ScopeKind,
@@ -2628,6 +2572,66 @@ const TypeFnAfterRetState = struct {
     start: Token.Idx,
     args: AST.TypeAnno.Span,
     effectful: bool,
+};
+
+const TypeOpenSyntaxStack = struct {
+    kinds: std.ArrayList(OpenSyntaxKind) = .empty,
+    apply: std.ArrayList(TypeApplyState) = .empty,
+    paren_item: std.ArrayList(TypeParenAfterItemState) = .empty,
+    paren_fn_ret: std.ArrayList(TypeParenFnRetState) = .empty,
+    zero_arg_fn_ret: std.ArrayList(TypeZeroArgFnRetState) = .empty,
+    record_ext: std.ArrayList(TypeRecordExtState) = .empty,
+    record_field: std.ArrayList(TypeRecordFieldState) = .empty,
+    tag_union_ext: std.ArrayList(TypeTagUnionExtState) = .empty,
+    tag_union_item: std.ArrayList(TypeTagUnionItemState) = .empty,
+    fn_arg: std.ArrayList(TypeFnArgsState) = .empty,
+    fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
+
+    fn deinit(self: *TypeOpenSyntaxStack, allocator: std.mem.Allocator) void {
+        self.kinds.deinit(allocator);
+        self.apply.deinit(allocator);
+        self.paren_item.deinit(allocator);
+        self.paren_fn_ret.deinit(allocator);
+        self.zero_arg_fn_ret.deinit(allocator);
+        self.record_ext.deinit(allocator);
+        self.record_field.deinit(allocator);
+        self.tag_union_ext.deinit(allocator);
+        self.tag_union_item.deinit(allocator);
+        self.fn_arg.deinit(allocator);
+        self.fn_ret.deinit(allocator);
+    }
+
+    inline fn payloadStack(self: *TypeOpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
+        if (Payload == TypeApplyState) return &self.apply;
+        if (Payload == TypeParenAfterItemState) return &self.paren_item;
+        if (Payload == TypeParenFnRetState) return &self.paren_fn_ret;
+        if (Payload == TypeZeroArgFnRetState) return &self.zero_arg_fn_ret;
+        if (Payload == TypeRecordExtState) return &self.record_ext;
+        if (Payload == TypeRecordFieldState) return &self.record_field;
+        if (Payload == TypeTagUnionExtState) return &self.tag_union_ext;
+        if (Payload == TypeTagUnionItemState) return &self.tag_union_item;
+        if (Payload == TypeFnArgsState) return &self.fn_arg;
+        if (Payload == TypeFnAfterRetState) return &self.fn_ret;
+        @compileError("unsupported type open syntax payload: " ++ @typeName(Payload));
+    }
+
+    inline fn push(self: *TypeOpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
+        const stack = self.payloadStack(Payload);
+        try stack.append(allocator, payload);
+        errdefer _ = stack.pop();
+        try self.kinds.append(allocator, kind);
+    }
+
+    inline fn peekKind(self: *const TypeOpenSyntaxStack) ?OpenSyntaxKind {
+        if (self.kinds.items.len == 0) return null;
+        return self.kinds.items[self.kinds.items.len - 1];
+    }
+
+    inline fn popPayload(self: *TypeOpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
+        const kind = self.kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
 };
 
 /// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
@@ -5144,7 +5148,7 @@ fn runExprStatementKernel(
 fn runTypeAnnoDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
     const open_allocator = open_allocator_state.get();
-    var open_syntax: OpenSyntaxStack = .{};
+    var open_syntax: TypeOpenSyntaxStack = .{};
     defer open_syntax.deinit(open_allocator);
 
     const type_path_stack_top = self.type_path_stack.items.len;
