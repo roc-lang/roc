@@ -194,11 +194,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error;
 
-const OpenSyntaxKind = enum(u8) {
-    header,
-    header_record_field,
-    statement_for_pattern,
-    statement_destructure_pattern,
+const ExprParentKind = enum(u8) {
     statement_expr_body,
     statement_decl_body,
     statement_var_body,
@@ -210,20 +206,10 @@ const OpenSyntaxKind = enum(u8) {
     statement_crash_body,
     statement_dbg_body,
     statement_return_body,
-    statement_type_after_anno,
-    statement_type_after_associated,
-    statement_type_decl_anno,
-    statement_type_decl_associated,
-    statement_type_associated_block,
-    statement_type_associated_statement,
-    where_statement_type_anno,
-    where_statement_type_decl,
-    where_clause_type,
     expr_unary,
     expr_binary_rhs,
     expr_collection_item,
     expr_arrow_inner,
-    expr_record,
     expr_record_ext,
     expr_record_field,
     expr_string,
@@ -231,38 +217,55 @@ const OpenSyntaxKind = enum(u8) {
     expr_if_then,
     expr_if_else,
     expr_match,
-    expr_match_pattern,
     expr_match_guard,
     expr_match_body,
     expr_dbg,
-    expr_for,
-    expr_for_pattern,
     expr_for_list,
     expr_for_body,
-    expr_lambda,
-    expr_lambda_args,
     expr_lambda_body,
+    pattern_string,
+};
+
+const PatternParentKind = enum(u8) {
+    statement_for_pattern,
+    statement_destructure_pattern,
+    expr_for_pattern,
+    expr_lambda_args,
+    expr_match_pattern,
     pattern_root,
     pattern_tag_args,
     pattern_list,
     pattern_tuple,
-    pattern_record,
     pattern_record_field,
-    pattern_string,
+};
+
+const TypeParentKind = enum(u8) {
+    statement_type_after_anno,
+    statement_type_decl_anno,
+    where_clause_type,
     type_apply,
-    type_paren,
     type_paren_item,
     type_paren_fn_ret,
     type_zero_arg_fn_ret,
-    type_record,
     type_record_ext,
     type_record_field,
-    type_tag_union,
     type_tag_union_ext,
     type_tag_union_item,
-    type_fn,
     type_fn_arg,
     type_fn_ret,
+};
+
+const WhereParentKind = enum(u8) {
+    where_statement_type_anno,
+    where_statement_type_decl,
+};
+
+const StatementParentKind = enum(u8) {
+    statement_type_associated_statement,
+};
+
+const AssociatedParentKind = enum(u8) {
+    statement_type_decl_associated,
 };
 
 fn enterDeclScope(
@@ -1685,6 +1688,10 @@ const ExprBlockStack = struct {
     fn isEmpty(self: *const ExprBlockStack) bool {
         return self.current == null and self.stack.items.len == 0;
     }
+
+    inline fn depth(self: *const ExprBlockStack) usize {
+        return self.stack.items.len + @intFromBool(self.current != null);
+    }
 };
 
 const ExprBinaryRhsStack = struct {
@@ -1990,6 +1997,7 @@ const StatementAssociatedBlockState = struct {
 
 const StatementAssociatedStatementState = struct {
     statement_pos: Token.Idx,
+    expr_block_depth: usize,
 };
 
 const ExprState = struct {
@@ -2184,7 +2192,12 @@ const ExprBlockState = struct {
 };
 
 const ExprOpenSyntaxStack = struct {
-    kinds: std.ArrayList(OpenSyntaxKind) = .empty,
+    expr_kinds: std.ArrayList(ExprParentKind) = .empty,
+    pattern_kinds: std.ArrayList(PatternParentKind) = .empty,
+    type_kinds: std.ArrayList(TypeParentKind) = .empty,
+    where_kinds: std.ArrayList(WhereParentKind) = .empty,
+    statement_kinds: std.ArrayList(StatementParentKind) = .empty,
+    associated_kinds: std.ArrayList(AssociatedParentKind) = .empty,
     expr_after_unary: std.ArrayList(ExprAfterUnaryState) = .empty,
     expr_arrow_after_inner: std.ArrayList(ExprArrowAfterInnerState) = .empty,
     expr_string: std.ArrayList(ExprStringState) = .empty,
@@ -2229,7 +2242,12 @@ const ExprOpenSyntaxStack = struct {
     type_fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
 
     fn deinit(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator) void {
-        self.kinds.deinit(allocator);
+        self.expr_kinds.deinit(allocator);
+        self.pattern_kinds.deinit(allocator);
+        self.type_kinds.deinit(allocator);
+        self.where_kinds.deinit(allocator);
+        self.statement_kinds.deinit(allocator);
+        self.associated_kinds.deinit(allocator);
         self.expr_after_unary.deinit(allocator);
         self.expr_arrow_after_inner.deinit(allocator);
         self.expr_string.deinit(allocator);
@@ -2320,42 +2338,133 @@ const ExprOpenSyntaxStack = struct {
         @compileError("unsupported expression open syntax payload: " ++ @typeName(Payload));
     }
 
-    inline fn push(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn peekPayload(self: *ExprOpenSyntaxStack, comptime Payload: type) Payload {
+        const stack = self.payloadStack(Payload);
+        return stack.items[stack.items.len - 1];
+    }
+
+    inline fn pushWithKind(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) Error!void {
         const stack = self.payloadStack(Payload);
         try stack.append(allocator, payload);
         errdefer _ = stack.pop();
-        try self.kinds.append(allocator, kind);
+        try kind_stack.append(allocator, kind);
     }
 
-    inline fn pushMarker(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
-        try self.kinds.append(allocator, kind);
+    inline fn pushExpr(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.expr_kinds, kind, Payload, payload);
     }
 
-    inline fn peekKind(self: *const ExprOpenSyntaxStack) ?OpenSyntaxKind {
-        if (self.kinds.items.len == 0) return null;
-        return self.kinds.items[self.kinds.items.len - 1];
+    inline fn pushPattern(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.pattern_kinds, kind, Payload, payload);
     }
 
-    inline fn containsKind(self: *const ExprOpenSyntaxStack, kind: OpenSyntaxKind) bool {
-        for (self.kinds.items) |entry| {
-            if (entry == kind) return true;
-        }
-        return false;
+    inline fn pushType(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: TypeParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.type_kinds, kind, Payload, payload);
     }
 
-    inline fn popPayload(self: *ExprOpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
-        const kind = self.kinds.pop() orelse unreachable;
+    inline fn pushWhere(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: WhereParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.where_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushStatement(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: StatementParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.statement_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushAssociated(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: AssociatedParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.associated_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushExprMarker(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind) Error!void {
+        try self.expr_kinds.append(allocator, kind);
+    }
+
+    inline fn pushPatternMarker(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind) Error!void {
+        try self.pattern_kinds.append(allocator, kind);
+    }
+
+    inline fn peekExpr(self: *const ExprOpenSyntaxStack) ?ExprParentKind {
+        if (self.expr_kinds.items.len == 0) return null;
+        return self.expr_kinds.items[self.expr_kinds.items.len - 1];
+    }
+
+    inline fn peekPattern(self: *const ExprOpenSyntaxStack) ?PatternParentKind {
+        if (self.pattern_kinds.items.len == 0) return null;
+        return self.pattern_kinds.items[self.pattern_kinds.items.len - 1];
+    }
+
+    inline fn peekType(self: *const ExprOpenSyntaxStack) ?TypeParentKind {
+        if (self.type_kinds.items.len == 0) return null;
+        return self.type_kinds.items[self.type_kinds.items.len - 1];
+    }
+
+    inline fn peekWhere(self: *const ExprOpenSyntaxStack) ?WhereParentKind {
+        if (self.where_kinds.items.len == 0) return null;
+        return self.where_kinds.items[self.where_kinds.items.len - 1];
+    }
+
+    inline fn peekStatement(self: *const ExprOpenSyntaxStack) ?StatementParentKind {
+        if (self.statement_kinds.items.len == 0) return null;
+        return self.statement_kinds.items[self.statement_kinds.items.len - 1];
+    }
+
+    inline fn peekAssociated(self: *const ExprOpenSyntaxStack) ?AssociatedParentKind {
+        if (self.associated_kinds.items.len == 0) return null;
+        return self.associated_kinds.items[self.associated_kinds.items.len - 1];
+    }
+
+    inline fn popExprPayload(self: *ExprOpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
+        const kind = self.expr_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popMarker(self: *ExprOpenSyntaxStack, expected: OpenSyntaxKind) void {
-        const kind = self.kinds.pop() orelse unreachable;
+    inline fn popPatternPayload(self: *ExprOpenSyntaxStack, expected: PatternParentKind, comptime Payload: type) Payload {
+        const kind = self.pattern_kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popTypePayload(self: *ExprOpenSyntaxStack, expected: TypeParentKind, comptime Payload: type) Payload {
+        const kind = self.type_kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popWherePayload(self: *ExprOpenSyntaxStack, expected: WhereParentKind, comptime Payload: type) Payload {
+        const kind = self.where_kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popStatementPayload(self: *ExprOpenSyntaxStack, expected: StatementParentKind, comptime Payload: type) Payload {
+        const kind = self.statement_kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popAssociatedPayload(self: *ExprOpenSyntaxStack, expected: AssociatedParentKind, comptime Payload: type) Payload {
+        const kind = self.associated_kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popExprMarker(self: *ExprOpenSyntaxStack, expected: ExprParentKind) void {
+        const kind = self.expr_kinds.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+    }
+
+    inline fn popPatternMarker(self: *ExprOpenSyntaxStack, expected: PatternParentKind) void {
+        const kind = self.pattern_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
     }
 
     fn clearRetainingCapacity(self: *ExprOpenSyntaxStack) void {
-        self.kinds.clearRetainingCapacity();
+        self.expr_kinds.clearRetainingCapacity();
+        self.pattern_kinds.clearRetainingCapacity();
+        self.type_kinds.clearRetainingCapacity();
+        self.where_kinds.clearRetainingCapacity();
+        self.statement_kinds.clearRetainingCapacity();
+        self.associated_kinds.clearRetainingCapacity();
         self.expr_after_unary.clearRetainingCapacity();
         self.expr_arrow_after_inner.clearRetainingCapacity();
         self.expr_string.clearRetainingCapacity();
@@ -2401,7 +2510,12 @@ const ExprOpenSyntaxStack = struct {
     }
 
     fn isEmpty(self: *const ExprOpenSyntaxStack) bool {
-        return self.kinds.items.len == 0 and
+        return self.expr_kinds.items.len == 0 and
+            self.pattern_kinds.items.len == 0 and
+            self.type_kinds.items.len == 0 and
+            self.where_kinds.items.len == 0 and
+            self.statement_kinds.items.len == 0 and
+            self.associated_kinds.items.len == 0 and
             self.expr_after_unary.items.len == 0 and
             self.expr_arrow_after_inner.items.len == 0 and
             self.expr_string.items.len == 0 and
@@ -2795,6 +2909,7 @@ fn runExprStatementKernel(
     var where_state: WhereState = undefined;
     var last_where: ?AST.Collection.Idx = null;
     var statement_type_decl_ready_state: StatementTypeDeclReadyState = undefined;
+    var expr_match_guard_depth: u32 = 0;
 
     if (root == .associated_block) {
         if (self.peek() == .OpenCurly) {
@@ -3006,7 +3121,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .record_finish;
                     } else if (self.peek() == .DoubleDot) {
                         self.advance();
-                        try open_syntax.push(open_allocator, .expr_record_ext, ExprRecordExtState, .{
+                        try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
                             .start = start,
                             .min_bp = expr_state.min_bp,
                         });
@@ -3074,7 +3189,7 @@ fn runExprStatementKernel(
                     const start = self.pos;
                     const operator_token = start;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_unary, ExprAfterUnaryState, .{ .start = start, .min_bp = expr_state.min_bp, .operator = operator_token });
+                    try open_syntax.pushExpr(open_allocator, .expr_unary, ExprAfterUnaryState, .{ .start = start, .min_bp = expr_state.min_bp, .operator = operator_token });
                     expr_state = .{ .start = self.pos, .min_bp = 100 };
                     continue :expr_kernel .prefix;
                 }
@@ -3094,11 +3209,11 @@ fn runExprStatementKernel(
                             .min_bp = lambda_args_state.min_bp,
                             .args = args,
                         });
-                        try open_syntax.pushMarker(open_allocator, .expr_lambda_body);
+                        try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
                     }
-                    try open_syntax.push(open_allocator, .expr_lambda_args, ExprLambdaArgsState, lambda_args_state);
+                    try open_syntax.pushPattern(open_allocator, .expr_lambda_args, ExprLambdaArgsState, lambda_args_state);
                     pattern_root_state = .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
@@ -3119,28 +3234,28 @@ fn runExprStatementKernel(
                 if (tok == .KwIf) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_if, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    try open_syntax.pushExpr(open_allocator, .expr_if, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwMatch) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_match, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    try open_syntax.pushExpr(open_allocator, .expr_match, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwDbg) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_dbg, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    try open_syntax.pushExpr(open_allocator, .expr_dbg, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwFor) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_for_pattern, ExprAfterExprState, .{
+                    try open_syntax.pushPattern(open_allocator, .expr_for_pattern, ExprAfterExprState, .{
                         .start = start,
                         .min_bp = expr_state.min_bp,
                     });
@@ -3297,7 +3412,7 @@ fn runExprStatementKernel(
                         .left = expr_finish_state.expr,
                         .operator = op_pos,
                     });
-                    try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
+                    try open_syntax.pushExprMarker(open_allocator, .expr_binary_rhs);
                     expr_state = .{ .start = self.pos, .min_bp = bp.right };
                     continue :expr_kernel .prefix;
                 }
@@ -3316,7 +3431,7 @@ fn runExprStatementKernel(
             } else if (tok_int < @intFromEnum(Token.Tag.OpArrow)) {
                 // Not an expression suffix.
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
-                if (open_syntax.containsKind(.expr_match_guard)) {
+                if (expr_match_guard_depth != 0) {
                     last_expr = expr_finish_state.expr;
                     continue :expr_kernel .complete;
                 }
@@ -3353,7 +3468,7 @@ fn runExprStatementKernel(
                     continue :expr_kernel .arrow_app_next;
                 } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_arrow_inner, ExprArrowAfterInnerState, .{
+                    try open_syntax.pushExpr(open_allocator, .expr_arrow_inner, ExprArrowAfterInnerState, .{
                         .start = expr_finish_state.start,
                         .min_bp = expr_finish_state.min_bp,
                         .left = expr_finish_state.expr,
@@ -3373,10 +3488,10 @@ fn runExprStatementKernel(
         },
         .complete => {
             const completed = last_expr orelse unreachable;
-            if (open_syntax.peekKind()) |kind| {
+            if (open_syntax.peekExpr()) |kind| {
                 switch (kind) {
                     .expr_collection_item => {
-                        open_syntax.popMarker(.expr_collection_item);
+                        open_syntax.popExprMarker(.expr_collection_item);
                         last_expr = null;
                         try self.store.addScratchExpr(completed);
                         if (self.peek() == .Comma) {
@@ -3385,7 +3500,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .collection_next;
                     },
                     .expr_binary_rhs => {
-                        open_syntax.popMarker(.expr_binary_rhs);
+                        open_syntax.popExprMarker(.expr_binary_rhs);
                         const state = expr_binary_rhs_stack.leave();
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .bin_op = .{
@@ -3398,7 +3513,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_unary => {
-                        const state = open_syntax.popPayload(.expr_unary, ExprAfterUnaryState);
+                        const state = open_syntax.popExprPayload(.expr_unary, ExprAfterUnaryState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .unary_op = .{
                             .operator = state.operator,
@@ -3409,7 +3524,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_arrow_inner => {
-                        const state = open_syntax.popPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
+                        const state = open_syntax.popExprPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
                         last_expr = null;
                         if (self.peek() != .CloseRound) {
                             const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
@@ -3427,7 +3542,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .arrow_app_next;
                     },
                     .expr_record_ext => {
-                        const state = open_syntax.popPayload(.expr_record_ext, ExprRecordExtState);
+                        const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
                         last_expr = null;
                         if (self.peek() != .Comma) {
                             const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
@@ -3444,7 +3559,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .record_fields_next;
                     },
                     .expr_record_field => {
-                        const state = open_syntax.popPayload(.expr_record_field, ExprRecordFieldState);
+                        const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
                         last_expr = null;
                         const field = try self.store.addRecordField(.{
                             .name = state.name,
@@ -3468,7 +3583,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .record_fields_next;
                     },
                     .expr_string => {
-                        expr_string_state = open_syntax.popPayload(.expr_string, ExprStringState);
+                        expr_string_state = open_syntax.popExprPayload(.expr_string, ExprStringState);
                         last_expr = null;
                         try self.store.addScratchExpr(completed);
                         if (self.peek() != .CloseStringInterpolation) {
@@ -3480,9 +3595,9 @@ fn runExprStatementKernel(
                         continue :expr_kernel .string_next;
                     },
                     .expr_if => {
-                        const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
+                        const state = open_syntax.popExprPayload(.expr_if, ExprAfterExprState);
                         last_expr = null;
-                        try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                        try open_syntax.pushExpr(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
                             .start = state.start,
                             .min_bp = state.min_bp,
                             .condition = completed,
@@ -3491,11 +3606,11 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .expr_if_then => {
-                        const state = open_syntax.popPayload(.expr_if_then, ExprIfAfterThenState);
+                        const state = open_syntax.popExprPayload(.expr_if_then, ExprIfAfterThenState);
                         last_expr = null;
                         if (self.peek() == .KwElse) {
                             self.advance();
-                            try open_syntax.push(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
+                            try open_syntax.pushExpr(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .condition = state.condition,
@@ -3513,7 +3628,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_if_else => {
-                        const state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
+                        const state = open_syntax.popExprPayload(.expr_if_else, ExprIfAfterElseState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .if_then_else = .{
                             .region = .{ .start = state.start, .end = self.pos },
@@ -3525,7 +3640,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_match => {
-                        const state = open_syntax.popPayload(.expr_match, ExprAfterExprState);
+                        const state = open_syntax.popExprPayload(.expr_match, ExprAfterExprState);
                         last_expr = null;
                         if (self.peek() == .OpenCurly) {
                             self.advance();
@@ -3542,7 +3657,8 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_match_guard => {
-                        const state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                        const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                        expr_match_guard_depth -= 1;
                         last_expr = null;
                         if (self.peek() == .OpArrow) {
                             try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
@@ -3552,7 +3668,7 @@ fn runExprStatementKernel(
                         } else {
                             try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
                         }
-                        try open_syntax.push(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
                             .match_start = state.match_start,
                             .min_bp = state.min_bp,
                             .matched = state.matched,
@@ -3565,7 +3681,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .expr_match_body => {
-                        const state = open_syntax.popPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
+                        const state = open_syntax.popExprPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
                         last_expr = null;
                         const branch = try self.store.addMatchBranch(.{
                             .region = .{ .start = state.branch_start, .end = self.pos },
@@ -3586,7 +3702,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .match_branch_next;
                     },
                     .expr_dbg => {
-                        const state = open_syntax.popPayload(.expr_dbg, ExprAfterExprState);
+                        const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .dbg = .{
                             .region = .{ .start = state.start, .end = self.pos },
@@ -3596,9 +3712,9 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_for_list => {
-                        const state = open_syntax.popPayload(.expr_for_list, ExprForAfterListState);
+                        const state = open_syntax.popExprPayload(.expr_for_list, ExprForAfterListState);
                         last_expr = null;
-                        try open_syntax.push(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
+                        try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
                             .start = state.start,
                             .min_bp = state.min_bp,
                             .pattern = state.pattern,
@@ -3608,7 +3724,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .expr_for_body => {
-                        const state = open_syntax.popPayload(.expr_for_body, ExprForAfterBodyState);
+                        const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .for_expr = .{
                             .region = .{ .start = state.start, .end = self.pos },
@@ -3620,7 +3736,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_lambda_body => {
-                        open_syntax.popMarker(.expr_lambda_body);
+                        open_syntax.popExprMarker(.expr_lambda_body);
                         const state = expr_lambda_body_stack.leave();
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .lambda = .{
@@ -3632,7 +3748,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .statement_expr_body => {
-                        const start = open_syntax.popPayload(.statement_expr_body, Token.Idx);
+                        const start = open_syntax.popExprPayload(.statement_expr_body, Token.Idx);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .expr = .{
                             .expr = completed,
@@ -3641,13 +3757,13 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_decl_body => {
-                        const state = open_syntax.popPayload(.statement_decl_body, StatementDeclBodyState);
+                        const state = open_syntax.popExprPayload(.statement_decl_body, StatementDeclBodyState);
                         last_expr = null;
                         last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_var_body => {
-                        const state = open_syntax.popPayload(.statement_var_body, StatementVarBodyState);
+                        const state = open_syntax.popExprPayload(.statement_var_body, StatementVarBodyState);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .@"var" = .{
                             .name = state.name,
@@ -3657,7 +3773,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_expect_body => {
-                        const start = open_syntax.popPayload(.statement_expect_body, Token.Idx);
+                        const start = open_syntax.popExprPayload(.statement_expect_body, Token.Idx);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .expect = .{
                             .body = completed,
@@ -3666,9 +3782,9 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_for_expr => {
-                        const state = open_syntax.popPayload(.statement_for_expr, StatementForExprState);
+                        const state = open_syntax.popExprPayload(.statement_for_expr, StatementForExprState);
                         last_expr = null;
-                        try open_syntax.push(open_allocator, .statement_for_body, StatementForBodyState, .{
+                        try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
                             .start = state.start,
                             .patt = state.patt,
                             .expr = completed,
@@ -3677,7 +3793,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .statement_for_body => {
-                        const state = open_syntax.popPayload(.statement_for_body, StatementForBodyState);
+                        const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .@"for" = .{
                             .region = .{ .start = state.start, .end = self.pos },
@@ -3688,9 +3804,9 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_while_cond => {
-                        const start = open_syntax.popPayload(.statement_while_cond, Token.Idx);
+                        const start = open_syntax.popExprPayload(.statement_while_cond, Token.Idx);
                         last_expr = null;
-                        try open_syntax.push(open_allocator, .statement_while_body, StatementWhileBodyState, .{
+                        try open_syntax.pushExpr(open_allocator, .statement_while_body, StatementWhileBodyState, .{
                             .start = start,
                             .cond = completed,
                         });
@@ -3698,7 +3814,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .statement_while_body => {
-                        const state = open_syntax.popPayload(.statement_while_body, StatementWhileBodyState);
+                        const state = open_syntax.popExprPayload(.statement_while_body, StatementWhileBodyState);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .@"while" = .{
                             .region = .{ .start = state.start, .end = self.pos },
@@ -3708,7 +3824,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_crash_body => {
-                        const start = open_syntax.popPayload(.statement_crash_body, Token.Idx);
+                        const start = open_syntax.popExprPayload(.statement_crash_body, Token.Idx);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .crash = .{
                             .expr = completed,
@@ -3717,7 +3833,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_dbg_body => {
-                        const start = open_syntax.popPayload(.statement_dbg_body, Token.Idx);
+                        const start = open_syntax.popExprPayload(.statement_dbg_body, Token.Idx);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .dbg = .{
                             .expr = completed,
@@ -3726,7 +3842,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_return_body => {
-                        const start = open_syntax.popPayload(.statement_return_body, Token.Idx);
+                        const start = open_syntax.popExprPayload(.statement_return_body, Token.Idx);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .@"return" = .{
                             .expr = completed,
@@ -3735,7 +3851,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .pattern_string => {
-                        pattern_string_state = open_syntax.popPayload(.pattern_string, PatternStringState);
+                        pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
                         last_expr = null;
                         last_pattern = try self.store.addPattern(.{ .string = .{
                             .string_tok = pattern_string_state.start,
@@ -3744,7 +3860,6 @@ fn runExprStatementKernel(
                         } });
                         continue :expr_kernel .pattern_complete;
                     },
-                    else => unreachable,
                 }
             }
             if (root == .expr) {
@@ -3852,7 +3967,7 @@ fn runExprStatementKernel(
                 continue :expr_kernel .suffix;
             },
             else => {
-                try open_syntax.pushMarker(open_allocator, .expr_collection_item);
+                try open_syntax.pushExprMarker(open_allocator, .expr_collection_item);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 continue :expr_kernel .prefix;
             },
@@ -3903,7 +4018,7 @@ fn runExprStatementKernel(
             },
             .OpenStringInterpolation => {
                 self.advance();
-                try open_syntax.push(open_allocator, .expr_string, ExprStringState, expr_string_state);
+                try open_syntax.pushExpr(open_allocator, .expr_string, ExprStringState, expr_string_state);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 continue :expr_kernel .prefix;
             },
@@ -3959,7 +4074,7 @@ fn runExprStatementKernel(
                 const name = field_start;
                 if (self.peek() == .OpColon) {
                     self.advance();
-                    try open_syntax.push(open_allocator, .expr_record_field, ExprRecordFieldState, .{
+                    try open_syntax.pushExpr(open_allocator, .expr_record_field, ExprRecordFieldState, .{
                         .start = expr_record_state.start,
                         .min_bp = expr_record_state.min_bp,
                         .scratch_top = expr_record_state.scratch_top,
@@ -4035,7 +4150,7 @@ fn runExprStatementKernel(
                     expr_finish_state = .{ .start = expr_match_branch_state.start, .min_bp = expr_match_branch_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }
-                try open_syntax.push(open_allocator, .expr_match_pattern, ExprMatchBranchAfterPatternState, .{
+                try open_syntax.pushPattern(open_allocator, .expr_match_pattern, ExprMatchBranchAfterPatternState, .{
                     .match_start = expr_match_branch_state.start,
                     .min_bp = expr_match_branch_state.min_bp,
                     .matched = expr_match_branch_state.matched,
@@ -4219,10 +4334,10 @@ fn runExprStatementKernel(
         },
         .type_complete => {
             const completed = last_type_anno orelse unreachable;
-            if (open_syntax.peekKind()) |kind| {
+            if (open_syntax.peekType()) |kind| {
                 switch (kind) {
                     .type_apply => {
-                        type_apply_state = open_syntax.popPayload(.type_apply, TypeApplyState);
+                        type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
                         last_type_anno = null;
                         try self.store.addScratchTypeAnno(completed);
                         if (self.peek() == .Comma or self.peek() == .CloseRound) {
@@ -4236,7 +4351,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_complete;
                     },
                     .type_paren_item => {
-                        const state = open_syntax.popPayload(.type_paren_item, TypeParenAfterItemState);
+                        const state = open_syntax.popTypePayload(.type_paren_item, TypeParenAfterItemState);
                         last_type_anno = null;
                         try self.store.addScratchTypeAnno(completed);
                         type_paren_state = .{
@@ -4254,7 +4369,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_paren_next;
                     },
                     .type_paren_fn_ret => {
-                        const state = open_syntax.popPayload(.type_paren_fn_ret, TypeParenFnRetState);
+                        const state = open_syntax.popTypePayload(.type_paren_fn_ret, TypeParenFnRetState);
                         last_type_anno = null;
                         if (self.peek() != .CloseRound) {
                             self.store.clearScratchTypeAnnosFrom(state.scratch_top);
@@ -4276,7 +4391,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_after_primary;
                     },
                     .type_zero_arg_fn_ret => {
-                        const state = open_syntax.popPayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
+                        const state = open_syntax.popTypePayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
                         last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
                             .args = state.args,
                             .ret = completed,
@@ -4287,7 +4402,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_after_primary;
                     },
                     .type_record_ext => {
-                        const state = open_syntax.popPayload(.type_record_ext, TypeRecordExtState);
+                        const state = open_syntax.popTypePayload(.type_record_ext, TypeRecordExtState);
                         last_type_anno = null;
                         const anno_region = self.store.typeAnnoRegion(completed);
                         if (self.peek() == .Comma) {
@@ -4304,7 +4419,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_record_finish;
                     },
                     .type_record_field => {
-                        const state = open_syntax.popPayload(.type_record_field, TypeRecordFieldState);
+                        const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
                         last_type_anno = null;
                         const field = try self.store.addAnnoRecordField(.{
                             .region = .{ .start = state.field_start, .end = self.pos },
@@ -4328,7 +4443,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_record_next;
                     },
                     .type_tag_union_ext => {
-                        const state = open_syntax.popPayload(.type_tag_union_ext, TypeTagUnionExtState);
+                        const state = open_syntax.popTypePayload(.type_tag_union_ext, TypeTagUnionExtState);
                         last_type_anno = null;
                         const anno_region = self.store.typeAnnoRegion(completed);
                         if (self.peek() == .Comma) {
@@ -4345,7 +4460,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_tag_union_finish;
                     },
                     .type_tag_union_item => {
-                        const state = open_syntax.popPayload(.type_tag_union_item, TypeTagUnionItemState);
+                        const state = open_syntax.popTypePayload(.type_tag_union_item, TypeTagUnionItemState);
                         last_type_anno = null;
                         self.collect_type_dependencies = state.was_collecting;
                         if (state.was_collecting) {
@@ -4368,13 +4483,13 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_tag_union_next;
                     },
                     .type_fn_arg => {
-                        type_fn_args_state = open_syntax.popPayload(.type_fn_arg, TypeFnArgsState);
+                        type_fn_args_state = open_syntax.popTypePayload(.type_fn_arg, TypeFnArgsState);
                         last_type_anno = null;
                         try self.store.addScratchTypeAnno(completed);
                         continue :expr_kernel .type_fn_args_next;
                     },
                     .type_fn_ret => {
-                        const state = open_syntax.popPayload(.type_fn_ret, TypeFnAfterRetState);
+                        const state = open_syntax.popTypePayload(.type_fn_ret, TypeFnAfterRetState);
                         last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
                             .region = .{ .start = state.start, .end = self.pos },
                             .args = state.args,
@@ -4384,7 +4499,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .type_complete;
                     },
                     .where_clause_type => {
-                        const state = open_syntax.popPayload(.where_clause_type, WhereClauseTypeState);
+                        const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
                         last_type_anno = null;
                         const method_type = self.store.getTypeAnno(completed);
                         if (method_type == .@"fn") {
@@ -4417,12 +4532,12 @@ fn runExprStatementKernel(
                         continue :expr_kernel .where_after_clause;
                     },
                     .statement_type_after_anno => {
-                        const state = open_syntax.popPayload(.statement_type_after_anno, StatementTypeAnnoState);
+                        const state = open_syntax.popTypePayload(.statement_type_after_anno, StatementTypeAnnoState);
                         last_type_anno = null;
                         if (self.peek() == .KwWhere) {
                             const where_start = self.pos;
                             self.advance();
-                            try open_syntax.push(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
+                            try open_syntax.pushWhere(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
                                 .start = state.start,
                                 .name = state.name,
                                 .is_var = state.is_var,
@@ -4441,7 +4556,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_type_decl_anno => {
-                        const state = open_syntax.popPayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
+                        const state = open_syntax.popTypePayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
                         last_type_anno = null;
                         const type_dependencies = blk: {
                             if (self.store.typeAnnoIsMalformed(completed)) {
@@ -4455,7 +4570,7 @@ fn runExprStatementKernel(
                         if (self.peek() == .KwWhere) {
                             const where_start = self.pos;
                             self.advance();
-                            try open_syntax.push(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
+                            try open_syntax.pushWhere(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
                                 .start = state.start,
                                 .header = state.header,
                                 .anno = completed,
@@ -4478,7 +4593,6 @@ fn runExprStatementKernel(
                         };
                         continue :expr_kernel .statement_type_decl_finish;
                     },
-                    else => unreachable,
                 }
             }
             if (root == .type_anno) {
@@ -4502,7 +4616,7 @@ fn runExprStatementKernel(
                     last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
                     continue :expr_kernel .type_complete;
                 }
-                try open_syntax.push(open_allocator, .type_apply, TypeApplyState, type_apply_state);
+                try open_syntax.pushType(open_allocator, .type_apply, TypeApplyState, type_apply_state);
                 type_args = .looking_for_type_arg;
                 continue :expr_kernel .type_prefix;
             },
@@ -4512,7 +4626,7 @@ fn runExprStatementKernel(
                 const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance();
-                try open_syntax.push(open_allocator, .type_paren_fn_ret, TypeParenFnRetState, .{
+                try open_syntax.pushType(open_allocator, .type_paren_fn_ret, TypeParenFnRetState, .{
                     .start = type_paren_state.start,
                     .after_round = type_paren_state.after_round,
                     .scratch_top = type_paren_state.scratch_top,
@@ -4529,7 +4643,7 @@ fn runExprStatementKernel(
                     self.advance();
                     const effectful = self.peek() == .OpFatArrow;
                     self.advance();
-                    try open_syntax.push(open_allocator, .type_zero_arg_fn_ret, TypeZeroArgFnRetState, .{
+                    try open_syntax.pushType(open_allocator, .type_zero_arg_fn_ret, TypeZeroArgFnRetState, .{
                         .start = type_paren_state.start,
                         .after_round = type_paren_state.after_round,
                         .effectful = effectful,
@@ -4561,7 +4675,7 @@ fn runExprStatementKernel(
                     last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, type_paren_state.start);
                     continue :expr_kernel .type_complete;
                 }
-                try open_syntax.push(open_allocator, .type_paren_item, TypeParenAfterItemState, .{
+                try open_syntax.pushType(open_allocator, .type_paren_item, TypeParenAfterItemState, .{
                     .start = type_paren_state.start,
                     .after_round = type_paren_state.after_round,
                     .scratch_top = type_paren_state.scratch_top,
@@ -4578,7 +4692,7 @@ fn runExprStatementKernel(
                 const double_dot_start = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
-                    try open_syntax.push(open_allocator, .type_record_ext, TypeRecordExtState, .{
+                    try open_syntax.pushType(open_allocator, .type_record_ext, TypeRecordExtState, .{
                         .start = type_record_state.start,
                         .scratch_top = type_record_state.scratch_top,
                         .looking_for_args = type_record_state.looking_for_args,
@@ -4602,7 +4716,7 @@ fn runExprStatementKernel(
                     continue :expr_kernel .type_complete;
                 }
                 self.advance();
-                try open_syntax.push(open_allocator, .type_record_field, TypeRecordFieldState, .{
+                try open_syntax.pushType(open_allocator, .type_record_field, TypeRecordFieldState, .{
                     .record_start = type_record_state.start,
                     .scratch_top = type_record_state.scratch_top,
                     .field_start = field_start,
@@ -4654,7 +4768,7 @@ fn runExprStatementKernel(
                 const double_dot_pos = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
-                    try open_syntax.push(open_allocator, .type_tag_union_ext, TypeTagUnionExtState, .{
+                    try open_syntax.pushType(open_allocator, .type_tag_union_ext, TypeTagUnionExtState, .{
                         .start = type_tag_union_state.start,
                         .scratch_top = type_tag_union_state.scratch_top,
                         .looking_for_args = type_tag_union_state.looking_for_args,
@@ -4674,7 +4788,7 @@ fn runExprStatementKernel(
                 }
                 const was_collecting = self.collect_type_dependencies;
                 self.collect_type_dependencies = false;
-                try open_syntax.push(open_allocator, .type_tag_union_item, TypeTagUnionItemState, .{
+                try open_syntax.pushType(open_allocator, .type_tag_union_item, TypeTagUnionItemState, .{
                     .start = type_tag_union_state.start,
                     .scratch_top = type_tag_union_state.scratch_top,
                     .ext = type_tag_union_state.ext,
@@ -4706,7 +4820,7 @@ fn runExprStatementKernel(
         .type_fn_args_next => switch (self.peek()) {
             .Comma => {
                 self.advance();
-                try open_syntax.push(open_allocator, .type_fn_arg, TypeFnArgsState, type_fn_args_state);
+                try open_syntax.pushType(open_allocator, .type_fn_arg, TypeFnArgsState, type_fn_args_state);
                 type_args = .looking_for_args;
                 continue :expr_kernel .type_prefix;
             },
@@ -4714,7 +4828,7 @@ fn runExprStatementKernel(
                 const args = try self.store.typeAnnoSpanFrom(type_fn_args_state.scratch_top);
                 const effectful = self.peek() == .OpFatArrow;
                 self.advance();
-                try open_syntax.push(open_allocator, .type_fn_ret, TypeFnAfterRetState, .{
+                try open_syntax.pushType(open_allocator, .type_fn_ret, TypeFnAfterRetState, .{
                     .start = type_fn_args_state.start,
                     .args = args,
                     .effectful = effectful,
@@ -4786,7 +4900,7 @@ fn runExprStatementKernel(
                 self.advance();
 
                 const args_start = self.pos;
-                try open_syntax.push(open_allocator, .where_clause_type, WhereClauseTypeState, .{
+                try open_syntax.pushType(open_allocator, .where_clause_type, WhereClauseTypeState, .{
                     .start = start,
                     .var_tok = var_tok,
                     .name_tok = name_tok,
@@ -4840,10 +4954,10 @@ fn runExprStatementKernel(
         .where_complete => {
             const completed = last_where orelse unreachable;
             last_where = null;
-            if (open_syntax.peekKind()) |kind| {
+            if (open_syntax.peekWhere()) |kind| {
                 switch (kind) {
                     .where_statement_type_anno => {
-                        const state = open_syntax.popPayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
+                        const state = open_syntax.popWherePayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
                         last_statement = try self.addStatement(.{ .type_anno = .{
                             .anno = state.anno,
                             .name = state.name,
@@ -4854,7 +4968,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .where_statement_type_decl => {
-                        const state = open_syntax.popPayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
+                        const state = open_syntax.popWherePayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
                         statement_type_decl_ready_state = .{
                             .start = state.start,
                             .header = state.header,
@@ -4866,7 +4980,6 @@ fn runExprStatementKernel(
                         };
                         continue :expr_kernel .statement_type_decl_finish;
                     },
-                    else => unreachable,
                 }
             }
             unreachable;
@@ -4879,7 +4992,7 @@ fn runExprStatementKernel(
                 self.advance();
                 const nested_associated_start = self.pos - 1;
 
-                try open_syntax.push(open_allocator, .statement_type_decl_associated, TypeDeclAssociatedState, .{
+                try open_syntax.pushAssociated(open_allocator, .statement_type_decl_associated, TypeDeclAssociatedState, .{
                     .start = state.start,
                     .header = state.header,
                     .anno = state.anno,
@@ -4935,7 +5048,7 @@ fn runExprStatementKernel(
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         self.advance();
-                        try open_syntax.push(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                        try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
                             .start = start,
                             .pattern = patt_idx,
                         });
@@ -4948,7 +5061,7 @@ fn runExprStatementKernel(
                         }
                         self.advance();
                         self.advance();
-                        try open_syntax.push(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
+                        try open_syntax.pushType(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
                             .start = start,
                             .name = start,
                             .is_var = false,
@@ -4959,7 +5072,7 @@ fn runExprStatementKernel(
                         last_statement = try self.addTopLevelUnexpectedStatement();
                         continue :expr_kernel .statement_complete;
                     } else {
-                        try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                        try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                         expr_state = .{ .start = start, .min_bp = 0 };
                         continue :expr_kernel .prefix;
                     }
@@ -4973,7 +5086,7 @@ fn runExprStatementKernel(
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         self.advance();
-                        try open_syntax.push(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                        try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
                             .start = start,
                             .pattern = patt_idx,
                         });
@@ -4983,7 +5096,7 @@ fn runExprStatementKernel(
                         last_statement = try self.addTopLevelUnexpectedStatement();
                         continue :expr_kernel .statement_complete;
                     } else {
-                        try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                        try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                         expr_state = .{ .start = start, .min_bp = 0 };
                         continue :expr_kernel .prefix;
                     }
@@ -4998,7 +5111,7 @@ fn runExprStatementKernel(
                             last_statement = try self.addTopLevelUnexpectedStatement();
                             continue :expr_kernel .statement_complete;
                         }
-                        try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                        try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                         expr_state = .{ .start = start, .min_bp = 0 };
                         continue :expr_kernel .prefix;
                     }
@@ -5033,7 +5146,7 @@ fn runExprStatementKernel(
                     const type_dependencies_start = self.decl_index.typeDependencyTop();
                     const was_collecting_type_dependencies = self.collect_type_dependencies;
                     self.collect_type_dependencies = true;
-                    try open_syntax.push(open_allocator, .statement_type_decl_anno, StatementTypeDeclAnnoState, .{
+                    try open_syntax.pushType(open_allocator, .statement_type_decl_anno, StatementTypeDeclAnnoState, .{
                         .start = start,
                         .header = header,
                         .kind = kind,
@@ -5065,7 +5178,7 @@ fn runExprStatementKernel(
                     lookahead_pos += 1;
                 }
                 if (is_destructure) {
-                    try open_syntax.push(open_allocator, .statement_destructure_pattern, Token.Idx, start);
+                    try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);
                     pattern_root_state = .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
@@ -5077,7 +5190,7 @@ fn runExprStatementKernel(
                     last_statement = try self.addTopLevelUnexpectedStatement();
                     continue :expr_kernel .statement_complete;
                 }
-                try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                 expr_state = .{ .start = start, .min_bp = 0 };
                 continue :expr_kernel .prefix;
             } else if (tok_int >= @intFromEnum(Token.Tag.KwApp) and tok_int <= @intFromEnum(Token.Tag.KwBreak)) {
@@ -5096,7 +5209,7 @@ fn runExprStatementKernel(
                     self.advance();
                     if (self.peek() == .OpColon) {
                         self.advance();
-                        try open_syntax.push(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
+                        try open_syntax.pushType(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
                             .start = start,
                             .name = name,
                             .is_var = true,
@@ -5108,7 +5221,7 @@ fn runExprStatementKernel(
                         last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
                         continue :expr_kernel .statement_complete;
                     };
-                    try open_syntax.push(open_allocator, .statement_var_body, StatementVarBodyState, .{
+                    try open_syntax.pushExpr(open_allocator, .statement_var_body, StatementVarBodyState, .{
                         .start = start,
                         .name = name,
                     });
@@ -5126,14 +5239,14 @@ fn runExprStatementKernel(
                 if (tok == .KwExpect) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .statement_expect_body, Token.Idx, start);
+                    try open_syntax.pushExpr(open_allocator, .statement_expect_body, Token.Idx, start);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwFor) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .statement_for_pattern, Token.Idx, start);
+                    try open_syntax.pushPattern(open_allocator, .statement_for_pattern, Token.Idx, start);
                     pattern_root_state = .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
@@ -5144,28 +5257,28 @@ fn runExprStatementKernel(
                 if (tok == .KwWhile) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .statement_while_cond, Token.Idx, start);
+                    try open_syntax.pushExpr(open_allocator, .statement_while_cond, Token.Idx, start);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwCrash) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .statement_crash_body, Token.Idx, start);
+                    try open_syntax.pushExpr(open_allocator, .statement_crash_body, Token.Idx, start);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwDbg) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .statement_dbg_body, Token.Idx, start);
+                    try open_syntax.pushExpr(open_allocator, .statement_dbg_body, Token.Idx, start);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
                 if (tok == .KwReturn) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .statement_return_body, Token.Idx, start);
+                    try open_syntax.pushExpr(open_allocator, .statement_return_body, Token.Idx, start);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
@@ -5184,15 +5297,17 @@ fn runExprStatementKernel(
                 continue :expr_kernel .statement_complete;
             }
             const start = self.pos;
-            try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+            try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
             expr_state = .{ .start = start, .min_bp = 0 };
             continue :expr_kernel .prefix;
         },
         .statement_complete => {
             const completed = last_statement orelse unreachable;
             last_statement = null;
-            if (open_syntax.peekKind() == .statement_type_associated_statement) {
-                const state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
+            if (open_syntax.peekStatement() == .statement_type_associated_statement and
+                open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
+            {
+                const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
                 if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
                     const stmt = self.store.getStatement(completed);
                     if (stmt == .expr and self.peek() == .CloseCurly) {
@@ -5214,8 +5329,9 @@ fn runExprStatementKernel(
         .associated_next => switch (self.peek()) {
             .CloseCurly, .EndOfFile => continue :expr_kernel .associated_finish,
             else => {
-                try open_syntax.push(open_allocator, .statement_type_associated_statement, StatementAssociatedStatementState, .{
+                try open_syntax.pushStatement(open_allocator, .statement_type_associated_statement, StatementAssociatedStatementState, .{
                     .statement_pos = self.pos,
+                    .expr_block_depth = expr_blocks.depth(),
                 });
                 statement_type = .in_associated_block;
                 continue :expr_kernel .statement_start;
@@ -5240,11 +5356,11 @@ fn runExprStatementKernel(
                     .region = assoc_region,
                 };
 
-                if (root == .associated_block and open_syntax.peekKind() != .statement_type_decl_associated) {
+                if (root == .associated_block and open_syntax.peekAssociated() != .statement_type_decl_associated) {
                     return associated;
                 }
 
-                const type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
+                const type_decl_state = open_syntax.popAssociatedPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
                 if (type_decl_state.kind == .alias) {
                     try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
                         .start = type_decl_state.dot_pos,
@@ -5285,7 +5401,7 @@ fn runExprStatementKernel(
             },
             else => {
                 try pattern_roots.enter(open_allocator, pattern_root_state);
-                try open_syntax.pushMarker(open_allocator, .pattern_root);
+                try open_syntax.pushPatternMarker(open_allocator, .pattern_root);
                 pattern_alternatives = pattern_root_state.alternatives;
                 continue :expr_kernel .pattern_prefix;
             },
@@ -5334,7 +5450,7 @@ fn runExprStatementKernel(
                 if (tok == .StringStart) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.push(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
+                    try open_syntax.pushExpr(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
                     expr_string_state = .{
                         .start = start,
                         .min_bp = null,
@@ -5500,14 +5616,14 @@ fn runExprStatementKernel(
         },
         .pattern_complete => {
             const completed = last_pattern orelse unreachable;
-            if (open_syntax.peekKind()) |kind| {
+            if (open_syntax.peekPattern()) |kind| {
                 switch (kind) {
                     .expr_for_pattern => {
-                        const state = open_syntax.popPayload(.expr_for_pattern, ExprAfterExprState);
+                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprAfterExprState);
                         last_pattern = null;
                         if (self.peek() == .KwIn) {
                             self.advance();
-                            try open_syntax.push(open_allocator, .expr_for_list, ExprForAfterListState, .{
+                            try open_syntax.pushExpr(open_allocator, .expr_for_list, ExprForAfterListState, .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .pattern = completed,
@@ -5520,7 +5636,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .suffix;
                     },
                     .expr_lambda_args => {
-                        const state = open_syntax.popPayload(.expr_lambda_args, ExprLambdaArgsState);
+                        const state = open_syntax.popPatternPayload(.expr_lambda_args, ExprLambdaArgsState);
                         last_pattern = null;
                         try self.store.addScratchPattern(completed);
                         if (self.peek() == .Comma) {
@@ -5536,11 +5652,11 @@ fn runExprStatementKernel(
                                 .min_bp = state.min_bp,
                                 .args = args,
                             });
-                            try open_syntax.pushMarker(open_allocator, .expr_lambda_body);
+                            try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
                             continue :expr_kernel .prefix;
                         }
-                        try open_syntax.push(open_allocator, .expr_lambda_args, ExprLambdaArgsState, state);
+                        try open_syntax.pushPattern(open_allocator, .expr_lambda_args, ExprLambdaArgsState, state);
                         pattern_root_state = .{
                             .outer_start = self.pos,
                             .scratch_top = self.store.scratchPatternTop(),
@@ -5549,9 +5665,9 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_root_next;
                     },
                     .expr_match_pattern => {
-                        const state = open_syntax.popPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
+                        const state = open_syntax.popPatternPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
                         last_pattern = null;
-                        try open_syntax.push(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
+                        try open_syntax.pushExpr(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
                             .match_start = state.match_start,
                             .min_bp = state.min_bp,
                             .matched = state.matched,
@@ -5560,6 +5676,7 @@ fn runExprStatementKernel(
                             .pattern = completed,
                             .guard = null,
                         });
+                        expr_match_guard_depth += 1;
                         if (self.peek() == .KwIf) {
                             self.advance();
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
@@ -5573,8 +5690,9 @@ fn runExprStatementKernel(
                         } else {
                             try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
                         }
-                        _ = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                        try open_syntax.push(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                        _ = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                        expr_match_guard_depth -= 1;
+                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
                             .match_start = state.match_start,
                             .min_bp = state.min_bp,
                             .matched = state.matched,
@@ -5587,11 +5705,11 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .statement_for_pattern => {
-                        const start = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
+                        const start = open_syntax.popPatternPayload(.statement_for_pattern, Token.Idx);
                         last_pattern = null;
                         if (self.peek() == .KwIn) {
                             self.advance();
-                            try open_syntax.push(open_allocator, .statement_for_expr, StatementForExprState, .{
+                            try open_syntax.pushExpr(open_allocator, .statement_for_expr, StatementForExprState, .{
                                 .start = start,
                                 .patt = completed,
                             });
@@ -5602,11 +5720,11 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .statement_destructure_pattern => {
-                        const start = open_syntax.popPayload(.statement_destructure_pattern, Token.Idx);
+                        const start = open_syntax.popPatternPayload(.statement_destructure_pattern, Token.Idx);
                         last_pattern = null;
                         if (self.peek() == .OpAssign) {
                             self.advance();
-                            try open_syntax.push(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                            try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
                                 .start = start,
                                 .pattern = completed,
                             });
@@ -5617,7 +5735,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .statement_complete;
                     },
                     .pattern_root => {
-                        open_syntax.popMarker(.pattern_root);
+                        open_syntax.popPatternMarker(.pattern_root);
                         const state = pattern_roots.leave();
                         last_pattern = null;
                         if (state.alternatives == .alternatives_forbidden) {
@@ -5644,7 +5762,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_root_next;
                     },
                     .pattern_tag_args => {
-                        pattern_tag_args_state = open_syntax.popPayload(.pattern_tag_args, PatternTagArgsState);
+                        pattern_tag_args_state = open_syntax.popPatternPayload(.pattern_tag_args, PatternTagArgsState);
                         last_pattern = null;
                         try self.store.addScratchPattern(completed);
                         if (self.peek() == .Comma or self.peek() == .CloseRound) {
@@ -5658,7 +5776,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_complete;
                     },
                     .pattern_list => {
-                        pattern_list_state = open_syntax.popPayload(.pattern_list, PatternListState);
+                        pattern_list_state = open_syntax.popPatternPayload(.pattern_list, PatternListState);
                         last_pattern = null;
                         try self.store.addScratchPattern(completed);
                         if (self.peek() == .Comma or self.peek() == .CloseSquare) {
@@ -5672,7 +5790,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_complete;
                     },
                     .pattern_tuple => {
-                        pattern_tuple_state = open_syntax.popPayload(.pattern_tuple, PatternTupleState);
+                        pattern_tuple_state = open_syntax.popPatternPayload(.pattern_tuple, PatternTupleState);
                         last_pattern = null;
                         try self.store.addScratchPattern(completed);
                         if (self.peek() == .Comma or self.peek() == .CloseRound) {
@@ -5686,7 +5804,7 @@ fn runExprStatementKernel(
                         continue :expr_kernel .pattern_complete;
                     },
                     .pattern_record_field => {
-                        const state = open_syntax.popPayload(.pattern_record_field, PatternRecordFieldState);
+                        const state = open_syntax.popPatternPayload(.pattern_record_field, PatternRecordFieldState);
                         last_pattern = null;
                         const field = try self.store.addPatternRecordField(.{
                             .name = state.name,
@@ -5709,7 +5827,6 @@ fn runExprStatementKernel(
                         }
                         continue :expr_kernel .pattern_record_next;
                     },
-                    else => unreachable,
                 }
             }
             unreachable;
@@ -5732,7 +5849,7 @@ fn runExprStatementKernel(
                     last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
                     continue :expr_kernel .pattern_complete;
                 }
-                try open_syntax.push(open_allocator, .pattern_tag_args, PatternTagArgsState, pattern_tag_args_state);
+                try open_syntax.pushPattern(open_allocator, .pattern_tag_args, PatternTagArgsState, pattern_tag_args_state);
                 pattern_root_state = .{
                     .outer_start = self.pos,
                     .scratch_top = self.store.scratchPatternTop(),
@@ -5775,7 +5892,7 @@ fn runExprStatementKernel(
                     last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
                     continue :expr_kernel .pattern_complete;
                 }
-                try open_syntax.push(open_allocator, .pattern_list, PatternListState, pattern_list_state);
+                try open_syntax.pushPattern(open_allocator, .pattern_list, PatternListState, pattern_list_state);
                 pattern_root_state = .{
                     .outer_start = self.pos,
                     .scratch_top = self.store.scratchPatternTop(),
@@ -5849,7 +5966,7 @@ fn runExprStatementKernel(
                     continue :expr_kernel .pattern_complete;
                 }
                 self.advance();
-                try open_syntax.push(open_allocator, .pattern_record_field, PatternRecordFieldState, .{
+                try open_syntax.pushPattern(open_allocator, .pattern_record_field, PatternRecordFieldState, .{
                     .record_start = pattern_record_state.start,
                     .scratch_top = pattern_record_state.scratch_top,
                     .alternatives = pattern_record_state.alternatives,
@@ -5900,7 +6017,7 @@ fn runExprStatementKernel(
                     last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
                     continue :expr_kernel .pattern_complete;
                 }
-                try open_syntax.push(open_allocator, .pattern_tuple, PatternTupleState, pattern_tuple_state);
+                try open_syntax.pushPattern(open_allocator, .pattern_tuple, PatternTupleState, pattern_tuple_state);
                 pattern_root_state = .{
                     .outer_start = self.pos,
                     .scratch_top = self.store.scratchPatternTop(),
