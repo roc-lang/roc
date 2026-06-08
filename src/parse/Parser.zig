@@ -338,7 +338,6 @@ const OpenSyntaxKind = enum(u8) {
     statement_type_associated_block,
     statement_type_associated_statement,
     expr_unary,
-    expr_binary_rhs,
     expr_arrow_inner,
     expr_record,
     expr_record_ext,
@@ -2059,24 +2058,29 @@ const ExprBlockStack = struct {
 };
 
 const ExprBinaryRhsStack = struct {
-    current: ?ExprAfterBinaryRhsState = null,
-    stack: std.ArrayList(ExprAfterBinaryRhsState) = .empty,
+    const Frame = struct {
+        state: ExprAfterBinaryRhsState,
+        open_depth: usize,
+    };
+
+    current: ?Frame = null,
+    stack: std.ArrayList(Frame) = .empty,
 
     fn deinit(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator) void {
         self.stack.deinit(allocator);
     }
 
-    fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState) Error!void {
+    fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
-        self.current = state;
+        self.current = .{ .state = state, .open_depth = open_depth };
     }
 
     fn leave(self: *ExprBinaryRhsStack) ExprAfterBinaryRhsState {
-        const state = self.current orelse unreachable;
+        const frame = self.current orelse unreachable;
         self.current = self.stack.pop();
-        return state;
+        return frame.state;
     }
 };
 
@@ -4343,14 +4347,19 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             .min_bp = expr_finish_state.min_bp,
                             .left = expr_finish_state.expr,
                             .operator = op_pos,
-                        });
-                        try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
+                        }, open_syntax.entries.items.len);
                         expr_state = .{ .start = self.pos, .min_bp = bp.right };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
                     }
                     last_expr = expr_finish_state.expr;
                     const open_depth = open_syntax.entries.items.len;
+                    if (expr_binary_rhs_stack.current) |frame| {
+                        if (frame.open_depth == open_depth) {
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_after_binary_rhs;
+                        }
+                    }
                     if (root_expr_parents.current) |parent_frame| {
                         if (parent_frame.open_depth == open_depth) {
                             dispatch_token = self.peek();
@@ -4418,7 +4427,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             }
                             dispatch_token = self.peek();
                             if (kind == .expr_unary) continue :dispatch .expr_after_unary;
-                            if (kind == .expr_binary_rhs) continue :dispatch .expr_after_binary_rhs;
                             if (kind == .expr_arrow_inner) continue :dispatch .expr_arrow_after_inner;
                             if (kind == .expr_record_ext) continue :dispatch .expr_record_ext_after_expr;
                             if (kind == .expr_record_field) continue :dispatch .expr_record_field_after_value;
@@ -4460,8 +4468,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         .min_bp = expr_finish_state.min_bp,
                         .left = expr_finish_state.expr,
                         .operator = op_pos,
-                    });
-                    try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
+                    }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = bp.right };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -4474,6 +4481,12 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         .expr_complete => {
             const completed = last_expr orelse unreachable;
             const open_depth = open_syntax.entries.items.len;
+            if (expr_binary_rhs_stack.current) |frame| {
+                if (frame.open_depth == open_depth) {
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_after_binary_rhs;
+                }
+            }
             if (root_expr_parents.current) |parent_frame| {
                 if (parent_frame.open_depth == open_depth) {
                     dispatch_token = self.peek();
@@ -4546,7 +4559,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         dispatch_token = self.peek();
                         switch (kind) {
                             .expr_unary => continue :dispatch .expr_after_unary,
-                            .expr_binary_rhs => continue :dispatch .expr_after_binary_rhs,
                             .expr_arrow_inner => continue :dispatch .expr_arrow_after_inner,
                             else => {},
                         }
@@ -4628,7 +4640,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         },
         .expr_after_binary_rhs => switch (dispatch_token) {
             .EndOfFile => {
-                open_syntax.popMarker(.expr_binary_rhs);
                 const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
                 const rhs = last_expr orelse unreachable;
                 last_expr = null;
@@ -4643,7 +4654,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .expr_suffix;
             },
             else => {
-                open_syntax.popMarker(.expr_binary_rhs);
                 const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
                 const rhs = last_expr orelse unreachable;
                 last_expr = null;
