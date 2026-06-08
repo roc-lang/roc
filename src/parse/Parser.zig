@@ -4340,11 +4340,13 @@ fn runExprStatementKernel(
                         type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
                         last_type_anno = null;
                         try self.store.addScratchTypeAnno(completed);
-                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
-                            if (self.peek() == .Comma) {
+                        switch (self.peek()) {
+                            .Comma => {
                                 self.advance();
-                            }
-                            continue :expr_kernel .type_apply_next;
+                                continue :expr_kernel .type_apply_next;
+                            },
+                            .CloseRound => continue :expr_kernel .type_apply_next,
+                            else => {},
                         }
                         self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
                         last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
