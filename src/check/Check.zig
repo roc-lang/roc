@@ -9878,15 +9878,39 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
 
         if (deferred_constraint_index >= max_deferred_dispatch_iterations) {
-            // Runaway: a non-terminating static-dispatch cycle keeps enqueueing
-            // fresh constrained receivers. Report an infinite type and stop,
-            // rather than hang. (See `max_deferred_dispatch_iterations`.)
-            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, deferred_constraint.var_);
-            _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
-                .var_ = deferred_constraint.var_,
-                .snapshot = snapshot,
-                .def_name = null,
-            } });
+            // Runaway: a non-terminating static-dispatch cycle keeps re-deriving
+            // an unsatisfiable `where` constraint on the same type because the
+            // recursion never bottoms out (the element type's method has the
+            // wrong shape). Report the *unsatisfied method* precisely — naming the
+            // dispatcher type and method — rather than a generic infinite type,
+            // then stop. (See `max_deferred_dispatch_iterations`.)
+            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+            const resolved_content = self.types.resolveVar(deferred_constraint.var_).desc.content;
+            const dispatcher_type: ?problem.DispatcherDoesNotImplMethod.DispatcherType =
+                if (resolved_content == .structure and resolved_content.structure == .nominal_type)
+                    .nominal
+                else if (resolved_content == .rigid)
+                    .rigid
+                else
+                    null;
+            if (constraints.len > 0 and dispatcher_type != null) {
+                try self.reportConstraintError(
+                    deferred_constraint.var_,
+                    constraints[0],
+                    .{ .missing_method = dispatcher_type.? },
+                    env,
+                    is_numeric_default_pass,
+                );
+            } else {
+                // Fall back to a generic infinite-type error when we can't name a
+                // dispatcher type (e.g. the receiver is a flex/structural type).
+                const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, deferred_constraint.var_);
+                _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+                    .var_ = deferred_constraint.var_,
+                    .snapshot = snapshot,
+                    .def_name = null,
+                } });
+            }
             try self.unifyWith(deferred_constraint.var_, .err, env);
             break;
         }
