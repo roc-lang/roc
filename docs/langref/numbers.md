@@ -1,31 +1,50 @@
 # Numbers
 
-Roc ships with several numeric types, and you can make new [custom number types](custom) as well.
+Roc ships with several numeric types, on top of which you can make new [custom number types](custom).
 
 ## Number Literals
 
-You always put underscores in your number literals. They have no effect on the number's value, but can make large numbers easier to read. Here's an example of a large negative number literal:
+Roc number literals can consist of any combination of the following:
+* **Number Digits** (0-9; zeros at the very beginning of the number never change the number)
+* **Letter Digits** (a-f, optionally capitalized; these represent the digits 10 through 15 in hexadecimal number literals)
+* **Base Prefix** (`0x` in front of the number means the digits will be treated as hexadecimal, which is base-16 instead of base-10. The other options are `0o` for octal, which is base-8, and `0b`, for binary, which is base-2. If there's no prefix, the digits default to being interpreted as decimal, which is base-10. The letter must be lowercase.)
+* **Scientific Notation Suffix** (if the number is base-10 and ends in `e___`, everything before the `e` will be multiplied by 10 to the power of the number in the `___`. This suffix can't be used if any base prefix is specified.)
+* **A decimal point** (can optionally be combined with scientific notation, but cannot be used if a base prefix is specified because uppercase hexadecimal letters after the decimal point would be ambigious with a [type suffix](type-suffix) such as `.F64`.)
+* **Underscores** (the compiler skips over these; they're just for making long numbers easier to read. They can appear in between any digits, including letter digits, and digits after the decimal point, but each underscore must always have a digit on either side of it.)
+* **Minus sign in front** (for negative numbers, not to be confused with [the unary negate operator](operators#negate) which is an operator that applies to expressions. For example, `-x` applies the unary negate operator to `x`, but `-1` is just an ordinary number literal and no negate operation will be executed. This distinction can matter for [custom number types](custom).)
+
+Here are some examples of valid number literals:
 
 ```roc
+1
+-1
+1.23
+-123.456e789
+0x1abcde42
 -1_000_000.123_456_789
 ```
 
+## Type Suffixes
 
-
-## Number Suffixes
-
-
-```roc
--1_000_000.123_456_789.Dec
-```
+Roc's compiler will infer the type of your number literal based on how it's used. For example:
 
 ```roc
--1_000_000.I64
+List.get(my_list, 3)
 ```
 
-### Defaulting to `Dec`
+Here, the type of `3` will be `U64` based on how it's used here, because [`List.get`](../builtins/List#get) takes a [`List`](../builtins/List) as its first argument and a [`U64`](../builtins/U64) as its second argument. 
 
-It's possible to use number literals in a way where the number never gets inferred to a specific type. For example:
+If you want to specify an explicit type for the number (perhaps for documentation, or maybe because you want an error report if it gets used as any other type), you can add the type you want after a dot at the end. For example, here's how you would specify that the number `-12.34` should be interpreted as a [`Dec`](../builtins/Dec):
+
+```roc
+-12.34.Dec
+```
+
+This not only works with builtin number types, but also with any [custom number type](custom) you might make—the only requirement is that the type name must be in scope (which you can accomplish using [`import`](modules#import) as long as it's accessible to your module).
+
+## Defaulting to `Dec`
+
+In some situations, a number literal never gets inferred to a specific type. For example:
 
 ```roc
 if 2 > 1 {
@@ -33,7 +52,7 @@ if 2 > 1 {
 }
 ```
 
-Here, `2 > 1` must be evaluated in order to tell whether the `if` should be taken, yet it's never used in a way that would associate it with a particular number type. In these cases, Roc will use the builtin [`Dec`](builtins/Dec) number type. So this code will do exactly the same thing as:
+Here, `2 > 1` must be evaluated in order to tell whether the `if` should be taken, yet it's never used in a way that would associate it with any particular number type. In these cases, Roc will use the builtin [`Dec`](builtins/Dec) number type for the literal. So this code will do exactly the same thing as:
 
 ```roc
 if 2.Dec > 1.Dec {
@@ -41,13 +60,13 @@ if 2.Dec > 1.Dec {
 }
 ```
 
-This comes up very rarely in practice, unless you're playing around putting numbers into the REPL. In those situations, `Dec` can be a nice default because it both supports fractions and can give precise answers when doing quick calculations in the repl.
+This almost never comes up in practice, unless you're playing around putting numbers into the REPL. In those situations, `Dec` can be a nice default because it both supports fractions and can give precise answers when doing quick calculations in the repl.
 
 ## Builtin Number Types
 
-All of Roc's builtin number types have a fixed size (which is the same no matter what target you're building for), and they only ever perform heap allocations when converting to heap-allocated types like [Str](builtins/Str).
+All of Roc's builtin number types have a fixed size (and that size never varies by what target you're building for), and they only ever perform heap allocations when converting to heap-allocated types like [Str](builtins/Str).
 
-## Integers
+### Integers
 
 Here are Roc's builtin integer types, along with their ranges and sizes in memory:
 
@@ -97,6 +116,55 @@ general trade-offs are:
 * Certain CPUs work faster on some numeric sizes than others. If the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 
+## Custom Number Types
+
+We already saw how you can use optional [number type suffixes](#type-suffixes) to specify the type of a number literal instead of letting it be inferred. For example:
+
+```
+-12.34.F64
+```
+
+[`F64`](../builtins/F64) is a builtin type, but you can use your own custom number type in the same way. Let's say you made a custom number type called `Ratio` which stores both a numerator and denominator, so it can represent fractions like two-thirds which can't be precisely represented using either decimals or floating-point numbers. You could create a `Ratio` value like this:
+
+```
+-12.34.Ratio
+```
+
+Here's what will happen if you write this:
+
+* Just based on the syntax here, at compile time, Roc will call `Ratio.from_numeral(...)` 
+* It will pass an argument to specify that this is a negative number with the digits `12` before the decimal point and `34` after it.
+* `Ratio.from_numeral` will return a `Try` representing whether the specified digits are a valid `Ratio`. (Some custom number types may have limits on the size of the numbers they store, may or may not support negative numbers, may or may not support digits after the decimal point, etc.)
+  * If `Ratio.from_numeral` returned a [`Try.Ok`](../builtins/Try) tag, then that tag's [payload](tag-unions#payloads) will contain the actual number value that these digits resolved to.
+  * If it returned an `Err`, then (since this is all being evaluated at compile time), the compiler will report an error for this number literal before the program even runs.
+  
+### Inferred Custom Number Types
+
+Just like with builtin number types, you don't have to annotate your number literals to specify that they use your custom number type. Instead, you can let the compiler infer the type based on usage. For example, let's say you have a function named `from_ratio` which takes a `Ratio`. Then you could write:
+
+```
+from_ratio(12.57)
+```
+
+First, the compiler would determine that the argument to `from_ratio` is a `Ratio`, and therefore call `Ratio.from_numeral` specifying that the digits before the decimal point are `12` and the digits after the decimal point are `57`. Assuming that returns `Ok`, the value inside that `Ok` would be what ended up getting passed to `from_ratio`.
+
+From there, everything works the same way as in the previous example with the explicit `.Ratio` suffix. The only difference is that you didn't have to write the word `Ratio` becuase the compiler inferred that was the type, and called its `from_numeral` method.
+
+### Custom Number Types and Operators
+
+- note Ratio and like `3 / 4` and compile time, including if you write `3 / 0` what happens - can either do it in the literal's `Try`, or can just let it execute and then return a `crash`; either way, that will all get executed at compile time.
+
+
+### Creating a `from_numeral` Implementation
+
+
+notes:
+- it converts all other forms to this base-12 representation, so hex/octal/etc. doesn't matter (and neither do underscores ofc).
+- mention the implication that you can make arbitrary-sized nums this way
+- if the List of digits_after_decimal_pt is empty, then you know it didn't have a decimal point
+- if the List of digits_before_decimal_pt is empty, then ___________? should we allow that?
+
+-------------------------------------------------------
 Represents a number that could be either an [Int] or a [Frac].
 
 This is useful for functions that can work on either, for example [Num.add], whose type is:
