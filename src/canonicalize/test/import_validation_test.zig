@@ -201,16 +201,17 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // The imports for decode, JsonError, map, Try, encode, and DecodeProblem should all work
 }
 
-test "import validation - type module associated values are exposed under their bare names" {
+test "import validation - type module associated values are importable via exposing" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
+    const Ident = base.Ident;
 
     // A type module whose associated values should be importable via
-    // `import FooBar exposing [square]`. The exposed set must therefore contain
-    // the bare names `square` and `cube`, not just the qualified `FooBar.square`
-    // forms, because `exposing` validation looks them up by their bare names.
-    const source =
+    // `import FooBar exposing [square]`. Its associated items are exposed under
+    // the qualified `FooBar.square` form (which also powers qualified access),
+    // so the importer must resolve the bare `exposing` name to that form.
+    const foobar_source =
         \\FooBar :: {}.{
         \\    square : U64 -> U64
         \\    square = |x| x * x
@@ -219,34 +220,83 @@ test "import validation - type module associated values are exposed under their 
         \\    cube = |x| x * x * x
         \\}
     ;
-
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const parse_env = try allocator.create(ModuleEnv);
-    parse_env.* = try ModuleEnv.init(allocator, source);
+    const foobar_env = try allocator.create(ModuleEnv);
+    foobar_env.* = try ModuleEnv.init(allocator, foobar_source);
     defer {
-        parse_env.deinit();
-        allocator.destroy(parse_env);
+        foobar_env.deinit();
+        allocator.destroy(foobar_env);
     }
-    const ast = try parse.parse(allocator, &parse_env.common);
-    defer ast.deinit();
-    try parse_env.initCIRFields("FooBar");
+    const foobar_ast = try parse.parse(allocator, &foobar_env.common);
+    defer foobar_ast.deinit();
+    try foobar_env.initCIRFields("FooBar");
 
-    var builtin_ctx = try BuiltinTestContext.init(allocator);
-    defer builtin_ctx.deinit();
+    var foobar_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer foobar_builtin_ctx.deinit();
 
-    var can = try Can.initModule(roc_ctx, parse_env, ast, builtin_ctx.canInitContext());
-    defer can.deinit();
-    try can.canonicalizeFile();
+    var foobar_can = try Can.initModule(roc_ctx, foobar_env, foobar_ast, foobar_builtin_ctx.canInitContext());
+    defer foobar_can.deinit();
+    try foobar_can.canonicalizeFile();
 
-    // `exposing` validation resolves an item by finding its bare ident in the
-    // target module and asking whether that ident is exposed (see Can.zig).
-    const square_ident = parse_env.common.findIdent("square") orelse
-        return error.SquareIdentMissing;
-    try testing.expect(parse_env.containsExposedById(square_ident));
-    const cube_ident = parse_env.common.findIdent("cube") orelse
-        return error.CubeIdentMissing;
-    try testing.expect(parse_env.containsExposedById(cube_ident));
+    // Now canonicalize an importer that uses an exposed associated value.
+    const importer_source =
+        \\module [main]
+        \\
+        \\import FooBar exposing [square]
+        \\
+        \\main = square(12)
+    ;
+    const importer_env = try allocator.create(ModuleEnv);
+    importer_env.* = try ModuleEnv.init(allocator, importer_source);
+    defer {
+        importer_env.deinit();
+        allocator.destroy(importer_env);
+    }
+    const importer_ast = try parse.parse(allocator, &importer_env.common);
+    defer importer_ast.deinit();
+    try importer_env.initCIRFields("Importer");
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    const foobar_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("FooBar"));
+    const foobar_qualified_ident = try foobar_env.common.insertIdent(foobar_env.gpa, Ident.for_text("FooBar"));
+    try module_envs.put(foobar_module_ident, .{ .env = foobar_env, .qualified_type_ident = foobar_qualified_ident });
+
+    var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer importer_builtin_ctx.deinit();
+
+    var importer_can = try Can.initModule(roc_ctx, importer_env, importer_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = importer_builtin_ctx.builtin_module.env,
+            .builtin_indices = importer_builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer importer_can.deinit();
+    try importer_can.canonicalizeFile();
+
+    // The exposed associated value must resolve cleanly: no "value not exposed"
+    // at the import, and no unresolved reference where `square` is used.
+    const diagnostics = try importer_env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .value_not_exposed => |d| {
+                std.debug.print("unexpected VALUE NOT EXPOSED for {s}\n", .{importer_env.getIdent(d.value_name)});
+                return error.UnexpectedValueNotExposed;
+            },
+            .qualified_ident_does_not_exist => |d| {
+                std.debug.print("unexpected unresolved ident {s}\n", .{importer_env.getIdent(d.ident)});
+                return error.UnexpectedUnresolvedIdent;
+            },
+            .ident_not_in_scope => |d| {
+                std.debug.print("unexpected ident not in scope {s}\n", .{importer_env.getIdent(d.ident)});
+                return error.UnexpectedIdentNotInScope;
+            },
+            else => {},
+        }
+    }
 }
 
 test "import validation - no module_envs provided" {

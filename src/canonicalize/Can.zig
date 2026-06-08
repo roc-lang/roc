@@ -5642,13 +5642,11 @@ fn introduceItemsAliased(
             const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
             const item_name_text = self.env.getIdent(exposed_item.name);
 
-            // Check if the item is exposed by the module
-            // We need to look up by string because the identifiers are from different modules
-            // First, try to find this identifier in the target module's ident store
-            const is_exposed = if (module_env.common.findIdent(item_name_text)) |target_ident|
-                module_env.containsExposedById(target_ident)
-            else
-                false;
+            // Check if the item is exposed by the module. The identifiers are
+            // from different modules, so look up by string. A type module's
+            // associated items are exposed under `<MainType>.<item>`, which
+            // lookupImportedExposedNode resolves in addition to the bare name.
+            const is_exposed = (try self.lookupImportedExposedNode(module_env, item_name_text)) != null;
 
             if (!is_exposed) {
                 // Determine if it's a type or value based on capitalization
@@ -5742,44 +5740,13 @@ fn introduceItemsUnaliased(
             const local_ident = exposed_item.alias orelse exposed_item.name;
             const local_name_text = self.env.getIdent(local_ident);
 
-            const target_ident = module_env.common.findIdent(self.env.getIdent(exposed_item.name));
+            const item_name_text = self.env.getIdent(exposed_item.name);
             const is_type_name = local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z';
 
-            if (target_ident) |ident_in_module| {
-                if (!module_env.containsExposedById(ident_in_module)) {
-                    if (is_type_name) {
-                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
-                            .module_name = module_name,
-                            .type_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    } else {
-                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
-                            .module_name = module_name,
-                            .value_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    }
-                    continue;
-                }
-
-                const target_node_idx = module_env.getExposedNodeIndexById(ident_in_module) orelse {
-                    if (is_type_name) {
-                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
-                            .module_name = module_name,
-                            .type_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    } else {
-                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
-                            .module_name = module_name,
-                            .value_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    }
-                    continue;
-                };
-
+            // A type module's associated items are exposed under
+            // `<MainType>.<item>`; lookupImportedExposedNode resolves both that
+            // qualified form and the bare module-style name.
+            if (try self.lookupImportedExposedNode(module_env, item_name_text)) |target_node_idx| {
                 const item_info = Scope.ExposedItemInfo{
                     .module_name = module_name,
                     .original_name = exposed_item.name,
@@ -5802,20 +5769,18 @@ fn introduceItemsUnaliased(
                         .module_was_found,
                     );
                 }
+            } else if (is_type_name) {
+                try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = exposed_item.name,
+                    .region = import_region,
+                } });
             } else {
-                if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
-                    try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = exposed_item.name,
-                        .region = import_region,
-                    } });
-                } else {
-                    try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
-                        .module_name = module_name,
-                        .value_name = exposed_item.name,
-                        .region = import_region,
-                    } });
-                }
+                try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                    .module_name = module_name,
+                    .value_name = exposed_item.name,
+                    .region = import_region,
+                } });
             }
         }
     } else {
@@ -6719,12 +6684,7 @@ pub fn canonicalizeExpr(
                             const field_text = self.env.getIdent(exposed_info.original_name);
                             const target_node_idx_opt: ?u32 = blk: {
                                 if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
-                                    const module_env = auto_imported_type.env;
-                                    if (module_env.common.findIdent(field_text)) |target_ident| {
-                                        break :blk module_env.getExposedNodeIndexById(target_ident);
-                                    } else {
-                                        break :blk null;
-                                    }
+                                    break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
                                 } else {
                                     break :blk null;
                                 }
@@ -9604,22 +9564,27 @@ fn validateImportedNominalTagTarget(
     }
 }
 
-fn lookupImportedExposedTypeNode(
+/// Resolve the exposed-node index for an item exposed by `imported_env`,
+/// handling both module-style exposure (the item is exposed under its bare
+/// name) and type-module associated items (exposed under `<MainType>.<item>`,
+/// since the module's main type name equals its module name). Used for both
+/// exposed types and exposed values.
+fn lookupImportedExposedNode(
     self: *Self,
     imported_env: *const ModuleEnv,
-    type_path_text: []const u8,
+    item_text: []const u8,
 ) std.mem.Allocator.Error!?u32 {
     const module_name_text = imported_env.module_name;
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
-    const module_qualified_text = try self.scratchQualifiedText(module_name_text, type_path_text);
+    const module_qualified_text = try self.scratchQualifiedText(module_name_text, item_text);
     const module_qualified_node_idx = lookupExposedNodeByText(imported_env, module_qualified_text);
 
     if (module_qualified_node_idx) |target_node_idx| {
         return target_node_idx;
     }
 
-    return lookupExposedNodeByText(imported_env, type_path_text);
+    return lookupExposedNodeByText(imported_env, item_text);
 }
 
 fn lookupExposedNodeByText(
@@ -9792,7 +9757,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             };
             const target_node_idx = blk: {
                 const original_name_text = self.env.getIdent(exposed_info.original_name);
-                break :blk (try self.lookupImportedExposedTypeNode(imported_type.env, original_name_text)) orelse {
+                break :blk (try self.lookupImportedExposedNode(imported_type.env, original_name_text)) orelse {
                     // Type is not exposed by the imported module
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
@@ -9851,7 +9816,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
             };
 
             const tag_text = self.env.getIdent(tag_name);
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, tag_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, tag_text)) orelse {
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = tag_name,
@@ -10002,7 +9967,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
 
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedNode(imported_type.env, type_name)) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -10640,7 +10605,7 @@ pub fn canonicalizePattern(
                         } });
                     };
 
-                    const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name)) orelse {
+                    const other_module_node_id = (try self.lookupImportedExposedNode(auto_imported_type.env, type_name)) orelse {
                         return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                             .module_name = module_name,
                             .type_name = type_name_ident,
@@ -11531,7 +11496,7 @@ fn canonicalizeTypeAnnoBasicType(
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
                         // Convert identifier from current module to target module's interner
                         const original_name_text = self.env.getIdent(exposed_info.original_name);
-                        const target_node_idx = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, original_name_text)) orelse {
+                        const target_node_idx = (try self.lookupImportedExposedNode(auto_imported_type.env, original_name_text)) orelse {
                             // Type is not exposed by the imported module
                             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                                 .module_name = exposed_info.module_name,
@@ -11620,7 +11585,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, type_path_text)) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_path_ident,
@@ -11686,7 +11651,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedNode(auto_imported_type.env, type_name_text)) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
