@@ -3660,13 +3660,13 @@ fn runExprStatementKernel(
                         const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
                         expr_match_guard_depth -= 1;
                         last_expr = null;
-                        switch (self.peek()) {
-                            .OpArrow => {
-                                try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                                self.advance();
-                            },
-                            .OpFatArrow => self.advance(),
-                            else => try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos }),
+                        if (self.peek() == .OpArrow) {
+                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                            self.advance();
+                        } else {
+                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
                         }
                         try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
                             .match_start = state.match_start,
