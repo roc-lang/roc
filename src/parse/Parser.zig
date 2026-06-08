@@ -1849,159 +1849,6 @@ const QualificationResult = struct {
     is_upper: bool,
 };
 
-const TypeDeclProgress = struct {
-    start: Token.Idx,
-    header: AST.TypeHeader.Idx,
-    anno: AST.TypeAnno.Idx,
-    kind: AST.TypeDeclKind,
-    where_clause: ?AST.Collection.Idx,
-    type_dependencies: DeclIndex.Span,
-    type_path: ?DeclIndex.TypePathIdx,
-    dot_pos: Token.Idx,
-};
-
-const TypeAnnoStatementProgress = struct {
-    start: Token.Idx,
-    name: Token.Idx,
-    is_var: bool,
-};
-
-const TypeDeclAnnoProgress = struct {
-    start: Token.Idx,
-    header: AST.TypeHeader.Idx,
-    kind: AST.TypeDeclKind,
-    type_path: ?DeclIndex.TypePathIdx,
-    type_dependencies_start: DeclIndex.TypeDependencyMark,
-    was_collecting_type_dependencies: bool,
-};
-
-const FileState = struct {
-    module_scope: DeclIndex.ScopeIdx,
-    scratch_top: u32,
-};
-
-const HeaderRecordFieldState = struct {
-    start: Token.Idx,
-    name: Token.Idx,
-};
-
-const StatementForExprState = struct {
-    start: Token.Idx,
-    patt: AST.Pattern.Idx,
-};
-
-const StatementForBodyState = struct {
-    start: Token.Idx,
-    patt: AST.Pattern.Idx,
-    expr: AST.Expr.Idx,
-};
-
-const StatementWhileBodyState = struct {
-    start: Token.Idx,
-    cond: AST.Expr.Idx,
-};
-
-const StatementVarBodyState = struct {
-    start: Token.Idx,
-    name: Token.Idx,
-};
-
-const StatementDeclBodyState = struct {
-    start: Token.Idx,
-    pattern: AST.Pattern.Idx,
-};
-
-const StatementAssociatedBlockState = struct {
-    start: Token.Idx,
-    scope: DeclIndex.ScopeIdx,
-    scratch_top: u32,
-    pushed_type_path: bool,
-};
-
-const StatementAssociatedStatementState = struct {
-    start: Token.Idx,
-    scope: DeclIndex.ScopeIdx,
-    scratch_top: u32,
-    pushed_type_path: bool,
-    statement_pos: Token.Idx,
-};
-
-const RootExprParent = union(enum) {
-    expr_collection_item,
-    statement_expect: Token.Idx,
-    statement_for_expr: StatementForExprState,
-    statement_for_body: StatementForBodyState,
-    statement_while_cond: Token.Idx,
-    statement_while_body: StatementWhileBodyState,
-    statement_crash: Token.Idx,
-    statement_dbg: Token.Idx,
-    statement_return: Token.Idx,
-    statement_var_body: StatementVarBodyState,
-    statement_decl_body: StatementDeclBodyState,
-    statement_destructure_body: StatementDeclBodyState,
-    statement_final_expr: Token.Idx,
-};
-
-const RootExprParents = struct {
-    const Frame = struct {
-        parent: RootExprParent,
-        open_depth: usize,
-    };
-
-    current: ?Frame = null,
-    stack: std.ArrayList(Frame) = .empty,
-
-    fn deinit(self: *RootExprParents, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn set(self: *RootExprParents, allocator: std.mem.Allocator, parent: RootExprParent, open_depth: usize) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
-        }
-        self.current = .{ .parent = parent, .open_depth = open_depth };
-    }
-
-    inline fn take(self: *RootExprParents) RootExprParent {
-        const current = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return current.parent;
-    }
-};
-
-const StatementParent = enum(u8) {
-    file,
-    expr_block,
-};
-
-const StatementParents = struct {
-    const Frame = struct {
-        parent: StatementParent,
-        open_depth: usize,
-    };
-
-    current: ?Frame = null,
-    stack: std.ArrayList(Frame) = .empty,
-
-    fn deinit(self: *StatementParents, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn set(self: *StatementParents, allocator: std.mem.Allocator, parent: StatementParent, open_depth: usize) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
-        }
-        self.current = .{ .parent = parent, .open_depth = open_depth };
-    }
-
-    inline fn take(self: *StatementParents, open_depth: usize) ?StatementParent {
-        const current = self.current orelse return null;
-        if (current.open_depth != open_depth) return null;
-        self.current = self.stack.pop();
-        return current.parent;
-    }
-};
-
 const ExprBlockStack = struct {
     current: ?ExprBlockState = null,
     stack: std.ArrayList(ExprBlockState) = .empty,
@@ -2157,10 +2004,6 @@ const PatternTupleState = struct {
     scratch_top: u32,
 };
 
-const PatternStringState = struct {
-    start: Token.Idx,
-};
-
 const ExprState = struct {
     start: Token.Idx = 0,
     min_bp: u8 = 0,
@@ -2272,12 +2115,6 @@ const ExprLambdaAfterBodyState = struct {
     args: AST.Pattern.Span,
 };
 
-const ExprLambdaArgsState = struct {
-    start: Token.Idx,
-    min_bp: u8,
-    scratch_top: u32,
-};
-
 const ExprAfterExprState = struct {
     start: Token.Idx,
     min_bp: u8,
@@ -2301,14 +2138,6 @@ const ExprMatchBranchState = struct {
     min_bp: u8,
     matched: AST.Expr.Idx,
     scratch_top: u32,
-};
-
-const ExprMatchBranchAfterPatternState = struct {
-    match_start: Token.Idx,
-    min_bp: u8,
-    matched: AST.Expr.Idx,
-    scratch_top: u32,
-    branch_start: Token.Idx,
 };
 
 const ExprMatchBranchAfterGuardState = struct {
