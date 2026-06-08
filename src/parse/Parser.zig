@@ -250,11 +250,9 @@ const ParserContext = enum(u16) {
     expr_if_after_else,
     expr_match_after_expr,
     expr_match_branch_next,
-    expr_match_branch_after_pattern,
     expr_match_branch_after_guard,
     expr_match_branch_after_body,
     expr_dbg_after_expr,
-    expr_for_after_pattern,
     expr_for_after_list,
     expr_for_after_body,
     expr_block_begin,
@@ -4996,42 +4994,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .pattern_root_next;
             },
         },
-        .expr_match_branch_after_pattern => switch (dispatch_token) {
-            .KwIf => {
-                const expr_match_branch_after_pattern_state = open_syntax.popPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
-                const pattern = last_pattern orelse unreachable;
-                last_pattern = null;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
-                    .match_start = expr_match_branch_after_pattern_state.match_start,
-                    .min_bp = expr_match_branch_after_pattern_state.min_bp,
-                    .matched = expr_match_branch_after_pattern_state.matched,
-                    .scratch_top = expr_match_branch_after_pattern_state.scratch_top,
-                    .branch_start = expr_match_branch_after_pattern_state.branch_start,
-                    .pattern = pattern,
-                    .guard = null,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const expr_match_branch_after_pattern_state = open_syntax.popPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
-                const pattern = last_pattern orelse unreachable;
-                last_pattern = null;
-                try open_syntax.push(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
-                    .match_start = expr_match_branch_after_pattern_state.match_start,
-                    .min_bp = expr_match_branch_after_pattern_state.min_bp,
-                    .matched = expr_match_branch_after_pattern_state.matched,
-                    .scratch_top = expr_match_branch_after_pattern_state.scratch_top,
-                    .branch_start = expr_match_branch_after_pattern_state.branch_start,
-                    .pattern = pattern,
-                    .guard = null,
-                });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_match_branch_after_guard;
-            },
-        },
         .expr_match_branch_after_guard => switch (dispatch_token) {
             .OpFatArrow, .OpArrow => {
                 const expr_match_branch_after_guard_state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
@@ -5141,30 +5103,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     .region = .{ .start = state.start, .end = self.pos },
                     .expr = e,
                 } });
-                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-        },
-        .expr_for_after_pattern => switch (dispatch_token) {
-            .KwIn => {
-                const state = open_syntax.popPayload(.expr_for_pattern, ExprAfterExprState);
-                const pattern = last_pattern orelse unreachable;
-                last_pattern = null;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_for_list, ExprForAfterListState, .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .pattern = pattern,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const state = open_syntax.popPayload(.expr_for_pattern, ExprAfterExprState);
-                const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
-                last_pattern = null;
                 expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_suffix;
@@ -5412,13 +5350,50 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                             last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
                             continue :dispatch .statement_complete;
                         },
-                        .expr_match_pattern => continue :dispatch .expr_match_branch_after_pattern,
+                        .expr_match_pattern => {
+                            const state = open_syntax.popPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
+                            last_pattern = null;
+                            try open_syntax.push(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
+                                .match_start = state.match_start,
+                                .min_bp = state.min_bp,
+                                .matched = state.matched,
+                                .scratch_top = state.scratch_top,
+                                .branch_start = state.branch_start,
+                                .pattern = completed,
+                                .guard = null,
+                            });
+                            if (self.peek() == .KwIf) {
+                                self.advance();
+                                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_prefix;
+                            }
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_match_branch_after_guard;
+                        },
                         else => {},
                     }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
                     dispatch_token = self.peek();
                     switch (kind) {
-                        .expr_for_pattern => continue :dispatch .expr_for_after_pattern,
+                        .expr_for_pattern => {
+                            const state = open_syntax.popPayload(.expr_for_pattern, ExprAfterExprState);
+                            last_pattern = null;
+                            if (self.peek() == .KwIn) {
+                                self.advance();
+                                try open_syntax.push(open_allocator, .expr_for_list, ExprForAfterListState, .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .pattern = completed,
+                                });
+                                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_prefix;
+                            }
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            continue :dispatch .expr_suffix;
+                        },
                         .expr_lambda_args => continue :dispatch .expr_lambda_after_args,
                         else => {},
                     }
