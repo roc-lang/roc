@@ -396,7 +396,7 @@ const OpenSyntaxStack = struct {
         self.payloads.deinit(allocator);
     }
 
-    fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
         const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
         const end = start + @sizeOf(Payload);
         try self.payloads.resize(allocator, end);
@@ -404,27 +404,27 @@ const OpenSyntaxStack = struct {
         try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(start) });
     }
 
-    fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
+    inline fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
         try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
     }
 
-    fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
+    inline fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
         if (self.entries.items.len == 0) return null;
         return self.entries.items[self.entries.items.len - 1].kind;
     }
 
-    fn depth(self: *const OpenSyntaxStack) usize {
+    inline fn depth(self: *const OpenSyntaxStack) usize {
         return self.entries.items.len;
     }
 
-    fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
+    inline fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
         for (self.entries.items) |entry| {
             if (entry.kind == kind) return true;
         }
         return false;
     }
 
-    fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
+    inline fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
         const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
         const start: usize = @intCast(entry.payload_start);
@@ -435,7 +435,7 @@ const OpenSyntaxStack = struct {
         return payload;
     }
 
-    fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
+    inline fn popMarker(self: *OpenSyntaxStack, expected: OpenSyntaxKind) void {
         const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
         self.payloads.shrinkRetainingCapacity(@intCast(entry.payload_start));
@@ -2583,6 +2583,8 @@ const DirectEntry = struct {
 };
 
 fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
+    comptime @setEvalBranchQuota(10_000);
+
     const trace = tracy.trace(@src());
     defer trace.end();
 
