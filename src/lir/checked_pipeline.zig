@@ -38,6 +38,7 @@ pub const RootRequestSet = struct {
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
+    inline_mode: InlineMode = .none,
 };
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -50,6 +51,7 @@ pub const RuntimeRecordFieldSchema = postcheck.SolvedLirLower.RuntimeRecordField
 pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
+pub const InlineMode = postcheck.SolvedLirLower.InlineMode;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -201,7 +203,9 @@ pub fn lowerCheckedModulesToLir(
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
 
-    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved);
+    var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
+        .inline_mode = target.inline_mode,
+    });
     solved_owned = false;
     solved = undefined;
     errdefer lowered.deinit();
