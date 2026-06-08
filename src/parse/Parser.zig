@@ -4325,7 +4325,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                 }
                 if (isInBinOpTokenRange(tok)) {
-                    const bp = getTokenBP(tok) orelse {
+                    const bp = getTokenBPInRange(tok) orelse {
                         last_expr = expr_finish_state.expr;
                         dispatch_token = self.peek();
                         continue :dispatch .expr_complete;
@@ -7544,27 +7544,71 @@ inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
 }
 
 /// Get the binding power for a Token if it's a operator token, else return null.
-fn getTokenBP(tok: Token.Tag) ?BinOpBp {
-    return switch (tok) {
-        .OpStar => .{ .left = 30, .right = 31 }, // 31 LEFT
-        .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
-        .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
-        .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
-        .OpPlus => .{ .left = 20, .right = 21 }, // 21 LEFT
-        .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
-        .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
-        .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT
-        .OpEquals => .{ .left = 15, .right = 15 }, // 15 NOASSOC
-        .OpNotEquals => .{ .left = 13, .right = 13 }, // 13 NOASSOC
-        .OpLessThan => .{ .left = 11, .right = 11 }, // 11 NOASSOC
-        .OpGreaterThan => .{ .left = 9, .right = 9 }, // 9 NOASSOC
-        .OpLessThanOrEq => .{ .left = 7, .right = 7 }, // 7 NOASSOC
-        .OpGreaterThanOrEq => .{ .left = 5, .right = 5 }, // 5 NOASSOC
-        .OpAnd => .{ .left = 4, .right = 3 }, // 3 RIGHT
-        .OpOr => .{ .left = 2, .right = 1 }, // 1 RIGHT
-        else => null,
-    };
+inline fn getTokenBP(tok: Token.Tag) ?BinOpBp {
+    if (!isInBinOpTokenRange(tok)) return null;
+    return getTokenBPInRange(tok);
 }
+
+inline fn getTokenBPInRange(tok: Token.Tag) ?BinOpBp {
+    const index = @intFromEnum(tok) - @intFromEnum(Token.Tag.OpPlus);
+    const left = bin_op_bp_left[index];
+    if (left == 0) return null;
+    return .{ .left = left, .right = bin_op_bp_right[index] };
+}
+
+const bin_op_bp_left = [_]u8{
+    20, // OpPlus
+    30, // OpStar
+    0, // OpPizza
+    0, // OpAssign
+    20, // OpBinaryMinus
+    0, // OpUnaryMinus
+    13, // OpNotEquals
+    0, // OpBang
+    4, // OpAnd
+    0, // OpAmpersand
+    16, // OpQuestion
+    18, // OpDoubleQuestion
+    2, // OpOr
+    0, // OpBar
+    26, // OpDoubleSlash
+    28, // OpSlash
+    24, // OpPercent
+    0, // OpCaret
+    5, // OpGreaterThanOrEq
+    9, // OpGreaterThan
+    7, // OpLessThanOrEq
+    0, // OpBackArrow
+    11, // OpLessThan
+    15, // OpEquals
+};
+
+const bin_op_bp_right = [_]u8{
+    21, // OpPlus
+    31, // OpStar
+    0, // OpPizza
+    0, // OpAssign
+    21, // OpBinaryMinus
+    0, // OpUnaryMinus
+    13, // OpNotEquals
+    0, // OpBang
+    3, // OpAnd
+    0, // OpAmpersand
+    17, // OpQuestion
+    19, // OpDoubleQuestion
+    1, // OpOr
+    0, // OpBar
+    27, // OpDoubleSlash
+    29, // OpSlash
+    25, // OpPercent
+    0, // OpCaret
+    5, // OpGreaterThanOrEq
+    9, // OpGreaterThan
+    7, // OpLessThanOrEq
+    0, // OpBackArrow
+    11, // OpLessThan
+    15, // OpEquals
+};
 
 comptime {
     for (@typeInfo(Token.Tag).@"enum".fields) |field| {
