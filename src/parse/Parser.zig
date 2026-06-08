@@ -4238,7 +4238,7 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                         continue :dispatch .expr_suffix;
                     }
                 }
-            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
                 if (tok == .NoSpaceOpenRound) {
                     self.advance();
                     try expr_collections.enter(open_allocator, .{
@@ -4256,6 +4256,36 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     dispatch_token = self.peek();
                     continue :dispatch .expr_collection_next;
                 }
+            } else if (tok_int <= @intFromEnum(Token.Tag.OpEquals)) {
+                const bp = getTokenBPInRange(tok);
+                if (bp.left == 0) {
+                    last_expr = expr_finish_state.expr;
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_complete;
+                }
+                if ((tok == .OpAnd or tok == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
+                    last_expr = expr_finish_state.expr;
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_complete;
+                }
+                if (bp.left >= expr_finish_state.min_bp) {
+                    const op_pos = self.pos;
+                    self.advance();
+                    try expr_binary_rhs_stack.enter(open_allocator, .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .left = expr_finish_state.expr,
+                        .operator = op_pos,
+                    });
+                    try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
+                    expr_state = .{ .start = self.pos, .min_bp = bp.right };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_prefix;
+                }
+                last_expr = expr_finish_state.expr;
+                dispatch_token = self.peek();
+                continue :dispatch .expr_complete;
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
                 if (tok == .NoSpaceOpQuestion) {
                     self.advance();
                     expr_finish_state.expr = try self.store.addExpr(.{ .suffix_single_question = .{
@@ -4321,36 +4351,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                         dispatch_token = self.peek();
                         continue :dispatch .expr_suffix;
                     }
-                }
-                if (isInBinOpTokenRange(tok)) {
-                    const bp = getTokenBPInRange(tok);
-                    if (bp.left == 0) {
-                        last_expr = expr_finish_state.expr;
-                        dispatch_token = self.peek();
-                        continue :dispatch .expr_complete;
-                    }
-                    if ((tok == .OpAnd or tok == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
-                        last_expr = expr_finish_state.expr;
-                        dispatch_token = self.peek();
-                        continue :dispatch .expr_complete;
-                    }
-                    if (bp.left >= expr_finish_state.min_bp) {
-                        const op_pos = self.pos;
-                        self.advance();
-                        try expr_binary_rhs_stack.enter(open_allocator, .{
-                            .start = expr_finish_state.start,
-                            .min_bp = expr_finish_state.min_bp,
-                            .left = expr_finish_state.expr,
-                            .operator = op_pos,
-                        });
-                        try open_syntax.pushMarker(open_allocator, .expr_binary_rhs);
-                        expr_state = .{ .start = self.pos, .min_bp = bp.right };
-                        dispatch_token = self.peek();
-                        continue :dispatch .expr_prefix;
-                    }
-                    last_expr = expr_finish_state.expr;
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_complete;
                 }
             }
 
