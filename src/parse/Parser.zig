@@ -1997,7 +1997,7 @@ const RootExprParents = struct {
         self.current = .{ .parent = parent, .open_depth = open_depth };
     }
 
-    inline fn take(self: *RootExprParents) RootExprParent {
+    fn take(self: *RootExprParents) RootExprParent {
         const current = self.current orelse unreachable;
         self.current = self.stack.pop();
         return current.parent;
@@ -2024,7 +2024,7 @@ const RootStatementParents = struct {
         self.current = .{ .parent = parent, .open_depth = open_depth };
     }
 
-    inline fn take(self: *RootStatementParents, open_depth: usize) ?DirectContext {
+    fn take(self: *RootStatementParents, open_depth: usize) ?DirectContext {
         const current = self.current orelse return null;
         if (current.open_depth != open_depth) return null;
         self.current = self.stack.pop();
@@ -2040,18 +2040,18 @@ const ExprBlockStack = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn enter(self: *ExprBlockStack, allocator: std.mem.Allocator, state: ExprBlockState) Error!void {
+    fn enter(self: *ExprBlockStack, allocator: std.mem.Allocator, state: ExprBlockState) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
         self.current = state;
     }
 
-    inline fn active(self: *ExprBlockStack) *ExprBlockState {
+    fn active(self: *ExprBlockStack) *ExprBlockState {
         return &self.current.?;
     }
 
-    inline fn leave(self: *ExprBlockStack) ExprBlockState {
+    fn leave(self: *ExprBlockStack) ExprBlockState {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
@@ -2073,7 +2073,7 @@ const ExprBinaryRhsStack = struct {
         self.current = state;
     }
 
-    inline fn leave(self: *ExprBinaryRhsStack) ExprAfterBinaryRhsState {
+    fn leave(self: *ExprBinaryRhsStack) ExprAfterBinaryRhsState {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
@@ -2088,14 +2088,14 @@ const ExprLambdaBodyStack = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn enter(self: *ExprLambdaBodyStack, allocator: std.mem.Allocator, state: ExprLambdaAfterBodyState) Error!void {
+    fn enter(self: *ExprLambdaBodyStack, allocator: std.mem.Allocator, state: ExprLambdaAfterBodyState) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
         self.current = state;
     }
 
-    inline fn leave(self: *ExprLambdaBodyStack) ExprLambdaAfterBodyState {
+    fn leave(self: *ExprLambdaBodyStack) ExprLambdaAfterBodyState {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
@@ -2110,14 +2110,14 @@ const PatternRootStack = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn enter(self: *PatternRootStack, allocator: std.mem.Allocator, state: PatternRootState) Error!void {
+    fn enter(self: *PatternRootStack, allocator: std.mem.Allocator, state: PatternRootState) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
         self.current = state;
     }
 
-    inline fn leave(self: *PatternRootStack) PatternRootState {
+    fn leave(self: *PatternRootStack) PatternRootState {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
@@ -2139,11 +2139,11 @@ const ExprCollectionStack = struct {
         self.current = state;
     }
 
-    inline fn active(self: *ExprCollectionStack) *ExprCollectionState {
+    fn active(self: *ExprCollectionStack) *ExprCollectionState {
         return &self.current.?;
     }
 
-    inline fn leave(self: *ExprCollectionStack) ExprCollectionState {
+    fn leave(self: *ExprCollectionStack) ExprCollectionState {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
