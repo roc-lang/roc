@@ -38,6 +38,7 @@ scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
+expr_kernel_scratch: ExprKernelScratch,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
@@ -62,6 +63,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .scratch_nodes = .empty,
         .diagnostics = .empty,
         .cached_malformed_node = null,
+        .expr_kernel_scratch = .{},
     };
 }
 
@@ -71,6 +73,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
+    parser.expr_kernel_scratch.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -1845,6 +1848,15 @@ const ExprBlockStack = struct {
         self.current = self.stack.pop();
         return state;
     }
+
+    fn clearRetainingCapacity(self: *ExprBlockStack) void {
+        self.current = null;
+        self.stack.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ExprBlockStack) bool {
+        return self.current == null and self.stack.items.len == 0;
+    }
 };
 
 const ExprBinaryRhsStack = struct {
@@ -1866,6 +1878,15 @@ const ExprBinaryRhsStack = struct {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
+    }
+
+    fn clearRetainingCapacity(self: *ExprBinaryRhsStack) void {
+        self.current = null;
+        self.stack.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ExprBinaryRhsStack) bool {
+        return self.current == null and self.stack.items.len == 0;
     }
 };
 
@@ -1889,6 +1910,15 @@ const ExprLambdaBodyStack = struct {
         self.current = self.stack.pop();
         return state;
     }
+
+    fn clearRetainingCapacity(self: *ExprLambdaBodyStack) void {
+        self.current = null;
+        self.stack.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ExprLambdaBodyStack) bool {
+        return self.current == null and self.stack.items.len == 0;
+    }
 };
 
 const PatternRootStack = struct {
@@ -1910,6 +1940,15 @@ const PatternRootStack = struct {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
+    }
+
+    fn clearRetainingCapacity(self: *PatternRootStack) void {
+        self.current = null;
+        self.stack.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const PatternRootStack) bool {
+        return self.current == null and self.stack.items.len == 0;
     }
 };
 
@@ -1937,6 +1976,15 @@ const ExprCollectionStack = struct {
         self.current = self.stack.pop();
         return state;
     }
+
+    fn clearRetainingCapacity(self: *ExprCollectionStack) void {
+        self.current = null;
+        self.stack.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ExprCollectionStack) bool {
+        return self.current == null and self.stack.items.len == 0;
+    }
 };
 
 const StatementAssociatedBlockStack = struct {
@@ -1962,6 +2010,15 @@ const StatementAssociatedBlockStack = struct {
         const state = self.current orelse unreachable;
         self.current = self.stack.pop();
         return state;
+    }
+
+    fn clearRetainingCapacity(self: *StatementAssociatedBlockStack) void {
+        self.current = null;
+        self.stack.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const StatementAssociatedBlockStack) bool {
+        return self.current == null and self.stack.items.len == 0;
     }
 };
 
@@ -2369,6 +2426,108 @@ const ExprOpenSyntaxStack = struct {
     inline fn popMarker(self: *ExprOpenSyntaxStack, expected: OpenSyntaxKind) void {
         const kind = self.kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
+    }
+
+    fn clearRetainingCapacity(self: *ExprOpenSyntaxStack) void {
+        self.kinds.clearRetainingCapacity();
+        self.expr_after_unary.clearRetainingCapacity();
+        self.expr_arrow_after_inner.clearRetainingCapacity();
+        self.expr_string.clearRetainingCapacity();
+        self.expr_record_ext.clearRetainingCapacity();
+        self.expr_record_field.clearRetainingCapacity();
+        self.expr_after_expr.clearRetainingCapacity();
+        self.expr_if_after_then.clearRetainingCapacity();
+        self.expr_if_after_else.clearRetainingCapacity();
+        self.expr_match_after_pattern.clearRetainingCapacity();
+        self.expr_match_after_guard.clearRetainingCapacity();
+        self.expr_match_after_body.clearRetainingCapacity();
+        self.expr_for_after_list.clearRetainingCapacity();
+        self.expr_for_after_body.clearRetainingCapacity();
+        self.expr_lambda_args.clearRetainingCapacity();
+        self.statement_token.clearRetainingCapacity();
+        self.statement_decl_body.clearRetainingCapacity();
+        self.statement_var_body.clearRetainingCapacity();
+        self.statement_for_expr.clearRetainingCapacity();
+        self.statement_for_body.clearRetainingCapacity();
+        self.statement_while_body.clearRetainingCapacity();
+        self.statement_type_decl_associated.clearRetainingCapacity();
+        self.statement_type_associated_statement.clearRetainingCapacity();
+        self.pattern_string.clearRetainingCapacity();
+        self.pattern_tag_args.clearRetainingCapacity();
+        self.pattern_list.clearRetainingCapacity();
+        self.pattern_tuple.clearRetainingCapacity();
+        self.pattern_record_field.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ExprOpenSyntaxStack) bool {
+        return self.kinds.items.len == 0 and
+            self.expr_after_unary.items.len == 0 and
+            self.expr_arrow_after_inner.items.len == 0 and
+            self.expr_string.items.len == 0 and
+            self.expr_record_ext.items.len == 0 and
+            self.expr_record_field.items.len == 0 and
+            self.expr_after_expr.items.len == 0 and
+            self.expr_if_after_then.items.len == 0 and
+            self.expr_if_after_else.items.len == 0 and
+            self.expr_match_after_pattern.items.len == 0 and
+            self.expr_match_after_guard.items.len == 0 and
+            self.expr_match_after_body.items.len == 0 and
+            self.expr_for_after_list.items.len == 0 and
+            self.expr_for_after_body.items.len == 0 and
+            self.expr_lambda_args.items.len == 0 and
+            self.statement_token.items.len == 0 and
+            self.statement_decl_body.items.len == 0 and
+            self.statement_var_body.items.len == 0 and
+            self.statement_for_expr.items.len == 0 and
+            self.statement_for_body.items.len == 0 and
+            self.statement_while_body.items.len == 0 and
+            self.statement_type_decl_associated.items.len == 0 and
+            self.statement_type_associated_statement.items.len == 0 and
+            self.pattern_string.items.len == 0 and
+            self.pattern_tag_args.items.len == 0 and
+            self.pattern_list.items.len == 0 and
+            self.pattern_tuple.items.len == 0 and
+            self.pattern_record_field.items.len == 0;
+    }
+};
+
+const ExprKernelScratch = struct {
+    open_syntax: ExprOpenSyntaxStack = .{},
+    collections: ExprCollectionStack = .{},
+    binary_rhs: ExprBinaryRhsStack = .{},
+    lambda_body: ExprLambdaBodyStack = .{},
+    blocks: ExprBlockStack = .{},
+    pattern_roots: PatternRootStack = .{},
+    associated_blocks: StatementAssociatedBlockStack = .{},
+
+    fn deinit(self: *ExprKernelScratch, allocator: std.mem.Allocator) void {
+        self.open_syntax.deinit(allocator);
+        self.collections.deinit(allocator);
+        self.binary_rhs.deinit(allocator);
+        self.lambda_body.deinit(allocator);
+        self.blocks.deinit(allocator);
+        self.pattern_roots.deinit(allocator);
+        self.associated_blocks.deinit(allocator);
+    }
+
+    fn clearRetainingCapacity(self: *ExprKernelScratch) void {
+        self.open_syntax.clearRetainingCapacity();
+        self.collections.clearRetainingCapacity();
+        self.binary_rhs.clearRetainingCapacity();
+        self.lambda_body.clearRetainingCapacity();
+        self.blocks.clearRetainingCapacity();
+        self.pattern_roots.clearRetainingCapacity();
+        self.associated_blocks.clearRetainingCapacity();
+    }
+
+    fn isEmpty(self: *const ExprKernelScratch) bool {
+        return self.open_syntax.isEmpty() and
+            self.collections.isEmpty() and
+            self.binary_rhs.isEmpty() and
+            self.lambda_body.isEmpty() and
+            self.blocks.isEmpty() and
+            self.pattern_roots.isEmpty() and
+            self.associated_blocks.isEmpty();
     }
 };
 
@@ -3500,10 +3659,11 @@ fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
 }
 
 fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
-    var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
-    const open_allocator = open_allocator_state.get();
-    var open_syntax: ExprOpenSyntaxStack = .{};
-    defer open_syntax.deinit(open_allocator);
+    const open_allocator = self.gpa;
+    const expr_scratch = &self.expr_kernel_scratch;
+    std.debug.assert(expr_scratch.isEmpty());
+    defer expr_scratch.clearRetainingCapacity();
+    const open_syntax = &expr_scratch.open_syntax;
 
     const ExprLabel = enum {
         prefix,
@@ -3535,26 +3695,21 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
 
     var expr_state = ExprState{ .start = self.pos, .min_bp = min_bp };
     var expr_finish_state: ExprFinishState = undefined;
-    var expr_collections: ExprCollectionStack = .{};
-    defer expr_collections.deinit(open_allocator);
-    var expr_binary_rhs_stack: ExprBinaryRhsStack = .{};
-    defer expr_binary_rhs_stack.deinit(open_allocator);
+    const expr_collections = &expr_scratch.collections;
+    const expr_binary_rhs_stack = &expr_scratch.binary_rhs;
     var expr_arrow_app_state: ExprArrowAppState = undefined;
     var expr_string_state: ExprStringState = undefined;
     var expr_record_state: ExprRecordState = undefined;
-    var expr_lambda_body_stack: ExprLambdaBodyStack = .{};
-    defer expr_lambda_body_stack.deinit(open_allocator);
+    const expr_lambda_body_stack = &expr_scratch.lambda_body;
     var expr_match_branch_state: ExprMatchBranchState = undefined;
-    var expr_blocks: ExprBlockStack = .{};
-    defer expr_blocks.deinit(open_allocator);
+    const expr_blocks = &expr_scratch.blocks;
     var last_expr: ?AST.Expr.Idx = null;
     var pattern_root_state = PatternRootState{
         .outer_start = self.pos,
         .scratch_top = self.store.scratchPatternTop(),
         .alternatives = .alternatives_forbidden,
     };
-    var pattern_roots: PatternRootStack = .{};
-    defer pattern_roots.deinit(open_allocator);
+    const pattern_roots = &expr_scratch.pattern_roots;
     var pattern_tag_args_state: PatternTagArgsState = undefined;
     var pattern_list_state: PatternListState = undefined;
     var pattern_record_state: PatternRecordState = undefined;
@@ -3564,8 +3719,7 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = StatementType.in_body;
     var last_statement: ?AST.Statement.Idx = null;
-    var associated_blocks: StatementAssociatedBlockStack = .{};
-    defer associated_blocks.deinit(open_allocator);
+    const associated_blocks = &expr_scratch.associated_blocks;
 
     expr_kernel: switch (ExprLabel.prefix) {
         .prefix => {
