@@ -2531,9 +2531,592 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
 }
 
 fn runTypeAnnoDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
-    _ = self;
-    _ = looking_for_args;
-    @panic("direct type annotation parser kernel is being rewritten");
+    var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
+    const open_allocator = open_allocator_state.get();
+    var open_syntax: OpenSyntaxStack = .{};
+    defer open_syntax.deinit(open_allocator);
+
+    const type_path_stack_top = self.type_path_stack.items.len;
+    const type_path_stack_visible_start = self.type_path_stack_visible_start;
+    const collect_type_dependencies_start = self.collect_type_dependencies;
+    errdefer self.type_path_stack.shrinkRetainingCapacity(type_path_stack_top);
+    errdefer self.type_path_stack_visible_start = type_path_stack_visible_start;
+    errdefer self.collect_type_dependencies = collect_type_dependencies_start;
+
+    const TypeLabel = enum {
+        prefix,
+        after_primary,
+        complete,
+        apply_next,
+        paren_next,
+        record_next,
+        record_finish,
+        tag_union_next,
+        tag_union_finish,
+        fn_args_next,
+    };
+
+    var type_args = looking_for_args;
+    var type_after_primary_state: TypeAfterPrimaryState = undefined;
+    var type_apply_state: TypeApplyState = undefined;
+    var type_paren_state: TypeParenState = undefined;
+    var type_record_state: TypeRecordState = undefined;
+    var type_tag_union_state: TypeTagUnionState = undefined;
+    var type_fn_args_state: TypeFnArgsState = undefined;
+    var last_type_anno: ?AST.TypeAnno.Idx = null;
+
+    type_kernel: switch (TypeLabel.prefix) {
+        .prefix => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent or tok == .LowerIdent) {
+                    const start = self.pos;
+                    const first_token_tag = self.peek();
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+
+                    const base_anno = if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0)
+                        try self.store.addTypeAnno(.{ .ty_var = .{
+                            .tok = qual_result.final_token,
+                            .region = .{ .start = qual_result.final_token, .end = self.pos },
+                        } })
+                    else blk: {
+                        const anno = try self.store.addTypeAnno(.{ .ty = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                        if (self.collect_type_dependencies and qual_result.is_upper) {
+                            try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+                        }
+                        break :blk anno;
+                    };
+
+                    const can_apply = !(first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0);
+                    if (can_apply and self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        const scratch_top = self.store.scratchTypeAnnoTop();
+                        try self.store.addScratchTypeAnno(base_anno);
+                        type_apply_state = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = type_args };
+                        continue :type_kernel .apply_next;
+                    }
+                    last_type_anno = base_anno;
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    continue :type_kernel .after_primary;
+                }
+                if (tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    last_type_anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
+                        .tok = self.pos,
+                        .region = .{ .start = start, .end = self.pos + 1 },
+                    } });
+                    self.advance();
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    continue :type_kernel .after_primary;
+                }
+                if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    type_paren_state = .{
+                        .start = start,
+                        .after_round = self.pos,
+                        .scratch_top = self.store.scratchTypeAnnoTop(),
+                        .saw_comma = false,
+                        .expect_close = false,
+                        .looking_for_args = type_args,
+                    };
+                    continue :type_kernel .paren_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+                    type_record_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchAnnoRecordFieldTop(),
+                        .ext = .closed,
+                        .looking_for_args = type_args,
+                    };
+                    continue :type_kernel .record_next;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    type_tag_union_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchTypeAnnoTop(),
+                        .ext = .closed,
+                        .looking_for_args = type_args,
+                    };
+                    continue :type_kernel .tag_union_next;
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    last_type_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    self.advance();
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    continue :type_kernel .after_primary;
+                }
+            }
+
+            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
+            continue :type_kernel .complete;
+        },
+        .after_primary => {
+            const an = last_type_anno orelse {
+                last_type_anno = try self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = type_after_primary_state.start, .end = self.pos });
+                continue :type_kernel .complete;
+            };
+
+            const curr = self.peek();
+            const next_tok = self.peekNext();
+            const two_away_tok = self.peekN(2);
+            const three_away_tok = self.peekN(3);
+            const curr_is_arrow = curr == .OpArrow or curr == .OpFatArrow;
+            const next_is_not_lower_ident = next_tok != .LowerIdent;
+            const not_followed_by_colon = two_away_tok != .OpColon;
+            const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
+            const next_starts_where_clause = next_tok == .LowerIdent and
+                (two_away_tok == .NoSpaceDotLowerIdent or two_away_tok == .DotLowerIdent or
+                    two_away_tok == .NoSpaceDotUpperIdent or two_away_tok == .DotUpperIdent) and
+                three_away_tok == .OpColon;
+            const can_parse_arrow = type_after_primary_state.looking_for_args != .looking_for_args and curr_is_arrow;
+            const can_parse_comma_args = type_after_primary_state.looking_for_args == .not_looking_for_args and
+                curr == .Comma and
+                (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and
+                !next_starts_where_clause and
+                next_tok != .CloseCurly and
+                next_tok != .DoubleDot and
+                next_tok != .CloseSquare;
+
+            if (can_parse_arrow or can_parse_comma_args) {
+                const scratch_top = self.store.scratchTypeAnnoTop();
+                try self.store.addScratchTypeAnno(an);
+                last_type_anno = null;
+                type_fn_args_state = .{ .start = type_after_primary_state.start, .scratch_top = scratch_top };
+                continue :type_kernel .fn_args_next;
+            }
+
+            last_type_anno = an;
+            continue :type_kernel .complete;
+        },
+        .complete => {
+            const completed = last_type_anno orelse unreachable;
+            if (open_syntax.peekKind()) |kind| {
+                switch (kind) {
+                    .type_apply => {
+                        type_apply_state = open_syntax.popPayload(.type_apply, TypeApplyState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :type_kernel .apply_next;
+                        }
+                        self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                        last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
+                        continue :type_kernel .complete;
+                    },
+                    .type_paren_item => {
+                        const state = open_syntax.popPayload(.type_paren_item, TypeParenAfterItemState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        type_paren_state = .{
+                            .start = state.start,
+                            .after_round = state.after_round,
+                            .scratch_top = state.scratch_top,
+                            .saw_comma = state.saw_comma or self.peek() == .Comma,
+                            .expect_close = self.peek() != .Comma,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            type_paren_state.expect_close = false;
+                        }
+                        continue :type_kernel .paren_next;
+                    },
+                    .type_paren_fn_ret => {
+                        const state = open_syntax.popPayload(.type_paren_fn_ret, TypeParenFnRetState);
+                        last_type_anno = null;
+                        if (self.peek() != .CloseRound) {
+                            self.store.clearScratchTypeAnnosFrom(state.scratch_top);
+                            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
+                            continue :type_kernel .complete;
+                        }
+                        const function = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                            .region = .{ .start = state.after_round, .end = self.pos },
+                        } });
+                        self.advance();
+                        last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
+                            .anno = function,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                        continue :type_kernel .after_primary;
+                    },
+                    .type_zero_arg_fn_ret => {
+                        const state = open_syntax.popPayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
+                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                            .region = .{ .start = state.after_round, .end = self.pos },
+                        } });
+                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                        continue :type_kernel .after_primary;
+                    },
+                    .type_record_ext => {
+                        const state = open_syntax.popPayload(.type_record_ext, TypeRecordExtState);
+                        last_type_anno = null;
+                        const anno_region = self.store.typeAnnoRegion(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        } else if (self.peek() != .CloseCurly) {
+                            self.expect(.Comma) catch {};
+                        }
+                        type_record_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        continue :type_kernel .record_finish;
+                    },
+                    .type_record_field => {
+                        const state = open_syntax.popPayload(.type_record_field, TypeRecordFieldState);
+                        last_type_anno = null;
+                        const field = try self.store.addAnnoRecordField(.{
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                            .name = state.name,
+                            .ty = completed,
+                        });
+                        try self.store.addScratchAnnoRecordField(field);
+                        type_record_state = .{
+                            .start = state.record_start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :type_kernel .record_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :type_kernel .record_finish;
+                        }
+                        continue :type_kernel .record_next;
+                    },
+                    .type_tag_union_ext => {
+                        const state = open_syntax.popPayload(.type_tag_union_ext, TypeTagUnionExtState);
+                        last_type_anno = null;
+                        const anno_region = self.store.typeAnnoRegion(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        } else if (self.peek() != .CloseSquare) {
+                            self.expect(.Comma) catch {};
+                        }
+                        type_tag_union_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        continue :type_kernel .tag_union_finish;
+                    },
+                    .type_tag_union_item => {
+                        const state = open_syntax.popPayload(.type_tag_union_item, TypeTagUnionItemState);
+                        last_type_anno = null;
+                        self.collect_type_dependencies = state.was_collecting;
+                        if (state.was_collecting) {
+                            try self.recordTypeDependenciesFromTagAnno(completed);
+                        }
+                        try self.store.addScratchTypeAnno(completed);
+                        type_tag_union_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :type_kernel .tag_union_next;
+                        }
+                        if (self.peek() == .CloseSquare) {
+                            continue :type_kernel .tag_union_finish;
+                        }
+                        continue :type_kernel .tag_union_next;
+                    },
+                    .type_fn_arg => {
+                        type_fn_args_state = open_syntax.popPayload(.type_fn_arg, TypeFnArgsState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        continue :type_kernel .fn_args_next;
+                    },
+                    .type_fn_ret => {
+                        const state = open_syntax.popPayload(.type_fn_ret, TypeFnAfterRetState);
+                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                        } });
+                        continue :type_kernel .complete;
+                    },
+                    else => unreachable,
+                }
+            }
+            return completed;
+        },
+        .apply_next => switch (self.peek()) {
+            .CloseRound => {
+                self.advance();
+                last_type_anno = try self.store.addTypeAnno(.{ .apply = .{
+                    .region = .{ .start = type_apply_state.start, .end = self.pos },
+                    .args = try self.store.typeAnnoSpanFrom(type_apply_state.scratch_top),
+                } });
+                type_after_primary_state = .{ .start = type_apply_state.start, .looking_for_args = type_apply_state.looking_for_args };
+                continue :type_kernel .after_primary;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
+                    continue :type_kernel .complete;
+                }
+                try open_syntax.push(open_allocator, .type_apply, TypeApplyState, type_apply_state);
+                type_args = .looking_for_type_arg;
+                continue :type_kernel .prefix;
+            },
+        },
+        .paren_next => switch (self.peek()) {
+            .OpArrow, .OpFatArrow => {
+                const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
+                const effectful = self.peek() == .OpFatArrow;
+                self.advance();
+                try open_syntax.push(open_allocator, .type_paren_fn_ret, TypeParenFnRetState, .{
+                    .start = type_paren_state.start,
+                    .after_round = type_paren_state.after_round,
+                    .scratch_top = type_paren_state.scratch_top,
+                    .args = args,
+                    .effectful = effectful,
+                    .looking_for_args = type_paren_state.looking_for_args,
+                });
+                type_args = .looking_for_args;
+                continue :type_kernel .prefix;
+            },
+            .CloseRound => {
+                const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
+                if ((self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and args.span.len == 0) {
+                    self.advance();
+                    const effectful = self.peek() == .OpFatArrow;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .type_zero_arg_fn_ret, TypeZeroArgFnRetState, .{
+                        .start = type_paren_state.start,
+                        .after_round = type_paren_state.after_round,
+                        .effectful = effectful,
+                        .args = args,
+                        .looking_for_args = type_paren_state.looking_for_args,
+                    });
+                    type_args = .looking_for_args;
+                    continue :type_kernel .prefix;
+                }
+                self.advance();
+                const annos = args;
+                if (annos.span.len == 1 and !type_paren_state.saw_comma) {
+                    last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = type_paren_state.start, .end = self.pos },
+                    } });
+                } else {
+                    last_type_anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = type_paren_state.start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
+                type_after_primary_state = .{ .start = type_paren_state.start, .looking_for_args = type_paren_state.looking_for_args };
+                continue :type_kernel .after_primary;
+            },
+            else => {
+                if (self.peek() == .EndOfFile or type_paren_state.expect_close) {
+                    self.store.clearScratchTypeAnnosFrom(type_paren_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, type_paren_state.start);
+                    continue :type_kernel .complete;
+                }
+                try open_syntax.push(open_allocator, .type_paren_item, TypeParenAfterItemState, .{
+                    .start = type_paren_state.start,
+                    .after_round = type_paren_state.after_round,
+                    .scratch_top = type_paren_state.scratch_top,
+                    .saw_comma = type_paren_state.saw_comma,
+                    .looking_for_args = type_paren_state.looking_for_args,
+                });
+                type_args = .looking_for_args;
+                continue :type_kernel .prefix;
+            },
+        },
+        .record_next => switch (self.peek()) {
+            .CloseCurly => continue :type_kernel .record_finish,
+            .DoubleDot => {
+                const double_dot_start = self.pos;
+                self.advance();
+                if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                    try open_syntax.push(open_allocator, .type_record_ext, TypeRecordExtState, .{
+                        .start = type_record_state.start,
+                        .scratch_top = type_record_state.scratch_top,
+                        .looking_for_args = type_record_state.looking_for_args,
+                    });
+                    type_args = .looking_for_args;
+                    continue :type_kernel .prefix;
+                }
+                self.expect(.Comma) catch {};
+                type_record_state.ext = .{ .open = double_dot_start };
+                continue :type_kernel .record_finish;
+            },
+            .LowerIdent => {
+                const field_start = self.pos;
+                const name = self.pos;
+                self.advance();
+                if (self.peek() != .OpColon) {
+                    while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
+                        self.advance();
+                    }
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_colon_after_type_field_name, field_start);
+                    continue :type_kernel .complete;
+                }
+                self.advance();
+                try open_syntax.push(open_allocator, .type_record_field, TypeRecordFieldState, .{
+                    .record_start = type_record_state.start,
+                    .scratch_top = type_record_state.scratch_top,
+                    .field_start = field_start,
+                    .name = name,
+                    .ext = type_record_state.ext,
+                    .looking_for_args = type_record_state.looking_for_args,
+                });
+                type_args = .not_looking_for_args;
+                continue :type_kernel .prefix;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchAnnoRecordFieldsFrom(type_record_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
+                    continue :type_kernel .complete;
+                }
+                const field_start = self.pos;
+                while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                const malformed_field = try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_type_field_name, field_start);
+                try self.store.addScratchAnnoRecordField(malformed_field);
+                self.store.clearScratchAnnoRecordFieldsFrom(type_record_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
+                continue :type_kernel .complete;
+            },
+        },
+        .record_finish => switch (self.peek()) {
+            .CloseCurly => {
+                self.advance();
+                const fields = try self.store.annoRecordFieldSpanFrom(type_record_state.scratch_top);
+                last_type_anno = try self.store.addTypeAnno(.{ .record = .{
+                    .region = .{ .start = type_record_state.start, .end = self.pos },
+                    .fields = fields,
+                    .ext = type_record_state.ext,
+                } });
+                type_after_primary_state = .{ .start = type_record_state.start, .looking_for_args = type_record_state.looking_for_args };
+                continue :type_kernel .after_primary;
+            },
+            else => {
+                self.store.clearScratchAnnoRecordFieldsFrom(type_record_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
+                continue :type_kernel .complete;
+            },
+        },
+        .tag_union_next => switch (self.peek()) {
+            .CloseSquare => continue :type_kernel .tag_union_finish,
+            .DoubleDot => {
+                const double_dot_pos = self.pos;
+                self.advance();
+                if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                    try open_syntax.push(open_allocator, .type_tag_union_ext, TypeTagUnionExtState, .{
+                        .start = type_tag_union_state.start,
+                        .scratch_top = type_tag_union_state.scratch_top,
+                        .looking_for_args = type_tag_union_state.looking_for_args,
+                    });
+                    type_args = .looking_for_args;
+                    continue :type_kernel .prefix;
+                }
+                self.expect(.Comma) catch {};
+                type_tag_union_state.ext = .{ .open = double_dot_pos };
+                continue :type_kernel .tag_union_finish;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchTypeAnnosFrom(type_tag_union_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
+                    continue :type_kernel .complete;
+                }
+                const was_collecting = self.collect_type_dependencies;
+                self.collect_type_dependencies = false;
+                try open_syntax.push(open_allocator, .type_tag_union_item, TypeTagUnionItemState, .{
+                    .start = type_tag_union_state.start,
+                    .scratch_top = type_tag_union_state.scratch_top,
+                    .ext = type_tag_union_state.ext,
+                    .was_collecting = was_collecting,
+                    .looking_for_args = type_tag_union_state.looking_for_args,
+                });
+                type_args = .looking_for_type_arg;
+                continue :type_kernel .prefix;
+            },
+        },
+        .tag_union_finish => switch (self.peek()) {
+            .CloseSquare => {
+                self.advance();
+                const tags = try self.store.typeAnnoSpanFrom(type_tag_union_state.scratch_top);
+                last_type_anno = try self.store.addTypeAnno(.{ .tag_union = .{
+                    .region = .{ .start = type_tag_union_state.start, .end = self.pos },
+                    .ext = type_tag_union_state.ext,
+                    .tags = tags,
+                } });
+                type_after_primary_state = .{ .start = type_tag_union_state.start, .looking_for_args = type_tag_union_state.looking_for_args };
+                continue :type_kernel .after_primary;
+            },
+            else => {
+                self.store.clearScratchTypeAnnosFrom(type_tag_union_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
+                continue :type_kernel .complete;
+            },
+        },
+        .fn_args_next => switch (self.peek()) {
+            .Comma => {
+                self.advance();
+                try open_syntax.push(open_allocator, .type_fn_arg, TypeFnArgsState, type_fn_args_state);
+                type_args = .looking_for_args;
+                continue :type_kernel .prefix;
+            },
+            .OpArrow, .OpFatArrow => {
+                const args = try self.store.typeAnnoSpanFrom(type_fn_args_state.scratch_top);
+                const effectful = self.peek() == .OpFatArrow;
+                self.advance();
+                try open_syntax.push(open_allocator, .type_fn_ret, TypeFnAfterRetState, .{
+                    .start = type_fn_args_state.start,
+                    .args = args,
+                    .effectful = effectful,
+                });
+                type_args = .looking_for_args;
+                continue :type_kernel .prefix;
+            },
+            else => {
+                self.store.clearScratchTypeAnnosFrom(type_fn_args_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_arrow, type_fn_args_state.start);
+                continue :type_kernel .complete;
+            },
+        },
+    }
 }
 
 fn runStatementOnlyBlockDirect(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
