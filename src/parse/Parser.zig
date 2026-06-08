@@ -4119,13 +4119,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     continue :dispatch .expr_lambda_after_args;
                 }
             } else {
-                if (tok == .KwReturn) {
-                    const start = self.pos;
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
-                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
                 if (tok == .KwIf) {
                     const start = self.pos;
                     self.advance();
@@ -4161,6 +4154,13 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     };
                     dispatch_token = self.peek();
                     continue :dispatch .pattern_root_next;
+                }
+                if (tok == .KwReturn) {
+                    const start = self.pos;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
                 }
             }
 
