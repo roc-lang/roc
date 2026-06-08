@@ -293,6 +293,38 @@ jobs:
           echo "=== Files found ==="
           cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
+  zig-valgrind:
+    needs: check-once
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+        with:
+          version: 0.16.0
+          use-cache: true
+
+      - name: build roc + repro executables for valgrind
+        run: |
+          git clean -fdx
+          zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
+
+      - name: install valgrind
+        run: |
+          # Install libc6-dbg which is required for Valgrind's function redirections
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
+          sudo snap install valgrind --classic
+          valgrind --version
+
+      - name: valgrind platform apps
+        run: |
+          ./zig-out/bin/test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
+          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=valgrind --app=test/int/app.roc
+
+      - name: valgrind snapshots
+        run: |
+          ./ci/valgrind_snapshots.sh
+
   zig-cross-compile:
     needs: check-once
     runs-on: ubuntu-24.04
