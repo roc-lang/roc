@@ -4955,29 +4955,31 @@ fn runExprStatementKernel(
             const completed = last_where orelse unreachable;
             last_where = null;
             if (open_syntax.peekWhere()) |kind| {
-                if (kind == .where_statement_type_anno) {
-                    const state = open_syntax.popWherePayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
-                    last_statement = try self.addStatement(.{ .type_anno = .{
-                        .anno = state.anno,
-                        .name = state.name,
-                        .where = completed,
-                        .is_var = state.is_var,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .where_statement_type_decl) {
-                    const state = open_syntax.popWherePayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
-                    statement_type_decl_ready_state = .{
-                        .start = state.start,
-                        .header = state.header,
-                        .anno = state.anno,
-                        .kind = state.kind,
-                        .where_clause = completed,
-                        .type_dependencies = state.type_dependencies,
-                        .type_path = state.type_path,
-                    };
-                    continue :expr_kernel .statement_type_decl_finish;
+                switch (kind) {
+                    .where_statement_type_anno => {
+                        const state = open_syntax.popWherePayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
+                        last_statement = try self.addStatement(.{ .type_anno = .{
+                            .anno = state.anno,
+                            .name = state.name,
+                            .where = completed,
+                            .is_var = state.is_var,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .where_statement_type_decl => {
+                        const state = open_syntax.popWherePayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
+                        statement_type_decl_ready_state = .{
+                            .start = state.start,
+                            .header = state.header,
+                            .anno = state.anno,
+                            .kind = state.kind,
+                            .where_clause = completed,
+                            .type_dependencies = state.type_dependencies,
+                            .type_path = state.type_path,
+                        };
+                        continue :expr_kernel .statement_type_decl_finish;
+                    },
                 }
             }
             unreachable;
