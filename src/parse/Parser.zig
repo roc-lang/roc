@@ -219,9 +219,7 @@ const ParserContext = enum(u16) {
     statement_start,
     statement_complete,
     statement_import,
-    statement_for_after_pattern,
     statement_var_after_type,
-    statement_destructure_after_pattern,
     statement_type_header,
     statement_type_after_anno,
     statement_type_decl_after_anno,
@@ -3366,47 +3364,9 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 unreachable;
             },
         },
-        .statement_for_after_pattern => switch (dispatch_token) {
-            .KwIn => {
-                const start = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
-                const patt = last_pattern orelse unreachable;
-                last_pattern = null;
-                self.advance();
-                try root_expr_parents.set(open_allocator, .{ .statement_for_expr = .{ .start = start, .patt = patt } }, open_syntax.entries.items.len);
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                _ = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
-                last_pattern = null;
-                last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-        },
         .statement_var_after_type => switch (dispatch_token) {
             else => {
                 unreachable;
-            },
-        },
-        .statement_destructure_after_pattern => switch (dispatch_token) {
-            .OpAssign => {
-                const start = open_syntax.popPayload(.statement_destructure_pattern, Token.Idx);
-                const pattern = last_pattern orelse unreachable;
-                last_pattern = null;
-                self.advance();
-                try root_expr_parents.set(open_allocator, .{ .statement_destructure_body = .{ .start = start, .pattern = pattern } }, open_syntax.entries.items.len);
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                _ = open_syntax.popPayload(.statement_destructure_pattern, Token.Idx);
-                last_pattern = null;
-                last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
             },
         },
         .statement_type_header => switch (dispatch_token) {
@@ -5426,8 +5386,32 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_pattern)) {
                     dispatch_token = self.peek();
                     switch (kind) {
-                        .statement_for_pattern => continue :dispatch .statement_for_after_pattern,
-                        .statement_destructure_pattern => continue :dispatch .statement_destructure_after_pattern,
+                        .statement_for_pattern => {
+                            const start = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
+                            last_pattern = null;
+                            if (self.peek() == .KwIn) {
+                                self.advance();
+                                try root_expr_parents.set(open_allocator, .{ .statement_for_expr = .{ .start = start, .patt = completed } }, open_syntax.entries.items.len);
+                                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_prefix;
+                            }
+                            last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_destructure_pattern => {
+                            const start = open_syntax.popPayload(.statement_destructure_pattern, Token.Idx);
+                            last_pattern = null;
+                            if (self.peek() == .OpAssign) {
+                                self.advance();
+                                try root_expr_parents.set(open_allocator, .{ .statement_destructure_body = .{ .start = start, .pattern = completed } }, open_syntax.entries.items.len);
+                                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_prefix;
+                            }
+                            last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
+                            continue :dispatch .statement_complete;
+                        },
                         .expr_match_pattern => continue :dispatch .expr_match_branch_after_pattern,
                         else => {},
                     }
