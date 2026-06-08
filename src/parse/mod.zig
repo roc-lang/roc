@@ -190,7 +190,7 @@ test "parse error triggers errdefer cleanup" {
     try std.testing.checkAllAllocationFailures(gpa, vmExprAllocationFailureImpl, .{output.tokens});
 }
 
-fn expectStatementParsesWithoutDiagnostics(source: []const u8) !void {
+fn expectStatementParsesWithoutDiagnostics(source: []const u8) (Allocator.Error || error{TestExpectedEqual})!void {
     const gpa = std.testing.allocator;
 
     var env = try CommonEnv.init(gpa, source);
@@ -203,7 +203,7 @@ fn expectStatementParsesWithoutDiagnostics(source: []const u8) !void {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
-fn expectFileParsesWithoutDiagnostics(source: []const u8) !void {
+fn expectFileParsesWithoutDiagnostics(source: []const u8) (Allocator.Error || error{TestExpectedEqual})!void {
     const gpa = std.testing.allocator;
 
     var env = try CommonEnv.init(gpa, source);
