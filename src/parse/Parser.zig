@@ -141,42 +141,37 @@ fn isVarIdent(self: *Parser, token: Token.Idx) bool {
 fn looksLikeTypeDecl(self: *Parser) bool {
     std.debug.assert(self.peek() == .UpperIdent);
 
-    const tags = self.tok_buf.tokens.items(.tag);
-    var lookahead_pos = self.pos + 1;
-    if (lookahead_pos >= tags.len) return false;
-    const next_tok = tags[lookahead_pos];
+    var lookahead: u32 = 1;
+    const next_tok = self.peekN(lookahead);
 
     // Check for parenthesized type params: Name(a, b) :
     if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
         // Skip to matching close paren, counting nesting
-        lookahead_pos += 1;
+        lookahead += 1;
         var depth: u32 = 1;
         while (depth > 0) {
-            if (lookahead_pos >= tags.len) return false;
-            const tok = tags[lookahead_pos];
+            const tok = self.peekN(lookahead);
             switch (tok) {
                 .OpenRound, .NoSpaceOpenRound => depth += 1,
                 .CloseRound => depth -= 1,
                 .EndOfFile => return false,
                 else => {},
             }
-            lookahead_pos += 1;
+            lookahead += 1;
         }
     }
     // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
     // Only `Name(a, b) :` with parenthesized type params is supported.
 
     // Now check for : or := or ::
-    if (lookahead_pos >= tags.len) return false;
-    const op_tok = tags[lookahead_pos];
+    const op_tok = self.peekN(lookahead);
     if (op_tok != .OpColon and op_tok != .OpColonEqual and op_tok != .OpDoubleColon) {
         return false;
     }
-    lookahead_pos += 1;
+    lookahead += 1;
 
     // Check if what follows is a valid type annotation start
-    if (lookahead_pos >= tags.len) return false;
-    const after_colon = tags[lookahead_pos];
+    const after_colon = self.peekN(lookahead);
     return switch (after_colon) {
         // Valid type annotation starts
         .UpperIdent, // Type name: Str, List, etc.
