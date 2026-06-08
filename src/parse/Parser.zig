@@ -701,7 +701,32 @@ pub fn runFile(self: *Parser) Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = try self.runParser(.file_start, .file, .{});
+    self.store.emptyScratch();
+
+    const module_scope = try self.enterDeclScope(.module, .file, AST.TokenizedRegion.empty());
+    try self.store.addFile(.{
+        .header = undefined,
+        .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
+        .scope = module_scope,
+        .region = AST.TokenizedRegion.empty(),
+    });
+
+    const header = try self.parseHeaderTokens();
+    const scratch_top = self.store.scratchStatementTop();
+
+    while (self.peek() != .EndOfFile) {
+        const statement = try self.runTopLevelStatement();
+        try self.store.addScratchStatement(statement);
+    }
+
+    const file_region = AST.TokenizedRegion{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) };
+    try self.exitDeclScope(module_scope, file_region);
+    try self.store.addFile(.{
+        .header = header,
+        .statements = try self.store.statementSpanFrom(scratch_top),
+        .scope = module_scope,
+        .region = file_region,
+    });
 }
 
 /// Parse a Roc file header.
@@ -709,7 +734,7 @@ pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.header_start, .header, .{})).header;
+    return try self.parseHeaderTokens();
 }
 
 fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
@@ -1771,9 +1796,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.statement_start, .statement, .{
-        .statement_type = statementType,
-    })).statement;
+    return try self.runStatementDirect(statementType);
 }
 
 fn addTopLevelUnexpectedStatement(self: *Parser) Error!AST.Statement.Idx {
@@ -1794,9 +1817,7 @@ pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.I
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.pattern_root_next, .pattern, .{
-        .pattern_alternatives = alternatives,
-    })).pattern;
+    return try self.runPatternDirect(alternatives);
 }
 
 fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
@@ -2482,39 +2503,8 @@ pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.expr_prefix, .expr, .{
-        .expr_min_bp = min_bp,
-    })).expr;
+    return try self.runExprDirect(min_bp);
 }
-
-const ParserResultKind = enum {
-    file,
-    header,
-    expr,
-    pattern,
-    type_anno,
-    statement,
-    associated,
-};
-
-const ParserResult = union(enum) {
-    file,
-    header: AST.Header.Idx,
-    expr: AST.Expr.Idx,
-    pattern: AST.Pattern.Idx,
-    type_anno: AST.TypeAnno.Idx,
-    statement: AST.Statement.Idx,
-    associated: AST.Associated,
-};
-
-const ParserEntry = struct {
-    expr_min_bp: u8 = 0,
-    pattern_alternatives: Alternatives = .alternatives_forbidden,
-    type_args: TyFnArgs = .not_looking_for_args,
-    statement_type: StatementType = .in_body,
-    associated_start: Token.Idx = 0,
-    associated_owner_type_path: ?DeclIndex.TypePathIdx = null,
-};
 
 const TyFnArgs = enum {
     not_looking_for_args,
@@ -2522,14 +2512,43 @@ const TyFnArgs = enum {
     looking_for_type_arg,
 };
 
+fn runStatementDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
+    _ = self;
+    _ = statement_type;
+    @panic("direct statement parser kernel is being rewritten");
+}
+
+fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+    _ = self;
+    _ = alternatives;
+    @panic("direct pattern parser kernel is being rewritten");
+}
+
+fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+    _ = self;
+    _ = min_bp;
+    @panic("direct expression parser kernel is being rewritten");
+}
+
+fn runTypeAnnoDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
+    _ = self;
+    _ = looking_for_args;
+    @panic("direct type annotation parser kernel is being rewritten");
+}
+
+fn runStatementOnlyBlockDirect(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+    _ = self;
+    _ = start;
+    _ = owner_type_path;
+    @panic("direct associated statement block parser kernel is being rewritten");
+}
+
 /// Run the direct token dispatch with a type-annotation goal and return the completed type.
 pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.type_prefix, .type_anno, .{
-        .type_args = looking_for_args,
-    })).type_anno;
+    return try self.runTypeAnnoDirect(looking_for_args);
 }
 
 fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
@@ -2664,10 +2683,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    return (try self.runParser(.statement_type_associated_start, .associated, .{
-        .associated_start = start,
-        .associated_owner_type_path = owner_type_path,
-    })).associated;
+    return try self.runStatementOnlyBlockDirect(start, owner_type_path);
 }
 
 fn finishRecordExpr(
