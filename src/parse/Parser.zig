@@ -231,8 +231,6 @@ const ParserContext = enum(u16) {
     expr_record_fields_next,
     expr_record_finish,
     expr_match_branch_next,
-    expr_block_begin,
-    expr_block_begin_after_open,
     expr_block_next,
     expr_block_finish,
 
@@ -2583,7 +2581,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     var expr_record_state: ExprRecordState = undefined;
     var expr_lambda_body_stack: ExprLambdaBodyStack = .{};
     defer expr_lambda_body_stack.deinit(open_allocator);
-    var expr_after_expr_state: ExprAfterExprState = undefined;
     var expr_match_branch_state: ExprMatchBranchState = undefined;
     var expr_blocks: ExprBlockStack = .{};
     defer expr_blocks.deinit(open_allocator);
@@ -2633,7 +2630,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     _ = &expr_string_state;
     _ = &expr_record_state;
     _ = &expr_lambda_body_stack;
-    _ = &expr_after_expr_state;
     _ = &expr_match_branch_state;
     _ = &expr_blocks;
     _ = &pattern_root_state;
@@ -3631,9 +3627,18 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                             }
                         }
                         if (is_block) {
-                            expr_after_expr_state = .{ .start = start, .min_bp = expr_state.min_bp };
+                            const previous_type_path_visible_start = self.type_path_stack_visible_start;
+                            self.type_path_stack_visible_start = self.type_path_stack.items.len;
+                            const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
+                            try expr_blocks.enter(open_allocator, .{
+                                .start = start,
+                                .min_bp = expr_state.min_bp,
+                                .scope = block_scope,
+                                .scratch_top = self.store.scratchStatementTop(),
+                                .previous_type_path_visible_start = previous_type_path_visible_start,
+                            });
                             dispatch_token = self.peek();
-                            continue :dispatch .expr_block_begin_after_open;
+                            continue :dispatch .expr_block_next;
                         }
                         expr_record_state = .{
                             .start = start,
@@ -3644,9 +3649,18 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                         dispatch_token = self.peek();
                         continue :dispatch .expr_record_fields_next;
                     } else {
-                        expr_after_expr_state = .{ .start = start, .min_bp = expr_state.min_bp };
+                        const previous_type_path_visible_start = self.type_path_stack_visible_start;
+                        self.type_path_stack_visible_start = self.type_path_stack.items.len;
+                        const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
+                        try expr_blocks.enter(open_allocator, .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .scope = block_scope,
+                            .scratch_top = self.store.scratchStatementTop(),
+                            .previous_type_path_visible_start = previous_type_path_visible_start,
+                        });
                         dispatch_token = self.peek();
-                        continue :dispatch .expr_block_begin_after_open;
+                        continue :dispatch .expr_block_next;
                     }
                 }
             } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
@@ -4711,39 +4725,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_root_next;
-            },
-        },
-        .expr_block_begin => switch (dispatch_token) {
-            .OpenCurly => {
-                if (self.peek() == .OpenCurly) {
-                    self.advance();
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .expr_block_begin_after_open;
-            },
-            else => {
-                dispatch_token = .OpenCurly;
-                continue :dispatch .expr_block_begin;
-            },
-        },
-        .expr_block_begin_after_open => switch (dispatch_token) {
-            .EndOfFile => {
-                const previous_type_path_visible_start = self.type_path_stack_visible_start;
-                self.type_path_stack_visible_start = self.type_path_stack.items.len;
-                const block_scope = try self.enterDeclScope(.block, .none, .{ .start = expr_after_expr_state.start, .end = expr_after_expr_state.start });
-                try expr_blocks.enter(open_allocator, .{
-                    .start = expr_after_expr_state.start,
-                    .min_bp = expr_after_expr_state.min_bp,
-                    .scope = block_scope,
-                    .scratch_top = self.store.scratchStatementTop(),
-                    .previous_type_path_visible_start = previous_type_path_visible_start,
-                });
-                dispatch_token = self.peek();
-                continue :dispatch .expr_block_next;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .expr_block_begin_after_open;
             },
         },
         .expr_block_next => switch (dispatch_token) {
