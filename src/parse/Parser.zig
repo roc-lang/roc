@@ -3963,7 +3963,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     dispatch_token = self.peek();
                     continue :dispatch .expr_suffix;
                 }
-            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+            } else if (tok_int < @intFromEnum(Token.Tag.OpStar)) {
                 if (tok == .UpperIdent) {
                     const start = self.pos;
                     const qual_result = try self.readQualificationChain();
@@ -4325,11 +4325,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                 }
                 if (isInBinOpTokenRange(tok)) {
-                    const bp = getTokenBP(tok) orelse {
-                        last_expr = expr_finish_state.expr;
-                        dispatch_token = self.peek();
-                        continue :dispatch .expr_complete;
-                    };
+                    const bp = getTokenBP(tok).?;
                     if ((self.peek() == .OpAnd or self.peek() == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
                         last_expr = expr_finish_state.expr;
                         dispatch_token = self.peek();
@@ -5942,7 +5938,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     dispatch_token = self.peek();
                     continue :dispatch .pattern_complete;
                 }
-            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+            } else if (tok_int < @intFromEnum(Token.Tag.OpStar)) {
                 if (tok == .UpperIdent) {
                     const start = self.pos;
                     const qual_result = try self.readQualificationChain();
@@ -6463,7 +6459,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             const tok = dispatch_token;
             const tok_int = @intFromEnum(tok);
 
-            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpStar)) {
                 if (tok == .UpperIdent or tok == .LowerIdent) {
                     const start = self.pos;
                     const first_token_tag = self.peek();
@@ -7540,7 +7536,7 @@ const BinOpBp = struct { left: u8, right: u8 };
 
 inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
     const tok_int = @intFromEnum(tok);
-    return tok_int >= @intFromEnum(Token.Tag.OpPlus) and tok_int <= @intFromEnum(Token.Tag.OpEquals);
+    return tok_int >= @intFromEnum(Token.Tag.OpStar) and tok_int <= @intFromEnum(Token.Tag.OpOr);
 }
 
 /// Get the binding power for a Token if it's a operator token, else return null.
@@ -7572,9 +7568,12 @@ comptime {
         if (getTokenBP(tok) != null and !isInBinOpTokenRange(tok)) {
             @compileError("binary operator binding-power token outside parser operator range");
         }
+        if (isInBinOpTokenRange(tok) and getTokenBP(tok) == null) {
+            @compileError("parser operator range contains a non-binary operator token");
+        }
     }
 
-    const range_holes = [_]Token.Tag{
+    const non_binary_operator_tokens = [_]Token.Tag{
         .OpPizza,
         .OpAssign,
         .OpUnaryMinus,
@@ -7583,13 +7582,16 @@ comptime {
         .OpBar,
         .OpCaret,
         .OpBackArrow,
+        .OpColonEqual,
+        .OpDoubleColon,
+        .NoSpaceOpQuestion,
     };
-    for (range_holes) |tok| {
-        if (!isInBinOpTokenRange(tok)) {
-            @compileError("expected non-binary operator hole inside parser operator range");
-        }
+    for (non_binary_operator_tokens) |tok| {
         if (getTokenBP(tok) != null) {
-            @compileError("operator range hole unexpectedly has binding power");
+            @compileError("non-binary operator unexpectedly has binding power");
+        }
+        if (isInBinOpTokenRange(tok)) {
+            @compileError("non-binary operator unexpectedly inside parser operator range");
         }
     }
 }
