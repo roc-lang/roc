@@ -2519,9 +2519,656 @@ fn runStatementDirect(self: *Parser, statement_type: StatementType) Error!AST.St
 }
 
 fn runPatternDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
-    _ = self;
-    _ = alternatives;
-    @panic("direct pattern parser kernel is being rewritten");
+    var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
+    const open_allocator = open_allocator_state.get();
+    var open_syntax: OpenSyntaxStack = .{};
+    defer open_syntax.deinit(open_allocator);
+
+    const PatternLabel = enum {
+        root_next,
+        prefix,
+        complete,
+        string_next,
+        tag_args_next,
+        list_next,
+        list_finish,
+        record_next,
+        record_finish,
+        tuple_next,
+        tuple_finish,
+    };
+
+    var pattern_root_state = PatternRootState{
+        .outer_start = self.pos,
+        .scratch_top = self.store.scratchPatternTop(),
+        .alternatives = alternatives,
+    };
+    var pattern_roots: PatternRootStack = .{};
+    defer pattern_roots.deinit(open_allocator);
+    var pattern_tag_args_state: PatternTagArgsState = undefined;
+    var pattern_list_state: PatternListState = undefined;
+    var pattern_record_state: PatternRecordState = undefined;
+    var pattern_tuple_state: PatternTupleState = undefined;
+    var pattern_alternatives = alternatives;
+    var pattern_string_start: Token.Idx = 0;
+    var pattern_string_scratch_top: u32 = 0;
+    var last_pattern: ?AST.Pattern.Idx = null;
+
+    pattern_kernel: switch (PatternLabel.root_next) {
+        .root_next => switch (self.peek()) {
+            .EndOfFile => {
+                const pattern_count = self.store.scratchPatternTop() - pattern_root_state.scratch_top;
+                if (pattern_count == 0) {
+                    last_pattern = try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = pattern_root_state.outer_start, .end = self.pos });
+                } else if (pattern_count == 1) {
+                    const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
+                    self.store.clearScratchPatternsFrom(pattern_root_state.scratch_top);
+                    last_pattern = try self.finishAsPattern(single_pattern);
+                } else {
+                    const patterns = try self.store.patternSpanFrom(pattern_root_state.scratch_top);
+                    last_pattern = try self.store.addPattern(.{ .alternatives = .{
+                        .region = .{ .start = pattern_root_state.outer_start, .end = self.pos },
+                        .patterns = patterns,
+                    } });
+                }
+                continue :pattern_kernel .complete;
+            },
+            else => {
+                try pattern_roots.enter(open_allocator, pattern_root_state);
+                try open_syntax.pushMarker(open_allocator, .pattern_root);
+                pattern_alternatives = pattern_root_state.alternatives;
+                continue :pattern_kernel .prefix;
+            },
+        },
+        .prefix => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int < @intFromEnum(Token.Tag.UpperIdent)) {
+                if (tok == .Float) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                        last_pattern = try self.store.addPattern(.{ .typed_frac = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                            continue :pattern_kernel .complete;
+                        };
+                        last_pattern = try self.store.addPattern(.{ .typed_frac = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else {
+                        last_pattern = try self.store.addPattern(.{ .frac = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .literal = literal,
+                        } });
+                    }
+                    continue :pattern_kernel .complete;
+                }
+                if (tok == .StringStart) {
+                    pattern_string_start = self.pos;
+                    pattern_string_scratch_top = self.store.scratchExprTop();
+                    self.advance();
+                    continue :pattern_kernel .string_next;
+                }
+                if (tok == .SingleQuote) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .single_quote = .{
+                        .token = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+                if (tok == .Int) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                        last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                            continue :pattern_kernel .complete;
+                        };
+                        last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else {
+                        last_pattern = try self.store.addPattern(.{ .int = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .literal = literal,
+                        } });
+                    }
+                    continue :pattern_kernel .complete;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+                    if (!qual_result.is_upper) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                        continue :pattern_kernel .complete;
+                    }
+                    if (self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        pattern_tag_args_state = .{
+                            .start = start,
+                            .final_token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .scratch_top = self.store.scratchPatternTop(),
+                        };
+                        continue :pattern_kernel .tag_args_next;
+                    }
+                    last_pattern = try self.store.addPattern(.{ .tag = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .args = .{ .span = .{ .start = 0, .len = 0 } },
+                        .tag_tok = qual_result.final_token,
+                        .qualifiers = qual_result.qualifiers,
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .ident = .{
+                        .ident_tok = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .underscore = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+                if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_tuple_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
+                    continue :pattern_kernel .tuple_next;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_list_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
+                    continue :pattern_kernel .list_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_record_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchPatternRecordFieldTop(),
+                        .alternatives = pattern_alternatives,
+                    };
+                    continue :pattern_kernel .record_next;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+                if (tok == .DoubleDot) {
+                    const start = self.pos;
+                    var name: ?Token.Idx = null;
+                    self.advance();
+                    if (self.peek() == .KwAs) {
+                        self.advance();
+                        if (self.peek() != .LowerIdent) {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                            continue :pattern_kernel .complete;
+                        }
+                        name = self.pos;
+                        self.advance();
+                    } else if (self.peek() == .LowerIdent) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
+                        continue :pattern_kernel .complete;
+                    }
+                    last_pattern = try self.store.addPattern(.{ .list_rest = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .name = name,
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+            } else {
+                if (tok == .KwVar) {
+                    const start = self.pos;
+                    self.advance();
+                    if (self.peek() != .LowerIdent) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
+                        continue :pattern_kernel .complete;
+                    }
+                    const ident_tok = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .var_ident = .{
+                        .ident_tok = ident_tok,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+            }
+
+            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
+            continue :pattern_kernel .complete;
+        },
+        .complete => {
+            const completed = last_pattern orelse unreachable;
+            if (open_syntax.peekKind()) |kind| {
+                switch (kind) {
+                    .pattern_root => {
+                        open_syntax.popMarker(.pattern_root);
+                        const state = pattern_roots.leave();
+                        last_pattern = null;
+                        if (state.alternatives == .alternatives_forbidden) {
+                            self.store.clearScratchPatternsFrom(state.scratch_top);
+                            last_pattern = try self.finishAsPattern(completed);
+                            continue :pattern_kernel .complete;
+                        }
+                        if (self.peek() != .OpBar) {
+                            if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
+                                last_pattern = try self.finishAsPattern(completed);
+                                continue :pattern_kernel .complete;
+                            }
+                            try self.store.addScratchPattern(completed);
+                            const patterns = try self.store.patternSpanFrom(state.scratch_top);
+                            last_pattern = try self.store.addPattern(.{ .alternatives = .{
+                                .region = .{ .start = state.outer_start, .end = self.pos },
+                                .patterns = patterns,
+                            } });
+                            continue :pattern_kernel .complete;
+                        }
+                        try self.store.addScratchPattern(completed);
+                        self.advance();
+                        pattern_root_state = state;
+                        continue :pattern_kernel .root_next;
+                    },
+                    .pattern_tag_args => {
+                        pattern_tag_args_state = open_syntax.popPayload(.pattern_tag_args, PatternTagArgsState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :pattern_kernel .tag_args_next;
+                        }
+                        self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                        continue :pattern_kernel .complete;
+                    },
+                    .pattern_list => {
+                        pattern_list_state = open_syntax.popPayload(.pattern_list, PatternListState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseSquare) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :pattern_kernel .list_next;
+                        }
+                        self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                        continue :pattern_kernel .complete;
+                    },
+                    .pattern_tuple => {
+                        pattern_tuple_state = open_syntax.popPayload(.pattern_tuple, PatternTupleState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :pattern_kernel .tuple_next;
+                        }
+                        self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                        continue :pattern_kernel .complete;
+                    },
+                    .pattern_record_field => {
+                        const state = open_syntax.popPayload(.pattern_record_field, PatternRecordFieldState);
+                        last_pattern = null;
+                        const field = try self.store.addPatternRecordField(.{
+                            .name = state.name,
+                            .value = completed,
+                            .rest = false,
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                        });
+                        try self.store.addScratchPatternRecordField(field);
+                        pattern_record_state = .{
+                            .start = state.record_start,
+                            .scratch_top = state.scratch_top,
+                            .alternatives = state.alternatives,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :pattern_kernel .record_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :pattern_kernel .record_finish;
+                        }
+                        continue :pattern_kernel .record_next;
+                    },
+                    else => unreachable,
+                }
+            }
+            return completed;
+        },
+        .string_next => switch (self.peek()) {
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance();
+                const part = try self.store.addExpr(.{ .string_part = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchExpr(part);
+                continue :pattern_kernel .string_next;
+            },
+            .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => {
+                self.advance();
+                continue :pattern_kernel .string_next;
+            },
+            .OpenStringInterpolation => {
+                self.advance();
+                const expr = try self.runExprDirect(0);
+                try self.store.addScratchExpr(expr);
+                if (self.peek() != .CloseStringInterpolation) {
+                    const malformed = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, pattern_string_start);
+                    self.store.clearScratchExprsFrom(pattern_string_scratch_top);
+                    last_pattern = try self.store.addPattern(.{ .string = .{
+                        .string_tok = pattern_string_start,
+                        .region = .{ .start = pattern_string_start, .end = self.pos },
+                        .expr = malformed,
+                    } });
+                    continue :pattern_kernel .complete;
+                }
+                self.advance();
+                continue :pattern_kernel .string_next;
+            },
+            .StringEnd => {
+                self.advance();
+                const parts = try self.store.exprSpanFrom(pattern_string_scratch_top);
+                const expr = try self.store.addExpr(.{ .string = .{
+                    .token = pattern_string_start,
+                    .parts = parts,
+                    .region = .{ .start = pattern_string_start, .end = self.pos },
+                } });
+                last_pattern = try self.store.addPattern(.{ .string = .{
+                    .string_tok = pattern_string_start,
+                    .region = .{ .start = pattern_string_start, .end = self.pos },
+                    .expr = expr,
+                } });
+                continue :pattern_kernel .complete;
+            },
+            .EndOfFile => {
+                try self.pushDiagnostic(.string_unclosed, .{ .start = self.pos, .end = self.pos });
+                const parts = try self.store.exprSpanFrom(pattern_string_scratch_top);
+                const expr = try self.store.addExpr(.{ .string = .{
+                    .token = pattern_string_start,
+                    .parts = parts,
+                    .region = .{ .start = pattern_string_start, .end = self.pos },
+                } });
+                last_pattern = try self.store.addPattern(.{ .string = .{
+                    .string_tok = pattern_string_start,
+                    .region = .{ .start = pattern_string_start, .end = self.pos },
+                    .expr = expr,
+                } });
+                continue :pattern_kernel .complete;
+            },
+            else => {
+                const expr = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
+                self.store.clearScratchExprsFrom(pattern_string_scratch_top);
+                last_pattern = try self.store.addPattern(.{ .string = .{
+                    .string_tok = pattern_string_start,
+                    .region = .{ .start = pattern_string_start, .end = self.pos },
+                    .expr = expr,
+                } });
+                continue :pattern_kernel .complete;
+            },
+        },
+        .tag_args_next => switch (self.peek()) {
+            .CloseRound => {
+                self.advance();
+                const args = try self.store.patternSpanFrom(pattern_tag_args_state.scratch_top);
+                last_pattern = try self.store.addPattern(.{ .tag = .{
+                    .region = .{ .start = pattern_tag_args_state.start, .end = self.pos },
+                    .args = args,
+                    .tag_tok = pattern_tag_args_state.final_token,
+                    .qualifiers = pattern_tag_args_state.qualifiers,
+                } });
+                continue :pattern_kernel .complete;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                    continue :pattern_kernel .complete;
+                }
+                try open_syntax.push(open_allocator, .pattern_tag_args, PatternTagArgsState, pattern_tag_args_state);
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
+                };
+                continue :pattern_kernel .root_next;
+            },
+        },
+        .list_next => switch (self.peek()) {
+            .CloseSquare => continue :pattern_kernel .list_finish,
+            .DoubleDot => {
+                const rest_start = self.pos;
+                self.advance();
+                var rest_name: ?Token.Idx = null;
+                if (self.peek() == .KwAs) {
+                    self.advance();
+                    if (self.peek() == .LowerIdent) {
+                        rest_name = self.pos;
+                        self.advance();
+                    }
+                } else if (self.peek() == .LowerIdent) {
+                    rest_name = self.pos;
+                    self.advance();
+                    try self.pushDiagnostic(.pattern_list_rest_old_syntax, .{ .start = rest_start, .end = self.pos });
+                }
+                const rest_pattern = try self.store.addPattern(.{ .list_rest = .{
+                    .name = rest_name,
+                    .region = .{ .start = rest_start, .end = self.pos },
+                } });
+                try self.store.addScratchPattern(rest_pattern);
+                if (self.peek() == .Comma) {
+                    self.advance();
+                    continue :pattern_kernel .list_next;
+                }
+                continue :pattern_kernel .list_finish;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                    continue :pattern_kernel .complete;
+                }
+                try open_syntax.push(open_allocator, .pattern_list, PatternListState, pattern_list_state);
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
+                };
+                continue :pattern_kernel .root_next;
+            },
+        },
+        .list_finish => switch (self.peek()) {
+            .CloseSquare => {
+                self.advance();
+                const patterns = try self.store.patternSpanFrom(pattern_list_state.scratch_top);
+                last_pattern = try self.store.addPattern(.{ .list = .{
+                    .region = .{ .start = pattern_list_state.start, .end = self.pos },
+                    .patterns = patterns,
+                } });
+                continue :pattern_kernel .complete;
+            },
+            else => {
+                self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                continue :pattern_kernel .complete;
+            },
+        },
+        .record_next => switch (self.peek()) {
+            .CloseCurly => continue :pattern_kernel .record_finish,
+            .DoubleDot => {
+                const field_start = self.pos;
+                self.advance();
+                var name: u32 = 0;
+                if (self.peek() == .LowerIdent) {
+                    name = self.pos;
+                    self.advance();
+                }
+                const field = try self.store.addPatternRecordField(.{
+                    .name = name,
+                    .value = null,
+                    .rest = true,
+                    .region = .{ .start = field_start, .end = self.pos },
+                });
+                try self.store.addScratchPatternRecordField(field);
+                if (self.peek() == .Comma) {
+                    self.advance();
+                    continue :pattern_kernel .record_next;
+                }
+                continue :pattern_kernel .record_finish;
+            },
+            .LowerIdent => {
+                const field_start = self.pos;
+                const name = self.pos;
+                self.advance();
+                if (self.peek() == .Comma or self.peek() == .CloseCurly) {
+                    const field = try self.store.addPatternRecordField(.{
+                        .name = name,
+                        .value = null,
+                        .rest = false,
+                        .region = .{ .start = field_start, .end = self.pos },
+                    });
+                    try self.store.addScratchPatternRecordField(field);
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                        continue :pattern_kernel .record_next;
+                    }
+                    continue :pattern_kernel .record_finish;
+                }
+                if (self.peek() != .OpColon) {
+                    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+                        self.advance();
+                    }
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .expected_colon_after_pat_field_name, field_start);
+                    continue :pattern_kernel .complete;
+                }
+                self.advance();
+                try open_syntax.push(open_allocator, .pattern_record_field, PatternRecordFieldState, .{
+                    .record_start = pattern_record_state.start,
+                    .scratch_top = pattern_record_state.scratch_top,
+                    .alternatives = pattern_record_state.alternatives,
+                    .field_start = field_start,
+                    .name = name,
+                });
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = pattern_record_state.alternatives,
+                };
+                continue :pattern_kernel .root_next;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternRecordFieldsFrom(pattern_record_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_record_state.start);
+                    continue :pattern_kernel .complete;
+                }
+                const field_start = self.pos;
+                while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+                    self.advance();
+                }
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .expected_lower_ident_pat_field_name, field_start);
+                continue :pattern_kernel .complete;
+            },
+        },
+        .record_finish => switch (self.peek()) {
+            .CloseCurly => {
+                const fields = try self.store.patternRecordFieldSpanFrom(pattern_record_state.scratch_top);
+                self.advance();
+                last_pattern = try self.store.addPattern(.{ .record = .{
+                    .region = .{ .start = pattern_record_state.start, .end = self.pos },
+                    .fields = fields,
+                } });
+                continue :pattern_kernel .complete;
+            },
+            else => {
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_record_state.start);
+                continue :pattern_kernel .complete;
+            },
+        },
+        .tuple_next => switch (self.peek()) {
+            .CloseRound => continue :pattern_kernel .tuple_finish,
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                    continue :pattern_kernel .complete;
+                }
+                try open_syntax.push(open_allocator, .pattern_tuple, PatternTupleState, pattern_tuple_state);
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
+                };
+                continue :pattern_kernel .root_next;
+            },
+        },
+        .tuple_finish => switch (self.peek()) {
+            .CloseRound => {
+                self.advance();
+                const patterns = try self.store.patternSpanFrom(pattern_tuple_state.scratch_top);
+                last_pattern = try self.store.addPattern(.{ .tuple = .{
+                    .patterns = patterns,
+                    .region = .{ .start = pattern_tuple_state.start, .end = self.pos },
+                } });
+                continue :pattern_kernel .complete;
+            },
+            else => {
+                self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                continue :pattern_kernel .complete;
+            },
+        },
+    }
 }
 
 fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
