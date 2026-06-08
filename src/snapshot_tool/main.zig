@@ -4390,7 +4390,9 @@ const SnapshotReplParsedLine = struct {
     }
 };
 
-fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplParsedLine {
+const SnapshotReplParseError = parse.Parser.Error || error{TooNested};
+
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplParsedLine {
     const module_env = try allocator.create(ModuleEnv);
     errdefer allocator.destroy(module_env);
     module_env.* = try ModuleEnv.init(allocator, line);
@@ -4428,7 +4430,7 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) parse.Par
     };
 }
 
-fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) parse.Parser.Error!?AST.Statement {
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) SnapshotReplParseError!?AST.Statement {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -4441,7 +4443,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) pars
     return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
 }
 
-fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplInputKind {
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplInputKind {
     var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
     const statement = if (maybe_file_parse) |*parsed| blk: {
         defer parsed.deinit();
@@ -4480,7 +4482,7 @@ fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) parse.Pa
     };
 }
 
-fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplDefinitionIdentity {
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplDefinitionIdentity {
     var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
     defer parsed.deinit();
 
