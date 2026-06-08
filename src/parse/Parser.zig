@@ -4671,7 +4671,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         .expr_collection_next => switch (dispatch_token) {
             .CloseRound, .CloseSquare => {
                 const active_collection = expr_collections.active();
-                if (dispatch_token == active_collection.end_token) {
+                if (self.peek() == active_collection.end_token) {
                     self.advance();
                     const expr_collection_state = expr_collections.leave();
                     const span = try self.store.exprSpanFrom(expr_collection_state.scratch_top);
@@ -4788,7 +4788,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_expr orelse unreachable;
                 last_expr = null;
                 try self.store.addScratchExpr(item);
-                if (dispatch_token == .Comma) self.advance();
+                if (self.peek() == .Comma) self.advance();
                 dispatch_token = self.peek();
                 continue :dispatch .expr_collection_next;
             },
@@ -4797,6 +4797,9 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const item = last_expr orelse unreachable;
                 last_expr = null;
                 try self.store.addScratchExpr(item);
+                if (self.peek() == .Comma) {
+                    self.advance();
+                }
                 dispatch_token = self.peek();
                 continue :dispatch .expr_collection_next;
             },
