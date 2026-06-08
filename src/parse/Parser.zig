@@ -196,6 +196,17 @@ const OpenSyntaxKind = enum(u8) {
     header_record_field,
     statement_for_pattern,
     statement_destructure_pattern,
+    statement_expr_body,
+    statement_decl_body,
+    statement_var_body,
+    statement_expect_body,
+    statement_for_expr,
+    statement_for_body,
+    statement_while_cond,
+    statement_while_body,
+    statement_crash_body,
+    statement_dbg_body,
+    statement_return_body,
     statement_type_after_anno,
     statement_type_after_associated,
     statement_type_decl_anno,
@@ -2008,6 +2019,32 @@ const PatternStringState = struct {
     start: Token.Idx,
 };
 
+const StatementForExprState = struct {
+    start: Token.Idx,
+    patt: AST.Pattern.Idx,
+};
+
+const StatementForBodyState = struct {
+    start: Token.Idx,
+    patt: AST.Pattern.Idx,
+    expr: AST.Expr.Idx,
+};
+
+const StatementWhileBodyState = struct {
+    start: Token.Idx,
+    cond: AST.Expr.Idx,
+};
+
+const StatementVarBodyState = struct {
+    start: Token.Idx,
+    name: Token.Idx,
+};
+
+const StatementDeclBodyState = struct {
+    start: Token.Idx,
+    pattern: AST.Pattern.Idx,
+};
+
 const ExprState = struct {
     start: Token.Idx = 0,
     min_bp: u8 = 0,
@@ -3354,6 +3391,8 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         pattern_record_finish,
         pattern_tuple_next,
         pattern_tuple_finish,
+        statement_start,
+        statement_complete,
     };
 
     var expr_state = ExprState{ .start = self.pos, .min_bp = min_bp };
@@ -3385,6 +3424,8 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     var pattern_alternatives = Alternatives.alternatives_forbidden;
     var pattern_string_state: PatternStringState = undefined;
     var last_pattern: ?AST.Pattern.Idx = null;
+    var statement_type = StatementType.in_body;
+    var last_statement: ?AST.Statement.Idx = null;
 
     expr_kernel: switch (ExprLabel.prefix) {
         .prefix => {
@@ -4163,6 +4204,109 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
+                    .statement_expr_body => {
+                        const start = open_syntax.popPayload(.statement_expr_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .expr = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_decl_body => {
+                        const state = open_syntax.popPayload(.statement_decl_body, StatementDeclBodyState);
+                        last_expr = null;
+                        last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_var_body => {
+                        const state = open_syntax.popPayload(.statement_var_body, StatementVarBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"var" = .{
+                            .name = state.name,
+                            .body = completed,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_expect_body => {
+                        const start = open_syntax.popPayload(.statement_expect_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .expect = .{
+                            .body = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_for_expr => {
+                        const state = open_syntax.popPayload(.statement_for_expr, StatementForExprState);
+                        last_expr = null;
+                        try open_syntax.push(open_allocator, .statement_for_body, StatementForBodyState, .{
+                            .start = state.start,
+                            .patt = state.patt,
+                            .expr = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_for_body => {
+                        const state = open_syntax.popPayload(.statement_for_body, StatementForBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"for" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .patt = state.patt,
+                            .expr = state.expr,
+                            .body = completed,
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_while_cond => {
+                        const start = open_syntax.popPayload(.statement_while_cond, Token.Idx);
+                        last_expr = null;
+                        try open_syntax.push(open_allocator, .statement_while_body, StatementWhileBodyState, .{
+                            .start = start,
+                            .cond = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_while_body => {
+                        const state = open_syntax.popPayload(.statement_while_body, StatementWhileBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"while" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .cond = state.cond,
+                            .body = completed,
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_crash_body => {
+                        const start = open_syntax.popPayload(.statement_crash_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .crash = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_dbg_body => {
+                        const start = open_syntax.popPayload(.statement_dbg_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .dbg = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_return_body => {
+                        const start = open_syntax.popPayload(.statement_return_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"return" = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
                     .pattern_string => {
                         pattern_string_state = open_syntax.popPayload(.pattern_string, PatternStringState);
                         last_expr = null;
@@ -4476,9 +4620,8 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
         .block_next => switch (self.peek()) {
             .CloseCurly, .EndOfFile => continue :expr_kernel .block_finish,
             else => {
-                const statement = try self.runStatementDirect(.in_body);
-                try self.store.addScratchStatement(statement);
-                continue :expr_kernel .block_next;
+                statement_type = .in_body;
+                continue :expr_kernel .statement_start;
             },
         },
         .block_finish => switch (self.peek()) {
@@ -4503,6 +4646,323 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 continue :expr_kernel .suffix;
             },
             else => unreachable,
+        },
+        .statement_start => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok == .EndOfFile) {
+                last_statement = try self.addTopLevelUnexpectedStatement();
+                continue :expr_kernel .statement_complete;
+            }
+
+            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpenRound)) {
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    const next_tok = self.peekNext();
+                    if (next_tok == .OpAssign) {
+                        self.advance();
+                        const patt_idx = try self.store.addPattern(.{ .ident = .{
+                            .ident_tok = start,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        self.advance();
+                        try open_syntax.push(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                            .start = start,
+                            .pattern = patt_idx,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    } else if (next_tok == .OpColon) {
+                        if (tok == .LowerIdent and self.isVarIdent(start)) {
+                            last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
+                            continue :expr_kernel .statement_complete;
+                        }
+                        self.advance();
+                        self.advance();
+                        const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
+                        last_statement = try self.addStatement(.{ .type_anno = .{
+                            .anno = anno,
+                            .name = start,
+                            .where = try self.parseWhereConstraintTokens(),
+                            .is_var = false,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    } else if (statement_type == .top_level) {
+                        last_statement = try self.addTopLevelUnexpectedStatement();
+                        continue :expr_kernel .statement_complete;
+                    } else {
+                        try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                        expr_state = .{ .start = start, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    const next_tok = self.peekNext();
+                    if (next_tok == .OpAssign) {
+                        self.advance();
+                        const patt_idx = try self.store.addPattern(.{ .underscore = .{
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        self.advance();
+                        try open_syntax.push(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                            .start = start,
+                            .pattern = patt_idx,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    } else if (statement_type == .top_level) {
+                        last_statement = try self.addTopLevelUnexpectedStatement();
+                        continue :expr_kernel .statement_complete;
+                    } else {
+                        try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                        expr_state = .{ .start = start, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                }
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const is_type_decl_context = statement_type == .top_level or
+                        statement_type == .in_associated_block or
+                        (statement_type == .in_body and self.looksLikeTypeDecl());
+                    if (!is_type_decl_context) {
+                        if (statement_type == .top_level) {
+                            last_statement = try self.addTopLevelUnexpectedStatement();
+                            continue :expr_kernel .statement_complete;
+                        }
+                        try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                        expr_state = .{ .start = start, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+
+                    const header = try self.parseTypeHeaderTokens();
+                    const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+                    if (header_node.tag == .malformed) {
+                        self.recoverMalformedTypeDeclLine(start);
+                        const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
+                        last_statement = try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
+                        continue :expr_kernel .statement_complete;
+                    }
+
+                    const type_path = blk_path: {
+                        const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
+                        const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
+                        const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
+                        break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
+                    };
+
+                    if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    }
+                    const kind: AST.TypeDeclKind = switch (self.peek()) {
+                        .OpColonEqual => .nominal,
+                        .OpDoubleColon => .@"opaque",
+                        else => .alias,
+                    };
+                    self.advance();
+
+                    const type_dependencies_start = self.decl_index.typeDependencyTop();
+                    const was_collecting_type_dependencies = self.collect_type_dependencies;
+                    self.collect_type_dependencies = true;
+                    const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
+                    const type_dependencies = blk: {
+                        if (self.store.typeAnnoIsMalformed(anno)) {
+                            self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
+                            break :blk DeclIndex.Span.empty();
+                        }
+                        break :blk self.decl_index.typeDependencySpanFrom(type_dependencies_start);
+                    };
+                    self.collect_type_dependencies = was_collecting_type_dependencies;
+
+                    const where_clause = try self.parseWhereConstraintTokens();
+                    if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                        const dot_pos = self.pos;
+                        self.advance();
+                        self.advance();
+                        const associated = try self.runStatementOnlyBlockDirect(self.pos - 1, type_path);
+                        if (kind == .alias) {
+                            try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                                .start = dot_pos,
+                                .end = dot_pos + 1,
+                            });
+                        }
+                        const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
+                            .header = header,
+                            .anno = anno,
+                            .kind = kind,
+                            .where = where_clause,
+                            .associated = associated,
+                            .region = .{ .start = start, .end = self.pos },
+                        } }, type_dependencies, type_path);
+                        self.decl_index.setScopeOwner(associated.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
+                        last_statement = statement_idx;
+                        continue :expr_kernel .statement_complete;
+                    }
+
+                    last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
+                        .header = header,
+                        .anno = anno,
+                        .kind = kind,
+                        .where = where_clause,
+                        .associated = null,
+                        .region = .{ .start = start, .end = self.pos },
+                    } }, type_dependencies, type_path);
+                    continue :expr_kernel .statement_complete;
+                }
+            } else if (tok == .OpenCurly or tok == .OpenRound) {
+                const isCurly = self.peek() == .OpenCurly;
+                const start = self.pos;
+                var is_destructure = false;
+                var lookahead_pos = self.pos + 1;
+                var depth: u32 = 0;
+                while (lookahead_pos < self.tok_buf.tokens.len) {
+                    const lookahead_tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                    if ((isCurly and lookahead_tok == .OpenCurly) or (!isCurly and (lookahead_tok == .OpenRound or lookahead_tok == .NoSpaceOpenRound))) {
+                        depth += 1;
+                    } else if ((isCurly and lookahead_tok == .CloseCurly) or (!isCurly and lookahead_tok == .CloseRound)) {
+                        if (depth == 0) {
+                            const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
+                            if (token_after_close == .OpAssign) is_destructure = true;
+                            break;
+                        }
+                        depth -= 1;
+                    } else if (lookahead_tok == .EndOfFile) break;
+                    lookahead_pos += 1;
+                }
+                if (is_destructure) {
+                    try open_syntax.push(open_allocator, .statement_destructure_pattern, Token.Idx, start);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (statement_type == .top_level) {
+                    last_statement = try self.addTopLevelUnexpectedStatement();
+                    continue :expr_kernel .statement_complete;
+                }
+                try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+                expr_state = .{ .start = start, .min_bp = 0 };
+                continue :expr_kernel .prefix;
+            } else if (tok_int >= @intFromEnum(Token.Tag.KwApp) and tok_int <= @intFromEnum(Token.Tag.KwBreak)) {
+                if (tok == .KwVar) {
+                    const start = self.pos;
+                    if (statement_type != .in_body) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    }
+                    self.advance();
+                    if (self.peek() != .LowerIdent) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_must_have_ident, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    }
+                    const name = self.pos;
+                    self.advance();
+                    if (self.peek() == .OpColon) {
+                        self.advance();
+                        const anno = try self.runTypeAnnoDirect(.not_looking_for_args);
+                        last_statement = try self.addStatement(.{ .type_anno = .{
+                            .anno = anno,
+                            .name = name,
+                            .where = try self.parseWhereConstraintTokens(),
+                            .is_var = true,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    }
+                    self.expect(.OpAssign) catch {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    };
+                    try open_syntax.push(open_allocator, .statement_var_body, StatementVarBodyState, .{
+                        .start = start,
+                        .name = name,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwImport) {
+                    if (statement_type == .top_level) {
+                        last_statement = try self.parseImportStatementTokens();
+                    } else {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .import_must_be_top_level, self.pos);
+                    }
+                    continue :expr_kernel .statement_complete;
+                }
+                if (tok == .KwExpect) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .statement_expect_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwFor) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .statement_for_pattern, Token.Idx, start);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (tok == .KwWhile) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .statement_while_cond, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwCrash) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .statement_crash_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwDbg) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .statement_dbg_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwReturn) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.push(open_allocator, .statement_return_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwBreak) {
+                    const start = self.pos;
+                    self.advance();
+                    last_statement = try self.addStatement(.{ .@"break" = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+            }
+
+            if (statement_type == .top_level) {
+                last_statement = try self.addTopLevelUnexpectedStatement();
+                continue :expr_kernel .statement_complete;
+            }
+            const start = self.pos;
+            try open_syntax.push(open_allocator, .statement_expr_body, Token.Idx, start);
+            expr_state = .{ .start = start, .min_bp = 0 };
+            continue :expr_kernel .prefix;
+        },
+        .statement_complete => {
+            const completed = last_statement orelse unreachable;
+            last_statement = null;
+            try self.store.addScratchStatement(completed);
+            continue :expr_kernel .block_next;
         },
         .pattern_root_next => switch (self.peek()) {
             .EndOfFile => {
@@ -4824,6 +5284,36 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
+                    },
+                    .statement_for_pattern => {
+                        const start = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
+                        last_pattern = null;
+                        if (self.peek() == .KwIn) {
+                            self.advance();
+                            try open_syntax.push(open_allocator, .statement_for_expr, StatementForExprState, .{
+                                .start = start,
+                                .patt = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_destructure_pattern => {
+                        const start = open_syntax.popPayload(.statement_destructure_pattern, Token.Idx);
+                        last_pattern = null;
+                        if (self.peek() == .OpAssign) {
+                            self.advance();
+                            try open_syntax.push(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                                .start = start,
+                                .pattern = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
+                        continue :expr_kernel .statement_complete;
                     },
                     .pattern_root => {
                         open_syntax.popMarker(.pattern_root);
