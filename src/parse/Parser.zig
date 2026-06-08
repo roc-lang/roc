@@ -1990,7 +1990,7 @@ const RootExprParents = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn set(self: *RootExprParents, allocator: std.mem.Allocator, parent: RootExprParent, open_depth: usize) Error!void {
+    fn set(self: *RootExprParents, allocator: std.mem.Allocator, parent: RootExprParent, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
@@ -2017,7 +2017,7 @@ const RootStatementParents = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: DirectContext, open_depth: usize) Error!void {
+    fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: DirectContext, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
@@ -2066,7 +2066,7 @@ const ExprBinaryRhsStack = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState) Error!void {
+    fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
@@ -2132,7 +2132,7 @@ const ExprCollectionStack = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn enter(self: *ExprCollectionStack, allocator: std.mem.Allocator, state: ExprCollectionState) Error!void {
+    fn enter(self: *ExprCollectionStack, allocator: std.mem.Allocator, state: ExprCollectionState) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
