@@ -23,8 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - run: rm rust-toolchain.toml
-
       - run: cargo install typos-cli --version 1.44.0
 
       - name: do spell check with typos-cli 1.44.0

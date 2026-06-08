@@ -157,7 +157,7 @@ test "deeply nested parentheses parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
-fn vmExprAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();
     defer parser.decl_index.deinit();
@@ -233,7 +233,7 @@ test "where clause method function types parse stack-safely" {
     );
 }
 
-fn vmInitAllocationFailureImpl(allocator: std.mem.Allocator, tokens: tokenize.TokenizedBuffer) !void {
+fn vmInitAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();
     defer parser.decl_index.deinit();

@@ -76,7 +76,7 @@ pub fn parseSingleModule(
     module_env: *ModuleEnv,
     mode: ParseMode,
     options: CompileOptions,
-) !*AST {
+) (Allocator.Error || error{TooNested})!*AST {
     // Calculate line starts for source location tracking (idempotent if already done)
     try module_env.common.calcLineStarts(gpa);
 
@@ -133,7 +133,7 @@ pub fn canonicalizeSingleModule(
     module_env: *ModuleEnv,
     parse_ast: *AST,
     context: can.Can.ModuleInitContext,
-) !void {
+) Allocator.Error!void {
     try can.canonicalizeModule(roc_ctx, module_env, parse_ast, context);
 }
 

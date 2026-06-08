@@ -26,6 +26,7 @@
 //! - Original Rust implementation in `crates/compiler/exhaustive/`
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const builtins = @import("builtins");
 const i128h = builtins.compiler_rt_128;
@@ -127,7 +128,7 @@ pub const HumanIndex = struct {
     }
 
     /// Returns ordinal string: "1st", "2nd", "3rd", "4th", etc.
-    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) ![]const u8 {
+    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) Allocator.Error![]const u8 {
         const n = self.toHuman();
         const suffix = switch (n % 100) {
             11, 12, 13 => "th",
@@ -1123,7 +1124,7 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 
 /// Push work items for AND semantics: all types must be inhabited.
 /// Pushes AndCombine(N) followed by CheckType for each var.
-fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars: []const Var) !void {
+fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars: []const Var) Allocator.Error!void {
     const count: u32 = @intCast(vars.len);
     if (count == 0) {
         // Empty AND is true - push result directly
@@ -1140,7 +1141,7 @@ fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars
 
 /// Push work items for a tag union: OR semantics across tags, AND within each tag's args.
 /// Also handles extension chain following.
-fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *std.ArrayList(WorkItem), initial_tag_union: types.TagUnion) !void {
+fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *std.ArrayList(WorkItem), initial_tag_union: types.TagUnion) Allocator.Error!void {
     // First, collect all tags by following the extension chain
     var all_tag_args: std.ArrayList(Var.SafeList.Range) = .empty;
     defer all_tag_args.deinit(gpa);
@@ -1319,7 +1320,7 @@ fn isSketchedPatternInhabited(
             const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
 
             // Get the constructor's argument types
-            const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, tag_id);
+            const arg_types = try getCtorArgTypes(allocator, type_store, first_col_type, tag_id);
 
             // Check if any argument type is uninhabited
             for (arg_types, 0..) |arg_type, i| {
@@ -1535,7 +1536,7 @@ fn collectTypeParamsFromBackingType(
 /// IMPORTANT: This function follows extension chains to find the tag at the given index.
 /// Tag unions from unification may have tags split across the main union
 /// and its extension chain (e.g., [Normal, ..ext] where ext = [HasEmpty, ..]).
-fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_var: Var, tag_id: TagId) []const Var {
+fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_var: Var, tag_id: TagId) std.mem.Allocator.Error![]const Var {
     const resolved = type_store.resolveVar(type_var);
     const content = resolved.desc.content;
 
@@ -1566,11 +1567,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
             const ext_var = ext_resolved.var_;
 
             // Cycle detection: have we seen this variable before?
-            const gop = seen_exts.getOrPut(ext_var) catch {
-                // OOM during cycle detection - return empty to avoid crash.
-                // This is conservative: caller will see wrong arity but won't crash.
-                return &[_]Var{};
-            };
+            const gop = try seen_exts.getOrPut(ext_var);
             if (gop.found_existing) {
                 // Cycle detected - tag not found
                 break;
@@ -1598,7 +1595,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
     switch (content) {
         .alias => |alias| {
             const backing_var = type_store.getAliasBackingVar(alias);
-            return getCtorArgTypes(allocator, type_store, backing_var, tag_id);
+            return try getCtorArgTypes(allocator, type_store, backing_var, tag_id);
         },
         .structure => |flat_type| switch (flat_type) {
             .nominal_type => |nominal| {
@@ -1607,7 +1604,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                 // 2. Substitute any type parameters with the nominal type's arguments
                 const backing_var = type_store.getNominalBackingVar(nominal);
                 const nom_args = type_store.sliceNominalArgs(nominal);
-                const backing_args = getCtorArgTypes(allocator, type_store, backing_var, tag_id);
+                const backing_args = try getCtorArgTypes(allocator, type_store, backing_var, tag_id);
 
                 // If no nominal args or no backing args, nothing to substitute
                 if (nom_args.len == 0 or backing_args.len == 0) {
@@ -1629,10 +1626,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                 }
 
                 // Collect type parameters from the backing type to build substitution map
-                const type_params = collectTypeParamsFromBackingType(type_store, backing_var) catch {
-                    // OOM - return unsubstituted args
-                    return backing_args;
-                };
+                const type_params = try collectTypeParamsFromBackingType(type_store, backing_var);
                 defer type_store.gpa.free(type_params);
 
                 // Build substitution: param[i] -> nom_args[i]
@@ -1642,9 +1636,7 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
                 }
 
                 // Allocate result with substituted vars (uses arena allocator, freed at end of check)
-                const result = allocator.alloc(Var, backing_args.len) catch {
-                    return backing_args;
-                };
+                const result = try allocator.alloc(Var, backing_args.len);
 
                 for (backing_args, 0..) |arg, i| {
                     const arg_resolved = type_store.resolveVar(arg);
@@ -1704,7 +1696,7 @@ fn getRecordFieldTypes(type_store: *TypeStore, fields: types.RecordField.SafeMul
 /// Returns null if the field doesn't exist in the record type.
 /// Handles record, record_unbound, and follows aliases/recursion vars.
 /// Uses iterative approach to avoid stack overflow on deeply nested types.
-fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name: Ident.Idx) ?Var {
+fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name: Ident.Idx) std.mem.Allocator.Error!?Var {
     var current_type = record_type;
 
     // Track seen variables to detect cycles in recursive types
@@ -1717,7 +1709,7 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
         const content = resolved.desc.content;
 
         // Cycle detection: if we've seen this resolved variable before, stop
-        const gop = seen.getOrPut(type_store.gpa, resolved_var) catch return null;
+        const gop = try seen.getOrPut(type_store.gpa, resolved_var);
         if (gop.found_existing) {
             return null; // Cycle detected - field not found
         }
@@ -1833,7 +1825,7 @@ pub const ColumnTypes = struct {
         std.debug.assert(self.types.len > 0);
 
         // Look up the tag's payload types from types[0]
-        const payload_types = getCtorArgTypes(allocator, self.type_store, self.types[0], tag_id);
+        const payload_types = try getCtorArgTypes(allocator, self.type_store, self.types[0], tag_id);
 
         // For tag unions, the arity should match exactly.
         // For records, the pattern might destructure fewer fields than the actual type has.
@@ -1868,7 +1860,7 @@ pub const ColumnTypes = struct {
         const field_types = try allocator.alloc(Var, field_names.len);
 
         for (field_names, 0..) |name, i| {
-            field_types[i] = getRecordFieldTypeByName(self.type_store, record_type, name) orelse
+            field_types[i] = try getRecordFieldTypeByName(self.type_store, record_type, name) orelse
                 return error.TypeError;
         }
 
@@ -1912,7 +1904,7 @@ pub const ColumnTypes = struct {
         self: ColumnTypes,
         allocator: std.mem.Allocator,
         elem_count: usize,
-    ) !ColumnTypes {
+    ) Allocator.Error!ColumnTypes {
         if (self.types.len == 0) {
             return .{ .types = &[_]Var{}, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
         }
@@ -1936,7 +1928,7 @@ pub const ColumnTypes = struct {
 fn buildListCtorsForChecking(
     allocator: std.mem.Allocator,
     pattern_arities: []const ListArity,
-) ![]const ListArity {
+) Allocator.Error![]const ListArity {
     // Find the maximum lengths we need to consider
     var max_exact_len: usize = 0;
     var has_slice = false;
@@ -2397,7 +2389,7 @@ fn recurseIntoAllCtors(
 ) PatternResolveError![]const Pattern {
     for (alternatives) |alt| {
         // Skip uninhabited constructors
-        const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
+        const arg_types = try getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
         if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
             continue;
         }
@@ -2550,7 +2542,7 @@ pub fn checkExhaustiveSketched(
                     if (!found) {
                         // Skip uninhabited constructors - they don't need to be matched
                         // because no values of that constructor can exist.
-                        const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
+                        const arg_types = try getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
                         if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
                             continue;
                         }
@@ -2874,7 +2866,7 @@ pub fn isUsefulSketched(
                             }
                             if (!found) {
                                 // This constructor is missing - check if it's inhabited
-                                const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
+                                const arg_types = try getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
                                 var ctor_uninhabited = false;
                                 for (arg_types) |arg_type| {
                                     if (!try isTypeInhabited(type_store, builtin_idents, arg_type)) {
@@ -2902,7 +2894,7 @@ pub fn isUsefulSketched(
                     // All constructors covered - check each one
                     for (ctor_info.union_info.alternatives) |alt| {
                         // Skip uninhabited constructors
-                        const arg_types = getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
+                        const arg_types = try getCtorArgTypes(allocator, type_store, first_col_type, alt.tag_id);
                         if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
                             continue;
                         }
@@ -3224,7 +3216,7 @@ pub fn checkMatch(
     overall_region: Region,
 ) PatternResolveError!CheckResult {
     // Use an arena for all intermediate allocations to avoid leaks
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

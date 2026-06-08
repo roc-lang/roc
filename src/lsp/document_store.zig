@@ -1,6 +1,7 @@
 //! Document storage for tracking open text documents in the LSP server.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Stores the latest contents of each open text document.
 pub const DocumentStore = struct {
@@ -43,7 +44,7 @@ pub const DocumentStore = struct {
     }
 
     /// Inserts or replaces the document at `uri` with the given text and version.
-    pub fn upsert(self: *DocumentStore, uri: []const u8, version: i64, text: []const u8) !void {
+    pub fn upsert(self: *DocumentStore, uri: []const u8, version: i64, text: []const u8) Allocator.Error!void {
         const gop = try self.entries.getOrPut(uri);
         if (!gop.found_existing) {
             gop.key_ptr.* = try self.allocator.dupe(u8, uri);
@@ -74,13 +75,13 @@ pub const DocumentStore = struct {
     }
 
     /// Applies a range replacement to an existing document using UTF-16 positions.
-    pub fn applyRangeReplacement(self: *DocumentStore, uri: []const u8, version: i64, range: Range, new_text: []const u8) !void {
+    pub fn applyRangeReplacement(self: *DocumentStore, uri: []const u8, version: i64, range: Range, new_text: []const u8) (Allocator.Error || error{ NoChanges, DocumentNotFound, InvalidRange, InvalidPosition })!void {
         const change = ContentChange{ .text = new_text, .range = range };
         try self.applyContentChanges(uri, version, &.{change});
     }
 
     /// Applies one or more content changes in order, mirroring LSP incremental edits.
-    pub fn applyContentChanges(self: *DocumentStore, uri: []const u8, version: i64, changes: []const ContentChange) !void {
+    pub fn applyContentChanges(self: *DocumentStore, uri: []const u8, version: i64, changes: []const ContentChange) (Allocator.Error || error{ NoChanges, DocumentNotFound, InvalidRange, InvalidPosition })!void {
         if (changes.len == 0) return error.NoChanges;
 
         const entry = self.entries.getPtr(uri) orelse return error.DocumentNotFound;
@@ -101,7 +102,7 @@ pub const DocumentStore = struct {
         current_owned = false;
     }
 
-    fn applyChangeToText(self: *DocumentStore, text: []const u8, change: ContentChange) ![]u8 {
+    fn applyChangeToText(self: *DocumentStore, text: []const u8, change: ContentChange) (Allocator.Error || error{ InvalidRange, InvalidPosition })![]u8 {
         if (change.range) |range| {
             return replaceRange(self.allocator, text, range, change.text);
         } else {
@@ -109,7 +110,7 @@ pub const DocumentStore = struct {
         }
     }
 
-    fn replaceRange(allocator: std.mem.Allocator, text: []const u8, range: Range, new_text: []const u8) ![]u8 {
+    fn replaceRange(allocator: std.mem.Allocator, text: []const u8, range: Range, new_text: []const u8) (Allocator.Error || error{ InvalidRange, InvalidPosition })![]u8 {
         const start_offset = try positionToOffset(text, range.start_line, range.start_character);
         const end_offset = try positionToOffset(text, range.end_line, range.end_character);
         if (start_offset > end_offset or end_offset > text.len) return error.InvalidRange;
@@ -126,7 +127,7 @@ pub const DocumentStore = struct {
         return buffer;
     }
 
-    fn positionToOffset(text: []const u8, line: usize, character_utf16: usize) !usize {
+    fn positionToOffset(text: []const u8, line: usize, character_utf16: usize) (Allocator.Error || error{InvalidPosition})!usize {
         var current_line: usize = 0;
         var index: usize = 0;
         while (current_line < line) : (current_line += 1) {

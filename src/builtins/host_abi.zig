@@ -171,7 +171,7 @@ pub const RocOps = extern struct {
             tracy.alloc(@ptrCast(roc_alloc_args.answer), length);
         }
 
-        return roc_alloc_args.answer;
+        return roc_alloc_args.answer.?;
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
@@ -198,7 +198,13 @@ pub const RocOps = extern struct {
 pub const RocAlloc = extern struct {
     alignment: usize,
     length: usize,
-    answer: *anyopaque,
+    /// On success the host writes the allocated pointer here. A host that cannot
+    /// provide a non-null pointer (e.g. due to OOM) must not return normally; a
+    /// platform host aborts, while the compiler-internal host signals failure by
+    /// writing `null` so the surrounding interpreter can turn it into a Roc crash
+    /// (`null` and a real pointer share the same representation, so codegen and
+    /// platform hosts that always succeed are unaffected).
+    answer: ?*anyopaque,
 };
 
 /// When RocOps.roc_dealloc gets called, it will be passed one of these.
@@ -210,14 +216,15 @@ pub const RocDealloc = extern struct {
 };
 
 /// When RocOps.roc_realloc gets called, it will be passed one of these.
-/// That function should write the allocated memory into `ret`.
-/// If it cannot provide a non-null pointer (e.g. due to OOM), it
-/// must not return, and must instead do something along the lines
-/// of roc_crashed.
+/// On entry `answer` holds the existing allocation; the host writes the
+/// reallocated pointer back into it. A host that cannot provide a non-null
+/// pointer (e.g. due to OOM) must not return normally; a platform host aborts,
+/// while the compiler-internal host writes `null` so the surrounding interpreter
+/// can turn it into a Roc crash. See `RocAlloc.answer`.
 pub const RocRealloc = extern struct {
     alignment: usize,
     new_length: usize,
-    answer: *anyopaque,
+    answer: ?*anyopaque,
 };
 
 /// The UTF-8 string message the host receives when a Roc program crashes

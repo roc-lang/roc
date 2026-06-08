@@ -6,6 +6,7 @@
 //! following the "Inform Don't Block" philosophy.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const tracy = @import("tracy");
 

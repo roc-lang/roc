@@ -153,7 +153,7 @@ pub fn validateTargetFilesExist(
     std_io: std.Io,
     targets_config: TargetsConfig,
     platform_dir: std.Io.Dir,
-) !ValidationResult {
+) Allocator.Error!ValidationResult {
     const files_dir_path = targets_config.files_dir orelse return .{ .valid = {} };
 
     // Check if files directory exists
@@ -195,7 +195,7 @@ fn validateTargetSpec(
     spec: TargetLinkSpec,
     link_type: LinkType,
     files_dir: std.Io.Dir,
-) !?ValidationResult {
+) Allocator.Error!?ValidationResult {
     // Get target subdirectory name
     const target_subdir = @tagName(spec.target);
 
@@ -253,7 +253,7 @@ fn validateTargetSpec(
 pub fn createValidationReport(
     allocator: Allocator,
     result: ValidationResult,
-) !Report {
+) Allocator.Error!Report {
     switch (result) {
         .valid => unreachable, // Should not create report for valid result
 

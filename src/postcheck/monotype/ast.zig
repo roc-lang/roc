@@ -21,6 +21,8 @@ pub const PatId = enum(u32) { _ };
 pub const DefId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
+/// Identifier assigned by Monotype lifting when this storage is consumed.
+pub const LiftedFnId = enum(u32) { _ };
 /// Identifier for an owned string literal.
 pub const StringLiteralId = enum(u32) { _ };
 
@@ -189,9 +191,15 @@ pub const CallValue = struct {
     args: Span(ExprId),
 };
 
-/// Direct call to a known function template.
+/// Direct call target before or after Monotype lifting.
+pub const ProcCallee = union(enum) {
+    template: FnTemplate,
+    lifted: LiftedFnId,
+};
+
+/// Direct call to a known function.
 pub const CallProc = struct {
-    callee: FnTemplate,
+    callee: ProcCallee,
     args: Span(ExprId),
 };
 
@@ -259,6 +267,7 @@ pub const ExprData = union(enum) {
     lambda: LambdaExpr,
     def_ref: DefId,
     fn_def: FnTemplate,
+    fn_ref: LiftedFnId,
     call_value: CallValue,
     call_proc: CallProc,
     low_level: LowLevelCall,

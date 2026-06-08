@@ -1,6 +1,7 @@
 //! Host-managed storage for crash messages emitted through `RocOps` callbacks.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// Result of the most recent crash callback invocation.
 pub const CrashState = union(enum) {
@@ -41,7 +42,7 @@ pub const CrashContext = struct {
     }
 
     /// Store a crash message (taking ownership of a duplicated copy).
-    pub fn recordCrash(self: *CrashContext, message: []const u8) !void {
+    pub fn recordCrash(self: *CrashContext, message: []const u8) Allocator.Error!void {
         self.reset();
         const copy = try self.allocator.dupe(u8, message);
         self.state = .{ .crashed = copy };

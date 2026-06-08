@@ -304,9 +304,6 @@ fn compileModule(
     var module_env = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
@@ -435,7 +432,7 @@ fn compileModule(
         try imported_envs.append(gpa, dep.env);
     }
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
@@ -500,7 +497,7 @@ fn serializeModuleEnv(
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

@@ -18,7 +18,7 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const CoreCtx = @import("ctx").CoreCtx;
 const RocDec = builtins.dec.RocDec;
 
-fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
+fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) error{NotAnInteger}!i128 {
     const expr = module_env.store.getExpr(expr_idx);
     switch (expr) {
         .e_num => |int_expr| {

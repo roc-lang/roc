@@ -138,7 +138,7 @@ pub fn parseAppHeader(
     };
 }
 
-fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
+fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) error{ExpectedString}![]const u8 {
     const e = ast.store.getExpr(expr_idx);
     return switch (e) {
         .string => |s| {

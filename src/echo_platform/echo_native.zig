@@ -12,6 +12,7 @@ const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");
 const roc_target = @import("roc_target");
+const base = @import("base");
 const runner = @import("runner.zig");
 
 const Allocator = std.mem.Allocator;
@@ -71,7 +72,7 @@ fn printUsageAndExit() noreturn {
 /// CLI entry point. Parses argv, reads the app source (and any
 /// `--with-file` modules), then drives `runner.runEcho` against a
 /// 128 MiB FixedBufferAllocator. Exits with the Roc program's exit code.
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) anyerror!void {
     process_io = init.io;
     const io = init.io;
 
@@ -79,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

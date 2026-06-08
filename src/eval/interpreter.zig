@@ -156,11 +156,32 @@ const InterpreterRocEnv = struct {
         self.recordCrash(msg);
     }
 
+    /// The host allocators signal OOM by writing a null `answer` (see
+    /// `host_abi.RocAlloc`). Turn that into a Roc crash that unwinds to the eval
+    /// boundary via the active jump buffer, instead of letting it abort.
+    fn crashAllocationFailed(self: *InterpreterRocEnv) noreturn {
+        self.reportCrash("ran out of memory");
+        const active_jmp_buf = self.active_jmp_buf orelse {
+            debugPrint(
+                "LIR/interpreter invariant violated: allocation failed without an active jump buffer\n",
+                .{},
+            );
+            if (is_freestanding) {
+                @trap();
+            } else {
+                std.process.abort();
+            }
+        };
+        self.active_jmp_buf = null;
+        longjmp(active_jmp_buf, 1);
+    }
+
     fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         const caller_roc_ops = self.currentRocOps();
         caller_roc_ops.roc_alloc(roc_alloc, caller_roc_ops.env);
-        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
+        const ptr = roc_alloc.answer orelse self.crashAllocationFailed();
+        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), roc_alloc.length, roc_alloc.alignment });
     }
 
     fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
@@ -173,9 +194,10 @@ const InterpreterRocEnv = struct {
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
         const caller_roc_ops = self.currentRocOps();
-        const old_ptr = roc_realloc.answer;
+        const old_ptr = roc_realloc.answer.?;
         caller_roc_ops.roc_realloc(roc_realloc, caller_roc_ops.env);
-        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+        const new_ptr = roc_realloc.answer orelse self.crashAllocationFailed();
+        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), roc_realloc.new_length });
     }
 
     fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -238,7 +260,7 @@ pub const Interpreter = struct {
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
     /// Arena for interpreter-allocated memory (temporaries, copies).
-    arena: std.heap.ArenaAllocator,
+    arena: base.SingleThreadArena,
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
@@ -443,7 +465,7 @@ pub const Interpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
                 .env = @ptrCast(roc_env),

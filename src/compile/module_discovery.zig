@@ -29,7 +29,7 @@ const AST = parse.AST;
 pub fn extractImportsFromDeclIndex(
     parse_ast: *const AST,
     gpa: Allocator,
-) ![][]const u8 {
+) Allocator.Error![][]const u8 {
     var result = std.ArrayList([]const u8).empty;
     errdefer {
         for (result.items) |item| gpa.free(item);
@@ -54,7 +54,7 @@ fn appendModuleName(
     result: *std.ArrayList([]const u8),
     module_name: []const u8,
     allow_builtin_source_import: bool,
-) !void {
+) Allocator.Error!void {
     if (!allow_builtin_source_import and std.mem.eql(u8, module_name, "Builtin")) return;
 
     // Check if it looks like a module name (starts with uppercase)
@@ -79,7 +79,7 @@ fn stripLeadingDot(text: []const u8) []const u8 {
 pub fn extractQualifiedImportsFromDeclIndex(
     parse_ast: *const AST,
     gpa: Allocator,
-) ![][]const u8 {
+) Allocator.Error![][]const u8 {
     var result = std.ArrayList([]const u8).empty;
     errdefer {
         for (result.items) |item| gpa.free(item);
