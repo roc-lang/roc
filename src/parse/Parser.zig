@@ -2486,28 +2486,30 @@ const TypeFnAfterRetState = struct {
 fn readQualificationChain(self: *Parser) Error!QualificationResult {
     std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
 
-    const first_token = self.pos;
-    const first_tag = self.peek();
-    const next_tag = self.peekNext();
-    if (next_tag != .NoSpaceDotUpperIdent and next_tag != .NoSpaceDotLowerIdent) {
-        return .{
-            .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
-            .final_token = first_token,
-            .is_upper = first_tag == .UpperIdent,
-        };
-    }
-
     const scratch_top = self.store.scratchTokenTop();
-    var final_token = first_token;
-    var is_upper = first_tag == .UpperIdent;
+    var final_token = self.pos; // Capture position of the identifier
+    var is_upper = true;
+
+    // Check if there's a qualification chain by looking ahead
+    const saved_pos = self.pos;
     self.advance();
 
-    while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-        try self.store.addScratchToken(final_token);
+    if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+        // There is a qualification chain, continue parsing
+        while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+            // Add the current token as a qualifier before moving to the next
+            try self.store.addScratchToken(final_token);
 
-        final_token = self.pos;
-        is_upper = self.peek() == .NoSpaceDotUpperIdent;
-        self.advance();
+            // Capture position of the dot-prefixed token
+            final_token = self.pos;
+            is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
+
+            // Move past this token
+            self.advance();
+        }
+    } else {
+        // No qualification chain, restore position
+        self.pos = saved_pos;
     }
 
     const qualifiers = try self.store.tokenSpanFrom(scratch_top);
