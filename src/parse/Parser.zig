@@ -4088,16 +4088,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     }
                 }
             } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
-                if (tok == .TripleDot) {
-                    const start = self.pos;
-                    const expr = try self.store.addExpr(.{ .ellipsis = .{
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                    self.advance();
-                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
                 if (tok == .OpUnaryMinus or tok == .OpBang) {
                     const start = self.pos;
                     const operator_token = start;
@@ -4117,6 +4107,16 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_lambda_after_args;
+                }
+                if (tok == .TripleDot) {
+                    const start = self.pos;
+                    const expr = try self.store.addExpr(.{ .ellipsis = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    self.advance();
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_suffix;
                 }
             } else {
                 if (tok == .KwIf) {
