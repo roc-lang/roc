@@ -170,6 +170,7 @@ const CustomCase = enum {
     generated_graph_5_5,
     generated_graph_2_100,
     generated_graph_200_5,
+    list_builtin_inlined,
     fmt_reformats_file,
     fmt_does_not_change_file,
     fmt_stdin_formats,
@@ -502,6 +503,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many symbols per file", .body = .{ .custom = .generated_graph_2_100 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many imported files", .body = .{ .custom = .generated_graph_200_5 } },
+    .{ .id = 0, .suite = .subcommands, .name = "list builtins inline in native --opt=speed build", .body = .{ .custom = .list_builtin_inlined } },
     .{ .id = 0, .suite = .subcommands, .name = "roc version outputs at least 5 chars to stdout", .body = .{ .command = .{ .args = &.{"version"}, .stdout_min_len = 5 } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl batch mode suppresses welcome banner", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "", .stdout_exact = "", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates simple expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1\n", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "Roc REPL" }, .{ .stream = .stdout, .text = ">" }, .{ .stream = .stdout, .text = "Goodbye" } } } } },
@@ -1342,6 +1344,7 @@ fn runCustomCase(
         .generated_graph_5_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 5, .symbols_per_file = 5 }),
         .generated_graph_2_100 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 2, .symbols_per_file = 100 }),
         .generated_graph_200_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 200, .symbols_per_file = 5 }),
+        .list_builtin_inlined => customListBuiltinInlined(io, allocator, &env, &timer, timeout_ms),
         .fmt_reformats_file => customFmtReformatsFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_does_not_change_file => customFmtDoesNotChangeFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_stdin_formats => customFmtStdin(io, allocator, &env, &timer, timeout_ms, false),
@@ -1505,6 +1508,80 @@ const GeneratedModuleGraphConfig = struct {
     roc_file_count: usize,
     symbols_per_file: usize,
 };
+
+/// Regression test for builtin inlining: a native `--opt=speed` build must inline
+/// list builtins (link builtins.bc) rather than leave them as opaque external calls.
+/// If the builtin symbol naming ever drifts between the codegen and the bitcode, the
+/// inlining silently stops; this catches that by asserting the emitted object has no
+/// remaining reference to `roc_builtins_list_append_unsafe` (i.e. it was inlined away).
+fn customListBuiltinInlined(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const plat_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_plat.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+
+    const plat_src =
+        \\platform ""
+        \\    requires {} { main! : () => List(I32) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host!: "main" }
+        \\    targets: {
+        \\        files: "targets/",
+        \\        exe: {
+        \\            arm64mac: ["libhost.a", app],
+        \\            x64mac: ["libhost.a", app],
+        \\            arm64musl: ["libhost.a", app],
+        \\            x64musl: ["libhost.a", app],
+        \\            arm64glibc: ["libhost.a", app],
+        \\            x64glibc: ["libhost.a", app],
+        \\        }
+        \\    }
+        \\
+        \\main_for_host! : () => List(I32)
+        \\main_for_host! = || main!()
+        \\
+    ;
+    const app_src =
+        \\app [main!] { pf: platform "./inline_plat.roc" }
+        \\
+        \\main! : () => List(I32)
+        \\main! = || [1.I32, 2, 3].map(|x| x + 1)
+        \\
+    ;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = plat_path, .data = plat_src }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_src }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
+
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-link" }, app_path, .absolute, null, child_timeout_ms) catch |err|
+        return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
+    if (checkCommandExpectation(allocator, result, .{ .args = &.{"build"}, .exit = .success })) |message| {
+        return failureFromRun(allocator, timer, result, message);
+    }
+
+    const marker = "Object file generated: ";
+    const marker_idx = std.mem.indexOf(u8, result.stdout, marker) orelse
+        return customFailure(allocator, timer, "roc build --no-link did not report an object path", .{});
+    const after_marker = result.stdout[marker_idx + marker.len ..];
+    const newline = std.mem.indexOfScalar(u8, after_marker, '\n') orelse after_marker.len;
+    const obj_path = std.mem.trim(u8, after_marker[0..newline], " \r\t");
+
+    const obj_bytes = std.Io.Dir.cwd().readFileAlloc(io, obj_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read object {s}: {}", .{ obj_path, err });
+    if (std.mem.indexOf(u8, obj_bytes, "roc_builtins_list_append_unsafe") != null) {
+        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed object (it still references the builtin symbol)", .{});
+    }
+    return null;
+}
 
 fn customGeneratedModuleGraph(
     io: std.Io,

@@ -293,9 +293,14 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     // and there are no duplicate symbols. The linkage must be set AFTER linking,
     // because LLVMLinkModules2 promotes available_externally back to external when
     // it resolves an external declaration in the destination module.
+    //
+    // Only done for native builds: the embedded builtin bitcode is compiled for the
+    // host (native) target, so linking it into a cross-compiled module would splice
+    // in wrong-architecture code. Cross builds fall back to external builtin calls
+    // resolved from the target's roc_builtins.o at final link (correct, not inlined).
     {
         const builtins_bc = llvm_embedded.builtins_bc;
-        if (builtins_bc.len > 0) {
+        if (builtins_bc.len > 0 and config.isNative()) {
             // Record the app's own defined functions before linking.
             var app_defs = std.StringHashMap(void).init(gpa);
             defer {
