@@ -201,6 +201,54 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // The imports for decode, JsonError, map, Try, encode, and DecodeProblem should all work
 }
 
+test "import validation - type module associated values are exposed under their bare names" {
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
+
+    // A type module whose associated values should be importable via
+    // `import FooBar exposing [square]`. The exposed set must therefore contain
+    // the bare names `square` and `cube`, not just the qualified `FooBar.square`
+    // forms, because `exposing` validation looks them up by their bare names.
+    const source =
+        \\FooBar :: {}.{
+        \\    square : U64 -> U64
+        \\    square = |x| x * x
+        \\
+        \\    cube : U64 -> U64
+        \\    cube = |x| x * x * x
+        \\}
+    ;
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+
+    const parse_env = try allocator.create(ModuleEnv);
+    parse_env.* = try ModuleEnv.init(allocator, source);
+    defer {
+        parse_env.deinit();
+        allocator.destroy(parse_env);
+    }
+    const ast = try parse.parse(allocator, &parse_env.common);
+    defer ast.deinit();
+    try parse_env.initCIRFields("FooBar");
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var can = try Can.initModule(roc_ctx, parse_env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    // `exposing` validation resolves an item by finding its bare ident in the
+    // target module and asking whether that ident is exposed (see Can.zig).
+    const square_ident = parse_env.common.findIdent("square") orelse
+        return error.SquareIdentMissing;
+    try testing.expect(parse_env.containsExposedById(square_ident));
+    const cube_ident = parse_env.common.findIdent("cube") orelse
+        return error.CubeIdentMissing;
+    try testing.expect(parse_env.containsExposedById(cube_ident));
+}
+
 test "import validation - no module_envs provided" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);

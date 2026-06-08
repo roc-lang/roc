@@ -2714,6 +2714,29 @@ const tests = [_]CliBugSpec{
         \\    x = Id(42)
         \\}
     , "42\n"),
+    .{
+        .id = 212,
+        .bug_id = "B212",
+        .name = "bughunt B212: default-app imports a sibling type module and exposes its values",
+        .files = &.{
+            .{ .path = "main.roc", .contents =
+            \\import FooBar exposing [square]
+            \\
+            \\main! = |_arg| {
+            \\    echo!(square(12).to_str())
+            \\    Ok({})
+            \\}
+            },
+            .{ .path = "FooBar.roc", .contents =
+            \\FooBar :: {}.{
+            \\    square : U64 -> U64
+            \\    square = |x| x * x
+            \\}
+            },
+        },
+        .command = .run_dev,
+        .expect = .{ .success_stdout_exact = "144\n" },
+    },
 };
 
 fn currentProcessIdForFilename() u64 {
