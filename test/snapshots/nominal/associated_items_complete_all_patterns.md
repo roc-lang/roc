@@ -496,8 +496,7 @@ PARSE ERROR - associated_items_complete_all_patterns.md:49:18:49:19
 PARSE ERROR - associated_items_complete_all_patterns.md:49:19:49:20
 PARSE ERROR - associated_items_complete_all_patterns.md:49:20:49:21
 UNEXPECTED TOKEN IN EXPRESSION - associated_items_complete_all_patterns.md:51:27:51:34
-UNEXPECTED TOKEN IN EXPRESSION - associated_items_complete_all_patterns.md:51:40:51:41
-EXPRESSION IN ASSOCIATED ITEMS - associated_items_complete_all_patterns.md:51:42:51:43
+EXPRESSION IN ASSOCIATED ITEMS - associated_items_complete_all_patterns.md:51:27:51:43
 PARSE ERROR - associated_items_complete_all_patterns.md:57:1:57:2
 PARSE ERROR - associated_items_complete_all_patterns.md:58:19:58:26
 PARSE ERROR - associated_items_complete_all_patterns.md:58:26:58:31
