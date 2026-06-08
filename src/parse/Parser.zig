@@ -4323,12 +4323,13 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     }
                 }
                 if (isInBinOpTokenRange(tok)) {
-                    const bp = getTokenBP(tok) orelse {
+                    const bp = getTokenBPInRange(tok);
+                    if (bp.left == 0) {
                         last_expr = expr_finish_state.expr;
                         dispatch_token = self.peek();
                         continue :dispatch .expr_complete;
-                    };
-                    if ((self.peek() == .OpAnd or self.peek() == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
+                    }
+                    if ((tok == .OpAnd or tok == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
                         last_expr = expr_finish_state.expr;
                         dispatch_token = self.peek();
                         continue :dispatch .expr_complete;
@@ -7355,27 +7356,39 @@ inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
     return tok_int >= @intFromEnum(Token.Tag.OpPlus) and tok_int <= @intFromEnum(Token.Tag.OpEquals);
 }
 
+const no_bin_op_bp = BinOpBp{ .left = 0, .right = 0 };
+const bin_op_bp_table = blk: {
+    const start = @intFromEnum(Token.Tag.OpPlus);
+    const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
+    var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 30, .right = 31 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 28, .right = 29 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 24, .right = 25 };
+    table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
+    table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
+    table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
+    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 16, .right = 17 };
+    table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
+    table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
+    table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };
+    table[@intFromEnum(Token.Tag.OpGreaterThan) - start] = .{ .left = 9, .right = 9 };
+    table[@intFromEnum(Token.Tag.OpLessThanOrEq) - start] = .{ .left = 7, .right = 7 };
+    table[@intFromEnum(Token.Tag.OpGreaterThanOrEq) - start] = .{ .left = 5, .right = 5 };
+    table[@intFromEnum(Token.Tag.OpAnd) - start] = .{ .left = 4, .right = 3 };
+    table[@intFromEnum(Token.Tag.OpOr) - start] = .{ .left = 2, .right = 1 };
+    break :blk table;
+};
+
+inline fn getTokenBPInRange(tok: Token.Tag) BinOpBp {
+    return bin_op_bp_table[@intFromEnum(tok) - @intFromEnum(Token.Tag.OpPlus)];
+}
+
 /// Get the binding power for a Token if it's a operator token, else return null.
 fn getTokenBP(tok: Token.Tag) ?BinOpBp {
-    return switch (tok) {
-        .OpStar => .{ .left = 30, .right = 31 }, // 31 LEFT
-        .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
-        .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
-        .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
-        .OpPlus => .{ .left = 20, .right = 21 }, // 21 LEFT
-        .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
-        .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
-        .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT
-        .OpEquals => .{ .left = 15, .right = 15 }, // 15 NOASSOC
-        .OpNotEquals => .{ .left = 13, .right = 13 }, // 13 NOASSOC
-        .OpLessThan => .{ .left = 11, .right = 11 }, // 11 NOASSOC
-        .OpGreaterThan => .{ .left = 9, .right = 9 }, // 9 NOASSOC
-        .OpLessThanOrEq => .{ .left = 7, .right = 7 }, // 7 NOASSOC
-        .OpGreaterThanOrEq => .{ .left = 5, .right = 5 }, // 5 NOASSOC
-        .OpAnd => .{ .left = 4, .right = 3 }, // 3 RIGHT
-        .OpOr => .{ .left = 2, .right = 1 }, // 1 RIGHT
-        else => null,
-    };
+    if (!isInBinOpTokenRange(tok)) return null;
+    const bp = getTokenBPInRange(tok);
+    return if (bp.left == 0) null else bp;
 }
 
 comptime {
