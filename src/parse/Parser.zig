@@ -5946,21 +5946,25 @@ fn runExprStatementKernel(
                 const field_start = self.pos;
                 const name = self.pos;
                 self.advance();
-                if (self.peek() == .Comma or self.peek() == .CloseCurly) {
-                    const field = try self.store.addPatternRecordField(.{
-                        .name = name,
-                        .value = null,
-                        .rest = false,
-                        .region = .{ .start = field_start, .end = self.pos },
-                    });
-                    try self.store.addScratchPatternRecordField(field);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                        continue :expr_kernel .pattern_record_next;
-                    }
-                    continue :expr_kernel .pattern_record_finish;
+                const after_name = self.peek();
+                switch (after_name) {
+                    .Comma, .CloseCurly => {
+                        const field = try self.store.addPatternRecordField(.{
+                            .name = name,
+                            .value = null,
+                            .rest = false,
+                            .region = .{ .start = field_start, .end = self.pos },
+                        });
+                        try self.store.addScratchPatternRecordField(field);
+                        if (after_name == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .pattern_record_next;
+                        }
+                        continue :expr_kernel .pattern_record_finish;
+                    },
+                    else => {},
                 }
-                if (self.peek() != .OpColon) {
+                if (after_name != .OpColon) {
                     while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
                         self.advance();
                     }
