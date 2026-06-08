@@ -4349,7 +4349,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     }
                     last_expr = expr_finish_state.expr;
                     const open_depth = open_syntax.entries.items.len;
-                    if (root_expr_parents.current) |*parent_frame| {
+                    if (root_expr_parents.current) |parent_frame| {
                         if (parent_frame.open_depth == open_depth) {
                             dispatch_token = self.peek();
                             const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
@@ -4443,7 +4443,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         .expr_complete => {
             const completed = last_expr orelse unreachable;
             const open_depth = open_syntax.entries.items.len;
-            if (root_expr_parents.current) |*parent_frame| {
+            if (root_expr_parents.current) |parent_frame| {
                 if (parent_frame.open_depth == open_depth) {
                     dispatch_token = self.peek();
                     const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
@@ -4691,7 +4691,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             }
                             last_expr = expr;
                             const open_depth = open_syntax.entries.items.len;
-                            if (root_expr_parents.current) |*parent_frame| {
+                            if (root_expr_parents.current) |parent_frame| {
                                 if (parent_frame.open_depth == open_depth) {
                                     dispatch_token = self.peek();
                                     const parent_int = @intFromEnum(std.meta.activeTag(parent_frame.parent));
