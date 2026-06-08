@@ -3228,6 +3228,42 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
             } else if (tok_int >= @intFromEnum(Token.Tag.KwApp) and tok_int <= @intFromEnum(Token.Tag.KwBreak)) {
+                if (tok == .KwVar) {
+                    const start = self.pos;
+                    if (statement_type != .in_body) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
+                        dispatch_token = self.peek();
+                        continue :dispatch .statement_complete;
+                    }
+                    self.advance();
+                    if (self.peek() != .LowerIdent) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_must_have_ident, self.pos);
+                        dispatch_token = self.peek();
+                        continue :dispatch .statement_complete;
+                    }
+                    const name = self.pos;
+                    self.advance();
+                    if (self.peek() == .OpColon) {
+                        self.advance();
+                        try open_syntax.push(open_allocator, .statement_type_after_anno, TypeAnnoStatementProgress, .{
+                            .start = start,
+                            .name = name,
+                            .is_var = true,
+                        });
+                        type_args = .not_looking_for_args;
+                        dispatch_token = self.peek();
+                        continue :dispatch .type_prefix;
+                    }
+                    self.expect(.OpAssign) catch {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
+                        dispatch_token = self.peek();
+                        continue :dispatch .statement_complete;
+                    };
+                    try root_expr_parents.set(open_allocator, .{ .statement_var_body = .{ .start = start, .name = name } }, open_syntax.entries.items.len);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    dispatch_token = self.peek();
+                    continue :dispatch .expr_prefix;
+                }
                 if (tok == .KwImport) {
                     if (statement_type == .top_level) {
                         last_statement = try self.parseImportStatementTokens();
@@ -3285,42 +3321,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     const start = self.pos;
                     self.advance();
                     try root_expr_parents.set(open_allocator, .{ .statement_return = start }, open_syntax.entries.items.len);
-                    expr_state = .{ .start = self.pos, .min_bp = 0 };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_prefix;
-                }
-                if (tok == .KwVar) {
-                    const start = self.pos;
-                    if (statement_type != .in_body) {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
-                        dispatch_token = self.peek();
-                        continue :dispatch .statement_complete;
-                    }
-                    self.advance();
-                    if (self.peek() != .LowerIdent) {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_must_have_ident, self.pos);
-                        dispatch_token = self.peek();
-                        continue :dispatch .statement_complete;
-                    }
-                    const name = self.pos;
-                    self.advance();
-                    if (self.peek() == .OpColon) {
-                        self.advance();
-                        try open_syntax.push(open_allocator, .statement_type_after_anno, TypeAnnoStatementProgress, .{
-                            .start = start,
-                            .name = name,
-                            .is_var = true,
-                        });
-                        type_args = .not_looking_for_args;
-                        dispatch_token = self.peek();
-                        continue :dispatch .type_prefix;
-                    }
-                    self.expect(.OpAssign) catch {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
-                        dispatch_token = self.peek();
-                        continue :dispatch .statement_complete;
-                    };
-                    try root_expr_parents.set(open_allocator, .{ .statement_var_body = .{ .start = start, .name = name } }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
