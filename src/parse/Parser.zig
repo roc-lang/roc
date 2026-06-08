@@ -4538,65 +4538,33 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 else => .{ .expr = completed },
             };
         },
-        .expr_after_unary => switch (dispatch_token) {
-            .EndOfFile => {
-                expr_after_unary_state = open_syntax.popPayload(.expr_unary, ExprAfterUnaryState);
-                const operand = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .unary_op = .{
-                    .operator = expr_after_unary_state.operator,
-                    .expr = operand,
-                    .region = .{ .start = expr_after_unary_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_after_unary_state.start, .min_bp = expr_after_unary_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                expr_after_unary_state = open_syntax.popPayload(.expr_unary, ExprAfterUnaryState);
-                const operand = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .unary_op = .{
-                    .operator = expr_after_unary_state.operator,
-                    .expr = operand,
-                    .region = .{ .start = expr_after_unary_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_after_unary_state.start, .min_bp = expr_after_unary_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
+        .expr_after_unary => {
+            expr_after_unary_state = open_syntax.popPayload(.expr_unary, ExprAfterUnaryState);
+            const operand = last_expr orelse unreachable;
+            last_expr = null;
+            const expr = try self.store.addExpr(.{ .unary_op = .{
+                .operator = expr_after_unary_state.operator,
+                .expr = operand,
+                .region = .{ .start = expr_after_unary_state.start, .end = self.pos },
+            } });
+            expr_finish_state = .{ .start = expr_after_unary_state.start, .min_bp = expr_after_unary_state.min_bp, .expr = expr };
+            dispatch_token = self.peek();
+            continue :dispatch .expr_suffix;
         },
-        .expr_after_binary_rhs => switch (dispatch_token) {
-            .EndOfFile => {
-                open_syntax.popMarker(.expr_binary_rhs);
-                const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
-                const rhs = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .bin_op = .{
-                    .left = expr_after_binary_rhs_state.left,
-                    .right = rhs,
-                    .operator = expr_after_binary_rhs_state.operator,
-                    .region = .{ .start = expr_after_binary_rhs_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_after_binary_rhs_state.start, .min_bp = expr_after_binary_rhs_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                open_syntax.popMarker(.expr_binary_rhs);
-                const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
-                const rhs = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .bin_op = .{
-                    .left = expr_after_binary_rhs_state.left,
-                    .right = rhs,
-                    .operator = expr_after_binary_rhs_state.operator,
-                    .region = .{ .start = expr_after_binary_rhs_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_after_binary_rhs_state.start, .min_bp = expr_after_binary_rhs_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
+        .expr_after_binary_rhs => {
+            open_syntax.popMarker(.expr_binary_rhs);
+            const expr_after_binary_rhs_state = expr_binary_rhs_stack.leave();
+            const rhs = last_expr orelse unreachable;
+            last_expr = null;
+            const expr = try self.store.addExpr(.{ .bin_op = .{
+                .left = expr_after_binary_rhs_state.left,
+                .right = rhs,
+                .operator = expr_after_binary_rhs_state.operator,
+                .region = .{ .start = expr_after_binary_rhs_state.start, .end = self.pos },
+            } });
+            expr_finish_state = .{ .start = expr_after_binary_rhs_state.start, .min_bp = expr_after_binary_rhs_state.min_bp, .expr = expr };
+            dispatch_token = self.peek();
+            continue :dispatch .expr_suffix;
         },
         .expr_arrow_after_inner => switch (dispatch_token) {
             .CloseRound => {
@@ -5148,63 +5116,32 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .pattern_root_next;
             },
         },
-        .expr_lambda_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                open_syntax.popMarker(.expr_lambda_body);
-                const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .lambda = .{
-                    .body = body,
-                    .args = expr_lambda_after_body_state.args,
-                    .region = .{ .start = expr_lambda_after_body_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_lambda_after_body_state.start, .min_bp = expr_lambda_after_body_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                open_syntax.popMarker(.expr_lambda_body);
-                const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .lambda = .{
-                    .body = body,
-                    .args = expr_lambda_after_body_state.args,
-                    .region = .{ .start = expr_lambda_after_body_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_lambda_after_body_state.start, .min_bp = expr_lambda_after_body_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
+        .expr_lambda_after_body => {
+            open_syntax.popMarker(.expr_lambda_body);
+            const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
+            const body = last_expr orelse unreachable;
+            last_expr = null;
+            const expr = try self.store.addExpr(.{ .lambda = .{
+                .body = body,
+                .args = expr_lambda_after_body_state.args,
+                .region = .{ .start = expr_lambda_after_body_state.start, .end = self.pos },
+            } });
+            expr_finish_state = .{ .start = expr_lambda_after_body_state.start, .min_bp = expr_lambda_after_body_state.min_bp, .expr = expr };
+            dispatch_token = self.peek();
+            continue :dispatch .expr_suffix;
         },
-        .expr_if_after_condition => switch (dispatch_token) {
-            .EndOfFile => {
-                const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
-                const condition = last_expr orelse unreachable;
-                last_expr = null;
-                try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .condition = condition,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
-                const condition = last_expr orelse unreachable;
-                last_expr = null;
-                try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .condition = condition,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
+        .expr_if_after_condition => {
+            const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
+            const condition = last_expr orelse unreachable;
+            last_expr = null;
+            try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                .start = state.start,
+                .min_bp = state.min_bp,
+                .condition = condition,
+            });
+            expr_state = .{ .start = self.pos, .min_bp = 0 };
+            dispatch_token = self.peek();
+            continue :dispatch .expr_prefix;
         },
         .expr_if_after_then => switch (dispatch_token) {
             .KwElse => {
@@ -5236,35 +5173,19 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .expr_suffix;
             },
         },
-        .expr_if_after_else => switch (dispatch_token) {
-            .EndOfFile => {
-                expr_if_after_else_state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
-                const else_expr = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .if_then_else = .{
-                    .region = .{ .start = expr_if_after_else_state.start, .end = self.pos },
-                    .condition = expr_if_after_else_state.condition,
-                    .then = expr_if_after_else_state.then,
-                    .@"else" = else_expr,
-                } });
-                expr_finish_state = .{ .start = expr_if_after_else_state.start, .min_bp = expr_if_after_else_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                expr_if_after_else_state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
-                const else_expr = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .if_then_else = .{
-                    .region = .{ .start = expr_if_after_else_state.start, .end = self.pos },
-                    .condition = expr_if_after_else_state.condition,
-                    .then = expr_if_after_else_state.then,
-                    .@"else" = else_expr,
-                } });
-                expr_finish_state = .{ .start = expr_if_after_else_state.start, .min_bp = expr_if_after_else_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
+        .expr_if_after_else => {
+            expr_if_after_else_state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
+            const else_expr = last_expr orelse unreachable;
+            last_expr = null;
+            const expr = try self.store.addExpr(.{ .if_then_else = .{
+                .region = .{ .start = expr_if_after_else_state.start, .end = self.pos },
+                .condition = expr_if_after_else_state.condition,
+                .then = expr_if_after_else_state.then,
+                .@"else" = else_expr,
+            } });
+            expr_finish_state = .{ .start = expr_if_after_else_state.start, .min_bp = expr_if_after_else_state.min_bp, .expr = expr };
+            dispatch_token = self.peek();
+            continue :dispatch .expr_suffix;
         },
         .expr_match_after_expr => switch (dispatch_token) {
             .OpenCurly => {
