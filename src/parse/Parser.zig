@@ -191,7 +191,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error;
 
-const DirectContext = enum(u16) {
+const ParserContext = enum(u16) {
     file_start,
     file_after_header,
     file_statement_next,
@@ -836,7 +836,7 @@ pub fn runFile(self: *Parser) Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = try self.runDirectParser(.{
+    _ = try self.runParser(.{
         .initial_context = .file_start,
         .result_kind = .file,
     });
@@ -847,7 +847,7 @@ pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runDirectParser(.{
+    return (try self.runParser(.{
         .initial_context = .header_start,
         .result_kind = .header,
     })).header;
@@ -1877,7 +1877,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runDirectParser(.{
+    return (try self.runParser(.{
         .initial_context = .statement_start,
         .result_kind = .statement,
         .statement_type = statementType,
@@ -1902,7 +1902,7 @@ pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.I
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runDirectParser(.{
+    return (try self.runParser(.{
         .initial_context = .pattern_root_next,
         .result_kind = .pattern,
         .pattern_alternatives = alternatives,
@@ -2074,7 +2074,7 @@ const RootExprParents = struct {
 
 const RootStatementParents = struct {
     const Frame = struct {
-        parent: DirectContext,
+        parent: ParserContext,
         open_depth: usize,
     };
 
@@ -2085,14 +2085,14 @@ const RootStatementParents = struct {
         self.stack.deinit(allocator);
     }
 
-    inline fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: DirectContext, open_depth: usize) Error!void {
+    inline fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: ParserContext, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
         self.current = .{ .parent = parent, .open_depth = open_depth };
     }
 
-    inline fn take(self: *RootStatementParents, open_depth: usize) ?DirectContext {
+    inline fn take(self: *RootStatementParents, open_depth: usize) ?ParserContext {
         const current = self.current orelse return null;
         if (current.open_depth != open_depth) return null;
         self.current = self.stack.pop();
@@ -2602,14 +2602,14 @@ pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runDirectParser(.{
+    return (try self.runParser(.{
         .initial_context = .expr_prefix,
         .result_kind = .expr,
         .expr_min_bp = min_bp,
     })).expr;
 }
 
-const DirectResultKind = enum {
+const ParserResultKind = enum {
     file,
     header,
     expr,
@@ -2619,7 +2619,7 @@ const DirectResultKind = enum {
     associated,
 };
 
-const DirectResult = union(enum) {
+const ParserResult = union(enum) {
     file,
     header: AST.Header.Idx,
     expr: AST.Expr.Idx,
@@ -2629,9 +2629,9 @@ const DirectResult = union(enum) {
     associated: AST.Associated,
 };
 
-const DirectEntry = struct {
-    initial_context: DirectContext,
-    result_kind: DirectResultKind,
+const ParserEntry = struct {
+    initial_context: ParserContext,
+    result_kind: ParserResultKind,
     expr_min_bp: u8 = 0,
     pattern_alternatives: Alternatives = .alternatives_forbidden,
     type_args: TyFnArgs = .not_looking_for_args,
@@ -2640,7 +2640,7 @@ const DirectEntry = struct {
     associated_owner_type_path: ?DeclIndex.TypePathIdx = null,
 };
 
-fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
+fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -7364,7 +7364,7 @@ pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runDirectParser(.{
+    return (try self.runParser(.{
         .initial_context = .type_prefix,
         .result_kind = .type_anno,
         .type_args = looking_for_args,
@@ -7503,7 +7503,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    return (try self.runDirectParser(.{
+    return (try self.runParser(.{
         .initial_context = .statement_type_associated_start,
         .result_kind = .associated,
         .associated_start = start,
