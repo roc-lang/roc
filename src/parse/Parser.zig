@@ -764,26 +764,6 @@ pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
     return (try self.runParser(.header_start, .header, .{})).header;
 }
 
-const DelimitedError = Error || error{ExpectedNotFound};
-
-fn parseDelimitedTokens(
-    self: *Parser,
-    comptime T: type,
-    end_token: Token.Tag,
-    scratch_fn: fn (*NodeStore, T) Error!void,
-    parser: fn (*Parser) Error!T,
-) DelimitedError!void {
-    while (self.peek() != end_token and self.peek() != .EndOfFile) {
-        try scratch_fn(&self.store, try parser(self));
-        self.expect(.Comma) catch {
-            break;
-        };
-    }
-    self.expect(end_token) catch {
-        return error.ExpectedNotFound;
-    };
-}
-
 fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
     const start = self.pos;
     switch (self.peek()) {
@@ -925,13 +905,19 @@ fn parseTypeHeaderTokens(self: *Parser) Error!AST.TypeHeader.Idx {
     }
     self.advance();
     const scratch_top = self.store.scratchTypeAnnoTop();
-    self.parseDelimitedTokens(AST.TypeAnno.Idx, .CloseRound, NodeStore.addScratchTypeAnno, Parser.parseTypeIdentToken) catch |err| switch (err) {
-        error.ExpectedNotFound => {
-            self.store.clearScratchTypeAnnosFrom(scratch_top);
-            return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
-        },
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+        try self.store.addScratchTypeAnno(try self.parseTypeIdentToken());
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    if (self.peek() != .CloseRound) {
+        self.store.clearScratchTypeAnnosFrom(scratch_top);
+        return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
+    }
+    self.advance();
     const args = try self.store.typeAnnoSpanFrom(scratch_top);
     return try self.store.addTypeHeader(.{
         .name = start,
@@ -1058,17 +1044,23 @@ fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
                 return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
             };
             const scratch_top = self.store.scratchExposedItemTop();
-            self.parseDelimitedTokens(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItemTokens) catch |err| switch (err) {
-                error.ExpectedNotFound => {
-                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                        self.advance();
-                    }
-                    self.expect(.CloseSquare) catch {};
-                    self.store.clearScratchExposedItemsFrom(scratch_top);
-                    return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
-                },
-                error.OutOfMemory => return error.OutOfMemory,
-            };
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            if (self.peek() != .CloseSquare) {
+                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                self.expect(.CloseSquare) catch {};
+                self.store.clearScratchExposedItemsFrom(scratch_top);
+                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
+            }
+            self.advance();
             exposes = try self.store.exposedItemSpanFrom(scratch_top);
         }
     }
@@ -1309,13 +1301,19 @@ fn parseRecordFieldCollectionTokens(
         return try self.pushMalformed(AST.Collection.Idx, open_error, start);
     };
     const scratch_top = self.store.scratchRecordFieldTop();
-    self.parseDelimitedTokens(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, Parser.parseRecordFieldTokens) catch |err| switch (err) {
-        error.ExpectedNotFound => {
-            self.store.clearScratchRecordFieldsFrom(scratch_top);
-            return try self.pushMalformed(AST.Collection.Idx, close_error, start);
-        },
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchRecordField(try self.parseRecordFieldTokens());
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchRecordFieldsFrom(scratch_top);
+        return try self.pushMalformed(AST.Collection.Idx, close_error, start);
+    }
+    self.advance();
     const span = try self.store.recordFieldSpanFrom(scratch_top);
     return try self.store.addCollection(collection_tag, .{
         .span = span.span,
@@ -1627,13 +1625,19 @@ fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
     };
 
     const files_top = self.store.scratchTargetFileTop();
-    self.parseDelimitedTokens(AST.TargetFile.Idx, .CloseSquare, NodeStore.addScratchTargetFile, Parser.parseTargetFileTokens) catch |err| switch (err) {
-        error.ExpectedNotFound => {
-            self.store.clearScratchTargetFilesFrom(files_top);
-            return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
-        },
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+        try self.store.addScratchTargetFile(try self.parseTargetFileTokens());
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    if (self.peek() != .CloseSquare) {
+        self.store.clearScratchTargetFilesFrom(files_top);
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
+    }
+    self.advance();
     return try self.store.addTargetEntry(.{
         .target = target_name,
         .files = try self.store.targetFileSpanFrom(files_top),
@@ -1647,13 +1651,19 @@ fn parseTargetLinkTypeTokens(self: *Parser) Error!AST.TargetLinkType.Idx {
         return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_open_curly, start);
     };
     const entries_top = self.store.scratchTargetEntryTop();
-    self.parseDelimitedTokens(AST.TargetEntry.Idx, .CloseCurly, NodeStore.addScratchTargetEntry, Parser.parseTargetEntryTokens) catch |err| switch (err) {
-        error.ExpectedNotFound => {
-            self.store.clearScratchTargetEntriesFrom(entries_top);
-            return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
-        },
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchTargetEntry(try self.parseTargetEntryTokens());
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchTargetEntriesFrom(entries_top);
+        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
+    }
+    self.advance();
     return try self.store.addTargetLinkType(.{
         .entries = try self.store.targetEntrySpanFrom(entries_top),
         .region = .{ .start = start, .end = self.pos },
