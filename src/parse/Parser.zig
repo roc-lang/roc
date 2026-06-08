@@ -3875,9 +3875,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const text = self.tokenText(start);
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(text);
-                    const literal = try self.store.addNumericLiteral(text, .frac);
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -3937,9 +3936,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const text = self.tokenText(start);
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(text);
-                    const literal = try self.store.addNumericLiteral(text, .int);
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -5862,9 +5860,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const text = self.tokenText(start);
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(text);
-                    const literal = try self.store.addNumericLiteral(text, .frac);
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
@@ -5924,9 +5921,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const text = self.tokenText(start);
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(text);
-                    const literal = try self.store.addNumericLiteral(text, .int);
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
