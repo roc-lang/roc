@@ -195,7 +195,6 @@ const ParserContext = enum(u16) {
     file_start,
     file_after_header,
     file_statement_next,
-    file_after_statement,
     file_finish,
 
     header_start,
@@ -275,7 +274,6 @@ const ParserContext = enum(u16) {
     expr_block_begin,
     expr_block_begin_after_open,
     expr_block_next,
-    expr_block_after_statement,
     expr_block_finish,
 
     pattern_root_next,
@@ -2060,27 +2058,32 @@ const RootExprParents = struct {
     }
 };
 
-const RootStatementParents = struct {
+const StatementParent = enum(u8) {
+    file,
+    expr_block,
+};
+
+const StatementParents = struct {
     const Frame = struct {
-        parent: ParserContext,
+        parent: StatementParent,
         open_depth: usize,
     };
 
     current: ?Frame = null,
     stack: std.ArrayList(Frame) = .empty,
 
-    fn deinit(self: *RootStatementParents, allocator: std.mem.Allocator) void {
+    fn deinit(self: *StatementParents, allocator: std.mem.Allocator) void {
         self.stack.deinit(allocator);
     }
 
-    inline fn set(self: *RootStatementParents, allocator: std.mem.Allocator, parent: ParserContext, open_depth: usize) Error!void {
+    inline fn set(self: *StatementParents, allocator: std.mem.Allocator, parent: StatementParent, open_depth: usize) Error!void {
         if (self.current) |current| {
             try self.stack.append(allocator, current);
         }
         self.current = .{ .parent = parent, .open_depth = open_depth };
     }
 
-    inline fn take(self: *RootStatementParents, open_depth: usize) ?ParserContext {
+    inline fn take(self: *StatementParents, open_depth: usize) ?StatementParent {
         const current = self.current orelse return null;
         if (current.open_depth != open_depth) return null;
         self.current = self.stack.pop();
@@ -2677,8 +2680,8 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     var type_fn_args_state: TypeFnArgsState = undefined;
     var statement_type_decl_state: TypeDeclProgress = undefined;
     var statement_associated_block_state: StatementAssociatedBlockState = undefined;
-    var root_statement_parents: RootStatementParents = .{};
-    defer root_statement_parents.deinit(open_allocator);
+    var statement_parents: StatementParents = .{};
+    defer statement_parents.deinit(open_allocator);
     var root_expr_parents: RootExprParents = .{};
     defer root_expr_parents.deinit(open_allocator);
     var pattern_alternatives = entry.pattern_alternatives;
@@ -2728,7 +2731,7 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
     _ = &type_fn_args_state;
     _ = &statement_type_decl_state;
     _ = &statement_associated_block_state;
-    _ = &root_statement_parents;
+    _ = &statement_parents;
     _ = &root_expr_parents;
     _ = &pattern_alternatives;
     _ = &type_args;
@@ -2784,23 +2787,10 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .file_finish;
             },
             else => {
-                try root_statement_parents.set(open_allocator, .file_after_statement, open_syntax.entries.items.len);
+                try statement_parents.set(open_allocator, .file, open_syntax.entries.items.len);
                 statement_type = .top_level;
                 dispatch_token = self.peek();
                 continue :dispatch .statement_start;
-            },
-        },
-        .file_after_statement => switch (dispatch_token) {
-            .EndOfFile => {
-                const statement = last_statement orelse unreachable;
-                last_statement = null;
-                try self.store.addScratchStatement(statement);
-                dispatch_token = self.peek();
-                continue :dispatch .file_statement_next;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .file_after_statement;
             },
         },
         .file_finish => switch (dispatch_token) {
@@ -3349,12 +3339,19 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
         .statement_complete => switch (dispatch_token) {
             else => {
                 _ = last_statement orelse unreachable;
-                if (root_statement_parents.take(open_syntax.entries.items.len)) |after| {
+                if (statement_parents.take(open_syntax.entries.items.len)) |parent| {
+                    const statement = last_statement orelse unreachable;
+                    last_statement = null;
+                    try self.store.addScratchStatement(statement);
                     dispatch_token = self.peek();
-                    switch (after) {
-                        .file_after_statement => continue :dispatch .file_after_statement,
-                        .expr_block_after_statement => continue :dispatch .expr_block_after_statement,
-                        else => unreachable,
+                    switch (parent) {
+                        .file => continue :dispatch .file_statement_next,
+                        .expr_block => {
+                            if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
+                                continue :dispatch .expr_block_finish;
+                            }
+                            continue :dispatch .expr_block_next;
+                        },
                     }
                 }
                 if (open_syntax.peekKind()) |kind| {
@@ -5439,29 +5436,10 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .expr_block_finish;
             },
             else => {
-                try root_statement_parents.set(open_allocator, .expr_block_after_statement, open_syntax.entries.items.len);
+                try statement_parents.set(open_allocator, .expr_block, open_syntax.entries.items.len);
                 statement_type = .in_body;
                 dispatch_token = self.peek();
                 continue :dispatch .statement_start;
-            },
-        },
-        .expr_block_after_statement => switch (dispatch_token) {
-            .CloseCurly, .EndOfFile => {
-                const statement = last_statement orelse unreachable;
-                last_statement = null;
-                try self.store.addScratchStatement(statement);
-                dispatch_token = self.peek();
-                continue :dispatch .expr_block_finish;
-            },
-            else => {
-                const statement = last_statement orelse unreachable;
-                last_statement = null;
-                try self.store.addScratchStatement(statement);
-                dispatch_token = self.peek();
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    continue :dispatch .expr_block_finish;
-                }
-                continue :dispatch .expr_block_next;
             },
         },
         .expr_block_finish => switch (dispatch_token) {
