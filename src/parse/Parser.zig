@@ -218,10 +218,8 @@ const ParserContext = enum(u16) {
 
     statement_start,
     statement_complete,
-    statement_type_decl_after_associated,
     statement_type_associated_start,
     statement_type_associated_next,
-    statement_type_associated_after_statement,
     statement_type_associated_finish,
 
     expr_prefix,
@@ -3279,8 +3277,30 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 if (open_syntax.peekKind()) |kind| {
                     switch (kind) {
                         .statement_type_associated_statement => {
+                            const state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
+                            const statement = last_statement orelse unreachable;
+                            last_statement = null;
+                            if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
+                                const stmt = self.store.getStatement(statement);
+                                if (stmt == .expr and self.peek() == .CloseCurly) {
+                                    try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
+                                        .start = state.statement_pos,
+                                        .end = self.pos,
+                                    });
+                                }
+                            }
+                            try self.store.addScratchStatement(statement);
+                            statement_associated_block_state = .{
+                                .start = state.start,
+                                .scope = state.scope,
+                                .scratch_top = state.scratch_top,
+                                .pushed_type_path = state.pushed_type_path,
+                            };
                             dispatch_token = self.peek();
-                            continue :dispatch .statement_type_associated_after_statement;
+                            if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
+                                continue :dispatch .statement_type_associated_finish;
+                            }
+                            continue :dispatch .statement_type_associated_next;
                         },
                         else => {
                             if (result_kind == .statement) {
@@ -3294,35 +3314,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     .statement => .{ .statement = last_statement.? },
                     else => .{ .statement = last_statement.? },
                 };
-            },
-        },
-        .statement_type_decl_after_associated => switch (dispatch_token) {
-            .EndOfFile => {
-                statement_type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclProgress);
-                const assoc = last_associated orelse unreachable;
-                last_associated = null;
-                if (statement_type_decl_state.kind == .alias) {
-                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
-                        .start = statement_type_decl_state.dot_pos,
-                        .end = statement_type_decl_state.dot_pos + 1,
-                    });
-                }
-                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
-                    .header = statement_type_decl_state.header,
-                    .anno = statement_type_decl_state.anno,
-                    .kind = statement_type_decl_state.kind,
-                    .where = statement_type_decl_state.where_clause,
-                    .associated = assoc,
-                    .region = .{ .start = statement_type_decl_state.start, .end = self.pos },
-                } }, statement_type_decl_state.type_dependencies, statement_type_decl_state.type_path);
-                self.decl_index.setScopeOwner(assoc.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
-                last_statement = statement_idx;
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_type_decl_after_associated;
             },
         },
         .statement_type_associated_start => switch (dispatch_token) {
@@ -3368,43 +3359,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .statement_start;
             },
         },
-        .statement_type_associated_after_statement => switch (dispatch_token) {
-            .CloseCurly, .EndOfFile => {
-                const statement_associated_statement_state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                const statement = last_statement orelse unreachable;
-                last_statement = null;
-                const stmt = self.store.getStatement(statement);
-                if (stmt == .expr and self.peek() == .CloseCurly) {
-                    try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
-                        .start = statement_associated_statement_state.statement_pos,
-                        .end = self.pos,
-                    });
-                }
-                try self.store.addScratchStatement(statement);
-                statement_associated_block_state = .{
-                    .start = statement_associated_statement_state.start,
-                    .scope = statement_associated_statement_state.scope,
-                    .scratch_top = statement_associated_statement_state.scratch_top,
-                    .pushed_type_path = statement_associated_statement_state.pushed_type_path,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .statement_type_associated_finish;
-            },
-            else => {
-                const statement_associated_statement_state = open_syntax.popPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                const statement = last_statement orelse unreachable;
-                last_statement = null;
-                try self.store.addScratchStatement(statement);
-                statement_associated_block_state = .{
-                    .start = statement_associated_statement_state.start,
-                    .scope = statement_associated_statement_state.scope,
-                    .scratch_top = statement_associated_statement_state.scratch_top,
-                    .pushed_type_path = statement_associated_statement_state.pushed_type_path,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .statement_type_associated_next;
-            },
-        },
         .statement_type_associated_finish => switch (dispatch_token) {
             .CloseCurly, .EndOfFile => {
                 if (self.peek() == .CloseCurly) {
@@ -3426,8 +3380,27 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 if (result_kind == .associated) {
                     return .{ .associated = last_associated.? };
                 }
+                statement_type_decl_state = open_syntax.popPayload(.statement_type_decl_associated, TypeDeclProgress);
+                const assoc = last_associated orelse unreachable;
+                last_associated = null;
+                if (statement_type_decl_state.kind == .alias) {
+                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                        .start = statement_type_decl_state.dot_pos,
+                        .end = statement_type_decl_state.dot_pos + 1,
+                    });
+                }
+                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
+                    .header = statement_type_decl_state.header,
+                    .anno = statement_type_decl_state.anno,
+                    .kind = statement_type_decl_state.kind,
+                    .where = statement_type_decl_state.where_clause,
+                    .associated = assoc,
+                    .region = .{ .start = statement_type_decl_state.start, .end = self.pos },
+                } }, statement_type_decl_state.type_dependencies, statement_type_decl_state.type_path);
+                self.decl_index.setScopeOwner(assoc.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
+                last_statement = statement_idx;
                 dispatch_token = self.peek();
-                continue :dispatch .statement_type_decl_after_associated;
+                continue :dispatch .statement_complete;
             },
             else => {
                 unreachable;
