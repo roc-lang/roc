@@ -117,24 +117,40 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
-The parser is a direct token-dispatch machine. Each hot parser context is a
-case in a labeled Zig `switch`, and each context case immediately switches on
-the current token tag. Transitions use `continue :dispatch .next_context` after
-advancing to the next token. This mirrors simdjson stage 2: tokenization does
-the linear input discovery, and the parser proper is a stack-safe token walker
-with explicit parser-owned state and direct jumps between documented parser
-contexts.
+The parser is a direct token-dispatch machine. Hot parser code is organized as
+grammar kernels that walk the token buffer with local token dispatch and ordinary
+lexical control flow. The hot path must not route every transition through a
+generic parser-context enum. A broad `switch (ParserContext)` loop is still an
+interpreter loop even when the cases contain token switches, because optimized
+code can lower the context transition to a central indirect branch.
 
-The hot path must not bounce through a generic `(context, token)` dispatch key
-unless optimized assembly for that exact chunk proves it is better. Dense
-combined keys can lower to an indirect jump table, which is not the same shape
-as simdjson's stage-2 parser on arm64. The preferred shape is local token
-switches inside context branches, because Zig can lower constant
-`continue :dispatch .next_context` transitions to direct branches between code
-blocks. Parser chunks are not considered structurally done until ReleaseFast
-assembly has been checked for this shape: no recursive parser calls for the
-converted grammar, no instruction-driver loop, no repeated context-dispatch
-ladder, and no unexpected indirect branch in the hot transition path.
+This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
+simdjson's stage-2 parser walks a precomputed structural stream with semantic
+grammar labels such as object-begin, object-continue, array-value, and
+scope-end. Its explicit stack records syntax facts about open containers
+(`is_array`, tape index, element count); it does not store "run this parser
+state next" instructions. Roc parser kernels must follow the same split:
+tokenization performs linear input discovery, parser kernels inspect the
+current token directly, and parser-owned syntax state describes currently open
+Roc syntax rather than queued control flow.
+
+Zig has no arbitrary sibling `goto`, so Roc cannot literally copy simdjson's C++
+label layout. The Zig equivalent is lexical grammar loops with local token
+switches, explicit syntax-depth state for nested constructs, and direct
+fallthrough/`continue`/`break` transitions inside the kernel. Where a grammar
+transition cannot be expressed lexically without a generic context switch, the
+hot alternatives are to duplicate a small token-dispatch block or to split out a
+specialized grammar kernel whose body remains stack-safe and assembly-audited.
+Using a wide parser-context switch is not accepted for hot expression, pattern,
+statement, or type parsing unless ReleaseFast assembly proves that exact slice
+has no central indirect branch and is faster than the lexical-kernel shape.
+
+Parser chunks are not considered structurally done until ReleaseFast assembly
+has been checked for this shape: no recursive parser calls for the converted
+grammar, no instruction-driver loop, no broad parser-context dispatch ladder,
+and no unexpected indirect branch in the hot transition path. The expression
+prefix/suffix/binary-operator kernel is the first required audit target because
+it is the parse-heavy hot path.
 
 Parser conversion proceeds by grammar slices that can be assembly-audited.
 Before expanding a slice, build a tiny Zig proof of the intended dispatch shape
@@ -159,8 +175,9 @@ container depth. This state records concrete syntax currently being parsed:
 open lists, records, strings, blocks, matches, type applications, and similar
 constructs. It is not a parser instruction stream and must not store "execute
 this parser operation next" entries. When a syntactic construct closes, the
-parser inspects the parent open syntax and jumps directly to that parent's next
-token branch.
+parser inspects the parent open syntax and branches directly to that parent's
+lexical continuation inside the current grammar kernel, or returns a completed
+result to the caller when the kernel's root syntax closes.
 
 Open-syntax state is stored compactly. The hot state records syntax kind and
 indexes into syntax-specific side storage when payload is unavoidable. The
