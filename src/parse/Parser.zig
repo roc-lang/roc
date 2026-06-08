@@ -219,21 +219,9 @@ const ParserContext = enum(u16) {
     statement_start,
     statement_complete,
     statement_import,
-    statement_expect_after_expr,
     statement_for_after_pattern,
-    statement_for_after_expr,
-    statement_for_after_body,
-    statement_while_after_cond,
-    statement_while_after_body,
-    statement_crash_after_expr,
-    statement_dbg_after_expr,
-    statement_return_after_expr,
     statement_var_after_type,
-    statement_var_after_body,
-    statement_decl_after_body,
     statement_destructure_after_pattern,
-    statement_destructure_after_body,
-    statement_final_expr,
     statement_type_header,
     statement_type_after_anno,
     statement_type_decl_after_anno,
@@ -2015,7 +2003,6 @@ const StatementAssociatedStatementState = struct {
 };
 
 const RootExprParent = union(enum) {
-    none,
     expr_collection_item,
     statement_expect: Token.Idx,
     statement_for_expr: StatementForExprState,
@@ -3379,23 +3366,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 unreachable;
             },
         },
-        .statement_expect_after_expr => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_expect;
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .expect = .{
-                    .body = body,
-                    .region = .{ .start = parent, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_expect_after_expr;
-            },
-        },
         .statement_for_after_pattern => switch (dispatch_token) {
             .KwIn => {
                 const start = open_syntax.popPayload(.statement_for_pattern, Token.Idx);
@@ -3415,163 +3385,9 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .statement_complete;
             },
         },
-        .statement_for_after_expr => switch (dispatch_token) {
-            .OpenCurly, .EndOfFile => {
-                const expr = last_expr orelse unreachable;
-                last_expr = null;
-                const for_expr_parent = root_expr_parents.take().statement_for_expr;
-                try root_expr_parents.set(open_allocator, .{ .statement_for_body = .{
-                    .start = for_expr_parent.start,
-                    .patt = for_expr_parent.patt,
-                    .expr = expr,
-                } }, open_syntax.entries.items.len);
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_for_after_expr;
-            },
-        },
-        .statement_for_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_for_body;
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .@"for" = .{
-                    .region = .{ .start = parent.start, .end = self.pos },
-                    .patt = parent.patt,
-                    .expr = parent.expr,
-                    .body = body,
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_for_after_body;
-            },
-        },
-        .statement_while_after_cond => switch (dispatch_token) {
-            .OpenCurly, .EndOfFile => {
-                const cond = last_expr orelse unreachable;
-                last_expr = null;
-                const while_start = root_expr_parents.take().statement_while_cond;
-                try root_expr_parents.set(open_allocator, .{ .statement_while_body = .{ .start = while_start, .cond = cond } }, open_syntax.entries.items.len);
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_while_after_cond;
-            },
-        },
-        .statement_while_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_while_body;
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .@"while" = .{
-                    .region = .{ .start = parent.start, .end = self.pos },
-                    .cond = parent.cond,
-                    .body = body,
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_while_after_body;
-            },
-        },
-        .statement_crash_after_expr => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_crash;
-                const expr = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .crash = .{
-                    .expr = expr,
-                    .region = .{ .start = parent, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_crash_after_expr;
-            },
-        },
-        .statement_dbg_after_expr => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_dbg;
-                const expr = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .dbg = .{
-                    .expr = expr,
-                    .region = .{ .start = parent, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_dbg_after_expr;
-            },
-        },
-        .statement_return_after_expr => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_return;
-                const expr = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .@"return" = .{
-                    .expr = expr,
-                    .region = .{ .start = parent, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_return_after_expr;
-            },
-        },
         .statement_var_after_type => switch (dispatch_token) {
             else => {
                 unreachable;
-            },
-        },
-        .statement_var_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_var_body;
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .@"var" = .{
-                    .name = parent.name,
-                    .body = body,
-                    .region = .{ .start = parent.start, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_var_after_body;
-            },
-        },
-        .statement_decl_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_decl_body;
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addDeclStatement(parent.pattern, body, .{ .start = parent.start, .end = self.pos });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_decl_after_body;
             },
         },
         .statement_destructure_after_pattern => switch (dispatch_token) {
@@ -3591,37 +3407,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
-            },
-        },
-        .statement_destructure_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_destructure_body;
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addDeclStatement(parent.pattern, body, .{ .start = parent.start, .end = self.pos });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_destructure_after_body;
-            },
-        },
-        .statement_final_expr => switch (dispatch_token) {
-            .EndOfFile => {
-                const parent = root_expr_parents.take().statement_final_expr;
-                const expr = last_expr orelse unreachable;
-                last_expr = null;
-                last_statement = try self.addStatement(.{ .expr = .{
-                    .expr = expr,
-                    .region = .{ .start = parent, .end = self.pos },
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .statement_complete;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .statement_final_expr;
             },
         },
         .statement_type_header => switch (dispatch_token) {
@@ -4362,21 +4147,109 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
             if (root_expr_parents.current) |parent_frame| {
                 if (parent_frame.open_depth == open_depth) {
                     dispatch_token = self.peek();
-                    const parent_tag = std.meta.activeTag(parent_frame.parent);
-                    if (parent_tag == .expr_collection_item) continue :dispatch .expr_collection_after_item;
-                    if (parent_tag == .statement_decl_body) continue :dispatch .statement_decl_after_body;
-                    if (parent_tag == .statement_final_expr) continue :dispatch .statement_final_expr;
-                    if (parent_tag == .statement_var_body) continue :dispatch .statement_var_after_body;
-                    if (parent_tag == .statement_expect) continue :dispatch .statement_expect_after_expr;
-                    if (parent_tag == .statement_return) continue :dispatch .statement_return_after_expr;
-                    if (parent_tag == .statement_for_expr) continue :dispatch .statement_for_after_expr;
-                    if (parent_tag == .statement_for_body) continue :dispatch .statement_for_after_body;
-                    if (parent_tag == .statement_while_cond) continue :dispatch .statement_while_after_cond;
-                    if (parent_tag == .statement_while_body) continue :dispatch .statement_while_after_body;
-                    if (parent_tag == .statement_destructure_body) continue :dispatch .statement_destructure_after_body;
-                    if (parent_tag == .statement_dbg) continue :dispatch .statement_dbg_after_expr;
-                    if (parent_tag == .statement_crash) continue :dispatch .statement_crash_after_expr;
-                    unreachable;
+                    switch (parent_frame.parent) {
+                        .expr_collection_item => {
+                            continue :dispatch .expr_collection_after_item;
+                        },
+                        else => {},
+                    }
+                    switch (root_expr_parents.take()) {
+                        .statement_expect => |start| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .expect = .{
+                                .body = completed,
+                                .region = .{ .start = start, .end = self.pos },
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_for_expr => |parent| {
+                            last_expr = null;
+                            try root_expr_parents.set(open_allocator, .{ .statement_for_body = .{
+                                .start = parent.start,
+                                .patt = parent.patt,
+                                .expr = completed,
+                            } }, open_depth);
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :dispatch .expr_prefix;
+                        },
+                        .statement_for_body => |parent| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .@"for" = .{
+                                .region = .{ .start = parent.start, .end = self.pos },
+                                .patt = parent.patt,
+                                .expr = parent.expr,
+                                .body = completed,
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_while_cond => |start| {
+                            last_expr = null;
+                            try root_expr_parents.set(open_allocator, .{ .statement_while_body = .{ .start = start, .cond = completed } }, open_depth);
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :dispatch .expr_prefix;
+                        },
+                        .statement_while_body => |parent| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .@"while" = .{
+                                .region = .{ .start = parent.start, .end = self.pos },
+                                .cond = parent.cond,
+                                .body = completed,
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_crash => |start| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .crash = .{
+                                .expr = completed,
+                                .region = .{ .start = start, .end = self.pos },
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_dbg => |start| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .dbg = .{
+                                .expr = completed,
+                                .region = .{ .start = start, .end = self.pos },
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_return => |start| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .@"return" = .{
+                                .expr = completed,
+                                .region = .{ .start = start, .end = self.pos },
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_var_body => |parent| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .@"var" = .{
+                                .name = parent.name,
+                                .body = completed,
+                                .region = .{ .start = parent.start, .end = self.pos },
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_decl_body => |parent| {
+                            last_expr = null;
+                            last_statement = try self.addDeclStatement(parent.pattern, completed, .{ .start = parent.start, .end = self.pos });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_destructure_body => |parent| {
+                            last_expr = null;
+                            last_statement = try self.addDeclStatement(parent.pattern, completed, .{ .start = parent.start, .end = self.pos });
+                            continue :dispatch .statement_complete;
+                        },
+                        .statement_final_expr => |start| {
+                            last_expr = null;
+                            last_statement = try self.addStatement(.{ .expr = .{
+                                .expr = completed,
+                                .region = .{ .start = start, .end = self.pos },
+                            } });
+                            continue :dispatch .statement_complete;
+                        },
+                        .expr_collection_item => unreachable,
+                    }
                 }
             }
             if (open_depth != 0) {
