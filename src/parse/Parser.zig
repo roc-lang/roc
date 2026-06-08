@@ -413,10 +413,6 @@ const OpenSyntaxStack = struct {
         return self.entries.items[self.entries.items.len - 1].kind;
     }
 
-    fn depth(self: *const OpenSyntaxStack) usize {
-        return self.entries.items.len;
-    }
-
     fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
         for (self.entries.items) |entry| {
             if (entry.kind == kind) return true;
@@ -2001,12 +1997,6 @@ const RootExprParents = struct {
         self.current = .{ .parent = parent, .open_depth = open_depth };
     }
 
-    fn activeParent(self: *const RootExprParents, open_depth: usize) ?RootExprParent {
-        const current = self.current orelse return null;
-        if (current.open_depth != open_depth) return null;
-        return current.parent;
-    }
-
     fn take(self: *RootExprParents) RootExprParent {
         const current = self.current orelse unreachable;
         self.current = self.stack.pop();
@@ -2788,7 +2778,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .file_finish;
             },
             else => {
-                try root_statement_parents.set(open_allocator, .file_after_statement, open_syntax.depth());
+                try root_statement_parents.set(open_allocator, .file_after_statement, open_syntax.entries.items.len);
                 statement_type = .top_level;
                 dispatch_token = self.peek();
                 continue :dispatch .statement_start;
@@ -3079,7 +3069,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         self.advance();
-                        try root_expr_parents.set(open_allocator, .{ .statement_decl_body = .{ .start = start, .pattern = patt_idx } }, open_syntax.depth());
+                        try root_expr_parents.set(open_allocator, .{ .statement_decl_body = .{ .start = start, .pattern = patt_idx } }, open_syntax.entries.items.len);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
@@ -3104,7 +3094,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         dispatch_token = self.peek();
                         continue :dispatch .statement_complete;
                     } else {
-                        try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.depth());
+                        try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.entries.items.len);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
@@ -3118,7 +3108,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         self.advance();
-                        try root_expr_parents.set(open_allocator, .{ .statement_decl_body = .{ .start = start, .pattern = patt_idx } }, open_syntax.depth());
+                        try root_expr_parents.set(open_allocator, .{ .statement_decl_body = .{ .start = start, .pattern = patt_idx } }, open_syntax.entries.items.len);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
@@ -3127,7 +3117,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         dispatch_token = self.peek();
                         continue :dispatch .statement_complete;
                     } else {
-                        try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.depth());
+                        try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.entries.items.len);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
@@ -3144,7 +3134,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                             dispatch_token = self.peek();
                             continue :dispatch .statement_complete;
                         }
-                        try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.depth());
+                        try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.entries.items.len);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
@@ -3225,7 +3215,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     dispatch_token = self.peek();
                     continue :dispatch .statement_complete;
                 }
-                try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.depth());
+                try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -3242,7 +3232,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .KwExpect) {
                     const start = self.pos;
                     self.advance();
-                    try root_expr_parents.set(open_allocator, .{ .statement_expect = start }, open_syntax.depth());
+                    try root_expr_parents.set(open_allocator, .{ .statement_expect = start }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -3262,7 +3252,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .KwWhile) {
                     const start = self.pos;
                     self.advance();
-                    try root_expr_parents.set(open_allocator, .{ .statement_while_cond = start }, open_syntax.depth());
+                    try root_expr_parents.set(open_allocator, .{ .statement_while_cond = start }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -3270,7 +3260,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .KwCrash) {
                     const start = self.pos;
                     self.advance();
-                    try root_expr_parents.set(open_allocator, .{ .statement_crash = start }, open_syntax.depth());
+                    try root_expr_parents.set(open_allocator, .{ .statement_crash = start }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -3278,7 +3268,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .KwDbg) {
                     const start = self.pos;
                     self.advance();
-                    try root_expr_parents.set(open_allocator, .{ .statement_dbg = start }, open_syntax.depth());
+                    try root_expr_parents.set(open_allocator, .{ .statement_dbg = start }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -3286,7 +3276,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 if (tok == .KwReturn) {
                     const start = self.pos;
                     self.advance();
-                    try root_expr_parents.set(open_allocator, .{ .statement_return = start }, open_syntax.depth());
+                    try root_expr_parents.set(open_allocator, .{ .statement_return = start }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -3322,7 +3312,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         dispatch_token = self.peek();
                         continue :dispatch .statement_complete;
                     };
-                    try root_expr_parents.set(open_allocator, .{ .statement_var_body = .{ .start = start, .name = name } }, open_syntax.depth());
+                    try root_expr_parents.set(open_allocator, .{ .statement_var_body = .{ .start = start, .name = name } }, open_syntax.entries.items.len);
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     dispatch_token = self.peek();
                     continue :dispatch .expr_prefix;
@@ -3343,7 +3333,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .statement_complete;
             }
             const start = self.pos;
-            try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.depth());
+            try root_expr_parents.set(open_allocator, .{ .statement_final_expr = start }, open_syntax.entries.items.len);
             expr_state = .{ .start = self.pos, .min_bp = 0 };
             dispatch_token = self.peek();
             continue :dispatch .expr_prefix;
@@ -3351,7 +3341,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         .statement_complete => switch (dispatch_token) {
             else => {
                 _ = last_statement orelse unreachable;
-                if (root_statement_parents.take(open_syntax.depth())) |after| {
+                if (root_statement_parents.take(open_syntax.entries.items.len)) |after| {
                     dispatch_token = self.peek();
                     switch (after) {
                         .file_after_statement => continue :dispatch .file_after_statement,
@@ -3407,7 +3397,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const patt = last_pattern orelse unreachable;
                 last_pattern = null;
                 self.advance();
-                try root_expr_parents.set(open_allocator, .{ .statement_for_expr = .{ .start = start, .patt = patt } }, open_syntax.depth());
+                try root_expr_parents.set(open_allocator, .{ .statement_for_expr = .{ .start = start, .patt = patt } }, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -3429,7 +3419,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .start = for_expr_parent.start,
                     .patt = for_expr_parent.patt,
                     .expr = expr,
-                } }, open_syntax.depth());
+                } }, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -3463,7 +3453,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const cond = last_expr orelse unreachable;
                 last_expr = null;
                 const while_start = root_expr_parents.take().statement_while_cond;
-                try root_expr_parents.set(open_allocator, .{ .statement_while_body = .{ .start = while_start, .cond = cond } }, open_syntax.depth());
+                try root_expr_parents.set(open_allocator, .{ .statement_while_body = .{ .start = while_start, .cond = cond } }, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -3589,7 +3579,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const pattern = last_pattern orelse unreachable;
                 last_pattern = null;
                 self.advance();
-                try root_expr_parents.set(open_allocator, .{ .statement_destructure_body = .{ .start = start, .pattern = pattern } }, open_syntax.depth());
+                try root_expr_parents.set(open_allocator, .{ .statement_destructure_body = .{ .start = start, .pattern = pattern } }, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -4804,7 +4794,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .expr_suffix;
             },
             else => {
-                try root_expr_parents.set(open_allocator, .expr_collection_item, open_syntax.depth());
+                try root_expr_parents.set(open_allocator, .expr_collection_item, open_syntax.entries.items.len);
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -5633,7 +5623,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 continue :dispatch .expr_block_finish;
             },
             else => {
-                try root_statement_parents.set(open_allocator, .expr_block_after_statement, open_syntax.depth());
+                try root_statement_parents.set(open_allocator, .expr_block_after_statement, open_syntax.entries.items.len);
                 statement_type = .in_body;
                 dispatch_token = self.peek();
                 continue :dispatch .statement_start;
