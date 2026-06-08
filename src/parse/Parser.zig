@@ -3062,8 +3062,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpenRound)) {
                 if (tok == .LowerIdent or tok == .NamedUnderscore) {
                     const start = self.pos;
-                    const next_tok = self.peekNext();
-                    if (next_tok == .OpAssign) {
+                    if (self.peekNext() == .OpAssign) {
                         self.advance();
                         const patt_idx = try self.store.addPattern(.{ .ident = .{
                             .ident_tok = start,
@@ -3074,8 +3073,8 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         dispatch_token = self.peek();
                         continue :dispatch .expr_prefix;
-                    } else if (next_tok == .OpColon) {
-                        if (tok == .LowerIdent and self.isVarIdent(start)) {
+                    } else if (self.peekNext() == .OpColon) {
+                        if (self.peek() == .LowerIdent and self.isVarIdent(start)) {
                             last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
                             dispatch_token = self.peek();
                             continue :dispatch .statement_complete;
@@ -3103,8 +3102,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 }
                 if (tok == .Underscore) {
                     const start = self.pos;
-                    const next_tok = self.peekNext();
-                    if (next_tok == .OpAssign) {
+                    if (self.peekNext() == .OpAssign) {
                         self.advance();
                         const patt_idx = try self.store.addPattern(.{ .underscore = .{
                             .region = .{ .start = start, .end = self.pos },
