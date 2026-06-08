@@ -503,9 +503,7 @@ fn recordStatementDecl(
     type_path: ?DeclIndex.TypePathIdx,
 ) Error!void {
     const scope_idx = self.decl_index.currentScope() orelse return;
-    const scope = self.decl_index.scopes.items[@intFromEnum(scope_idx)];
-    const owner_type_path = if (scope.kind == .associated) scope.owner_type_path else null;
-    const pending_anno = &self.scope_pending_annos.items[@intFromEnum(scope_idx)];
+    const owner_type_path = self.currentAssociatedOwnerPath();
 
     var record = switch (statement) {
         .decl => |decl| blk: {
@@ -606,7 +604,7 @@ fn recordStatementDecl(
         },
         else => null,
     } orelse {
-        pending_anno.* = null;
+        if (self.currentPendingAnno()) |pending| pending.* = null;
         return;
     };
 
@@ -616,24 +614,26 @@ fn recordStatementDecl(
 
     const decl_idx = try self.decl_index.addDecl(record);
     if (record.kind == .value_anno or record.kind == .var_anno) {
-        pending_anno.* = decl_idx;
+        if (self.currentPendingAnno()) |pending| pending.* = decl_idx;
         return;
     }
 
     if (record.kind == .value or record.kind == .var_decl) {
-        if (pending_anno.*) |anno_idx| {
-            const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
-            const kinds_match = (record.kind == .value and anno.kind == .value_anno) or
-                (record.kind == .var_decl and anno.kind == .var_anno);
-            if (kinds_match and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
-                self.decl_index.pairAnnotation(anno_idx, decl_idx);
+        if (self.currentPendingAnno()) |pending| {
+            if (pending.*) |anno_idx| {
+                const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
+                const kinds_match = (record.kind == .value and anno.kind == .value_anno) or
+                    (record.kind == .var_decl and anno.kind == .var_anno);
+                if (kinds_match and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+                    self.decl_index.pairAnnotation(anno_idx, decl_idx);
+                }
             }
+            pending.* = null;
         }
-        pending_anno.* = null;
         return;
     }
 
-    pending_anno.* = null;
+    if (self.currentPendingAnno()) |pending| pending.* = null;
 }
 
 fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx {
