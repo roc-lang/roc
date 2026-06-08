@@ -3731,13 +3731,45 @@ fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .Comma, .CloseRound, .CloseSquare, .CloseCurly, .CloseStringInterpolation, .StringEnd, .EndOfFile, .KwElse, .OpArrow, .OpFatArrow => {
                     expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
                 },
-                .OpAnd, .OpOr, .NoSpaceDotInt, .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .MalformedNoSpaceDotUnicodeIdent => {
+                .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
+                    var previous_pos = if (self.pos > 0) self.pos - 1 else self.pos;
+                    while (previous_pos > 0) {
+                        switch (self.tok_buf.tokens.items(.tag)[previous_pos]) {
+                            .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .DotLowerIdent, .DotUpperIdent => previous_pos -= 1,
+                            else => break,
+                        }
+                    }
+                    const previous_tag = self.tok_buf.tokens.items(.tag)[previous_pos];
+                    const recovery_expr = switch (previous_tag) {
+                        .LowerIdent, .NamedUnderscore, .NoSpaceDotLowerIdent, .DotLowerIdent => blk: {
+                            const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                            break :blk try self.store.addExpr(.{ .ident = .{
+                                .token = previous_pos,
+                                .qualifiers = empty_qualifiers,
+                                .region = .{ .start = previous_pos, .end = previous_pos + 1 },
+                            } });
+                        },
+                        .UpperIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => blk: {
+                            const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                            break :blk try self.store.addExpr(.{ .tag = .{
+                                .token = previous_pos,
+                                .qualifiers = empty_qualifiers,
+                                .region = .{ .start = previous_pos, .end = previous_pos + 1 },
+                            } });
+                        },
+                        else => expr,
+                    };
+                    while (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .NoSpaceDotUpperIdent) {
+                        self.advance();
+                    }
+                    expr_finish_state = .{ .start = previous_pos, .min_bp = expr_state.min_bp, .expr = recovery_expr };
+                },
+                .OpAnd, .OpOr, .NoSpaceDotInt, .MalformedNoSpaceDotUnicodeIdent => {
                     if (self.peek() == .EndOfFile) {
                         expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
                     } else {
                         self.advance();
-                        last_expr = expr;
-                        continue :expr_kernel .complete;
+                        expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
                     }
                 },
                 else => {
