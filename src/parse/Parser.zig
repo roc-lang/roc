@@ -243,13 +243,7 @@ const ParserContext = enum(u16) {
     expr_record_fields_next,
     expr_record_field_after_value,
     expr_record_finish,
-    expr_if_after_condition,
-    expr_if_after_then,
-    expr_if_after_else,
-    expr_match_after_expr,
     expr_match_branch_next,
-    expr_match_branch_after_guard,
-    expr_match_branch_after_body,
     expr_block_begin,
     expr_block_begin_after_open,
     expr_block_next,
@@ -4270,12 +4264,120 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.expr_for_list)) {
                     dispatch_token = self.peek();
                     switch (kind) {
-                        .expr_if => continue :dispatch .expr_if_after_condition,
-                        .expr_if_then => continue :dispatch .expr_if_after_then,
-                        .expr_if_else => continue :dispatch .expr_if_after_else,
-                        .expr_match => continue :dispatch .expr_match_after_expr,
-                        .expr_match_guard => continue :dispatch .expr_match_branch_after_guard,
-                        .expr_match_body => continue :dispatch .expr_match_branch_after_body,
+                        .expr_if => {
+                            const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
+                            last_expr = null;
+                            try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .condition = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_prefix;
+                        },
+                        .expr_if_then => {
+                            const state = open_syntax.popPayload(.expr_if_then, ExprIfAfterThenState);
+                            last_expr = null;
+                            if (self.peek() == .KwElse) {
+                                self.advance();
+                                try open_syntax.push(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .condition = state.condition,
+                                    .then = completed,
+                                });
+                                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_prefix;
+                            }
+                            const expr = try self.store.addExpr(.{ .if_without_else = .{
+                                .region = .{ .start = state.start, .end = self.pos },
+                                .condition = state.condition,
+                                .then = completed,
+                            } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_suffix;
+                        },
+                        .expr_if_else => {
+                            const state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
+                            last_expr = null;
+                            const expr = try self.store.addExpr(.{ .if_then_else = .{
+                                .region = .{ .start = state.start, .end = self.pos },
+                                .condition = state.condition,
+                                .then = state.then,
+                                .@"else" = completed,
+                            } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_suffix;
+                        },
+                        .expr_match => {
+                            const state = open_syntax.popPayload(.expr_match, ExprAfterExprState);
+                            last_expr = null;
+                            if (self.peek() == .OpenCurly) {
+                                self.advance();
+                                expr_match_branch_state = .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .matched = completed,
+                                    .scratch_top = self.store.scratchMatchBranchTop(),
+                                };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_match_branch_next;
+                            }
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_suffix;
+                        },
+                        .expr_match_guard => {
+                            const state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                            last_expr = null;
+                            if (self.peek() == .OpArrow) {
+                                try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                            }
+                            if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                                self.advance();
+                            } else {
+                                try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                            }
+                            try open_syntax.push(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                                .match_start = state.match_start,
+                                .min_bp = state.min_bp,
+                                .matched = state.matched,
+                                .scratch_top = state.scratch_top,
+                                .branch_start = state.branch_start,
+                                .pattern = state.pattern,
+                                .guard = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_prefix;
+                        },
+                        .expr_match_body => {
+                            const state = open_syntax.popPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
+                            last_expr = null;
+                            const branch = try self.store.addMatchBranch(.{
+                                .region = .{ .start = state.branch_start, .end = self.pos },
+                                .pattern = state.pattern,
+                                .body = completed,
+                                .guard = state.guard,
+                            });
+                            try self.store.addScratchMatchBranch(branch);
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            expr_match_branch_state = .{
+                                .start = state.match_start,
+                                .min_bp = state.min_bp,
+                                .matched = state.matched,
+                                .scratch_top = state.scratch_top,
+                            };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_match_branch_next;
+                        },
                         .expr_dbg => {
                             const state = open_syntax.popPayload(.expr_dbg, ExprAfterExprState);
                             last_expr = null;
@@ -4816,118 +4918,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .expr_suffix;
             },
         },
-        .expr_if_after_condition => switch (dispatch_token) {
-            .EndOfFile => {
-                const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
-                const condition = last_expr orelse unreachable;
-                last_expr = null;
-                try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .condition = condition,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
-                const condition = last_expr orelse unreachable;
-                last_expr = null;
-                try open_syntax.push(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .condition = condition,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-        },
-        .expr_if_after_then => switch (dispatch_token) {
-            .KwElse => {
-                const expr_if_after_then_state = open_syntax.popPayload(.expr_if_then, ExprIfAfterThenState);
-                const then_expr = last_expr orelse unreachable;
-                last_expr = null;
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
-                    .start = expr_if_after_then_state.start,
-                    .min_bp = expr_if_after_then_state.min_bp,
-                    .condition = expr_if_after_then_state.condition,
-                    .then = then_expr,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const expr_if_after_then_state = open_syntax.popPayload(.expr_if_then, ExprIfAfterThenState);
-                const then_expr = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .if_without_else = .{
-                    .region = .{ .start = expr_if_after_then_state.start, .end = self.pos },
-                    .condition = expr_if_after_then_state.condition,
-                    .then = then_expr,
-                } });
-                expr_finish_state = .{ .start = expr_if_after_then_state.start, .min_bp = expr_if_after_then_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-        },
-        .expr_if_after_else => switch (dispatch_token) {
-            .EndOfFile => {
-                const expr_if_after_else_state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
-                const else_expr = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .if_then_else = .{
-                    .region = .{ .start = expr_if_after_else_state.start, .end = self.pos },
-                    .condition = expr_if_after_else_state.condition,
-                    .then = expr_if_after_else_state.then,
-                    .@"else" = else_expr,
-                } });
-                expr_finish_state = .{ .start = expr_if_after_else_state.start, .min_bp = expr_if_after_else_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                const expr_if_after_else_state = open_syntax.popPayload(.expr_if_else, ExprIfAfterElseState);
-                const else_expr = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .if_then_else = .{
-                    .region = .{ .start = expr_if_after_else_state.start, .end = self.pos },
-                    .condition = expr_if_after_else_state.condition,
-                    .then = expr_if_after_else_state.then,
-                    .@"else" = else_expr,
-                } });
-                expr_finish_state = .{ .start = expr_if_after_else_state.start, .min_bp = expr_if_after_else_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-        },
-        .expr_match_after_expr => switch (dispatch_token) {
-            .OpenCurly => {
-                const state = open_syntax.popPayload(.expr_match, ExprAfterExprState);
-                const matched = last_expr orelse unreachable;
-                last_expr = null;
-                self.advance();
-                expr_match_branch_state = .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .matched = matched,
-                    .scratch_top = self.store.scratchMatchBranchTop(),
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_match_branch_next;
-            },
-            else => {
-                const state = open_syntax.popPayload(.expr_match, ExprAfterExprState);
-                const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
-                last_expr = null;
-                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-        },
         .expr_match_branch_next => switch (dispatch_token) {
             .CloseCurly => {
                 const branches = try self.store.matchBranchSpanFrom(expr_match_branch_state.scratch_top);
@@ -4968,94 +4958,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_root_next;
-            },
-        },
-        .expr_match_branch_after_guard => switch (dispatch_token) {
-            .OpFatArrow, .OpArrow => {
-                const expr_match_branch_after_guard_state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                const guard = if (last_expr) |g| blk: {
-                    last_expr = null;
-                    break :blk g;
-                } else expr_match_branch_after_guard_state.guard;
-                if (self.peek() == .OpArrow) {
-                    try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                }
-                self.advance();
-                try open_syntax.push(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
-                    .match_start = expr_match_branch_after_guard_state.match_start,
-                    .min_bp = expr_match_branch_after_guard_state.min_bp,
-                    .matched = expr_match_branch_after_guard_state.matched,
-                    .scratch_top = expr_match_branch_after_guard_state.scratch_top,
-                    .branch_start = expr_match_branch_after_guard_state.branch_start,
-                    .pattern = expr_match_branch_after_guard_state.pattern,
-                    .guard = guard,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const expr_match_branch_after_guard_state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                const guard = if (last_expr) |g| blk: {
-                    last_expr = null;
-                    break :blk g;
-                } else expr_match_branch_after_guard_state.guard;
-                try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
-                try open_syntax.push(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
-                    .match_start = expr_match_branch_after_guard_state.match_start,
-                    .min_bp = expr_match_branch_after_guard_state.min_bp,
-                    .matched = expr_match_branch_after_guard_state.matched,
-                    .scratch_top = expr_match_branch_after_guard_state.scratch_top,
-                    .branch_start = expr_match_branch_after_guard_state.branch_start,
-                    .pattern = expr_match_branch_after_guard_state.pattern,
-                    .guard = guard,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-        },
-        .expr_match_branch_after_body => switch (dispatch_token) {
-            .Comma => {
-                const expr_match_branch_after_body_state = open_syntax.popPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const branch = try self.store.addMatchBranch(.{
-                    .region = .{ .start = expr_match_branch_after_body_state.branch_start, .end = self.pos },
-                    .pattern = expr_match_branch_after_body_state.pattern,
-                    .body = body,
-                    .guard = expr_match_branch_after_body_state.guard,
-                });
-                try self.store.addScratchMatchBranch(branch);
-                self.advance();
-                expr_match_branch_state = .{
-                    .start = expr_match_branch_after_body_state.match_start,
-                    .min_bp = expr_match_branch_after_body_state.min_bp,
-                    .matched = expr_match_branch_after_body_state.matched,
-                    .scratch_top = expr_match_branch_after_body_state.scratch_top,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_match_branch_next;
-            },
-            else => {
-                const expr_match_branch_after_body_state = open_syntax.popPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const branch = try self.store.addMatchBranch(.{
-                    .region = .{ .start = expr_match_branch_after_body_state.branch_start, .end = self.pos },
-                    .pattern = expr_match_branch_after_body_state.pattern,
-                    .body = body,
-                    .guard = expr_match_branch_after_body_state.guard,
-                });
-                try self.store.addScratchMatchBranch(branch);
-                expr_match_branch_state = .{
-                    .start = expr_match_branch_after_body_state.match_start,
-                    .min_bp = expr_match_branch_after_body_state.min_bp,
-                    .matched = expr_match_branch_after_body_state.matched,
-                    .scratch_top = expr_match_branch_after_body_state.scratch_top,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_match_branch_next;
             },
         },
         .expr_block_begin => switch (dispatch_token) {
@@ -5258,8 +5160,26 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                                 dispatch_token = self.peek();
                                 continue :dispatch .expr_prefix;
                             }
+                            if (self.peek() == .OpArrow) {
+                                try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                            }
+                            if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                                self.advance();
+                            } else {
+                                try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                            }
+                            try open_syntax.push(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                                .match_start = state.match_start,
+                                .min_bp = state.min_bp,
+                                .matched = state.matched,
+                                .scratch_top = state.scratch_top,
+                                .branch_start = state.branch_start,
+                                .pattern = completed,
+                                .guard = null,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
                             dispatch_token = self.peek();
-                            continue :dispatch .expr_match_branch_after_guard;
+                            continue :dispatch .expr_prefix;
                         },
                         else => {},
                     }
