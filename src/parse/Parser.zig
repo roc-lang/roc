@@ -834,8 +834,47 @@ fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
 }
 
 fn parseStringExprTokens(self: *Parser) Error!AST.Expr.Idx {
-    std.debug.assert(self.peek() == .StringStart);
-    return try self.runExpr();
+    const start = self.pos;
+    self.expect(.StringStart) catch {
+        return try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
+    };
+    const scratch_top = self.store.scratchExprTop();
+    while (true) {
+        switch (self.peek()) {
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance();
+                const part = try self.store.addExpr(.{ .string_part = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchExpr(part);
+            },
+            .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => self.advance(),
+            .StringEnd => {
+                self.advance();
+                const parts = try self.store.exprSpanFrom(scratch_top);
+                return try self.store.addExpr(.{ .string = .{
+                    .token = start,
+                    .parts = parts,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
+            .EndOfFile => {
+                try self.pushDiagnostic(.string_unclosed, .{ .start = self.pos, .end = self.pos });
+                const parts = try self.store.exprSpanFrom(scratch_top);
+                return try self.store.addExpr(.{ .string = .{
+                    .token = start,
+                    .parts = parts,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
+            else => {
+                self.store.clearScratchExprsFrom(scratch_top);
+                return try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
+            },
+        }
+    }
 }
 
 fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
@@ -847,7 +886,7 @@ fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
     var value: ?AST.Expr.Idx = null;
     if (self.peek() == .OpColon) {
         self.advance();
-        value = try self.runExpr();
+        value = try self.parseStringExprTokens();
     }
     return try self.store.addRecordField(.{
         .name = name,
