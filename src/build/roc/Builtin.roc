@@ -485,11 +485,6 @@ Builtin :: [].{
 			Output.from_iter(iterator)
 		}
 
-		## Like [Iter.map], but effectful: the transform may run effects. Because the
-		## resulting steps are effectful, this yields a [Stream] rather than an [Iter].
-		map! : Iter(a), (a => b) => Stream(b)
-		map! = |iterator, transform!| Stream.from_iter_map!(iterator, transform!)
-
 		## Lift this pure iterator into an effectful [Stream], so it can be combined
 		## with effectful operations like [Stream.map].
 		stream : Iter(item) -> Stream(item)
@@ -631,21 +626,6 @@ Builtin :: [].{
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
-					},
-			}
-
-		## Lazily bridge a pure [Iter] into a [Stream], applying an effectful transform
-		## to each item as the stream is driven. Carries the source's length forward so
-		## [Stream.collect!] can pre-size.
-		from_iter_map! : Iter(a), (a => b) => Stream(b)
-		from_iter_map! = |iterator, transform!|
-			{
-				len_if_known: Iter.size_hint(iterator),
-				step!: ||
-					match Iter.next(iterator) {
-						Done => Done
-						Skip({ rest }) => Skip({ rest: Stream.from_iter_map!(rest, transform!) })
-						One({ item, rest }) => One({ item: transform!(item), rest: Stream.from_iter_map!(rest, transform!) })
 					},
 			}
 
@@ -819,7 +799,7 @@ Builtin :: [].{
 				match List.first(list) {
 					Ok(pivot) => {
 						rest = List.drop_first(list, 1)
-						less_or_equal = 
+						less_or_equal =
 							List.keep_if(
 								rest,
 								|item|
@@ -829,7 +809,7 @@ Builtin :: [].{
 										GT => False
 									},
 							)
-						greater = 
+						greater =
 							List.keep_if(
 								rest,
 								|item|

@@ -291,6 +291,10 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     pipeline_opts.LoopVectorization = true;
     pipeline_opts.LoopInterleaving = true;
     pipeline_opts.MergeFunctions = true;
+    // HACK (experiment): crank the inliner threshold so LLVM inlines the
+    // specialized iterator/stream combinator steps into their drive loops,
+    // to observe what fusion/unrolling becomes possible. Not for production.
+    pipeline_opts.InlinerThreshold = 1000000;
 
     // Instrumentations
     PassInstrumentationCallbacks instr_callbacks;
