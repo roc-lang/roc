@@ -399,13 +399,22 @@ const OpenSyntaxStack = struct {
     fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
         const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
         const end = start + @sizeOf(Payload);
-        try self.payloads.resize(allocator, end);
+        if (end > self.payloads.capacity) {
+            try self.payloads.ensureTotalCapacity(allocator, end);
+        }
+        self.payloads.items.len = end;
         @memcpy(self.payloads.items[start..end], std.mem.asBytes(&payload));
-        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(start) });
+        if (self.entries.items.len == self.entries.capacity) {
+            try self.entries.ensureUnusedCapacity(allocator, 1);
+        }
+        self.entries.appendAssumeCapacity(.{ .kind = kind, .payload_start = @intCast(start) });
     }
 
     fn pushMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind) Error!void {
-        try self.entries.append(allocator, .{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
+        if (self.entries.items.len == self.entries.capacity) {
+            try self.entries.ensureUnusedCapacity(allocator, 1);
+        }
+        self.entries.appendAssumeCapacity(.{ .kind = kind, .payload_start = @intCast(self.payloads.items.len) });
     }
 
     fn peekKind(self: *const OpenSyntaxStack) ?OpenSyntaxKind {
