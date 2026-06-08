@@ -286,11 +286,7 @@ pub fn extractSemanticTokensWithImports(
     defer module_env.deinit();
 
     // Parse the source
-    const parse_ast = parse.file(allocator, &module_env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        // Fall back to token-only extraction on parse error
-        else => return extractSemanticTokens(allocator, source, info),
-    };
+    const parse_ast = try parse.file(allocator, &module_env.common);
     defer parse_ast.deinit();
 
     // Initialize CIR fields
