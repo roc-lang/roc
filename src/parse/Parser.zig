@@ -245,19 +245,14 @@ const ParserContext = enum(u16) {
     expr_block_finish,
 
     pattern_root_next,
-    pattern_root_after_one,
     pattern_complete,
     pattern_prefix,
     pattern_tag_args_next,
-    pattern_tag_args_after_item,
     pattern_list_next,
-    pattern_list_after_item,
     pattern_list_finish,
     pattern_record_next,
-    pattern_record_field_after_value,
     pattern_record_finish,
     pattern_tuple_next,
-    pattern_tuple_after_item,
     pattern_tuple_finish,
 
     type_prefix,
@@ -4970,57 +4965,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .pattern_prefix;
             },
         },
-        .pattern_root_after_one => switch (dispatch_token) {
-            .OpBar => {
-                open_syntax.popMarker(.pattern_root);
-                const state = pattern_roots.leave();
-                const p = last_pattern orelse unreachable;
-                last_pattern = null;
-                if (state.alternatives == .alternatives_forbidden) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    last_pattern = try self.finishAsPattern(p);
-                    dispatch_token = self.peek();
-                    continue :dispatch .pattern_complete;
-                }
-                try self.store.addScratchPattern(p);
-                self.advance();
-                pattern_root_state = state;
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_root_next;
-            },
-            else => {
-                open_syntax.popMarker(.pattern_root);
-                const state = pattern_roots.leave();
-                const p = last_pattern orelse unreachable;
-                last_pattern = null;
-                if (state.alternatives == .alternatives_forbidden) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    last_pattern = try self.finishAsPattern(p);
-                    dispatch_token = self.peek();
-                    continue :dispatch .pattern_complete;
-                }
-                if (self.peek() != .OpBar) {
-                    if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
-                        last_pattern = try self.finishAsPattern(p);
-                        dispatch_token = self.peek();
-                        continue :dispatch .pattern_complete;
-                    }
-                    try self.store.addScratchPattern(p);
-                    const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                    last_pattern = try self.store.addPattern(.{ .alternatives = .{
-                        .region = .{ .start = state.outer_start, .end = self.pos },
-                        .patterns = patterns,
-                    } });
-                    dispatch_token = self.peek();
-                    continue :dispatch .pattern_complete;
-                }
-                try self.store.addScratchPattern(p);
-                self.advance();
-                pattern_root_state = state;
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_root_next;
-            },
-        },
         .pattern_complete => {
             const completed = last_pattern orelse unreachable;
             if (open_syntax.peekKind()) |kind| {
@@ -5150,17 +5094,114 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_record)) {
                     dispatch_token = self.peek();
                     switch (kind) {
-                        .pattern_root => continue :dispatch .pattern_root_after_one,
-                        .pattern_tag_args => continue :dispatch .pattern_tag_args_after_item,
-                        .pattern_list => continue :dispatch .pattern_list_after_item,
-                        .pattern_tuple => continue :dispatch .pattern_tuple_after_item,
+                        .pattern_root => {
+                            open_syntax.popMarker(.pattern_root);
+                            const state = pattern_roots.leave();
+                            last_pattern = null;
+                            if (state.alternatives == .alternatives_forbidden) {
+                                self.store.clearScratchPatternsFrom(state.scratch_top);
+                                last_pattern = try self.finishAsPattern(completed);
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_complete;
+                            }
+                            if (self.peek() != .OpBar) {
+                                if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
+                                    last_pattern = try self.finishAsPattern(completed);
+                                    dispatch_token = self.peek();
+                                    continue :dispatch .pattern_complete;
+                                }
+                                try self.store.addScratchPattern(completed);
+                                const patterns = try self.store.patternSpanFrom(state.scratch_top);
+                                last_pattern = try self.store.addPattern(.{ .alternatives = .{
+                                    .region = .{ .start = state.outer_start, .end = self.pos },
+                                    .patterns = patterns,
+                                } });
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_complete;
+                            }
+                            try self.store.addScratchPattern(completed);
+                            self.advance();
+                            pattern_root_state = state;
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_root_next;
+                        },
+                        .pattern_tag_args => {
+                            pattern_tag_args_state = open_syntax.popPayload(.pattern_tag_args, PatternTagArgsState);
+                            last_pattern = null;
+                            try self.store.addScratchPattern(completed);
+                            if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                                if (self.peek() == .Comma) {
+                                    self.advance();
+                                }
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_tag_args_next;
+                            }
+                            self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_complete;
+                        },
+                        .pattern_list => {
+                            pattern_list_state = open_syntax.popPayload(.pattern_list, PatternListState);
+                            last_pattern = null;
+                            try self.store.addScratchPattern(completed);
+                            if (self.peek() == .Comma or self.peek() == .CloseSquare) {
+                                if (self.peek() == .Comma) {
+                                    self.advance();
+                                }
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_list_next;
+                            }
+                            self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_complete;
+                        },
+                        .pattern_tuple => {
+                            pattern_tuple_state = open_syntax.popPayload(.pattern_tuple, PatternTupleState);
+                            last_pattern = null;
+                            try self.store.addScratchPattern(completed);
+                            if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                                if (self.peek() == .Comma) {
+                                    self.advance();
+                                }
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_tuple_next;
+                            }
+                            self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                            dispatch_token = self.peek();
+                            continue :dispatch .pattern_complete;
+                        },
                         else => {},
                     }
                 } else {
                     switch (kind) {
                         .pattern_record_field => {
+                            const state = open_syntax.popPayload(.pattern_record_field, PatternRecordFieldState);
+                            last_pattern = null;
+                            const field = try self.store.addPatternRecordField(.{
+                                .name = state.name,
+                                .value = completed,
+                                .rest = false,
+                                .region = .{ .start = state.field_start, .end = self.pos },
+                            });
+                            try self.store.addScratchPatternRecordField(field);
+                            pattern_record_state = .{
+                                .start = state.record_start,
+                                .scratch_top = state.scratch_top,
+                                .alternatives = state.alternatives,
+                            };
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                                dispatch_token = self.peek();
+                                continue :dispatch .pattern_record_next;
+                            }
                             dispatch_token = self.peek();
-                            continue :dispatch .pattern_record_field_after_value;
+                            if (self.peek() == .CloseCurly) {
+                                continue :dispatch .pattern_record_finish;
+                            }
+                            continue :dispatch .pattern_record_next;
                         },
                         else => {},
                     }
@@ -5430,31 +5471,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .pattern_root_next;
             },
         },
-        .pattern_tag_args_after_item => switch (dispatch_token) {
-            .Comma, .CloseRound => {
-                pattern_tag_args_state = open_syntax.popPayload(.pattern_tag_args, PatternTagArgsState);
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) self.advance();
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_tag_args_next;
-            },
-            else => {
-                pattern_tag_args_state = open_syntax.popPayload(.pattern_tag_args, PatternTagArgsState);
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .CloseRound) {} else {
-                    self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-        },
         .pattern_list_next => switch (dispatch_token) {
             .CloseSquare => {
                 dispatch_token = self.peek();
@@ -5503,31 +5519,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_root_next;
-            },
-        },
-        .pattern_list_after_item => switch (dispatch_token) {
-            .Comma, .CloseSquare => {
-                pattern_list_state = open_syntax.popPayload(.pattern_list, PatternListState);
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) self.advance();
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_list_next;
-            },
-            else => {
-                pattern_list_state = open_syntax.popPayload(.pattern_list, PatternListState);
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .CloseSquare) {} else {
-                    self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
             },
         },
         .pattern_list_finish => switch (dispatch_token) {
@@ -5636,55 +5627,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .pattern_complete;
             },
         },
-        .pattern_record_field_after_value => switch (dispatch_token) {
-            .Comma, .CloseCurly => {
-                const pattern_record_field_state = open_syntax.popPayload(.pattern_record_field, PatternRecordFieldState);
-                const value = last_pattern orelse unreachable;
-                last_pattern = null;
-                const field = try self.store.addPatternRecordField(.{
-                    .name = pattern_record_field_state.name,
-                    .value = value,
-                    .rest = false,
-                    .region = .{ .start = pattern_record_field_state.field_start, .end = self.pos },
-                });
-                try self.store.addScratchPatternRecordField(field);
-                pattern_record_state = .{
-                    .start = pattern_record_field_state.record_start,
-                    .scratch_top = pattern_record_field_state.scratch_top,
-                    .alternatives = pattern_record_field_state.alternatives,
-                };
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    dispatch_token = self.peek();
-                    continue :dispatch .pattern_record_next;
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_record_finish;
-            },
-            else => {
-                const pattern_record_field_state = open_syntax.popPayload(.pattern_record_field, PatternRecordFieldState);
-                const value = last_pattern orelse unreachable;
-                last_pattern = null;
-                const field = try self.store.addPatternRecordField(.{
-                    .name = pattern_record_field_state.name,
-                    .value = value,
-                    .rest = false,
-                    .region = .{ .start = pattern_record_field_state.field_start, .end = self.pos },
-                });
-                try self.store.addScratchPatternRecordField(field);
-                pattern_record_state = .{
-                    .start = pattern_record_field_state.record_start,
-                    .scratch_top = pattern_record_field_state.scratch_top,
-                    .alternatives = pattern_record_field_state.alternatives,
-                };
-                if (self.peek() == .Comma) self.advance();
-                dispatch_token = self.peek();
-                if (self.peek() == .CloseCurly) {
-                    continue :dispatch .pattern_record_finish;
-                }
-                continue :dispatch .pattern_record_next;
-            },
-        },
         .pattern_record_finish => switch (dispatch_token) {
             .CloseCurly => {
                 const fields = try self.store.patternRecordFieldSpanFrom(pattern_record_state.scratch_top);
@@ -5722,31 +5664,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_root_next;
-            },
-        },
-        .pattern_tuple_after_item => switch (dispatch_token) {
-            .Comma, .CloseRound => {
-                pattern_tuple_state = open_syntax.popPayload(.pattern_tuple, PatternTupleState);
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) self.advance();
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_tuple_next;
-            },
-            else => {
-                pattern_tuple_state = open_syntax.popPayload(.pattern_tuple, PatternTupleState);
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else if (self.peek() == .CloseRound) {} else {
-                    self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
-                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
             },
         },
         .pattern_tuple_finish => switch (dispatch_token) {
