@@ -193,28 +193,10 @@ pub const Error = std.mem.Allocator.Error;
 
 const ParserContext = enum(u16) {
     file_start,
-    file_after_header,
     file_statement_next,
     file_finish,
 
     header_start,
-    header_type_module,
-    header_app_start,
-    header_app_provides_next,
-    header_app_packages_next,
-    header_module_start,
-    header_module_exposes_next,
-    header_hosted_start,
-    header_hosted_exposes_next,
-    header_package_start,
-    header_package_exposes_next,
-    header_package_packages_next,
-    header_platform_start,
-    header_platform_requires_next,
-    header_platform_exposes_next,
-    header_platform_packages_next,
-    header_platform_provides_next,
-    header_platform_targets_next,
 
     statement_start,
     statement_complete,
@@ -2686,17 +2668,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .file_start;
             },
         },
-        .file_after_header => switch (dispatch_token) {
-            .EndOfFile => {
-                file_state.scratch_top = self.store.scratchStatementTop();
-                dispatch_token = self.peek();
-                continue :dispatch .file_statement_next;
-            },
-            else => {
-                dispatch_token = .EndOfFile;
-                continue :dispatch .file_after_header;
-            },
-        },
         .file_statement_next => switch (dispatch_token) {
             .EndOfFile => {
                 dispatch_token = self.peek();
@@ -2734,233 +2705,13 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
+                file_state.scratch_top = self.store.scratchStatementTop();
                 dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
+                continue :dispatch .file_statement_next;
             },
             else => {
                 dispatch_token = .EndOfFile;
                 continue :dispatch .header_start;
-            },
-        },
-        .header_type_module => switch (dispatch_token) {
-            .EndOfFile => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_app_start => switch (dispatch_token) {
-            .OpenSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_app_provides_next => switch (dispatch_token) {
-            .CloseSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_app_packages_next => switch (dispatch_token) {
-            .CloseCurly => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_module_start => switch (dispatch_token) {
-            .OpenSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_module_exposes_next => switch (dispatch_token) {
-            .CloseSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_hosted_start => switch (dispatch_token) {
-            .OpenSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_hosted_exposes_next => switch (dispatch_token) {
-            .CloseSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_package_start => switch (dispatch_token) {
-            .OpenSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_package_exposes_next => switch (dispatch_token) {
-            .CloseSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_package_packages_next => switch (dispatch_token) {
-            .CloseCurly => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_platform_start => switch (dispatch_token) {
-            .StringStart => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_platform_requires_next => switch (dispatch_token) {
-            .CloseCurly => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_platform_exposes_next => switch (dispatch_token) {
-            .CloseSquare => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_platform_packages_next => switch (dispatch_token) {
-            .CloseCurly => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_platform_provides_next => switch (dispatch_token) {
-            .CloseCurly => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
-            },
-        },
-        .header_platform_targets_next => switch (dispatch_token) {
-            .CloseCurly => {
-                last_header = try self.parseHeaderTokens();
-                if (result_kind == .header) {
-                    return .{ .header = last_header.? };
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .file_after_header;
-            },
-            else => {
-                unreachable;
             },
         },
         .statement_start => {
