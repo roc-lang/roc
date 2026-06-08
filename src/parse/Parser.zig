@@ -836,10 +836,7 @@ pub fn runFile(self: *Parser) Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = try self.runParser(.{
-        .initial_context = .file_start,
-        .result_kind = .file,
-    });
+    _ = try self.runParser(.file_start, .file, .{});
 }
 
 /// Parse a Roc file header.
@@ -847,10 +844,7 @@ pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.{
-        .initial_context = .header_start,
-        .result_kind = .header,
-    })).header;
+    return (try self.runParser(.header_start, .header, .{})).header;
 }
 
 const DelimitedError = Error || error{ExpectedNotFound};
@@ -1877,9 +1871,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.{
-        .initial_context = .statement_start,
-        .result_kind = .statement,
+    return (try self.runParser(.statement_start, .statement, .{
         .statement_type = statementType,
     })).statement;
 }
@@ -1902,9 +1894,7 @@ pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.I
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.{
-        .initial_context = .pattern_root_next,
-        .result_kind = .pattern,
+    return (try self.runParser(.pattern_root_next, .pattern, .{
         .pattern_alternatives = alternatives,
     })).pattern;
 }
@@ -2602,9 +2592,7 @@ pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.{
-        .initial_context = .expr_prefix,
-        .result_kind = .expr,
+    return (try self.runParser(.expr_prefix, .expr, .{
         .expr_min_bp = min_bp,
     })).expr;
 }
@@ -2630,8 +2618,6 @@ const ParserResult = union(enum) {
 };
 
 const ParserEntry = struct {
-    initial_context: ParserContext,
-    result_kind: ParserResultKind,
     expr_min_bp: u8 = 0,
     pattern_alternatives: Alternatives = .alternatives_forbidden,
     type_args: TyFnArgs = .not_looking_for_args,
@@ -2640,7 +2626,7 @@ const ParserEntry = struct {
     associated_owner_type_path: ?DeclIndex.TypePathIdx = null,
 };
 
-fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
+fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime result_kind: ParserResultKind, entry: ParserEntry) Error!ParserResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2760,7 +2746,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
     _ = &last_header;
 
     var dispatch_token = self.peek();
-    dispatch: switch (entry.initial_context) {
+    dispatch: switch (initial_context) {
         .file_start => switch (dispatch_token) {
             .KwApp, .KwModule, .KwHosted, .KwPackage, .KwPlatform, .EndOfFile => {
                 self.store.emptyScratch();
@@ -2841,7 +2827,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_start => switch (dispatch_token) {
             .KwApp, .KwModule, .KwHosted, .KwPackage, .KwPlatform, .EndOfFile => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2855,7 +2841,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_type_module => switch (dispatch_token) {
             .EndOfFile => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2868,7 +2854,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_app_start => switch (dispatch_token) {
             .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2881,7 +2867,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_app_provides_next => switch (dispatch_token) {
             .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2894,7 +2880,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_app_packages_next => switch (dispatch_token) {
             .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2907,7 +2893,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_module_start => switch (dispatch_token) {
             .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2920,7 +2906,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_module_exposes_next => switch (dispatch_token) {
             .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2933,7 +2919,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_hosted_start => switch (dispatch_token) {
             .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2946,7 +2932,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_hosted_exposes_next => switch (dispatch_token) {
             .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2959,7 +2945,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_package_start => switch (dispatch_token) {
             .OpenSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2972,7 +2958,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_package_exposes_next => switch (dispatch_token) {
             .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2985,7 +2971,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_package_packages_next => switch (dispatch_token) {
             .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -2998,7 +2984,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_platform_start => switch (dispatch_token) {
             .StringStart => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -3011,7 +2997,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_platform_requires_next => switch (dispatch_token) {
             .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -3024,7 +3010,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_platform_exposes_next => switch (dispatch_token) {
             .CloseSquare => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -3037,7 +3023,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_platform_packages_next => switch (dispatch_token) {
             .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -3050,7 +3036,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_platform_provides_next => switch (dispatch_token) {
             .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -3063,7 +3049,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
         .header_platform_targets_next => switch (dispatch_token) {
             .CloseCurly => {
                 last_header = try self.parseHeaderTokens();
-                if (entry.result_kind == .header) {
+                if (result_kind == .header) {
                     return .{ .header = last_header.? };
                 }
                 dispatch_token = self.peek();
@@ -3380,14 +3366,14 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                             continue :dispatch .statement_type_associated_after_statement;
                         },
                         else => {
-                            if (entry.result_kind == .statement) {
+                            if (result_kind == .statement) {
                                 return .{ .statement = last_statement.? };
                             }
                             unreachable;
                         },
                     }
                 }
-                return switch (entry.result_kind) {
+                return switch (result_kind) {
                     .statement => .{ .statement = last_statement.? },
                     else => .{ .statement = last_statement.? },
                 };
@@ -3850,7 +3836,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                     .scope = statement_associated_block_state.scope,
                     .region = assoc_region,
                 };
-                if (entry.result_kind == .associated) {
+                if (result_kind == .associated) {
                     return .{ .associated = last_associated.? };
                 }
                 dispatch_token = self.peek();
@@ -4456,7 +4442,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                                 continue :dispatch .pattern_string_after_expr;
                             }
                         }
-                        if (entry.result_kind == .expr) {
+                        if (result_kind == .expr) {
                             return .{ .expr = expr_finish_state.expr };
                         }
                         unreachable;
@@ -4602,12 +4588,12 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                         else => {},
                     }
                 }
-                if (entry.result_kind == .expr) {
+                if (result_kind == .expr) {
                     return .{ .expr = completed };
                 }
                 unreachable;
             }
-            return switch (entry.result_kind) {
+            return switch (result_kind) {
                 .expr => .{ .expr = completed },
                 else => .{ .expr = completed },
             };
@@ -5845,7 +5831,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                         else => {},
                     }
                 }
-                if (entry.result_kind == .pattern) {
+                if (result_kind == .pattern) {
                     return .{ .pattern = completed };
                 }
                 unreachable;
@@ -6670,7 +6656,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                         }
                     }
                 }
-                if (entry.result_kind == .type_anno) {
+                if (result_kind == .type_anno) {
                     return .{ .type_anno = completed };
                 }
                 unreachable;
@@ -7298,7 +7284,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                 if (self.peek() != .EndOfFile) {
                     self.advance();
                 }
-                return switch (entry.result_kind) {
+                return switch (result_kind) {
                     .file => .file,
                     .header => .{ .header = try self.pushMalformed(AST.Header.Idx, .statement_unexpected_token, self.pos) },
                     .expr => .{ .expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos) },
@@ -7317,7 +7303,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                 if (self.peek() != .EndOfFile) {
                     self.advance();
                 }
-                return switch (entry.result_kind) {
+                return switch (result_kind) {
                     .file => .file,
                     .header => .{ .header = try self.pushMalformed(AST.Header.Idx, .statement_unexpected_token, self.pos) },
                     .expr => .{ .expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos) },
@@ -7336,7 +7322,7 @@ fn runParser(self: *Parser, entry: ParserEntry) Error!ParserResult {
                 if (self.peek() != .EndOfFile) {
                     self.advance();
                 }
-                return switch (entry.result_kind) {
+                return switch (result_kind) {
                     .file => .file,
                     .header => .{ .header = try self.pushMalformed(AST.Header.Idx, .statement_unexpected_token, self.pos) },
                     .expr => .{ .expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos) },
@@ -7364,9 +7350,7 @@ pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return (try self.runParser(.{
-        .initial_context = .type_prefix,
-        .result_kind = .type_anno,
+    return (try self.runParser(.type_prefix, .type_anno, .{
         .type_args = looking_for_args,
     })).type_anno;
 }
@@ -7503,9 +7487,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    return (try self.runParser(.{
-        .initial_context = .statement_type_associated_start,
-        .result_kind = .associated,
+    return (try self.runParser(.statement_type_associated_start, .associated, .{
         .associated_start = start,
         .associated_owner_type_path = owner_type_path,
     })).associated;
