@@ -51,7 +51,7 @@ pub const RuntimeRecordFieldSchema = postcheck.SolvedLirLower.RuntimeRecordField
 pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
-pub const InlineMode = postcheck.SolvedLirLower.InlineMode;
+pub const InlineMode = postcheck.SolvedInline.Mode;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -203,8 +203,11 @@ pub fn lowerCheckedModulesToLir(
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
 
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
+    defer inline_plan.deinit();
+
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
-        .inline_mode = target.inline_mode,
+        .inline_plan = inline_plan.view(),
     });
     solved_owned = false;
     solved = undefined;

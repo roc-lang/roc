@@ -14,6 +14,7 @@ const layout = @import("layout");
 const Common = @import("common.zig");
 const Mono = @import("monotype/ast.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
+const SolvedInline = @import("solved_inline.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const LambdaMono = @import("lambda_mono/ast.zig");
@@ -103,15 +104,8 @@ pub const Output = struct {
     }
 };
 
-/// Optional post-check inlining performed while lowering solved monomorphic
-/// functions to LIR.
-pub const InlineMode = enum {
-    none,
-    direct_call_wrappers,
-};
-
 pub const Options = struct {
-    inline_mode: InlineMode = .none,
+    inline_plan: SolvedInline.Plan = .{},
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -209,18 +203,6 @@ const FnEntry = struct {
     proc: ?LIR.LirProcSpecId,
 };
 
-const InlineDecision = union(enum) {
-    unknown,
-    visiting,
-    never,
-    inline_direct_call: Lifted.ExprId,
-};
-
-const InlineCandidate = struct {
-    body: Lifted.ExprId,
-    call: Mono.CallProc,
-};
-
 const RootEntry = struct {
     fn_id: Type.FnId,
     request: check.CheckedModule.RootRequest,
@@ -259,9 +241,7 @@ const Lowerer = struct {
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
-    inline_mode: InlineMode,
-    inline_decisions: std.ArrayList(InlineDecision),
-    inline_stack: std.ArrayList(Type.FnId),
+    inline_plan: SolvedInline.Plan,
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
@@ -309,9 +289,7 @@ const Lowerer = struct {
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
-            .inline_mode = options.inline_mode,
-            .inline_decisions = .empty,
-            .inline_stack = .empty,
+            .inline_plan = options.inline_plan,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
@@ -337,8 +315,6 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
-        self.inline_stack.deinit(self.allocator);
-        self.inline_decisions.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
         self.fn_entries.deinit(self.allocator);
@@ -364,8 +340,6 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
-        self.inline_stack.deinit(self.allocator);
-        self.inline_decisions.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
         self.fn_entries.deinit(self.allocator);
@@ -376,8 +350,6 @@ const Lowerer = struct {
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = &.{};
         self.loop_stack = .empty;
-        self.inline_decisions = .empty;
-        self.inline_stack = .empty;
         return output;
     }
 
@@ -571,10 +543,6 @@ const Lowerer = struct {
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
         try self.fn_entries.append(self.allocator, undefined);
-        if (self.inline_mode != .none) {
-            try self.inline_decisions.append(self.allocator, .unknown);
-        }
-
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(source)];
         const symbol = self.symbols.fresh();
         const func = switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
@@ -1987,96 +1955,13 @@ const Lowerer = struct {
     }
 
     fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId) Common.LowerError!?Lifted.ExprId {
-        return switch (self.inline_mode) {
-            .none => null,
-            .direct_call_wrappers => try self.directCallWrapperInlineBody(callee),
-        };
-    }
+        const spec = self.fn_specs.items[@intFromEnum(callee)];
+        const body_expr = self.inline_plan.bodyForFn(spec.source) orelse return null;
 
-    fn directCallWrapperInlineBody(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!?Lifted.ExprId {
-        const index = @intFromEnum(fn_id);
-        if (index >= self.inline_decisions.items.len) {
-            Common.invariant("inline decision table was not initialized for a function spec");
-        }
+        if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
+        if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
 
-        switch (self.inline_decisions.items[index]) {
-            .unknown => {},
-            .visiting => {
-                self.markInlineCycle(fn_id);
-                return null;
-            },
-            .never => return null,
-            .inline_direct_call => |body| return body,
-        }
-
-        self.inline_decisions.items[index] = .visiting;
-        try self.inline_stack.append(self.allocator, fn_id);
-        defer {
-            const popped = self.inline_stack.pop() orelse Common.invariant("inline decision stack underflow");
-            if (popped != fn_id) Common.invariant("inline decision stack was corrupted");
-        }
-
-        const candidate = self.directCallWrapperCandidate(fn_id) orelse {
-            self.inline_decisions.items[index] = .never;
-            return null;
-        };
-
-        const callee_source = Lifted.callProcCallee(candidate.call);
-        const callee_fn = try self.ensureOwnFnSpec(callee_source, .finite);
-        _ = try self.directCallWrapperInlineBody(callee_fn);
-
-        switch (self.inline_decisions.items[index]) {
-            .never => return null,
-            .visiting => {},
-            .unknown, .inline_direct_call => Common.invariant("inline decision changed unexpectedly while visiting a candidate"),
-        }
-
-        self.inline_decisions.items[index] = .{ .inline_direct_call = candidate.body };
-        return candidate.body;
-    }
-
-    fn directCallWrapperCandidate(self: *Lowerer, fn_id: Type.FnId) ?InlineCandidate {
-        const spec = self.fn_specs.items[@intFromEnum(fn_id)];
-        if (spec.abi != .finite) return null;
-        if (spec.capture_ty != null) return null;
-
-        const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
-        const body_expr = switch (source_fn.body) {
-            .roc => |body| body,
-            .hosted => return null,
-        };
-        const call = self.directCallFromInlineBody(body_expr) orelse return null;
-        return .{ .body = body_expr, .call = call };
-    }
-
-    fn directCallFromInlineBody(self: *Lowerer, expr_id: Lifted.ExprId) ?Mono.CallProc {
-        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
-        return switch (expr.data) {
-            .call_proc => |call| call,
-            .block => |block| blk: {
-                if (self.solved.lifted.stmtSpan(block.statements).len != 0) return null;
-                const final_expr = self.solved.lifted.exprs.items[@intFromEnum(block.final_expr)];
-                break :blk switch (final_expr.data) {
-                    .call_proc => |call| call,
-                    else => null,
-                };
-            },
-            else => null,
-        };
-    }
-
-    fn markInlineCycle(self: *Lowerer, repeated: Type.FnId) void {
-        var cycle_start: ?usize = null;
-        for (self.inline_stack.items, 0..) |fn_id, index| {
-            if (fn_id == repeated) {
-                cycle_start = index;
-                break;
-            }
-        }
-        const start = cycle_start orelse Common.invariant("inline cycle did not refer to a visiting function");
-        for (self.inline_stack.items[start..]) |fn_id| {
-            self.inline_decisions.items[@intFromEnum(fn_id)] = .never;
-        }
+        return body_expr;
     }
 
     fn lowerInlineKnownCallInto(
