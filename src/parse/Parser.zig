@@ -194,78 +194,78 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error;
 
-const ExprParentKind = enum(u8) {
-    statement_expr_body,
-    statement_decl_body,
-    statement_var_body,
-    statement_expect_body,
-    statement_for_expr,
-    statement_for_body,
-    statement_while_cond,
-    statement_while_body,
-    statement_crash_body,
-    statement_dbg_body,
-    statement_return_body,
-    expr_unary,
-    expr_binary_rhs,
-    expr_collection_item,
-    expr_arrow_inner,
-    expr_record_ext,
-    expr_record_field,
-    expr_string,
-    expr_if,
-    expr_if_then,
-    expr_if_else,
-    expr_match,
-    expr_match_guard,
-    expr_match_body,
-    expr_dbg,
-    expr_for_list,
-    expr_for_body,
-    expr_lambda_body,
-    pattern_string,
+const ExprParentKind = enum(u16) {
+    statement_expr_body = 0x0001,
+    statement_decl_body = 0x0801,
+    statement_var_body = 0x1001,
+    statement_expect_body = 0x1801,
+    statement_for_expr = 0x2001,
+    statement_for_body = 0x2801,
+    statement_while_cond = 0x3001,
+    statement_while_body = 0x3801,
+    statement_crash_body = 0x4001,
+    statement_dbg_body = 0x4801,
+    statement_return_body = 0x5001,
+    expr_unary = 0x5801,
+    expr_binary_rhs = 0x6001,
+    expr_collection_item = 0x6801,
+    expr_arrow_inner = 0x7001,
+    expr_record_ext = 0x7801,
+    expr_record_field = 0x8001,
+    expr_string = 0x8801,
+    expr_if = 0x9001,
+    expr_if_then = 0x9801,
+    expr_if_else = 0xa001,
+    expr_match = 0xa801,
+    expr_match_guard = 0xb001,
+    expr_match_body = 0xb801,
+    expr_dbg = 0xc001,
+    expr_for_list = 0xc801,
+    expr_for_body = 0xd001,
+    expr_lambda_body = 0xd801,
+    pattern_string = 0xe001,
 };
 
-const PatternParentKind = enum(u8) {
-    statement_for_pattern,
-    statement_destructure_pattern,
-    expr_for_pattern,
-    expr_lambda_args,
-    expr_match_pattern,
-    pattern_root,
-    pattern_tag_args,
-    pattern_list,
-    pattern_tuple,
-    pattern_record_field,
+const PatternParentKind = enum(u16) {
+    statement_for_pattern = 0x0001,
+    statement_destructure_pattern = 0x0801,
+    expr_for_pattern = 0x1001,
+    expr_lambda_args = 0x1801,
+    expr_match_pattern = 0x2001,
+    pattern_root = 0x2801,
+    pattern_tag_args = 0x3001,
+    pattern_list = 0x3801,
+    pattern_tuple = 0x4001,
+    pattern_record_field = 0x4801,
 };
 
-const TypeParentKind = enum(u8) {
-    statement_type_after_anno,
-    statement_type_decl_anno,
-    where_clause_type,
-    type_apply,
-    type_paren_item,
-    type_paren_fn_ret,
-    type_zero_arg_fn_ret,
-    type_record_ext,
-    type_record_field,
-    type_tag_union_ext,
-    type_tag_union_item,
-    type_fn_arg,
-    type_fn_ret,
+const TypeParentKind = enum(u16) {
+    statement_type_after_anno = 0x0001,
+    statement_type_decl_anno = 0x0801,
+    where_clause_type = 0x1001,
+    type_apply = 0x1801,
+    type_paren_item = 0x2001,
+    type_paren_fn_ret = 0x2801,
+    type_zero_arg_fn_ret = 0x3001,
+    type_record_ext = 0x3801,
+    type_record_field = 0x4001,
+    type_tag_union_ext = 0x4801,
+    type_tag_union_item = 0x5001,
+    type_fn_arg = 0x5801,
+    type_fn_ret = 0x6001,
 };
 
-const WhereParentKind = enum(u8) {
-    where_statement_type_anno,
-    where_statement_type_decl,
+const WhereParentKind = enum(u16) {
+    where_statement_type_anno = 0x0001,
+    where_statement_type_decl = 0x0801,
 };
 
-const StatementParentKind = enum(u8) {
-    statement_type_associated_statement,
+const StatementParentKind = enum(u16) {
+    statement_type_associated_statement = 0x0001,
 };
 
-const AssociatedParentKind = enum(u8) {
-    statement_type_decl_associated,
+const AssociatedParentKind = enum(u16) {
+    statement_type_decl_associated = 0x0001,
 };
 
 fn enterDeclScope(
