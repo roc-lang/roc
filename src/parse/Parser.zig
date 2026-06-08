@@ -243,7 +243,6 @@ const ParserContext = enum(u16) {
     expr_record_fields_next,
     expr_record_field_after_value,
     expr_record_finish,
-    expr_lambda_after_body,
     expr_if_after_condition,
     expr_if_after_then,
     expr_if_after_else,
@@ -251,9 +250,6 @@ const ParserContext = enum(u16) {
     expr_match_branch_next,
     expr_match_branch_after_guard,
     expr_match_branch_after_body,
-    expr_dbg_after_expr,
-    expr_for_after_list,
-    expr_for_after_body,
     expr_block_begin,
     expr_block_begin_after_open,
     expr_block_next,
@@ -4280,15 +4276,61 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                         .expr_match => continue :dispatch .expr_match_after_expr,
                         .expr_match_guard => continue :dispatch .expr_match_branch_after_guard,
                         .expr_match_body => continue :dispatch .expr_match_branch_after_body,
-                        .expr_dbg => continue :dispatch .expr_dbg_after_expr,
+                        .expr_dbg => {
+                            const state = open_syntax.popPayload(.expr_dbg, ExprAfterExprState);
+                            last_expr = null;
+                            const expr = try self.store.addExpr(.{ .dbg = .{
+                                .region = .{ .start = state.start, .end = self.pos },
+                                .expr = completed,
+                            } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_suffix;
+                        },
                         else => {},
                     }
                 } else if (kind_int < @intFromEnum(OpenSyntaxKind.pattern_root)) {
                     dispatch_token = self.peek();
                     switch (kind) {
-                        .expr_for_list => continue :dispatch .expr_for_after_list,
-                        .expr_for_body => continue :dispatch .expr_for_after_body,
-                        .expr_lambda_body => continue :dispatch .expr_lambda_after_body,
+                        .expr_for_list => {
+                            const state = open_syntax.popPayload(.expr_for_list, ExprForAfterListState);
+                            last_expr = null;
+                            try open_syntax.push(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .pattern = state.pattern,
+                                .list_expr = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_prefix;
+                        },
+                        .expr_for_body => {
+                            const state = open_syntax.popPayload(.expr_for_body, ExprForAfterBodyState);
+                            last_expr = null;
+                            const expr = try self.store.addExpr(.{ .for_expr = .{
+                                .region = .{ .start = state.start, .end = self.pos },
+                                .patt = state.pattern,
+                                .expr = state.list_expr,
+                                .body = completed,
+                            } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_suffix;
+                        },
+                        .expr_lambda_body => {
+                            open_syntax.popMarker(.expr_lambda_body);
+                            const state = expr_lambda_body_stack.leave();
+                            last_expr = null;
+                            const expr = try self.store.addExpr(.{ .lambda = .{
+                                .body = completed,
+                                .args = state.args,
+                                .region = .{ .start = state.start, .end = self.pos },
+                            } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_suffix;
+                        },
                         else => {},
                     }
                 } else {
@@ -4774,36 +4816,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .expr_suffix;
             },
         },
-        .expr_lambda_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                open_syntax.popMarker(.expr_lambda_body);
-                const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .lambda = .{
-                    .body = body,
-                    .args = expr_lambda_after_body_state.args,
-                    .region = .{ .start = expr_lambda_after_body_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_lambda_after_body_state.start, .min_bp = expr_lambda_after_body_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                open_syntax.popMarker(.expr_lambda_body);
-                const expr_lambda_after_body_state = expr_lambda_body_stack.leave();
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .lambda = .{
-                    .body = body,
-                    .args = expr_lambda_after_body_state.args,
-                    .region = .{ .start = expr_lambda_after_body_state.start, .end = self.pos },
-                } });
-                expr_finish_state = .{ .start = expr_lambda_after_body_state.start, .min_bp = expr_lambda_after_body_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-        },
         .expr_if_after_condition => switch (dispatch_token) {
             .EndOfFile => {
                 const state = open_syntax.popPayload(.expr_if, ExprAfterExprState);
@@ -5044,92 +5056,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_match_branch_next;
-            },
-        },
-        .expr_dbg_after_expr => switch (dispatch_token) {
-            .EndOfFile => {
-                const state = open_syntax.popPayload(.expr_dbg, ExprAfterExprState);
-                const e = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .dbg = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .expr = e,
-                } });
-                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                const state = open_syntax.popPayload(.expr_dbg, ExprAfterExprState);
-                const e = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .dbg = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .expr = e,
-                } });
-                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-        },
-        .expr_for_after_list => switch (dispatch_token) {
-            .OpenCurly, .EndOfFile => {
-                const expr_for_after_list_state = open_syntax.popPayload(.expr_for_list, ExprForAfterListState);
-                const list_expr = last_expr orelse unreachable;
-                last_expr = null;
-                try open_syntax.push(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
-                    .start = expr_for_after_list_state.start,
-                    .min_bp = expr_for_after_list_state.min_bp,
-                    .pattern = expr_for_after_list_state.pattern,
-                    .list_expr = list_expr,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-            else => {
-                const expr_for_after_list_state = open_syntax.popPayload(.expr_for_list, ExprForAfterListState);
-                const list_expr = last_expr orelse unreachable;
-                last_expr = null;
-                try open_syntax.push(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
-                    .start = expr_for_after_list_state.start,
-                    .min_bp = expr_for_after_list_state.min_bp,
-                    .pattern = expr_for_after_list_state.pattern,
-                    .list_expr = list_expr,
-                });
-                expr_state = .{ .start = self.pos, .min_bp = 0 };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_prefix;
-            },
-        },
-        .expr_for_after_body => switch (dispatch_token) {
-            .EndOfFile => {
-                const expr_for_after_body_state = open_syntax.popPayload(.expr_for_body, ExprForAfterBodyState);
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .for_expr = .{
-                    .region = .{ .start = expr_for_after_body_state.start, .end = self.pos },
-                    .patt = expr_for_after_body_state.pattern,
-                    .expr = expr_for_after_body_state.list_expr,
-                    .body = body,
-                } });
-                expr_finish_state = .{ .start = expr_for_after_body_state.start, .min_bp = expr_for_after_body_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
-            },
-            else => {
-                const expr_for_after_body_state = open_syntax.popPayload(.expr_for_body, ExprForAfterBodyState);
-                const body = last_expr orelse unreachable;
-                last_expr = null;
-                const expr = try self.store.addExpr(.{ .for_expr = .{
-                    .region = .{ .start = expr_for_after_body_state.start, .end = self.pos },
-                    .patt = expr_for_after_body_state.pattern,
-                    .expr = expr_for_after_body_state.list_expr,
-                    .body = body,
-                } });
-                expr_finish_state = .{ .start = expr_for_after_body_state.start, .min_bp = expr_for_after_body_state.min_bp, .expr = expr };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_suffix;
             },
         },
         .expr_block_begin => switch (dispatch_token) {
