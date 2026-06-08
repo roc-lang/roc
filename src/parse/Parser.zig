@@ -233,15 +233,10 @@ const ParserContext = enum(u16) {
     expr_prefix,
     expr_suffix,
     expr_complete,
-    expr_arrow_after_inner,
     expr_arrow_app_next,
     expr_collection_next,
-    expr_collection_after_item,
     expr_string_next,
-    expr_string_after_interp,
-    expr_record_ext_after_expr,
     expr_record_fields_next,
-    expr_record_field_after_value,
     expr_record_finish,
     expr_match_branch_next,
     expr_block_begin,
@@ -264,7 +259,6 @@ const ParserContext = enum(u16) {
     pattern_tuple_next,
     pattern_tuple_after_item,
     pattern_tuple_finish,
-    pattern_string_after_expr,
 
     type_prefix,
     type_after_primary,
@@ -4113,7 +4107,14 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     dispatch_token = self.peek();
                     switch (parent_frame.parent) {
                         .expr_collection_item => {
-                            continue :dispatch .expr_collection_after_item;
+                            _ = root_expr_parents.take().expr_collection_item;
+                            last_expr = null;
+                            try self.store.addScratchExpr(completed);
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            dispatch_token = self.peek();
+                            continue :dispatch .expr_collection_next;
                         },
                         else => {},
                     }
@@ -4249,15 +4250,90 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     if (kind_int < @intFromEnum(OpenSyntaxKind.expr_record_ext)) {
                         dispatch_token = self.peek();
                         switch (kind) {
-                            .expr_arrow_inner => continue :dispatch .expr_arrow_after_inner,
+                            .expr_arrow_inner => {
+                                const state = open_syntax.popPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
+                                last_expr = null;
+                                if (self.peek() != .CloseRound) {
+                                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                                    dispatch_token = self.peek();
+                                    continue :dispatch .expr_suffix;
+                                }
+                                self.advance();
+                                expr_arrow_app_state = .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .left = state.left,
+                                    .operator = state.operator,
+                                    .rhs = completed,
+                                };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_arrow_app_next;
+                            },
                             else => {},
                         }
                     } else {
                         dispatch_token = self.peek();
                         switch (kind) {
-                            .expr_record_ext => continue :dispatch .expr_record_ext_after_expr,
-                            .expr_record_field => continue :dispatch .expr_record_field_after_value,
-                            .expr_string => continue :dispatch .expr_string_after_interp,
+                            .expr_record_ext => {
+                                const state = open_syntax.popPayload(.expr_record_ext, ExprRecordExtState);
+                                last_expr = null;
+                                if (self.peek() != .Comma) {
+                                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
+                                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                                    dispatch_token = self.peek();
+                                    continue :dispatch .expr_suffix;
+                                }
+                                self.advance();
+                                expr_record_state = .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .scratch_top = self.store.scratchRecordFieldTop(),
+                                    .ext = completed,
+                                };
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_record_fields_next;
+                            },
+                            .expr_record_field => {
+                                const state = open_syntax.popPayload(.expr_record_field, ExprRecordFieldState);
+                                last_expr = null;
+                                const field = try self.store.addRecordField(.{
+                                    .name = state.name,
+                                    .value = completed,
+                                    .region = .{ .start = state.field_start, .end = self.pos },
+                                });
+                                try self.store.addScratchRecordField(field);
+                                expr_record_state = .{
+                                    .start = state.start,
+                                    .min_bp = state.min_bp,
+                                    .scratch_top = state.scratch_top,
+                                    .ext = state.ext,
+                                };
+                                if (self.peek() == .Comma) {
+                                    self.advance();
+                                    dispatch_token = self.peek();
+                                    continue :dispatch .expr_record_fields_next;
+                                }
+                                dispatch_token = self.peek();
+                                if (self.peek() == .CloseCurly) {
+                                    continue :dispatch .expr_record_finish;
+                                }
+                                continue :dispatch .expr_record_fields_next;
+                            },
+                            .expr_string => {
+                                expr_string_state = open_syntax.popPayload(.expr_string, ExprStringState);
+                                last_expr = null;
+                                try self.store.addScratchExpr(completed);
+                                if (self.peek() != .CloseStringInterpolation) {
+                                    const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
+                                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                                    dispatch_token = self.peek();
+                                    continue :dispatch .expr_suffix;
+                                }
+                                self.advance();
+                                dispatch_token = self.peek();
+                                continue :dispatch .expr_string_next;
+                            },
                             else => {},
                         }
                     }
@@ -4438,8 +4514,15 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 } else {
                     switch (kind) {
                         .pattern_string => {
+                            pattern_string_state = open_syntax.popPayload(.pattern_string, PatternStringState);
+                            last_expr = null;
+                            last_pattern = try self.store.addPattern(.{ .string = .{
+                                .string_tok = pattern_string_state.start,
+                                .region = .{ .start = pattern_string_state.start, .end = self.pos },
+                                .expr = completed,
+                            } });
                             dispatch_token = self.peek();
-                            continue :dispatch .pattern_string_after_expr;
+                            continue :dispatch .pattern_complete;
                         },
                         else => {},
                     }
@@ -4453,44 +4536,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 .expr => .{ .expr = completed },
                 else => .{ .expr = completed },
             };
-        },
-        .expr_arrow_after_inner => switch (dispatch_token) {
-            .CloseRound => {
-                const expr_arrow_after_inner_state = open_syntax.popPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
-                const inner = last_expr orelse unreachable;
-                last_expr = null;
-                self.advance();
-                expr_arrow_app_state = .{
-                    .start = expr_arrow_after_inner_state.start,
-                    .min_bp = expr_arrow_after_inner_state.min_bp,
-                    .left = expr_arrow_after_inner_state.left,
-                    .operator = expr_arrow_after_inner_state.operator,
-                    .rhs = inner,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_arrow_app_next;
-            },
-            else => {
-                const expr_arrow_after_inner_state = open_syntax.popPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
-                const inner = last_expr orelse unreachable;
-                last_expr = null;
-                if (self.peek() != .CloseRound) {
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
-                    expr_finish_state = .{ .start = expr_arrow_after_inner_state.start, .min_bp = expr_arrow_after_inner_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
-                self.advance();
-                expr_arrow_app_state = .{
-                    .start = expr_arrow_after_inner_state.start,
-                    .min_bp = expr_arrow_after_inner_state.min_bp,
-                    .left = expr_arrow_after_inner_state.left,
-                    .operator = expr_arrow_after_inner_state.operator,
-                    .rhs = inner,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_arrow_app_next;
-            },
         },
         .expr_arrow_app_next => switch (dispatch_token) {
             .NoSpaceOpenRound => {
@@ -4604,28 +4649,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 continue :dispatch .expr_prefix;
             },
         },
-        .expr_collection_after_item => switch (dispatch_token) {
-            .Comma, .CloseRound, .CloseSquare => {
-                _ = root_expr_parents.take().expr_collection_item;
-                const item = last_expr orelse unreachable;
-                last_expr = null;
-                try self.store.addScratchExpr(item);
-                if (self.peek() == .Comma) self.advance();
-                dispatch_token = self.peek();
-                continue :dispatch .expr_collection_next;
-            },
-            else => {
-                _ = root_expr_parents.take().expr_collection_item;
-                const item = last_expr orelse unreachable;
-                last_expr = null;
-                try self.store.addScratchExpr(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .expr_collection_next;
-            },
-        },
         .expr_string_next => switch (dispatch_token) {
             .StringPart => {
                 const part_start = self.pos;
@@ -4736,68 +4759,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 }
             },
         },
-        .expr_string_after_interp => switch (dispatch_token) {
-            .CloseStringInterpolation => {
-                expr_string_state = open_syntax.popPayload(.expr_string, ExprStringState);
-                const ex = last_expr orelse unreachable;
-                last_expr = null;
-                try self.store.addScratchExpr(ex);
-                self.advance();
-                dispatch_token = self.peek();
-                continue :dispatch .expr_string_next;
-            },
-            else => {
-                expr_string_state = open_syntax.popPayload(.expr_string, ExprStringState);
-                const ex = last_expr orelse unreachable;
-                last_expr = null;
-                try self.store.addScratchExpr(ex);
-                if (self.peek() != .CloseStringInterpolation) {
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
-                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
-                self.advance();
-                dispatch_token = self.peek();
-                continue :dispatch .expr_string_next;
-            },
-        },
-        .expr_record_ext_after_expr => switch (dispatch_token) {
-            .Comma => {
-                const expr_record_ext_state = open_syntax.popPayload(.expr_record_ext, ExprRecordExtState);
-                const ext_expr = last_expr orelse unreachable;
-                last_expr = null;
-                self.advance();
-                expr_record_state = .{
-                    .start = expr_record_ext_state.start,
-                    .min_bp = expr_record_ext_state.min_bp,
-                    .scratch_top = self.store.scratchRecordFieldTop(),
-                    .ext = ext_expr,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_record_fields_next;
-            },
-            else => {
-                const expr_record_ext_state = open_syntax.popPayload(.expr_record_ext, ExprRecordExtState);
-                const ext_expr = last_expr orelse unreachable;
-                last_expr = null;
-                if (self.peek() != .Comma) {
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
-                    expr_finish_state = .{ .start = expr_record_ext_state.start, .min_bp = expr_record_ext_state.min_bp, .expr = expr };
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_suffix;
-                }
-                self.advance();
-                expr_record_state = .{
-                    .start = expr_record_ext_state.start,
-                    .min_bp = expr_record_ext_state.min_bp,
-                    .scratch_top = self.store.scratchRecordFieldTop(),
-                    .ext = ext_expr,
-                };
-                dispatch_token = self.peek();
-                continue :dispatch .expr_record_fields_next;
-            },
-        },
         .expr_record_fields_next => switch (dispatch_token) {
             .CloseCurly => {
                 dispatch_token = self.peek();
@@ -4850,55 +4811,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_suffix;
-            },
-        },
-        .expr_record_field_after_value => switch (dispatch_token) {
-            .Comma, .CloseCurly => {
-                const expr_record_field_state = open_syntax.popPayload(.expr_record_field, ExprRecordFieldState);
-                const value = last_expr orelse unreachable;
-                last_expr = null;
-                const field = try self.store.addRecordField(.{
-                    .name = expr_record_field_state.name,
-                    .value = value,
-                    .region = .{ .start = expr_record_field_state.field_start, .end = self.pos },
-                });
-                try self.store.addScratchRecordField(field);
-                expr_record_state = .{
-                    .start = expr_record_field_state.start,
-                    .min_bp = expr_record_field_state.min_bp,
-                    .scratch_top = expr_record_field_state.scratch_top,
-                    .ext = expr_record_field_state.ext,
-                };
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    dispatch_token = self.peek();
-                    continue :dispatch .expr_record_fields_next;
-                }
-                dispatch_token = self.peek();
-                continue :dispatch .expr_record_finish;
-            },
-            else => {
-                const expr_record_field_state = open_syntax.popPayload(.expr_record_field, ExprRecordFieldState);
-                const value = last_expr orelse unreachable;
-                last_expr = null;
-                const field = try self.store.addRecordField(.{
-                    .name = expr_record_field_state.name,
-                    .value = value,
-                    .region = .{ .start = expr_record_field_state.field_start, .end = self.pos },
-                });
-                try self.store.addScratchRecordField(field);
-                expr_record_state = .{
-                    .start = expr_record_field_state.start,
-                    .min_bp = expr_record_field_state.min_bp,
-                    .scratch_top = expr_record_field_state.scratch_top,
-                    .ext = expr_record_field_state.ext,
-                };
-                if (self.peek() == .Comma) self.advance();
-                dispatch_token = self.peek();
-                if (self.peek() == .CloseCurly) {
-                    continue :dispatch .expr_record_finish;
-                }
-                continue :dispatch .expr_record_fields_next;
             },
         },
         .expr_record_finish => switch (dispatch_token) {
@@ -5851,32 +5763,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
             else => {
                 self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
                 last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-        },
-        .pattern_string_after_expr => switch (dispatch_token) {
-            .StringEnd => {
-                pattern_string_state = open_syntax.popPayload(.pattern_string, PatternStringState);
-                const inner = last_expr orelse unreachable;
-                last_expr = null;
-                last_pattern = try self.store.addPattern(.{ .string = .{
-                    .string_tok = pattern_string_state.start,
-                    .region = .{ .start = pattern_string_state.start, .end = self.pos },
-                    .expr = inner,
-                } });
-                dispatch_token = self.peek();
-                continue :dispatch .pattern_complete;
-            },
-            else => {
-                pattern_string_state = open_syntax.popPayload(.pattern_string, PatternStringState);
-                const inner = last_expr orelse unreachable;
-                last_expr = null;
-                last_pattern = try self.store.addPattern(.{ .string = .{
-                    .string_tok = pattern_string_state.start,
-                    .region = .{ .start = pattern_string_state.start, .end = self.pos },
-                    .expr = inner,
-                } });
                 dispatch_token = self.peek();
                 continue :dispatch .pattern_complete;
             },
