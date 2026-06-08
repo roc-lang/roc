@@ -5795,13 +5795,11 @@ fn runExprStatementKernel(
                         pattern_tuple_state = open_syntax.popPatternPayload(.pattern_tuple, PatternTupleState);
                         last_pattern = null;
                         try self.store.addScratchPattern(completed);
-                        switch (self.peek()) {
-                            .Comma => {
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
                                 self.advance();
-                                continue :expr_kernel .pattern_tuple_next;
-                            },
-                            .CloseRound => continue :expr_kernel .pattern_tuple_next,
-                            else => {},
+                            }
+                            continue :expr_kernel .pattern_tuple_next;
                         }
                         self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
                         last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
