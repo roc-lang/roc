@@ -4328,7 +4328,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                         dispatch_token = self.peek();
                         continue :dispatch .expr_complete;
                     };
-                    if ((self.peek() == .OpAnd or self.peek() == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
+                    if ((tok == .OpAnd or tok == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
                         last_expr = expr_finish_state.expr;
                         dispatch_token = self.peek();
                         continue :dispatch .expr_complete;
@@ -4449,7 +4449,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 }
             }
 
-            if (getTokenBP(self.peek())) |bp| {
+            if (getTokenBP(tok)) |bp| {
                 if (bp.left >= expr_finish_state.min_bp) {
                     const op_pos = self.pos;
                     self.advance();
