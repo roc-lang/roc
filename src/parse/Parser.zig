@@ -3489,377 +3489,375 @@ fn runExprStatementKernel(
         .complete => {
             const completed = last_expr orelse unreachable;
             if (open_syntax.peekExpr()) |kind| {
-                switch (kind) {
-                    .expr_collection_item => {
-                        open_syntax.popExprMarker(.expr_collection_item);
-                        last_expr = null;
-                        try self.store.addScratchExpr(completed);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                        }
-                        continue :expr_kernel .collection_next;
-                    },
-                    .expr_binary_rhs => {
-                        open_syntax.popExprMarker(.expr_binary_rhs);
-                        const state = expr_binary_rhs_stack.leave();
-                        last_expr = null;
-                        const expr = try self.store.addExpr(.{ .bin_op = .{
-                            .left = state.left,
-                            .right = completed,
-                            .operator = state.operator,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
+                if (kind == .expr_collection_item) {
+                    open_syntax.popExprMarker(.expr_collection_item);
+                    last_expr = null;
+                    try self.store.addScratchExpr(completed);
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    }
+                    continue :expr_kernel .collection_next;
+                }
+                if (kind == .expr_binary_rhs) {
+                    open_syntax.popExprMarker(.expr_binary_rhs);
+                    const state = expr_binary_rhs_stack.leave();
+                    last_expr = null;
+                    const expr = try self.store.addExpr(.{ .bin_op = .{
+                        .left = state.left,
+                        .right = completed,
+                        .operator = state.operator,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_unary) {
+                    const state = open_syntax.popExprPayload(.expr_unary, ExprAfterUnaryState);
+                    last_expr = null;
+                    const expr = try self.store.addExpr(.{ .unary_op = .{
+                        .operator = state.operator,
+                        .expr = completed,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_arrow_inner) {
+                    const state = open_syntax.popExprPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
+                    last_expr = null;
+                    if (self.peek() != .CloseRound) {
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
-                    },
-                    .expr_unary => {
-                        const state = open_syntax.popExprPayload(.expr_unary, ExprAfterUnaryState);
-                        last_expr = null;
-                        const expr = try self.store.addExpr(.{ .unary_op = .{
-                            .operator = state.operator,
-                            .expr = completed,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
+                    }
+                    self.advance();
+                    expr_arrow_app_state = .{
+                        .start = state.start,
+                        .min_bp = state.min_bp,
+                        .left = state.left,
+                        .operator = state.operator,
+                        .rhs = completed,
+                    };
+                    continue :expr_kernel .arrow_app_next;
+                }
+                if (kind == .expr_record_ext) {
+                    const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
+                    last_expr = null;
+                    if (self.peek() != .Comma) {
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
-                    },
-                    .expr_arrow_inner => {
-                        const state = open_syntax.popExprPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
-                        last_expr = null;
-                        if (self.peek() != .CloseRound) {
-                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
-                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                            continue :expr_kernel .suffix;
-                        }
+                    }
+                    self.advance();
+                    expr_record_state = .{
+                        .start = state.start,
+                        .min_bp = state.min_bp,
+                        .scratch_top = self.store.scratchRecordFieldTop(),
+                        .ext = completed,
+                    };
+                    continue :expr_kernel .record_fields_next;
+                }
+                if (kind == .expr_record_field) {
+                    const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
+                    last_expr = null;
+                    const field = try self.store.addRecordField(.{
+                        .name = state.name,
+                        .value = completed,
+                        .region = .{ .start = state.field_start, .end = self.pos },
+                    });
+                    try self.store.addScratchRecordField(field);
+                    expr_record_state = .{
+                        .start = state.start,
+                        .min_bp = state.min_bp,
+                        .scratch_top = state.scratch_top,
+                        .ext = state.ext,
+                    };
+                    if (self.peek() == .Comma) {
                         self.advance();
-                        expr_arrow_app_state = .{
-                            .start = state.start,
-                            .min_bp = state.min_bp,
-                            .left = state.left,
-                            .operator = state.operator,
-                            .rhs = completed,
-                        };
-                        continue :expr_kernel .arrow_app_next;
-                    },
-                    .expr_record_ext => {
-                        const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
-                        last_expr = null;
-                        if (self.peek() != .Comma) {
-                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
-                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                            continue :expr_kernel .suffix;
-                        }
-                        self.advance();
-                        expr_record_state = .{
-                            .start = state.start,
-                            .min_bp = state.min_bp,
-                            .scratch_top = self.store.scratchRecordFieldTop(),
-                            .ext = completed,
-                        };
                         continue :expr_kernel .record_fields_next;
-                    },
-                    .expr_record_field => {
-                        const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
-                        last_expr = null;
-                        const field = try self.store.addRecordField(.{
-                            .name = state.name,
-                            .value = completed,
-                            .region = .{ .start = state.field_start, .end = self.pos },
-                        });
-                        try self.store.addScratchRecordField(field);
-                        expr_record_state = .{
-                            .start = state.start,
-                            .min_bp = state.min_bp,
-                            .scratch_top = state.scratch_top,
-                            .ext = state.ext,
-                        };
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                            continue :expr_kernel .record_fields_next;
-                        }
-                        if (self.peek() == .CloseCurly) {
-                            continue :expr_kernel .record_finish;
-                        }
-                        continue :expr_kernel .record_fields_next;
-                    },
-                    .expr_string => {
-                        expr_string_state = open_syntax.popExprPayload(.expr_string, ExprStringState);
-                        last_expr = null;
-                        try self.store.addScratchExpr(completed);
-                        if (self.peek() != .CloseStringInterpolation) {
-                            const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
-                            expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
-                            continue :expr_kernel .suffix;
-                        }
+                    }
+                    if (self.peek() == .CloseCurly) {
+                        continue :expr_kernel .record_finish;
+                    }
+                    continue :expr_kernel .record_fields_next;
+                }
+                if (kind == .expr_string) {
+                    expr_string_state = open_syntax.popExprPayload(.expr_string, ExprStringState);
+                    last_expr = null;
+                    try self.store.addScratchExpr(completed);
+                    if (self.peek() != .CloseStringInterpolation) {
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
+                        expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    }
+                    self.advance();
+                    continue :expr_kernel .string_next;
+                }
+                if (kind == .expr_if) {
+                    const state = open_syntax.popExprPayload(.expr_if, ExprAfterExprState);
+                    last_expr = null;
+                    try open_syntax.pushExpr(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                        .start = state.start,
+                        .min_bp = state.min_bp,
+                        .condition = completed,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (kind == .expr_if_then) {
+                    const state = open_syntax.popExprPayload(.expr_if_then, ExprIfAfterThenState);
+                    last_expr = null;
+                    if (self.peek() == .KwElse) {
                         self.advance();
-                        continue :expr_kernel .string_next;
-                    },
-                    .expr_if => {
-                        const state = open_syntax.popExprPayload(.expr_if, ExprAfterExprState);
-                        last_expr = null;
-                        try open_syntax.pushExpr(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                        try open_syntax.pushExpr(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
                             .start = state.start,
                             .min_bp = state.min_bp,
-                            .condition = completed,
-                        });
-                        expr_state = .{ .start = self.pos, .min_bp = 0 };
-                        continue :expr_kernel .prefix;
-                    },
-                    .expr_if_then => {
-                        const state = open_syntax.popExprPayload(.expr_if_then, ExprIfAfterThenState);
-                        last_expr = null;
-                        if (self.peek() == .KwElse) {
-                            self.advance();
-                            try open_syntax.pushExpr(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .condition = state.condition,
-                                .then = completed,
-                            });
-                            expr_state = .{ .start = self.pos, .min_bp = 0 };
-                            continue :expr_kernel .prefix;
-                        }
-                        const expr = try self.store.addExpr(.{ .if_without_else = .{
-                            .region = .{ .start = state.start, .end = self.pos },
                             .condition = state.condition,
                             .then = completed,
-                        } });
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .expr_if_else => {
-                        const state = open_syntax.popExprPayload(.expr_if_else, ExprIfAfterElseState);
-                        last_expr = null;
-                        const expr = try self.store.addExpr(.{ .if_then_else = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .condition = state.condition,
-                            .then = state.then,
-                            .@"else" = completed,
-                        } });
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .expr_match => {
-                        const state = open_syntax.popExprPayload(.expr_match, ExprAfterExprState);
-                        last_expr = null;
-                        if (self.peek() == .OpenCurly) {
-                            self.advance();
-                            expr_match_branch_state = .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .matched = completed,
-                                .scratch_top = self.store.scratchMatchBranchTop(),
-                            };
-                            continue :expr_kernel .match_branch_next;
-                        }
-                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .expr_match_guard => {
-                        const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                        expr_match_guard_depth -= 1;
-                        last_expr = null;
-                        if (self.peek() == .OpArrow) {
-                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                        }
-                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
-                            self.advance();
-                        } else {
-                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
-                        }
-                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
-                            .match_start = state.match_start,
-                            .min_bp = state.min_bp,
-                            .matched = state.matched,
-                            .scratch_top = state.scratch_top,
-                            .branch_start = state.branch_start,
-                            .pattern = state.pattern,
-                            .guard = completed,
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
-                    },
-                    .expr_match_body => {
-                        const state = open_syntax.popExprPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
-                        last_expr = null;
-                        const branch = try self.store.addMatchBranch(.{
-                            .region = .{ .start = state.branch_start, .end = self.pos },
-                            .pattern = state.pattern,
-                            .body = completed,
-                            .guard = state.guard,
-                        });
-                        try self.store.addScratchMatchBranch(branch);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                        }
+                    }
+                    const expr = try self.store.addExpr(.{ .if_without_else = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .condition = state.condition,
+                        .then = completed,
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_if_else) {
+                    const state = open_syntax.popExprPayload(.expr_if_else, ExprIfAfterElseState);
+                    last_expr = null;
+                    const expr = try self.store.addExpr(.{ .if_then_else = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .condition = state.condition,
+                        .then = state.then,
+                        .@"else" = completed,
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_match) {
+                    const state = open_syntax.popExprPayload(.expr_match, ExprAfterExprState);
+                    last_expr = null;
+                    if (self.peek() == .OpenCurly) {
+                        self.advance();
                         expr_match_branch_state = .{
-                            .start = state.match_start,
+                            .start = state.start,
                             .min_bp = state.min_bp,
-                            .matched = state.matched,
-                            .scratch_top = state.scratch_top,
+                            .matched = completed,
+                            .scratch_top = self.store.scratchMatchBranchTop(),
                         };
                         continue :expr_kernel .match_branch_next;
-                    },
-                    .expr_dbg => {
-                        const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
-                        last_expr = null;
-                        const expr = try self.store.addExpr(.{ .dbg = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .expr = completed,
-                        } });
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .expr_for_list => {
-                        const state = open_syntax.popExprPayload(.expr_for_list, ExprForAfterListState);
-                        last_expr = null;
-                        try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
-                            .start = state.start,
-                            .min_bp = state.min_bp,
-                            .pattern = state.pattern,
-                            .list_expr = completed,
-                        });
-                        expr_state = .{ .start = self.pos, .min_bp = 0 };
-                        continue :expr_kernel .prefix;
-                    },
-                    .expr_for_body => {
-                        const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
-                        last_expr = null;
-                        const expr = try self.store.addExpr(.{ .for_expr = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .patt = state.pattern,
-                            .expr = state.list_expr,
-                            .body = completed,
-                        } });
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .expr_lambda_body => {
-                        open_syntax.popExprMarker(.expr_lambda_body);
-                        const state = expr_lambda_body_stack.leave();
-                        last_expr = null;
-                        const expr = try self.store.addExpr(.{ .lambda = .{
-                            .body = completed,
-                            .args = state.args,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .statement_expr_body => {
-                        const start = open_syntax.popExprPayload(.statement_expr_body, Token.Idx);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .expr = .{
-                            .expr = completed,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_decl_body => {
-                        const state = open_syntax.popExprPayload(.statement_decl_body, StatementDeclBodyState);
-                        last_expr = null;
-                        last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_var_body => {
-                        const state = open_syntax.popExprPayload(.statement_var_body, StatementVarBodyState);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .@"var" = .{
-                            .name = state.name,
-                            .body = completed,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_expect_body => {
-                        const start = open_syntax.popExprPayload(.statement_expect_body, Token.Idx);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .expect = .{
-                            .body = completed,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_for_expr => {
-                        const state = open_syntax.popExprPayload(.statement_for_expr, StatementForExprState);
-                        last_expr = null;
-                        try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
-                            .start = state.start,
-                            .patt = state.patt,
-                            .expr = completed,
-                        });
-                        expr_state = .{ .start = self.pos, .min_bp = 0 };
-                        continue :expr_kernel .prefix;
-                    },
-                    .statement_for_body => {
-                        const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .@"for" = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .patt = state.patt,
-                            .expr = state.expr,
-                            .body = completed,
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_while_cond => {
-                        const start = open_syntax.popExprPayload(.statement_while_cond, Token.Idx);
-                        last_expr = null;
-                        try open_syntax.pushExpr(open_allocator, .statement_while_body, StatementWhileBodyState, .{
-                            .start = start,
-                            .cond = completed,
-                        });
-                        expr_state = .{ .start = self.pos, .min_bp = 0 };
-                        continue :expr_kernel .prefix;
-                    },
-                    .statement_while_body => {
-                        const state = open_syntax.popExprPayload(.statement_while_body, StatementWhileBodyState);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .@"while" = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .cond = state.cond,
-                            .body = completed,
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_crash_body => {
-                        const start = open_syntax.popExprPayload(.statement_crash_body, Token.Idx);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .crash = .{
-                            .expr = completed,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_dbg_body => {
-                        const start = open_syntax.popExprPayload(.statement_dbg_body, Token.Idx);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .dbg = .{
-                            .expr = completed,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_return_body => {
-                        const start = open_syntax.popExprPayload(.statement_return_body, Token.Idx);
-                        last_expr = null;
-                        last_statement = try self.addStatement(.{ .@"return" = .{
-                            .expr = completed,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .pattern_string => {
-                        pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
-                        last_expr = null;
-                        last_pattern = try self.store.addPattern(.{ .string = .{
-                            .string_tok = pattern_string_state.start,
-                            .region = .{ .start = pattern_string_state.start, .end = self.pos },
-                            .expr = completed,
-                        } });
-                        continue :expr_kernel .pattern_complete;
-                    },
+                    }
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_match_guard) {
+                    const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                    expr_match_guard_depth -= 1;
+                    last_expr = null;
+                    if (self.peek() == .OpArrow) {
+                        try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                    }
+                    if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                        self.advance();
+                    } else {
+                        try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                    }
+                    try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                        .match_start = state.match_start,
+                        .min_bp = state.min_bp,
+                        .matched = state.matched,
+                        .scratch_top = state.scratch_top,
+                        .branch_start = state.branch_start,
+                        .pattern = state.pattern,
+                        .guard = completed,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (kind == .expr_match_body) {
+                    const state = open_syntax.popExprPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
+                    last_expr = null;
+                    const branch = try self.store.addMatchBranch(.{
+                        .region = .{ .start = state.branch_start, .end = self.pos },
+                        .pattern = state.pattern,
+                        .body = completed,
+                        .guard = state.guard,
+                    });
+                    try self.store.addScratchMatchBranch(branch);
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    }
+                    expr_match_branch_state = .{
+                        .start = state.match_start,
+                        .min_bp = state.min_bp,
+                        .matched = state.matched,
+                        .scratch_top = state.scratch_top,
+                    };
+                    continue :expr_kernel .match_branch_next;
+                }
+                if (kind == .expr_dbg) {
+                    const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
+                    last_expr = null;
+                    const expr = try self.store.addExpr(.{ .dbg = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .expr = completed,
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_for_list) {
+                    const state = open_syntax.popExprPayload(.expr_for_list, ExprForAfterListState);
+                    last_expr = null;
+                    try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
+                        .start = state.start,
+                        .min_bp = state.min_bp,
+                        .pattern = state.pattern,
+                        .list_expr = completed,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (kind == .expr_for_body) {
+                    const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
+                    last_expr = null;
+                    const expr = try self.store.addExpr(.{ .for_expr = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .patt = state.pattern,
+                        .expr = state.list_expr,
+                        .body = completed,
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_lambda_body) {
+                    open_syntax.popExprMarker(.expr_lambda_body);
+                    const state = expr_lambda_body_stack.leave();
+                    last_expr = null;
+                    const expr = try self.store.addExpr(.{ .lambda = .{
+                        .body = completed,
+                        .args = state.args,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .statement_expr_body) {
+                    const start = open_syntax.popExprPayload(.statement_expr_body, Token.Idx);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .expr = .{
+                        .expr = completed,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_decl_body) {
+                    const state = open_syntax.popExprPayload(.statement_decl_body, StatementDeclBodyState);
+                    last_expr = null;
+                    last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_var_body) {
+                    const state = open_syntax.popExprPayload(.statement_var_body, StatementVarBodyState);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .@"var" = .{
+                        .name = state.name,
+                        .body = completed,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_expect_body) {
+                    const start = open_syntax.popExprPayload(.statement_expect_body, Token.Idx);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .expect = .{
+                        .body = completed,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_for_expr) {
+                    const state = open_syntax.popExprPayload(.statement_for_expr, StatementForExprState);
+                    last_expr = null;
+                    try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
+                        .start = state.start,
+                        .patt = state.patt,
+                        .expr = completed,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (kind == .statement_for_body) {
+                    const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .@"for" = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .patt = state.patt,
+                        .expr = state.expr,
+                        .body = completed,
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_while_cond) {
+                    const start = open_syntax.popExprPayload(.statement_while_cond, Token.Idx);
+                    last_expr = null;
+                    try open_syntax.pushExpr(open_allocator, .statement_while_body, StatementWhileBodyState, .{
+                        .start = start,
+                        .cond = completed,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (kind == .statement_while_body) {
+                    const state = open_syntax.popExprPayload(.statement_while_body, StatementWhileBodyState);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .@"while" = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .cond = state.cond,
+                        .body = completed,
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_crash_body) {
+                    const start = open_syntax.popExprPayload(.statement_crash_body, Token.Idx);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .crash = .{
+                        .expr = completed,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_dbg_body) {
+                    const start = open_syntax.popExprPayload(.statement_dbg_body, Token.Idx);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .dbg = .{
+                        .expr = completed,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_return_body) {
+                    const start = open_syntax.popExprPayload(.statement_return_body, Token.Idx);
+                    last_expr = null;
+                    last_statement = try self.addStatement(.{ .@"return" = .{
+                        .expr = completed,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .pattern_string) {
+                    pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
+                    last_expr = null;
+                    last_pattern = try self.store.addPattern(.{ .string = .{
+                        .string_tok = pattern_string_state.start,
+                        .region = .{ .start = pattern_string_state.start, .end = self.pos },
+                        .expr = completed,
+                    } });
+                    continue :expr_kernel .pattern_complete;
                 }
             }
             if (root == .expr) {
@@ -4335,264 +4333,262 @@ fn runExprStatementKernel(
         .type_complete => {
             const completed = last_type_anno orelse unreachable;
             if (open_syntax.peekType()) |kind| {
-                switch (kind) {
-                    .type_apply => {
-                        type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
-                        last_type_anno = null;
-                        try self.store.addScratchTypeAnno(completed);
-                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
-                            if (self.peek() == .Comma) {
-                                self.advance();
-                            }
-                            continue :expr_kernel .type_apply_next;
-                        }
-                        self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
-                        last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
-                        continue :expr_kernel .type_complete;
-                    },
-                    .type_paren_item => {
-                        const state = open_syntax.popTypePayload(.type_paren_item, TypeParenAfterItemState);
-                        last_type_anno = null;
-                        try self.store.addScratchTypeAnno(completed);
-                        type_paren_state = .{
-                            .start = state.start,
-                            .after_round = state.after_round,
-                            .scratch_top = state.scratch_top,
-                            .saw_comma = state.saw_comma or self.peek() == .Comma,
-                            .expect_close = self.peek() != .Comma,
-                            .looking_for_args = state.looking_for_args,
-                        };
+                if (kind == .type_apply) {
+                    type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
+                    last_type_anno = null;
+                    try self.store.addScratchTypeAnno(completed);
+                    if (self.peek() == .Comma or self.peek() == .CloseRound) {
                         if (self.peek() == .Comma) {
                             self.advance();
-                            type_paren_state.expect_close = false;
                         }
-                        continue :expr_kernel .type_paren_next;
-                    },
-                    .type_paren_fn_ret => {
-                        const state = open_syntax.popTypePayload(.type_paren_fn_ret, TypeParenFnRetState);
-                        last_type_anno = null;
-                        if (self.peek() != .CloseRound) {
-                            self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
-                            continue :expr_kernel .type_complete;
-                        }
-                        const function = try self.store.addTypeAnno(.{ .@"fn" = .{
-                            .args = state.args,
-                            .ret = completed,
-                            .effectful = state.effectful,
-                            .region = .{ .start = state.after_round, .end = self.pos },
-                        } });
+                        continue :expr_kernel .type_apply_next;
+                    }
+                    self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
+                    continue :expr_kernel .type_complete;
+                }
+                if (kind == .type_paren_item) {
+                    const state = open_syntax.popTypePayload(.type_paren_item, TypeParenAfterItemState);
+                    last_type_anno = null;
+                    try self.store.addScratchTypeAnno(completed);
+                    type_paren_state = .{
+                        .start = state.start,
+                        .after_round = state.after_round,
+                        .scratch_top = state.scratch_top,
+                        .saw_comma = state.saw_comma or self.peek() == .Comma,
+                        .expect_close = self.peek() != .Comma,
+                        .looking_for_args = state.looking_for_args,
+                    };
+                    if (self.peek() == .Comma) {
                         self.advance();
-                        last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
-                            .anno = function,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
-                        continue :expr_kernel .type_after_primary;
-                    },
-                    .type_zero_arg_fn_ret => {
-                        const state = open_syntax.popTypePayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
-                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
-                            .args = state.args,
-                            .ret = completed,
-                            .effectful = state.effectful,
-                            .region = .{ .start = state.after_round, .end = self.pos },
-                        } });
-                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
-                        continue :expr_kernel .type_after_primary;
-                    },
-                    .type_record_ext => {
-                        const state = open_syntax.popTypePayload(.type_record_ext, TypeRecordExtState);
-                        last_type_anno = null;
-                        const anno_region = self.store.typeAnnoRegion(completed);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                        } else if (self.peek() != .CloseCurly) {
-                            self.expect(.Comma) catch {};
-                        }
-                        type_record_state = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
-                            .looking_for_args = state.looking_for_args,
-                        };
-                        continue :expr_kernel .type_record_finish;
-                    },
-                    .type_record_field => {
-                        const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
-                        last_type_anno = null;
-                        const field = try self.store.addAnnoRecordField(.{
-                            .region = .{ .start = state.field_start, .end = self.pos },
-                            .name = state.name,
-                            .ty = completed,
-                        });
-                        try self.store.addScratchAnnoRecordField(field);
-                        type_record_state = .{
-                            .start = state.record_start,
-                            .scratch_top = state.scratch_top,
-                            .ext = state.ext,
-                            .looking_for_args = state.looking_for_args,
-                        };
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                            continue :expr_kernel .type_record_next;
-                        }
-                        if (self.peek() == .CloseCurly) {
-                            continue :expr_kernel .type_record_finish;
-                        }
-                        continue :expr_kernel .type_record_next;
-                    },
-                    .type_tag_union_ext => {
-                        const state = open_syntax.popTypePayload(.type_tag_union_ext, TypeTagUnionExtState);
-                        last_type_anno = null;
-                        const anno_region = self.store.typeAnnoRegion(completed);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                        } else if (self.peek() != .CloseSquare) {
-                            self.expect(.Comma) catch {};
-                        }
-                        type_tag_union_state = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
-                            .looking_for_args = state.looking_for_args,
-                        };
-                        continue :expr_kernel .type_tag_union_finish;
-                    },
-                    .type_tag_union_item => {
-                        const state = open_syntax.popTypePayload(.type_tag_union_item, TypeTagUnionItemState);
-                        last_type_anno = null;
-                        self.collect_type_dependencies = state.was_collecting;
-                        if (state.was_collecting) {
-                            try self.recordTypeDependenciesFromTagAnno(completed);
-                        }
-                        try self.store.addScratchTypeAnno(completed);
-                        type_tag_union_state = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .ext = state.ext,
-                            .looking_for_args = state.looking_for_args,
-                        };
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                            continue :expr_kernel .type_tag_union_next;
-                        }
-                        if (self.peek() == .CloseSquare) {
-                            continue :expr_kernel .type_tag_union_finish;
-                        }
-                        continue :expr_kernel .type_tag_union_next;
-                    },
-                    .type_fn_arg => {
-                        type_fn_args_state = open_syntax.popTypePayload(.type_fn_arg, TypeFnArgsState);
-                        last_type_anno = null;
-                        try self.store.addScratchTypeAnno(completed);
-                        continue :expr_kernel .type_fn_args_next;
-                    },
-                    .type_fn_ret => {
-                        const state = open_syntax.popTypePayload(.type_fn_ret, TypeFnAfterRetState);
-                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .args = state.args,
-                            .ret = completed,
-                            .effectful = state.effectful,
-                        } });
+                        type_paren_state.expect_close = false;
+                    }
+                    continue :expr_kernel .type_paren_next;
+                }
+                if (kind == .type_paren_fn_ret) {
+                    const state = open_syntax.popTypePayload(.type_paren_fn_ret, TypeParenFnRetState);
+                    last_type_anno = null;
+                    if (self.peek() != .CloseRound) {
+                        self.store.clearScratchTypeAnnosFrom(state.scratch_top);
+                        last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
                         continue :expr_kernel .type_complete;
-                    },
-                    .where_clause_type => {
-                        const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
-                        last_type_anno = null;
-                        const method_type = self.store.getTypeAnno(completed);
-                        if (method_type == .@"fn") {
-                            const fn_type = method_type.@"fn";
-                            const args = try self.store.addCollection(.collection_ty_anno, .{
-                                .region = .{ .start = state.args_start, .end = self.pos },
-                                .span = fn_type.args.span,
-                            });
-                            try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
-                                .region = .{ .start = state.start, .end = self.pos },
-                                .name_tok = state.name_tok,
-                                .var_tok = state.var_tok,
-                                .args = args,
-                                .ret_anno = fn_type.ret,
-                            } }));
-                            continue :expr_kernel .where_after_clause;
-                        }
-
-                        const empty_args = try self.store.addCollection(.collection_ty_anno, .{
+                    }
+                    const function = try self.store.addTypeAnno(.{ .@"fn" = .{
+                        .args = state.args,
+                        .ret = completed,
+                        .effectful = state.effectful,
+                        .region = .{ .start = state.after_round, .end = self.pos },
+                    } });
+                    self.advance();
+                    last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = function,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                    continue :expr_kernel .type_after_primary;
+                }
+                if (kind == .type_zero_arg_fn_ret) {
+                    const state = open_syntax.popTypePayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
+                    last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                        .args = state.args,
+                        .ret = completed,
+                        .effectful = state.effectful,
+                        .region = .{ .start = state.after_round, .end = self.pos },
+                    } });
+                    type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                    continue :expr_kernel .type_after_primary;
+                }
+                if (kind == .type_record_ext) {
+                    const state = open_syntax.popTypePayload(.type_record_ext, TypeRecordExtState);
+                    last_type_anno = null;
+                    const anno_region = self.store.typeAnnoRegion(completed);
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else if (self.peek() != .CloseCurly) {
+                        self.expect(.Comma) catch {};
+                    }
+                    type_record_state = .{
+                        .start = state.start,
+                        .scratch_top = state.scratch_top,
+                        .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                        .looking_for_args = state.looking_for_args,
+                    };
+                    continue :expr_kernel .type_record_finish;
+                }
+                if (kind == .type_record_field) {
+                    const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
+                    last_type_anno = null;
+                    const field = try self.store.addAnnoRecordField(.{
+                        .region = .{ .start = state.field_start, .end = self.pos },
+                        .name = state.name,
+                        .ty = completed,
+                    });
+                    try self.store.addScratchAnnoRecordField(field);
+                    type_record_state = .{
+                        .start = state.record_start,
+                        .scratch_top = state.scratch_top,
+                        .ext = state.ext,
+                        .looking_for_args = state.looking_for_args,
+                    };
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                        continue :expr_kernel .type_record_next;
+                    }
+                    if (self.peek() == .CloseCurly) {
+                        continue :expr_kernel .type_record_finish;
+                    }
+                    continue :expr_kernel .type_record_next;
+                }
+                if (kind == .type_tag_union_ext) {
+                    const state = open_syntax.popTypePayload(.type_tag_union_ext, TypeTagUnionExtState);
+                    last_type_anno = null;
+                    const anno_region = self.store.typeAnnoRegion(completed);
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else if (self.peek() != .CloseSquare) {
+                        self.expect(.Comma) catch {};
+                    }
+                    type_tag_union_state = .{
+                        .start = state.start,
+                        .scratch_top = state.scratch_top,
+                        .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                        .looking_for_args = state.looking_for_args,
+                    };
+                    continue :expr_kernel .type_tag_union_finish;
+                }
+                if (kind == .type_tag_union_item) {
+                    const state = open_syntax.popTypePayload(.type_tag_union_item, TypeTagUnionItemState);
+                    last_type_anno = null;
+                    self.collect_type_dependencies = state.was_collecting;
+                    if (state.was_collecting) {
+                        try self.recordTypeDependenciesFromTagAnno(completed);
+                    }
+                    try self.store.addScratchTypeAnno(completed);
+                    type_tag_union_state = .{
+                        .start = state.start,
+                        .scratch_top = state.scratch_top,
+                        .ext = state.ext,
+                        .looking_for_args = state.looking_for_args,
+                    };
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                        continue :expr_kernel .type_tag_union_next;
+                    }
+                    if (self.peek() == .CloseSquare) {
+                        continue :expr_kernel .type_tag_union_finish;
+                    }
+                    continue :expr_kernel .type_tag_union_next;
+                }
+                if (kind == .type_fn_arg) {
+                    type_fn_args_state = open_syntax.popTypePayload(.type_fn_arg, TypeFnArgsState);
+                    last_type_anno = null;
+                    try self.store.addScratchTypeAnno(completed);
+                    continue :expr_kernel .type_fn_args_next;
+                }
+                if (kind == .type_fn_ret) {
+                    const state = open_syntax.popTypePayload(.type_fn_ret, TypeFnAfterRetState);
+                    last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .args = state.args,
+                        .ret = completed,
+                        .effectful = state.effectful,
+                    } });
+                    continue :expr_kernel .type_complete;
+                }
+                if (kind == .where_clause_type) {
+                    const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
+                    last_type_anno = null;
+                    const method_type = self.store.getTypeAnno(completed);
+                    if (method_type == .@"fn") {
+                        const fn_type = method_type.@"fn";
+                        const args = try self.store.addCollection(.collection_ty_anno, .{
                             .region = .{ .start = state.args_start, .end = self.pos },
-                            .span = base.DataSpan.empty(),
+                            .span = fn_type.args.span,
                         });
                         try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
                             .region = .{ .start = state.start, .end = self.pos },
                             .name_tok = state.name_tok,
                             .var_tok = state.var_tok,
-                            .args = empty_args,
-                            .ret_anno = completed,
+                            .args = args,
+                            .ret_anno = fn_type.ret,
                         } }));
                         continue :expr_kernel .where_after_clause;
-                    },
-                    .statement_type_after_anno => {
-                        const state = open_syntax.popTypePayload(.statement_type_after_anno, StatementTypeAnnoState);
-                        last_type_anno = null;
-                        if (self.peek() == .KwWhere) {
-                            const where_start = self.pos;
-                            self.advance();
-                            try open_syntax.pushWhere(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
-                                .start = state.start,
-                                .name = state.name,
-                                .is_var = state.is_var,
-                                .anno = completed,
-                            });
-                            where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
-                            continue :expr_kernel .where_start;
-                        }
-                        last_statement = try self.addStatement(.{ .type_anno = .{
-                            .anno = completed,
+                    }
+
+                    const empty_args = try self.store.addCollection(.collection_ty_anno, .{
+                        .region = .{ .start = state.args_start, .end = self.pos },
+                        .span = base.DataSpan.empty(),
+                    });
+                    try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
+                        .region = .{ .start = state.start, .end = self.pos },
+                        .name_tok = state.name_tok,
+                        .var_tok = state.var_tok,
+                        .args = empty_args,
+                        .ret_anno = completed,
+                    } }));
+                    continue :expr_kernel .where_after_clause;
+                }
+                if (kind == .statement_type_after_anno) {
+                    const state = open_syntax.popTypePayload(.statement_type_after_anno, StatementTypeAnnoState);
+                    last_type_anno = null;
+                    if (self.peek() == .KwWhere) {
+                        const where_start = self.pos;
+                        self.advance();
+                        try open_syntax.pushWhere(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
+                            .start = state.start,
                             .name = state.name,
-                            .where = null,
                             .is_var = state.is_var,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_type_decl_anno => {
-                        const state = open_syntax.popTypePayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
-                        last_type_anno = null;
-                        const type_dependencies = blk: {
-                            if (self.store.typeAnnoIsMalformed(completed)) {
-                                self.decl_index.clearTypeDependenciesFrom(state.type_dependencies_start);
-                                break :blk DeclIndex.Span.empty();
-                            }
-                            break :blk self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
-                        };
-                        self.collect_type_dependencies = state.was_collecting_type_dependencies;
-
-                        if (self.peek() == .KwWhere) {
-                            const where_start = self.pos;
-                            self.advance();
-                            try open_syntax.pushWhere(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
-                                .start = state.start,
-                                .header = state.header,
-                                .anno = completed,
-                                .kind = state.kind,
-                                .type_dependencies = type_dependencies,
-                                .type_path = state.type_path,
-                            });
-                            where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
-                            continue :expr_kernel .where_start;
+                            .anno = completed,
+                        });
+                        where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                        continue :expr_kernel .where_start;
+                    }
+                    last_statement = try self.addStatement(.{ .type_anno = .{
+                        .anno = completed,
+                        .name = state.name,
+                        .where = null,
+                        .is_var = state.is_var,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_type_decl_anno) {
+                    const state = open_syntax.popTypePayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
+                    last_type_anno = null;
+                    const type_dependencies = blk: {
+                        if (self.store.typeAnnoIsMalformed(completed)) {
+                            self.decl_index.clearTypeDependenciesFrom(state.type_dependencies_start);
+                            break :blk DeclIndex.Span.empty();
                         }
+                        break :blk self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
+                    };
+                    self.collect_type_dependencies = state.was_collecting_type_dependencies;
 
-                        statement_type_decl_ready_state = .{
+                    if (self.peek() == .KwWhere) {
+                        const where_start = self.pos;
+                        self.advance();
+                        try open_syntax.pushWhere(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
                             .start = state.start,
                             .header = state.header,
                             .anno = completed,
                             .kind = state.kind,
-                            .where_clause = null,
                             .type_dependencies = type_dependencies,
                             .type_path = state.type_path,
-                        };
-                        continue :expr_kernel .statement_type_decl_finish;
-                    },
+                        });
+                        where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                        continue :expr_kernel .where_start;
+                    }
+
+                    statement_type_decl_ready_state = .{
+                        .start = state.start,
+                        .header = state.header,
+                        .anno = completed,
+                        .kind = state.kind,
+                        .where_clause = null,
+                        .type_dependencies = type_dependencies,
+                        .type_path = state.type_path,
+                    };
+                    continue :expr_kernel .statement_type_decl_finish;
                 }
             }
             if (root == .type_anno) {
@@ -4955,31 +4951,29 @@ fn runExprStatementKernel(
             const completed = last_where orelse unreachable;
             last_where = null;
             if (open_syntax.peekWhere()) |kind| {
-                switch (kind) {
-                    .where_statement_type_anno => {
-                        const state = open_syntax.popWherePayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
-                        last_statement = try self.addStatement(.{ .type_anno = .{
-                            .anno = state.anno,
-                            .name = state.name,
-                            .where = completed,
-                            .is_var = state.is_var,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .where_statement_type_decl => {
-                        const state = open_syntax.popWherePayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
-                        statement_type_decl_ready_state = .{
-                            .start = state.start,
-                            .header = state.header,
-                            .anno = state.anno,
-                            .kind = state.kind,
-                            .where_clause = completed,
-                            .type_dependencies = state.type_dependencies,
-                            .type_path = state.type_path,
-                        };
-                        continue :expr_kernel .statement_type_decl_finish;
-                    },
+                if (kind == .where_statement_type_anno) {
+                    const state = open_syntax.popWherePayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
+                    last_statement = try self.addStatement(.{ .type_anno = .{
+                        .anno = state.anno,
+                        .name = state.name,
+                        .where = completed,
+                        .is_var = state.is_var,
+                        .region = .{ .start = state.start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .where_statement_type_decl) {
+                    const state = open_syntax.popWherePayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
+                    statement_type_decl_ready_state = .{
+                        .start = state.start,
+                        .header = state.header,
+                        .anno = state.anno,
+                        .kind = state.kind,
+                        .where_clause = completed,
+                        .type_dependencies = state.type_dependencies,
+                        .type_path = state.type_path,
+                    };
+                    continue :expr_kernel .statement_type_decl_finish;
                 }
             }
             unreachable;
@@ -5617,216 +5611,214 @@ fn runExprStatementKernel(
         .pattern_complete => {
             const completed = last_pattern orelse unreachable;
             if (open_syntax.peekPattern()) |kind| {
-                switch (kind) {
-                    .expr_for_pattern => {
-                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprAfterExprState);
-                        last_pattern = null;
-                        if (self.peek() == .KwIn) {
-                            self.advance();
-                            try open_syntax.pushExpr(open_allocator, .expr_for_list, ExprForAfterListState, .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .pattern = completed,
-                            });
-                            expr_state = .{ .start = self.pos, .min_bp = 0 };
-                            continue :expr_kernel .prefix;
-                        }
-                        const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
-                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                        continue :expr_kernel .suffix;
-                    },
-                    .expr_lambda_args => {
-                        const state = open_syntax.popPatternPayload(.expr_lambda_args, ExprLambdaArgsState);
-                        last_pattern = null;
-                        try self.store.addScratchPattern(completed);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                        }
-                        if (self.peek() == .OpBar or self.peek() == .EndOfFile) {
-                            if (self.peek() == .OpBar) {
-                                self.advance();
-                            }
-                            const args = try self.store.patternSpanFrom(state.scratch_top);
-                            try expr_lambda_body_stack.enter(open_allocator, .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .args = args,
-                            });
-                            try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
-                            expr_state = .{ .start = self.pos, .min_bp = 0 };
-                            continue :expr_kernel .prefix;
-                        }
-                        try open_syntax.pushPattern(open_allocator, .expr_lambda_args, ExprLambdaArgsState, state);
-                        pattern_root_state = .{
-                            .outer_start = self.pos,
-                            .scratch_top = self.store.scratchPatternTop(),
-                            .alternatives = .alternatives_forbidden,
-                        };
-                        continue :expr_kernel .pattern_root_next;
-                    },
-                    .expr_match_pattern => {
-                        const state = open_syntax.popPatternPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
-                        last_pattern = null;
-                        try open_syntax.pushExpr(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
-                            .match_start = state.match_start,
+                if (kind == .expr_for_pattern) {
+                    const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprAfterExprState);
+                    last_pattern = null;
+                    if (self.peek() == .KwIn) {
+                        self.advance();
+                        try open_syntax.pushExpr(open_allocator, .expr_for_list, ExprForAfterListState, .{
+                            .start = state.start,
                             .min_bp = state.min_bp,
-                            .matched = state.matched,
-                            .scratch_top = state.scratch_top,
-                            .branch_start = state.branch_start,
                             .pattern = completed,
-                            .guard = null,
-                        });
-                        expr_match_guard_depth += 1;
-                        if (self.peek() == .KwIf) {
-                            self.advance();
-                            expr_state = .{ .start = self.pos, .min_bp = 0 };
-                            continue :expr_kernel .prefix;
-                        }
-                        if (self.peek() == .OpArrow) {
-                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                        }
-                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
-                            self.advance();
-                        } else {
-                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
-                        }
-                        _ = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                        expr_match_guard_depth -= 1;
-                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
-                            .match_start = state.match_start,
-                            .min_bp = state.min_bp,
-                            .matched = state.matched,
-                            .scratch_top = state.scratch_top,
-                            .branch_start = state.branch_start,
-                            .pattern = completed,
-                            .guard = null,
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
-                    },
-                    .statement_for_pattern => {
-                        const start = open_syntax.popPatternPayload(.statement_for_pattern, Token.Idx);
-                        last_pattern = null;
-                        if (self.peek() == .KwIn) {
+                    }
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
+                    expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (kind == .expr_lambda_args) {
+                    const state = open_syntax.popPatternPayload(.expr_lambda_args, ExprLambdaArgsState);
+                    last_pattern = null;
+                    try self.store.addScratchPattern(completed);
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    }
+                    if (self.peek() == .OpBar or self.peek() == .EndOfFile) {
+                        if (self.peek() == .OpBar) {
                             self.advance();
-                            try open_syntax.pushExpr(open_allocator, .statement_for_expr, StatementForExprState, .{
-                                .start = start,
-                                .patt = completed,
-                            });
-                            expr_state = .{ .start = self.pos, .min_bp = 0 };
-                            continue :expr_kernel .prefix;
                         }
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .statement_destructure_pattern => {
-                        const start = open_syntax.popPatternPayload(.statement_destructure_pattern, Token.Idx);
-                        last_pattern = null;
-                        if (self.peek() == .OpAssign) {
-                            self.advance();
-                            try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
-                                .start = start,
-                                .pattern = completed,
-                            });
-                            expr_state = .{ .start = self.pos, .min_bp = 0 };
-                            continue :expr_kernel .prefix;
-                        }
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
-                        continue :expr_kernel .statement_complete;
-                    },
-                    .pattern_root => {
-                        open_syntax.popPatternMarker(.pattern_root);
-                        const state = pattern_roots.leave();
-                        last_pattern = null;
-                        if (state.alternatives == .alternatives_forbidden) {
-                            self.store.clearScratchPatternsFrom(state.scratch_top);
+                        const args = try self.store.patternSpanFrom(state.scratch_top);
+                        try expr_lambda_body_stack.enter(open_allocator, .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .args = args,
+                        });
+                        try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                    try open_syntax.pushPattern(open_allocator, .expr_lambda_args, ExprLambdaArgsState, state);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (kind == .expr_match_pattern) {
+                    const state = open_syntax.popPatternPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
+                    last_pattern = null;
+                    try open_syntax.pushExpr(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
+                        .match_start = state.match_start,
+                        .min_bp = state.min_bp,
+                        .matched = state.matched,
+                        .scratch_top = state.scratch_top,
+                        .branch_start = state.branch_start,
+                        .pattern = completed,
+                        .guard = null,
+                    });
+                    expr_match_guard_depth += 1;
+                    if (self.peek() == .KwIf) {
+                        self.advance();
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                    if (self.peek() == .OpArrow) {
+                        try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                    }
+                    if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                        self.advance();
+                    } else {
+                        try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                    }
+                    _ = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                    expr_match_guard_depth -= 1;
+                    try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                        .match_start = state.match_start,
+                        .min_bp = state.min_bp,
+                        .matched = state.matched,
+                        .scratch_top = state.scratch_top,
+                        .branch_start = state.branch_start,
+                        .pattern = completed,
+                        .guard = null,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (kind == .statement_for_pattern) {
+                    const start = open_syntax.popPatternPayload(.statement_for_pattern, Token.Idx);
+                    last_pattern = null;
+                    if (self.peek() == .KwIn) {
+                        self.advance();
+                        try open_syntax.pushExpr(open_allocator, .statement_for_expr, StatementForExprState, .{
+                            .start = start,
+                            .patt = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                    last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .statement_destructure_pattern) {
+                    const start = open_syntax.popPatternPayload(.statement_destructure_pattern, Token.Idx);
+                    last_pattern = null;
+                    if (self.peek() == .OpAssign) {
+                        self.advance();
+                        try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                            .start = start,
+                            .pattern = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                    last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
+                    continue :expr_kernel .statement_complete;
+                }
+                if (kind == .pattern_root) {
+                    open_syntax.popPatternMarker(.pattern_root);
+                    const state = pattern_roots.leave();
+                    last_pattern = null;
+                    if (state.alternatives == .alternatives_forbidden) {
+                        self.store.clearScratchPatternsFrom(state.scratch_top);
+                        last_pattern = try self.finishAsPattern(completed);
+                        continue :expr_kernel .pattern_complete;
+                    }
+                    if (self.peek() != .OpBar) {
+                        if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
                             last_pattern = try self.finishAsPattern(completed);
                             continue :expr_kernel .pattern_complete;
                         }
-                        if (self.peek() != .OpBar) {
-                            if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
-                                last_pattern = try self.finishAsPattern(completed);
-                                continue :expr_kernel .pattern_complete;
-                            }
-                            try self.store.addScratchPattern(completed);
-                            const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                            last_pattern = try self.store.addPattern(.{ .alternatives = .{
-                                .region = .{ .start = state.outer_start, .end = self.pos },
-                                .patterns = patterns,
-                            } });
-                            continue :expr_kernel .pattern_complete;
-                        }
                         try self.store.addScratchPattern(completed);
-                        self.advance();
-                        pattern_root_state = state;
-                        continue :expr_kernel .pattern_root_next;
-                    },
-                    .pattern_tag_args => {
-                        pattern_tag_args_state = open_syntax.popPatternPayload(.pattern_tag_args, PatternTagArgsState);
-                        last_pattern = null;
-                        try self.store.addScratchPattern(completed);
-                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
-                            if (self.peek() == .Comma) {
-                                self.advance();
-                            }
-                            continue :expr_kernel .pattern_tag_args_next;
-                        }
-                        self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
-                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                        const patterns = try self.store.patternSpanFrom(state.scratch_top);
+                        last_pattern = try self.store.addPattern(.{ .alternatives = .{
+                            .region = .{ .start = state.outer_start, .end = self.pos },
+                            .patterns = patterns,
+                        } });
                         continue :expr_kernel .pattern_complete;
-                    },
-                    .pattern_list => {
-                        pattern_list_state = open_syntax.popPatternPayload(.pattern_list, PatternListState);
-                        last_pattern = null;
-                        try self.store.addScratchPattern(completed);
-                        if (self.peek() == .Comma or self.peek() == .CloseSquare) {
-                            if (self.peek() == .Comma) {
-                                self.advance();
-                            }
-                            continue :expr_kernel .pattern_list_next;
-                        }
-                        self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
-                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
-                        continue :expr_kernel .pattern_complete;
-                    },
-                    .pattern_tuple => {
-                        pattern_tuple_state = open_syntax.popPatternPayload(.pattern_tuple, PatternTupleState);
-                        last_pattern = null;
-                        try self.store.addScratchPattern(completed);
-                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
-                            if (self.peek() == .Comma) {
-                                self.advance();
-                            }
-                            continue :expr_kernel .pattern_tuple_next;
-                        }
-                        self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
-                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
-                        continue :expr_kernel .pattern_complete;
-                    },
-                    .pattern_record_field => {
-                        const state = open_syntax.popPatternPayload(.pattern_record_field, PatternRecordFieldState);
-                        last_pattern = null;
-                        const field = try self.store.addPatternRecordField(.{
-                            .name = state.name,
-                            .value = completed,
-                            .rest = false,
-                            .region = .{ .start = state.field_start, .end = self.pos },
-                        });
-                        try self.store.addScratchPatternRecordField(field);
-                        pattern_record_state = .{
-                            .start = state.record_start,
-                            .scratch_top = state.scratch_top,
-                            .alternatives = state.alternatives,
-                        };
+                    }
+                    try self.store.addScratchPattern(completed);
+                    self.advance();
+                    pattern_root_state = state;
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (kind == .pattern_tag_args) {
+                    pattern_tag_args_state = open_syntax.popPatternPayload(.pattern_tag_args, PatternTagArgsState);
+                    last_pattern = null;
+                    try self.store.addScratchPattern(completed);
+                    if (self.peek() == .Comma or self.peek() == .CloseRound) {
                         if (self.peek() == .Comma) {
                             self.advance();
-                            continue :expr_kernel .pattern_record_next;
                         }
-                        if (self.peek() == .CloseCurly) {
-                            continue :expr_kernel .pattern_record_finish;
+                        continue :expr_kernel .pattern_tag_args_next;
+                    }
+                    self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (kind == .pattern_list) {
+                    pattern_list_state = open_syntax.popPatternPayload(.pattern_list, PatternListState);
+                    last_pattern = null;
+                    try self.store.addScratchPattern(completed);
+                    if (self.peek() == .Comma or self.peek() == .CloseSquare) {
+                        if (self.peek() == .Comma) {
+                            self.advance();
                         }
+                        continue :expr_kernel .pattern_list_next;
+                    }
+                    self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (kind == .pattern_tuple) {
+                    pattern_tuple_state = open_syntax.popPatternPayload(.pattern_tuple, PatternTupleState);
+                    last_pattern = null;
+                    try self.store.addScratchPattern(completed);
+                    if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        continue :expr_kernel .pattern_tuple_next;
+                    }
+                    self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (kind == .pattern_record_field) {
+                    const state = open_syntax.popPatternPayload(.pattern_record_field, PatternRecordFieldState);
+                    last_pattern = null;
+                    const field = try self.store.addPatternRecordField(.{
+                        .name = state.name,
+                        .value = completed,
+                        .rest = false,
+                        .region = .{ .start = state.field_start, .end = self.pos },
+                    });
+                    try self.store.addScratchPatternRecordField(field);
+                    pattern_record_state = .{
+                        .start = state.record_start,
+                        .scratch_top = state.scratch_top,
+                        .alternatives = state.alternatives,
+                    };
+                    if (self.peek() == .Comma) {
+                        self.advance();
                         continue :expr_kernel .pattern_record_next;
-                    },
+                    }
+                    if (self.peek() == .CloseCurly) {
+                        continue :expr_kernel .pattern_record_finish;
+                    }
+                    continue :expr_kernel .pattern_record_next;
                 }
             }
             unreachable;
