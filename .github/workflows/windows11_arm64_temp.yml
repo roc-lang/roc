@@ -7,22 +7,31 @@ on: [pull_request]
 # Run 1 (localization): `zig build ... -Doptimize=ReleaseFast` -> 13/218 ok.
 # Run 2 (classification): crashes ("error code 5") hit C/clang, Debug self-hosted,
 #   and LLVM alike; "unexpected EOF ZIR" is just fallout from those crashes.
-# Run 3 (direct CLI) NAILED the discriminator:
-#     zig build-exe <trivial>.zig -OReleaseFast   -> Segmentation fault
-#     zig build-exe <trivial>.c   -OReleaseFast   -> Segmentation fault
-#     zig build-obj roc_builtins (RF AND Debug)   -> exit 0  (success!)
-#   => ReleaseFast CODEGEN is fine; the crash is in the LINK / emit-executable
-#      phase. Every final exe/lib link in the roc build is what dies.
+# Run 3 (direct CLI): build-exe trivial crashed, build-obj roc_builtins passed
+#   (looked like a link-phase bug).
+# Run 4 (link matrix) OVERTURNED that: identical commands gave different results
+#   - exe-zig-RF = 0 but exe-zig-RF-lld = crash (yet --verbose-link shows the
+#     default already IS lld-link), build-obj crashed here but passed in run 3,
+#     and one run hit 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN / fastfail).
+#   => The crashes are NON-DETERMINISTIC: random memory corruption inside the
+#      zig 0.16-dev aarch64-windows compiler, independent of obj/exe/opt/linker.
+#      (`use_lld` is NOT a fix; -fno-lld isn't even supported on arm64 COFF.)
 #
-# Run 4 (this file) pins down (a) link-phase vs ReleaseFast-specific, and
-# (b) whether LLD is the culprit. Uses pwsh because MSYS bash's signal emulation
-# eats the exit code after a native crash; pwsh records $LASTEXITCODE reliably.
-# A native access-violation shows up as exit code -1073741819 (0xC0000005).
+# Run 5 (this file) CHARACTERIZES the flakiness: repeat the SAME trivial compile
+# many times and tally exit codes. Goals:
+#   * measure the per-process crash rate (explains why a 218-step build never
+#     all-passes),
+#   * fresh-cache (full compile each time) vs warm-cache (near no-op cache hit):
+#     do crashes scale with compile work (a race in heavy compilation) or happen
+#     even on trivial reruns (binary unstable at any size)?
+#   * does `zig version` (no compilation at all) ever crash?
+# Exit codes seen so far: 0 ok, -1073741819 = 0xC0000005 (access violation),
+# -1073740791 = 0xC0000409 (stack-buffer-overrun fastfail).
 
 jobs:
   debug:
     runs-on: windows-11-arm
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
@@ -37,59 +46,72 @@ jobs:
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v DontShowUI /t REG_DWORD /d 1 /f
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v Disabled  /t REG_DWORD /d 1 /f
 
-      - name: Link-phase matrix (trivial inputs, direct CLI)
+      - name: Flakiness characterization (repeat identical compiles, tally codes)
         shell: pwsh
         run: |
-          # GitHub's pwsh runs with ErrorActionPreference=Stop; without these a
-          # native crash (non-zero exit) would throw and abort the script at the
-          # first failing row, losing the -flld results. Force run-to-completion.
+          # Run to completion regardless of native crashes; capture $LASTEXITCODE.
           $ErrorActionPreference = 'Continue'
           $PSNativeCommandUseErrorActionPreference = $false
+
           zig version
-          'pub fn main() void {}' | Set-Content t.zig
+          Write-Host "Logical CPUs = $env:NUMBER_OF_PROCESSORS"
+          'pub fn main() void {}'    | Set-Content t.zig
           'int main(void){return 0;}' | Set-Content t.c
-          $log = "link-matrix.log"
+          $log = "flaky.log"
           if (Test-Path $log) { Remove-Item $log }
 
-          function Run([string]$label, [string[]]$cmd) {
-            "`n===== $label =====" | Tee-Object -FilePath $log -Append
-            ($cmd -join ' ')       | Tee-Object -FilePath $log -Append
-            $cache = ".zc-" + ($label -replace '[^A-Za-z0-9]','')
-            if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
-            & zig @cmd --cache-dir $cache --global-cache-dir $cache 2>&1 |
+          # Run $cmd $n times. freshCache=$true wipes the cache each iteration so
+          # every run does a full compile; $false reuses one warm cache (mostly
+          # cache hits = near no-op). Tallies exit codes and lists the iteration
+          # indices that crashed.
+          function Trial([string]$label, [string[]]$cmd, [int]$n, [bool]$freshCache = $true) {
+            $tally = @{}
+            $crashIdx = @()
+            $warm = ".zcwarm-$label"
+            if (-not $freshCache -and (Test-Path $warm)) { Remove-Item -Recurse -Force $warm }
+            for ($i = 0; $i -lt $n; $i++) {
+              $args = $cmd
+              if ($cmd[0] -ne 'version') {
+                $cache = if ($freshCache) { ".zc-$label-$i" } else { $warm }
+                if ($freshCache -and (Test-Path $cache)) { Remove-Item -Recurse -Force $cache }
+                $args = $cmd + @('--cache-dir', $cache, '--global-cache-dir', $cache)
+              }
+              & zig @args *> $null
+              $code = $LASTEXITCODE
+              $key = "$code"
+              if ($tally.ContainsKey($key)) { $tally[$key]++ } else { $tally[$key] = 1 }
+              if ($code -ne 0) { $crashIdx += $i }
+              if ($freshCache -and $cmd[0] -ne 'version' -and (Test-Path $cache)) {
+                Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
+              }
+            }
+            $summary = ($tally.GetEnumerator() | Sort-Object Name |
+              ForEach-Object { "exit=$($_.Name):$($_.Value)" }) -join '  '
+            $fails = ($tally.GetEnumerator() | Where-Object { $_.Name -ne '0' } |
+              Measure-Object -Property Value -Sum).Sum
+            if (-not $fails) { $fails = 0 }
+            "[$label] cache=$(if($freshCache){'fresh'}else{'warm'}) n=$n  fails=$fails  $summary" |
               Tee-Object -FilePath $log -Append
-            "exit[$label]=$LASTEXITCODE" | Tee-Object -FilePath $log -Append
+            if ($crashIdx.Count) {
+              "    crashed at iters: $($crashIdx -join ',')" | Tee-Object -FilePath $log -Append
+            }
           }
 
-          # Controls: codegen without a final link should work.
-          Run 'obj-zig-RF'          @('build-obj','-OReleaseFast','-Mroot=t.zig','-femit-bin=o_zig_rf.o')
-          Run 'exe-zig-RF-noemit'   @('build-exe','-OReleaseFast','-Mroot=t.zig','-fno-emit-bin')
-
-          # The repro and its axes: link in RF vs Debug; native zig vs C.
-          Run 'exe-zig-RF'          @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf.exe')
-          Run 'exe-zig-Debug'       @('build-exe','-Mroot=t.zig','-femit-bin=e_zig_dbg.exe')
-          Run 'exe-c-RF'            @('build-exe','-OReleaseFast','-lc','t.c','-femit-bin=e_c_rf.exe')
-
-          # Which linker does the default use? Show the link invocation.
-          Run 'exe-zig-RF-vlink'    @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf2.exe','--verbose-link')
-
-          # Codeberg #35537: the self-hosted COFF linker crashes on Windows.
-          # -fno-lld forces it (expected: crash); -flld forces LLD instead.
-          # If the -flld cases SUCCEED while the default/-fno-lld ones crash,
-          # then `use_lld = true` for Windows in build.zig is the workaround.
-          Run 'exe-zig-RF-no-lld'   @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf3.exe','-fno-lld')
-          Run 'exe-zig-RF-lld'      @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=e_zig_rf4.exe','-flld')
-          Run 'exe-zig-Debug-lld'   @('build-exe','-Mroot=t.zig','-femit-bin=e_zig_dbg_lld.exe','-flld')
-          Run 'exe-c-RF-lld'        @('build-exe','-OReleaseFast','-lc','t.c','-femit-bin=e_c_rf_lld.exe','-flld')
+          Trial 'exe-RF-fresh'   @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=o.exe')  40 $true
+          Trial 'exe-RF-warm'    @('build-exe','-OReleaseFast','-Mroot=t.zig','-femit-bin=o.exe')  40 $false
+          Trial 'obj-RF-fresh'   @('build-obj','-OReleaseFast','-Mroot=t.zig','-femit-bin=o.o')    40 $true
+          Trial 'exe-Debug-fresh' @('build-exe','-Mroot=t.zig','-femit-bin=od.exe')                30 $true
+          Trial 'exe-c-RF-fresh' @('build-exe','-OReleaseFast','-lc','t.c','-femit-bin=oc.exe')    20 $true
+          Trial 'version'        @('version')                                                       20 $true
 
           Write-Host "`n================ SUMMARY ================"
-          Select-String -Path $log -Pattern '^exit\[' | ForEach-Object { $_.Line }
+          Get-Content $log
 
       - name: upload logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4.6.2
         with:
-          name: win11-arm64-debug-logs-run4
+          name: win11-arm64-debug-logs-run5
           path: |
             *.log
           if-no-files-found: warn
