@@ -4335,262 +4335,264 @@ fn runExprStatementKernel(
         .type_complete => {
             const completed = last_type_anno orelse unreachable;
             if (open_syntax.peekType()) |kind| {
-                if (kind == .type_apply) {
-                    type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
-                    last_type_anno = null;
-                    try self.store.addScratchTypeAnno(completed);
-                    if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                switch (kind) {
+                    .type_apply => {
+                        type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :expr_kernel .type_apply_next;
+                        }
+                        self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                        last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
+                        continue :expr_kernel .type_complete;
+                    },
+                    .type_paren_item => {
+                        const state = open_syntax.popTypePayload(.type_paren_item, TypeParenAfterItemState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        type_paren_state = .{
+                            .start = state.start,
+                            .after_round = state.after_round,
+                            .scratch_top = state.scratch_top,
+                            .saw_comma = state.saw_comma or self.peek() == .Comma,
+                            .expect_close = self.peek() != .Comma,
+                            .looking_for_args = state.looking_for_args,
+                        };
                         if (self.peek() == .Comma) {
                             self.advance();
+                            type_paren_state.expect_close = false;
                         }
-                        continue :expr_kernel .type_apply_next;
-                    }
-                    self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
-                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
-                    continue :expr_kernel .type_complete;
-                }
-                if (kind == .type_paren_item) {
-                    const state = open_syntax.popTypePayload(.type_paren_item, TypeParenAfterItemState);
-                    last_type_anno = null;
-                    try self.store.addScratchTypeAnno(completed);
-                    type_paren_state = .{
-                        .start = state.start,
-                        .after_round = state.after_round,
-                        .scratch_top = state.scratch_top,
-                        .saw_comma = state.saw_comma or self.peek() == .Comma,
-                        .expect_close = self.peek() != .Comma,
-                        .looking_for_args = state.looking_for_args,
-                    };
-                    if (self.peek() == .Comma) {
+                        continue :expr_kernel .type_paren_next;
+                    },
+                    .type_paren_fn_ret => {
+                        const state = open_syntax.popTypePayload(.type_paren_fn_ret, TypeParenFnRetState);
+                        last_type_anno = null;
+                        if (self.peek() != .CloseRound) {
+                            self.store.clearScratchTypeAnnosFrom(state.scratch_top);
+                            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
+                            continue :expr_kernel .type_complete;
+                        }
+                        const function = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                            .region = .{ .start = state.after_round, .end = self.pos },
+                        } });
                         self.advance();
-                        type_paren_state.expect_close = false;
-                    }
-                    continue :expr_kernel .type_paren_next;
-                }
-                if (kind == .type_paren_fn_ret) {
-                    const state = open_syntax.popTypePayload(.type_paren_fn_ret, TypeParenFnRetState);
-                    last_type_anno = null;
-                    if (self.peek() != .CloseRound) {
-                        self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                        last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
-                        continue :expr_kernel .type_complete;
-                    }
-                    const function = try self.store.addTypeAnno(.{ .@"fn" = .{
-                        .args = state.args,
-                        .ret = completed,
-                        .effectful = state.effectful,
-                        .region = .{ .start = state.after_round, .end = self.pos },
-                    } });
-                    self.advance();
-                    last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
-                        .anno = function,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
-                    continue :expr_kernel .type_after_primary;
-                }
-                if (kind == .type_zero_arg_fn_ret) {
-                    const state = open_syntax.popTypePayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
-                    last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
-                        .args = state.args,
-                        .ret = completed,
-                        .effectful = state.effectful,
-                        .region = .{ .start = state.after_round, .end = self.pos },
-                    } });
-                    type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
-                    continue :expr_kernel .type_after_primary;
-                }
-                if (kind == .type_record_ext) {
-                    const state = open_syntax.popTypePayload(.type_record_ext, TypeRecordExtState);
-                    last_type_anno = null;
-                    const anno_region = self.store.typeAnnoRegion(completed);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                    } else if (self.peek() != .CloseCurly) {
-                        self.expect(.Comma) catch {};
-                    }
-                    type_record_state = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
-                        .looking_for_args = state.looking_for_args,
-                    };
-                    continue :expr_kernel .type_record_finish;
-                }
-                if (kind == .type_record_field) {
-                    const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
-                    last_type_anno = null;
-                    const field = try self.store.addAnnoRecordField(.{
-                        .region = .{ .start = state.field_start, .end = self.pos },
-                        .name = state.name,
-                        .ty = completed,
-                    });
-                    try self.store.addScratchAnnoRecordField(field);
-                    type_record_state = .{
-                        .start = state.record_start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    };
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                        continue :expr_kernel .type_record_next;
-                    }
-                    if (self.peek() == .CloseCurly) {
+                        last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
+                            .anno = function,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                        continue :expr_kernel .type_after_primary;
+                    },
+                    .type_zero_arg_fn_ret => {
+                        const state = open_syntax.popTypePayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
+                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                            .region = .{ .start = state.after_round, .end = self.pos },
+                        } });
+                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                        continue :expr_kernel .type_after_primary;
+                    },
+                    .type_record_ext => {
+                        const state = open_syntax.popTypePayload(.type_record_ext, TypeRecordExtState);
+                        last_type_anno = null;
+                        const anno_region = self.store.typeAnnoRegion(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        } else if (self.peek() != .CloseCurly) {
+                            self.expect(.Comma) catch {};
+                        }
+                        type_record_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .looking_for_args = state.looking_for_args,
+                        };
                         continue :expr_kernel .type_record_finish;
-                    }
-                    continue :expr_kernel .type_record_next;
-                }
-                if (kind == .type_tag_union_ext) {
-                    const state = open_syntax.popTypePayload(.type_tag_union_ext, TypeTagUnionExtState);
-                    last_type_anno = null;
-                    const anno_region = self.store.typeAnnoRegion(completed);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                    } else if (self.peek() != .CloseSquare) {
-                        self.expect(.Comma) catch {};
-                    }
-                    type_tag_union_state = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
-                        .looking_for_args = state.looking_for_args,
-                    };
-                    continue :expr_kernel .type_tag_union_finish;
-                }
-                if (kind == .type_tag_union_item) {
-                    const state = open_syntax.popTypePayload(.type_tag_union_item, TypeTagUnionItemState);
-                    last_type_anno = null;
-                    self.collect_type_dependencies = state.was_collecting;
-                    if (state.was_collecting) {
-                        try self.recordTypeDependenciesFromTagAnno(completed);
-                    }
-                    try self.store.addScratchTypeAnno(completed);
-                    type_tag_union_state = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    };
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                        continue :expr_kernel .type_tag_union_next;
-                    }
-                    if (self.peek() == .CloseSquare) {
+                    },
+                    .type_record_field => {
+                        const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
+                        last_type_anno = null;
+                        const field = try self.store.addAnnoRecordField(.{
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                            .name = state.name,
+                            .ty = completed,
+                        });
+                        try self.store.addScratchAnnoRecordField(field);
+                        type_record_state = .{
+                            .start = state.record_start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .type_record_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :expr_kernel .type_record_finish;
+                        }
+                        continue :expr_kernel .type_record_next;
+                    },
+                    .type_tag_union_ext => {
+                        const state = open_syntax.popTypePayload(.type_tag_union_ext, TypeTagUnionExtState);
+                        last_type_anno = null;
+                        const anno_region = self.store.typeAnnoRegion(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        } else if (self.peek() != .CloseSquare) {
+                            self.expect(.Comma) catch {};
+                        }
+                        type_tag_union_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .looking_for_args = state.looking_for_args,
+                        };
                         continue :expr_kernel .type_tag_union_finish;
-                    }
-                    continue :expr_kernel .type_tag_union_next;
-                }
-                if (kind == .type_fn_arg) {
-                    type_fn_args_state = open_syntax.popTypePayload(.type_fn_arg, TypeFnArgsState);
-                    last_type_anno = null;
-                    try self.store.addScratchTypeAnno(completed);
-                    continue :expr_kernel .type_fn_args_next;
-                }
-                if (kind == .type_fn_ret) {
-                    const state = open_syntax.popTypePayload(.type_fn_ret, TypeFnAfterRetState);
-                    last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .args = state.args,
-                        .ret = completed,
-                        .effectful = state.effectful,
-                    } });
-                    continue :expr_kernel .type_complete;
-                }
-                if (kind == .where_clause_type) {
-                    const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
-                    last_type_anno = null;
-                    const method_type = self.store.getTypeAnno(completed);
-                    if (method_type == .@"fn") {
-                        const fn_type = method_type.@"fn";
-                        const args = try self.store.addCollection(.collection_ty_anno, .{
+                    },
+                    .type_tag_union_item => {
+                        const state = open_syntax.popTypePayload(.type_tag_union_item, TypeTagUnionItemState);
+                        last_type_anno = null;
+                        self.collect_type_dependencies = state.was_collecting;
+                        if (state.was_collecting) {
+                            try self.recordTypeDependenciesFromTagAnno(completed);
+                        }
+                        try self.store.addScratchTypeAnno(completed);
+                        type_tag_union_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .type_tag_union_next;
+                        }
+                        if (self.peek() == .CloseSquare) {
+                            continue :expr_kernel .type_tag_union_finish;
+                        }
+                        continue :expr_kernel .type_tag_union_next;
+                    },
+                    .type_fn_arg => {
+                        type_fn_args_state = open_syntax.popTypePayload(.type_fn_arg, TypeFnArgsState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        continue :expr_kernel .type_fn_args_next;
+                    },
+                    .type_fn_ret => {
+                        const state = open_syntax.popTypePayload(.type_fn_ret, TypeFnAfterRetState);
+                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                        } });
+                        continue :expr_kernel .type_complete;
+                    },
+                    .where_clause_type => {
+                        const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
+                        last_type_anno = null;
+                        const method_type = self.store.getTypeAnno(completed);
+                        if (method_type == .@"fn") {
+                            const fn_type = method_type.@"fn";
+                            const args = try self.store.addCollection(.collection_ty_anno, .{
+                                .region = .{ .start = state.args_start, .end = self.pos },
+                                .span = fn_type.args.span,
+                            });
+                            try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
+                                .region = .{ .start = state.start, .end = self.pos },
+                                .name_tok = state.name_tok,
+                                .var_tok = state.var_tok,
+                                .args = args,
+                                .ret_anno = fn_type.ret,
+                            } }));
+                            continue :expr_kernel .where_after_clause;
+                        }
+
+                        const empty_args = try self.store.addCollection(.collection_ty_anno, .{
                             .region = .{ .start = state.args_start, .end = self.pos },
-                            .span = fn_type.args.span,
+                            .span = base.DataSpan.empty(),
                         });
                         try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
                             .region = .{ .start = state.start, .end = self.pos },
                             .name_tok = state.name_tok,
                             .var_tok = state.var_tok,
-                            .args = args,
-                            .ret_anno = fn_type.ret,
+                            .args = empty_args,
+                            .ret_anno = completed,
                         } }));
                         continue :expr_kernel .where_after_clause;
-                    }
-
-                    const empty_args = try self.store.addCollection(.collection_ty_anno, .{
-                        .region = .{ .start = state.args_start, .end = self.pos },
-                        .span = base.DataSpan.empty(),
-                    });
-                    try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .name_tok = state.name_tok,
-                        .var_tok = state.var_tok,
-                        .args = empty_args,
-                        .ret_anno = completed,
-                    } }));
-                    continue :expr_kernel .where_after_clause;
-                }
-                if (kind == .statement_type_after_anno) {
-                    const state = open_syntax.popTypePayload(.statement_type_after_anno, StatementTypeAnnoState);
-                    last_type_anno = null;
-                    if (self.peek() == .KwWhere) {
-                        const where_start = self.pos;
-                        self.advance();
-                        try open_syntax.pushWhere(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
-                            .start = state.start,
-                            .name = state.name,
-                            .is_var = state.is_var,
-                            .anno = completed,
-                        });
-                        where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
-                        continue :expr_kernel .where_start;
-                    }
-                    last_statement = try self.addStatement(.{ .type_anno = .{
-                        .anno = completed,
-                        .name = state.name,
-                        .where = null,
-                        .is_var = state.is_var,
-                        .region = .{ .start = state.start, .end = self.pos },
-                    } });
-                    continue :expr_kernel .statement_complete;
-                }
-                if (kind == .statement_type_decl_anno) {
-                    const state = open_syntax.popTypePayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
-                    last_type_anno = null;
-                    const type_dependencies = blk: {
-                        if (self.store.typeAnnoIsMalformed(completed)) {
-                            self.decl_index.clearTypeDependenciesFrom(state.type_dependencies_start);
-                            break :blk DeclIndex.Span.empty();
+                    },
+                    .statement_type_after_anno => {
+                        const state = open_syntax.popTypePayload(.statement_type_after_anno, StatementTypeAnnoState);
+                        last_type_anno = null;
+                        if (self.peek() == .KwWhere) {
+                            const where_start = self.pos;
+                            self.advance();
+                            try open_syntax.pushWhere(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
+                                .start = state.start,
+                                .name = state.name,
+                                .is_var = state.is_var,
+                                .anno = completed,
+                            });
+                            where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                            continue :expr_kernel .where_start;
                         }
-                        break :blk self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
-                    };
-                    self.collect_type_dependencies = state.was_collecting_type_dependencies;
+                        last_statement = try self.addStatement(.{ .type_anno = .{
+                            .anno = completed,
+                            .name = state.name,
+                            .where = null,
+                            .is_var = state.is_var,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_type_decl_anno => {
+                        const state = open_syntax.popTypePayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
+                        last_type_anno = null;
+                        const type_dependencies = blk: {
+                            if (self.store.typeAnnoIsMalformed(completed)) {
+                                self.decl_index.clearTypeDependenciesFrom(state.type_dependencies_start);
+                                break :blk DeclIndex.Span.empty();
+                            }
+                            break :blk self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
+                        };
+                        self.collect_type_dependencies = state.was_collecting_type_dependencies;
 
-                    if (self.peek() == .KwWhere) {
-                        const where_start = self.pos;
-                        self.advance();
-                        try open_syntax.pushWhere(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
+                        if (self.peek() == .KwWhere) {
+                            const where_start = self.pos;
+                            self.advance();
+                            try open_syntax.pushWhere(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
+                                .start = state.start,
+                                .header = state.header,
+                                .anno = completed,
+                                .kind = state.kind,
+                                .type_dependencies = type_dependencies,
+                                .type_path = state.type_path,
+                            });
+                            where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                            continue :expr_kernel .where_start;
+                        }
+
+                        statement_type_decl_ready_state = .{
                             .start = state.start,
                             .header = state.header,
                             .anno = completed,
                             .kind = state.kind,
+                            .where_clause = null,
                             .type_dependencies = type_dependencies,
                             .type_path = state.type_path,
-                        });
-                        where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
-                        continue :expr_kernel .where_start;
-                    }
-
-                    statement_type_decl_ready_state = .{
-                        .start = state.start,
-                        .header = state.header,
-                        .anno = completed,
-                        .kind = state.kind,
-                        .where_clause = null,
-                        .type_dependencies = type_dependencies,
-                        .type_path = state.type_path,
-                    };
-                    continue :expr_kernel .statement_type_decl_finish;
+                        };
+                        continue :expr_kernel .statement_type_decl_finish;
+                    },
                 }
             }
             if (root == .type_anno) {
