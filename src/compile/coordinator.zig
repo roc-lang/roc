@@ -2285,6 +2285,7 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .source_dir = mod.canonicalSourceDir(),
                 .module_role = mod.module_role,
                 .depth = mod.depth,
             },
@@ -3683,7 +3684,7 @@ pub const Coordinator = struct {
             discovered_local_imports.deinit(worker_alloc);
         }
         const local_import_names = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
-        const module_dir = std.fs.path.dirname(task.path) orelse "";
+        const module_dir = task.source_dir;
         for (local_import_names) |module_name| {
             const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
             errdefer worker_alloc.free(path);
@@ -4152,6 +4153,7 @@ test "Coordinator task queue" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/test/app/Main.roc",
+            .source_dir = "/test/app",
             .depth = 0,
             .module_role = .user,
         },
@@ -4196,6 +4198,7 @@ test "Coordinator isComplete logic" {
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4239,6 +4242,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4278,6 +4282,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },
@@ -4328,6 +4333,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },
