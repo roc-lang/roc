@@ -708,6 +708,54 @@ fn recordValueDecl(
     }
 }
 
+inline fn addTypeAnnoStatement(
+    self: *Parser,
+    anno: AST.TypeAnno.Idx,
+    name: Token.Idx,
+    where_clause: ?AST.Collection.Idx,
+    is_var: bool,
+    region: AST.TokenizedRegion,
+) Error!AST.Statement.Idx {
+    const idx = try self.store.addStatement(.{ .type_anno = .{
+        .anno = anno,
+        .name = name,
+        .where = where_clause,
+        .is_var = is_var,
+        .region = region,
+    } });
+    try self.recordTypeAnnoDecl(idx, anno, name, is_var, region);
+    return idx;
+}
+
+fn recordTypeAnnoDecl(
+    self: *Parser,
+    statement_idx: AST.Statement.Idx,
+    anno_idx: AST.TypeAnno.Idx,
+    name: Token.Idx,
+    is_var: bool,
+    region: AST.TokenizedRegion,
+) Error!void {
+    const scope_idx = self.decl_index.currentScope() orelse return;
+    const owner_type_path = self.currentAssociatedOwnerPath();
+
+    var record = DeclIndex.Decl{
+        .scope = scope_idx,
+        .statement = @intFromEnum(statement_idx),
+        .kind = if (is_var) .var_anno else .value_anno,
+        .name_tok = name,
+        .owner_type_path = owner_type_path,
+        .pattern = null,
+        .anno = @intFromEnum(anno_idx),
+        .region = .{ .start = region.start, .end = region.end },
+    };
+    record.name_ident = self.tok_buf.resolveIdentifier(name);
+
+    const decl_idx = try self.decl_index.addDecl(record);
+    if (self.currentPendingAnno()) |pending| {
+        pending.* = decl_idx;
+    }
+}
+
 fn addStatementWithTypeDependencies(
     self: *Parser,
     statement: AST.Statement,
@@ -3653,13 +3701,13 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                 const statement_type_anno_state = open_syntax.popPayload(.statement_type_after_anno, TypeAnnoStatementProgress);
                 const anno = last_type_anno orelse unreachable;
                 last_type_anno = null;
-                last_statement = try self.addStatement(.{ .type_anno = .{
-                    .anno = anno,
-                    .name = statement_type_anno_state.name,
-                    .where = try self.parseWhereConstraintTokens(),
-                    .is_var = statement_type_anno_state.is_var,
-                    .region = .{ .start = statement_type_anno_state.start, .end = self.pos },
-                } });
+                last_statement = try self.addTypeAnnoStatement(
+                    anno,
+                    statement_type_anno_state.name,
+                    try self.parseWhereConstraintTokens(),
+                    statement_type_anno_state.is_var,
+                    .{ .start = statement_type_anno_state.start, .end = self.pos },
+                );
                 dispatch_token = self.peek();
                 continue :dispatch .statement_complete;
             },
