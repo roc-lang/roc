@@ -2576,7 +2576,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var open_allocator_state = std.heap.stackFallback(8192, self.gpa);
+    var open_allocator_state = std.heap.stackFallback(4096, self.gpa);
     const open_allocator = open_allocator_state.get();
     var open_syntax: OpenSyntaxStack = .{};
     defer open_syntax.deinit(open_allocator);
