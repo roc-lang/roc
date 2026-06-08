@@ -218,9 +218,6 @@ const ParserContext = enum(u16) {
 
     statement_start,
     statement_complete,
-    statement_import,
-    statement_var_after_type,
-    statement_type_header,
     statement_type_after_anno,
     statement_type_decl_after_anno,
     statement_type_decl_after_associated,
@@ -277,7 +274,6 @@ const OpenSyntaxKind = enum(u8) {
     header_requires_type,
     header_where_clause_type,
     statement_for_pattern,
-    statement_var_type,
     statement_destructure_pattern,
     statement_type_after_anno,
     statement_type_after_associated,
@@ -3323,21 +3319,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                 };
             },
         },
-        .statement_import => switch (dispatch_token) {
-            else => {
-                unreachable;
-            },
-        },
-        .statement_var_after_type => switch (dispatch_token) {
-            else => {
-                unreachable;
-            },
-        },
-        .statement_type_header => switch (dispatch_token) {
-            else => {
-                unreachable;
-            },
-        },
         .statement_type_after_anno => switch (dispatch_token) {
             .KwWhere, .EndOfFile => {
                 const statement_type_anno_state = open_syntax.popPayload(.statement_type_after_anno, TypeAnnoStatementProgress);
@@ -5833,7 +5814,6 @@ fn runParser(self: *Parser, comptime initial_context: ParserContext, comptime re
                     switch (kind) {
                         .header_requires_type => continue :dispatch .header_platform_requires_next,
                         .header_where_clause_type => continue :dispatch .statement_type_after_where,
-                        .statement_var_type => continue :dispatch .statement_var_after_type,
                         .statement_type_after_anno => continue :dispatch .statement_type_after_anno,
                         .statement_type_decl_anno => continue :dispatch .statement_type_decl_after_anno,
                         else => {},
