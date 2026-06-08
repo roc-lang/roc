@@ -413,6 +413,13 @@ const OpenSyntaxStack = struct {
         return self.entries.items[self.entries.items.len - 1].kind;
     }
 
+    fn containsKind(self: *const OpenSyntaxStack, kind: OpenSyntaxKind) bool {
+        for (self.entries.items) |entry| {
+            if (entry.kind == kind) return true;
+        }
+        return false;
+    }
+
     fn popPayload(self: *OpenSyntaxStack, expected: OpenSyntaxKind, comptime Payload: type) Payload {
         const entry = self.entries.pop() orelse unreachable;
         std.debug.assert(entry.kind == expected);
@@ -2609,7 +2616,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     var expr_match_branch_after_pattern_state: ExprMatchBranchAfterPatternState = undefined;
     var expr_match_branch_after_guard_state: ExprMatchBranchAfterGuardState = undefined;
     var expr_match_branch_after_body_state: ExprMatchBranchAfterBodyState = undefined;
-    var expr_match_guard_depth: usize = 0;
     var expr_for_after_list_state: ExprForAfterListState = undefined;
     var expr_for_after_body_state: ExprForAfterBodyState = undefined;
     var expr_blocks: ExprBlockStack = .{};
@@ -2686,7 +2692,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
     _ = &expr_match_branch_after_pattern_state;
     _ = &expr_match_branch_after_guard_state;
     _ = &expr_match_branch_after_body_state;
-    _ = &expr_match_guard_depth;
     _ = &expr_for_after_list_state;
     _ = &expr_for_after_body_state;
     _ = &expr_blocks;
@@ -4262,7 +4267,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     continue :dispatch .expr_suffix;
                 }
                 if (tok == .OpArrow or tok == .OpFatArrow) {
-                    if (expr_match_guard_depth != 0) {
+                    if (open_syntax.containsKind(.expr_match_guard)) {
                         last_expr = expr_finish_state.expr;
                         dispatch_token = self.peek();
                         continue :dispatch .expr_complete;
@@ -5400,7 +5405,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .pattern = pattern,
                     .guard = null,
                 });
-                expr_match_guard_depth += 1;
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 dispatch_token = self.peek();
                 continue :dispatch .expr_prefix;
@@ -5418,7 +5422,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .pattern = pattern,
                     .guard = null,
                 });
-                expr_match_guard_depth += 1;
                 dispatch_token = self.peek();
                 continue :dispatch .expr_match_branch_after_guard;
             },
@@ -5426,7 +5429,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
         .expr_match_branch_after_guard => switch (dispatch_token) {
             .OpFatArrow, .OpArrow => {
                 expr_match_branch_after_guard_state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                expr_match_guard_depth -= 1;
                 const guard = if (last_expr) |g| blk: {
                     last_expr = null;
                     break :blk g;
@@ -5450,7 +5452,6 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
             },
             else => {
                 expr_match_branch_after_guard_state = open_syntax.popPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
-                expr_match_guard_depth -= 1;
                 const guard = if (last_expr) |g| blk: {
                     last_expr = null;
                     break :blk g;
