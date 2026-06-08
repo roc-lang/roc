@@ -5044,7 +5044,7 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .scratch_top = expr_record_field_state.scratch_top,
                     .ext = expr_record_field_state.ext,
                 };
-                if (dispatch_token == .Comma) {
+                if (self.peek() == .Comma) {
                     self.advance();
                     dispatch_token = self.peek();
                     continue :dispatch .expr_record_fields_next;
@@ -5068,7 +5068,11 @@ fn runDirectParser(self: *Parser, entry: DirectEntry) Error!DirectResult {
                     .scratch_top = expr_record_field_state.scratch_top,
                     .ext = expr_record_field_state.ext,
                 };
+                if (self.peek() == .Comma) self.advance();
                 dispatch_token = self.peek();
+                if (self.peek() == .CloseCurly) {
+                    continue :dispatch .expr_record_finish;
+                }
                 continue :dispatch .expr_record_fields_next;
             },
         },
