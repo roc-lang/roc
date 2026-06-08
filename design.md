@@ -125,11 +125,11 @@ interpreter loop even when the cases contain token switches, because optimized
 code can lower the context transition to a central indirect branch.
 
 This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
-simdjson's stage-2 parser walks a precomputed structural stream with semantic
-grammar labels such as object-begin, object-continue, array-value, and
-scope-end. Its explicit stack records syntax facts about open containers
-(`is_array`, tape index, element count); it does not store "run this parser
-state next" instructions. Roc parser kernels must follow the same split:
+simdjson's stage-2 parser walks a precomputed structural stream with concrete
+JSON grammar labels such as object-begin, object-continue, array-value, and
+scope-end. Its depth stack stores only open JSON scope fields (`is_array`,
+tape index, element count); it does not store "run this parser state next"
+instructions. Roc parser kernels must follow the same split:
 tokenization performs linear input discovery, parser kernels inspect the
 current token directly, and parser-owned syntax state describes currently open
 Roc syntax rather than queued control flow.
