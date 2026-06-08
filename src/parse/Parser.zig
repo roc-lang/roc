@@ -396,7 +396,7 @@ const OpenSyntaxStack = struct {
         self.payloads.deinit(allocator);
     }
 
-    fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn push(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: OpenSyntaxKind, comptime Payload: type, payload: Payload) Error!void {
         const start = std.mem.alignForward(usize, self.payloads.items.len, @max(@alignOf(Payload), 1));
         const end = start + @sizeOf(Payload);
         try self.payloads.resize(allocator, end);
