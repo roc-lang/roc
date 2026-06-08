@@ -170,6 +170,35 @@ assembly shows a dense jump table, generic context dispatch loop, indirect
 branch in the hot parser transition path, or revived recursive grammar call,
 the slice is not accepted and must be reshaped before more grammar is converted.
 
+Current parser audit result:
+
+```text
+commit: bf2510d888 Use irregular parser parent tags
+binary: zig-out/bin/roc
+version: release-fast-bf2510d8
+build: zig build roc -Doptimize=ReleaseFast -Dstrip=false --summary all --color off
+```
+
+The parser entry wrappers for expression, statement, pattern, type annotation,
+and associated statement blocks all enter `runExprStatementKernel` with an
+explicit root mode. They are API wrappers, not separate recursive grammar
+kernels. Static source and symbol checks must not find `OpenSyntaxKind`,
+`ParserContext`, `TypeOpenSyntaxStack`, `runTypeAnnoDirect`,
+`parseWhereClauseTokens`, or `parseWhereConstraintTokens`.
+
+The current ReleaseFast audit disassembled these parser kernel instantiations:
+
+```text
+_Parser.runExprStatementKernel__anon_169988
+_Parser.runExprStatementKernel__anon_175150
+_Parser.runExprStatementKernel__anon_175401
+```
+
+Searching those disassemblies for indirect branch-table dispatch found no
+`br xN` instructions. Remaining indirect instructions were `blr x8` allocator
+calls in growth/copy paths, not parser-state transitions. This is the accepted
+assembly shape for the current unified parser slice.
+
 Nested Roc syntax uses explicit open-syntax state, like simdjson's open
 container depth. This state records concrete syntax currently being parsed:
 open lists, records, strings, blocks, matches, type applications, and similar
