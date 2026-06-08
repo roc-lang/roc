@@ -304,9 +304,6 @@ fn compileModule(
     var module_env = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
@@ -500,7 +497,7 @@ fn serializeModuleEnv(
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

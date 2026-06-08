@@ -138,21 +138,11 @@ const RetiredCheckedArtifact = struct {
     }
 };
 
-/// Thread-safe allocator used for worker-thread allocations and shared
-/// coordinator buffers (channels, per-package maps) when running multi-threaded.
-///
-/// On platforms with threads, `std.heap.smp_allocator` is used: it maintains
-/// per-thread freelists backed by a shared global pool, avoiding the per-call
-/// `mmap`/`munmap` serialization on the kernel VM lock that `page_allocator`
-/// incurs (the prior cause of the multi-threaded performance cliff).
-///
-/// On wasm/freestanding (no threads), `smp_allocator` is unreachable at
-/// runtime but the constant must still compile, so it resolves to
-/// `page_allocator` (which on wasm is backed by `WasmAllocator`).
-const thread_safe_allocator: Allocator = if (threads_available)
-    std.heap.smp_allocator
-else
-    std.heap.page_allocator;
+/// Thread-safe allocator for worker-thread allocations and shared coordinator
+/// buffers (channels, per-package maps) in multi-threaded mode. base.defaultGpa
+/// resolves per target to a thread-safe, non-page_allocator choice: libc's
+/// malloc, smp_allocator on musl, or wasm_allocator on freestanding (no threads).
+const thread_safe_allocator: Allocator = base.defaultGpa();
 
 const StageTimer = if (threads_available) std.Io.Timestamp else void;
 
@@ -265,13 +255,14 @@ pub const WorkerAllocators = struct {
     /// In multi-threaded mode, this is smp_allocator for thread safety.
     gpa: Allocator,
 
-    /// Underlying arena implementation
-    arena_impl: std.heap.ArenaAllocator,
+    /// Underlying arena implementation. Each worker (and the inline path) owns
+    /// its own `WorkerAllocators`, so this arena is never touched concurrently.
+    arena_impl: base.SingleThreadArena,
 
     pub fn init(backing: Allocator) WorkerAllocators {
         return .{
             .gpa = backing,
-            .arena_impl = std.heap.ArenaAllocator.init(backing),
+            .arena_impl = base.SingleThreadArena.init(backing),
         };
     }
 
@@ -2285,6 +2276,7 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .source_dir = mod.canonicalSourceDir(),
                 .module_role = mod.module_role,
                 .depth = mod.depth,
             },
@@ -2506,7 +2498,7 @@ pub const Coordinator = struct {
 
     fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
         const allocator = self.cache_manager.?.allocator;
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = base.SingleThreadArena.init(allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
@@ -3705,7 +3697,7 @@ pub const Coordinator = struct {
             discovered_local_imports.deinit(worker_alloc);
         }
         const local_import_names = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
-        const module_dir = std.fs.path.dirname(task.path) orelse "";
+        const module_dir = task.source_dir;
         for (local_import_names) |module_name| {
             const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
             errdefer worker_alloc.free(path);
@@ -3998,7 +3990,7 @@ fn compileAppWithCheckedModuleCache(
     defer coord.deinit();
     coord.enable_hosted_transform = true;
 
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -4197,6 +4189,7 @@ test "Coordinator task queue" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/test/app/Main.roc",
+            .source_dir = "/test/app",
             .depth = 0,
             .module_role = .user,
         },
@@ -4241,6 +4234,7 @@ test "Coordinator isComplete logic" {
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4284,6 +4278,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4323,6 +4318,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },
@@ -4373,6 +4369,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },

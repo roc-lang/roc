@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
+const collections = @import("collections");
 
 const child_command_timeout_reserve_ms: u64 = 1_000;
 const timeout_result_grace_ms: u64 = 5_000;
@@ -588,6 +589,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9392 numeric utility expects are deterministic with no cache", .body = .{ .custom = .issue_9392_deterministic_no_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run issue 9208 open union tag before Exit matches wildcard", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/test_bar_error.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "exited with other error: Bar" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build issue 9435 hosted nominal return builds without mono panic", .body = .{ .custom = .build_issue_9435_hosted_nominal_return } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check Builtin.roc succeeds", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "src/build/roc/Builtin.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc docs Builtin.roc succeeds", .body = .{ .command = .{ .args = &.{ "docs", "--no-cache" }, .roc_file = "src/build/roc/Builtin.roc", .contains = &.{.{ .stream = .stdout, .text = "Generated docs for" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test complex_package --verbose passes all tests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--verbose" }, .roc_file = "test/complex_package/main.roc", .contains = &.{ .{ .stream = .stdout, .text = "tests passed" }, .{ .stream = .stdout, .text = "PASS" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
@@ -2512,7 +2514,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
 
-    var spec_arena = std.heap.ArenaAllocator.init(gpa);
+    var spec_arena = collections.SingleThreadArena.init(gpa);
     defer spec_arena.deinit();
 
     const parsed = parseRunnerArgs(spec_arena.allocator(), init.minimal.args) catch |err| {
@@ -2545,7 +2547,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     // harness runs N worker processes in parallel instead of forking.
     if (args.worker_index) |idx| {
         if (idx >= tests.len) std.process.exit(2);
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
         defer arena.deinit();
         const result = runSingleTest(init.io, arena.allocator(), tests[idx], args.timeout_ms);
         serializeResult(std.Io.File.stdout().handle, result);
@@ -2559,7 +2561,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     // with `--worker-stream` would fall through to the parent path below
     // and reentrantly spawn its own pool of workers — fork-bombing the box.
     if (args.worker_stream) {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
         defer arena.deinit();
 
         const stdin_handle = std.Io.File.stdin().handle;

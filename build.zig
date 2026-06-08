@@ -2111,8 +2111,6 @@ pub fn build(b: *std.Build) void {
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
     const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
     const run_test_cli_step = b.step("run-test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
-    const build_test_cli_bughunt_runner_step = b.step("build-test-cli-bughunt-runner", "Build opt-in CLI compiler-bug repro runner");
-    const run_test_cli_bughunt_step = b.step("run-test-cli-bughunt", "Run opt-in CLI compiler-bug repros");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
@@ -2151,6 +2149,7 @@ pub fn build(b: *std.Build) void {
     const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
     const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse false;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
+    const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     if (shared_memory_size) |size| {
         if (size == 0) {
@@ -2193,6 +2192,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption(bool, "trace_build", trace_build);
+    build_options.addOption(bool, "debug_gpa", debug_gpa);
     build_options.addOption(bool, "has_shared_memory_size", shared_memory_size != null);
     build_options.addOption(u64, "shared_memory_size", shared_memory_size orelse 0);
     const compiler_version_git = getCompilerVersionGit(b);
@@ -2542,7 +2542,9 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = b.createModule(.{
                         .root_source_file = b.path("src/build/test_harness.zig"),
+                        .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
                     }) },
+                    .{ .name = "collections", .module = roc_modules.collections },
                 },
             }),
         });
@@ -2565,38 +2567,6 @@ pub fn build(b: *std.Build) void {
         run_cli.step.dependOn(build_test_hosts_step);
         run_cli_test_step = &run_cli.step;
         run_test_cli_step.dependOn(&run_cli.step);
-
-        // test-bughunt-cli: opt-in known compiler-bug repros. This intentionally
-        // stays out of test-cli because these tests document currently failing
-        // behavior.
-        const bughunt_cli_runner_exe = b.addExecutable(.{
-            .name = "bughunt_cli_repros",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/cli/test/bughunt_cli_repros.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "test_harness", .module = b.createModule(.{
-                        .root_source_file = b.path("src/build/test_harness.zig"),
-                    }) },
-                },
-            }),
-        });
-        bughunt_cli_runner_exe.root_module.link_libc = true;
-        build_test_cli_bughunt_runner_step.dependOn(&bughunt_cli_runner_exe.step);
-
-        const run_bughunt_cli = b.addRunArtifact(bughunt_cli_runner_exe);
-        run_bughunt_cli.addArg("zig-out/bin/roc");
-        for (test_filters) |f| {
-            run_bughunt_cli.addArg("--filter");
-            run_bughunt_cli.addArg(f);
-        }
-        if (run_args.len != 0) {
-            run_bughunt_cli.addArgs(run_args);
-        }
-        run_bughunt_cli.step.dependOn(&install.step);
-        run_bughunt_cli.step.dependOn(build_test_hosts_step);
-        run_test_cli_bughunt_step.dependOn(&run_bughunt_cli.step);
     }
 
     // Manual rebuild command: zig build run-rebuild-builtins
@@ -2631,6 +2601,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
@@ -2681,6 +2652,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
@@ -2760,6 +2732,7 @@ pub fn build(b: *std.Build) void {
     eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_test_exe.root_module.addImport("test_harness", b.createModule(.{
         .root_source_file = b.path("src/build/test_harness.zig"),
+        .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
     }));
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
     try addLlvmSupportToStep(
@@ -2814,6 +2787,7 @@ pub fn build(b: *std.Build) void {
     eval_host_effects_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_host_effects_exe.root_module.addImport("test_harness", b.createModule(.{
         .root_source_file = b.path("src/build/test_harness.zig"),
+        .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
     }));
     eval_host_effects_exe.step.dependOn(&write_compiled_builtins.step);
     try addLlvmSupportToStep(
@@ -3642,6 +3616,7 @@ pub fn build(b: *std.Build) void {
                 eval_coverage_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
                 eval_coverage_exe.root_module.addImport("test_harness", b.createModule(.{
                     .root_source_file = b.path("src/build/test_harness.zig"),
+                    .imports = &.{.{ .name = "collections", .module = roc_modules.collections }},
                 }));
                 eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
                 try addLlvmSupportToStep(
@@ -4372,6 +4347,7 @@ fn addLlvmSupportToStep(
     step.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },

@@ -1590,3 +1590,61 @@ test "fx platform issue9118 try operator on tuple in type method (dev backend)" 
     // TODO: dev backend crashes with signal 6 (SIGABRT)
     return error.SkipZigTest;
 }
+
+test "default app resolves a sibling type module imported with exposing" {
+    const allocator = std.testing.allocator;
+
+    // A headerless file with `main!` runs as a "default app": its source is
+    // staged into a temp dir and compiled with a synthetic echo platform, while
+    // sibling imports resolve against the file's original directory. Here the
+    // sibling `FooBar.roc` is a type module whose associated value `square` is
+    // brought into scope via `exposing` and then called.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\import FooBar exposing [square]
+        \\
+        \\main! = |_arg| {
+        \\    echo!(square(12).to_str())
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "FooBar.roc",
+        .data =
+        \\FooBar :: {}.{
+        \\    square : U64 -> U64
+        \\    square = |x| x * x
+        \\}
+        ,
+    });
+
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+
+    const result = try util.runRoc(std.testing.io, allocator, &.{"--opt=dev"}, main_path);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| {
+            if (code != 0) {
+                std.debug.print("roc exited with code {}\nSTDOUT: {s}\nSTDERR: {s}\n", .{ code, result.stdout, result.stderr });
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("roc terminated abnormally: {}\nSTDERR: {s}\n", .{ result.term, result.stderr });
+            return error.RunFailed;
+        },
+    }
+
+    // 12 * 12 = 144, printed by the echo platform's `echo!`.
+    try testing.expect(std.mem.find(u8, result.stdout, "144") != null);
+}

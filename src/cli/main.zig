@@ -664,11 +664,22 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
-        if (builtin.os.tag == .freestanding) break :gpa .{ std.heap.wasm_allocator, false };
-        break :gpa switch (builtin.mode) {
-            .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
-            .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
-        };
+        // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
+        // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
+        // else uses the fast target allocator — see base.defaultGpa.
+        const use_debug_allocator = builtin.os.tag != .freestanding and
+            (builtin.mode == .Debug or build_options.debug_gpa);
+        if (use_debug_allocator) {
+            // Under Valgrind, use libc's malloc instead: Valgrind can't see the
+            // debug allocator's sub-allocations (it carves them out of mmap'd
+            // pages) but tracks every malloc/free. Debug builds carry the client
+            // requests, so this auto-switches with no flag.
+            if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
+                break :gpa .{ std.heap.c_allocator, false };
+            }
+            break :gpa .{ debug_allocator.allocator(), true };
+        }
+        break :gpa .{ base.defaultGpa(), false };
     };
     defer restoreWindowsConsoleCodePage();
     defer if (is_safe) {
@@ -681,7 +692,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         gpa = gpa_tracy.allocator();
     }
 
-    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    var arena_impl = base.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -735,13 +746,25 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     // cleanup completes, the OS will automatically terminate the cleanup thread.
     // This ensures cleanup never delays compilation or execution.
     //
-    // Uses page_allocator instead of GPA to avoid leak detection false positives
-    // (the thread may still be running when the main thread's leak check fires).
-    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator, CoreCtx.default(std.heap.page_allocator, std.heap.page_allocator, std_io))) |_| {
-        // Thread started successfully, will run in background
-    } else |_| {
-        // Non-fatal: cleanup failure shouldn't prevent compilation
-        std.log.debug("Failed to start background cleanup thread", .{});
+    // Resolve the temp/cache locations here using the same resolver the cache
+    // writer uses, so cleanup can never target a different directory than where
+    // artifacts are written. The background thread itself is CoreCtx-free and
+    // allocation-free; it only borrows these base paths (copied in by value).
+    {
+        const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
+        const temp_base: []const u8 = cache_config_mod.getTempDir(cleanup_ctx, arena) catch "";
+        const cache_base: []const u8 = blk: {
+            const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+            break :blk cfg.getEffectiveCacheDir(arena) catch "";
+        };
+        if (temp_base.len != 0 or cache_base.len != 0) {
+            if (compile.CacheCleanup.startBackgroundCleanup(temp_base, cache_base, std_io)) |_| {
+                // Thread started successfully, will run in background
+            } else |_| {
+                // Non-fatal: cleanup failure shouldn't prevent compilation
+                std.log.debug("Failed to start background cleanup thread", .{});
+            }
+        }
     }
 
     // Create I/O interface - this is passed to all command handlers via ctx
@@ -1474,7 +1497,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         return error.TypeCheckingFailed;
     }
 
-    const view = try viewLirImageFromHandle(shm_result.handle);
+    const view = try viewLirImageFromHandle(shm_result.handle, ctx.arena);
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
@@ -1655,7 +1678,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handl
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -1770,7 +1793,7 @@ fn runWithPosixFdInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handle: Sha
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), temp_dir_path);
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -1899,10 +1922,10 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewLirImageFromHandle(handle: SharedMemoryHandle) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+fn viewLirImageFromHandle(handle: SharedMemoryHandle, arena: std.mem.Allocator) lir.LirImage.ImageError!lir.LirImage.ProgramView {
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
-    return lir.LirImage.viewMappedImage(header, base_ptr, handle.size);
+    return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, arena);
 }
 
 fn argLayoutsForProc(
@@ -4312,7 +4335,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     };
     var cleanup_build_scratch_dir = true;
     defer if (cleanup_build_scratch_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, ctx.coreCtx(), build_scratch_dir);
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
     };
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
@@ -6176,6 +6199,13 @@ fn checkFileWithBuildEnv(
         // Note: BuildEnv.deinit() will clean up the cache manager
     }
     build_env.setPostCheckPublicationMode(.platform_relations);
+
+    // When checking the Builtin module itself, mark it as such so the
+    // canonicalizer skips loading the pre-compiled builtin types into its
+    // scope (which would cause shadowing errors for every type it defines).
+    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+        build_env.setRootModuleRole(.builtin);
+    }
 
     if (comptime build_options.trace_build) {
         std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
