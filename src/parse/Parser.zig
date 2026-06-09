@@ -812,9 +812,7 @@ fn parseTypeHeaderTokens(self: *Parser) Error!AST.TypeHeader.Idx {
     const scratch_top = self.store.scratchTypeAnnoTop();
     while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
         try self.store.addScratchTypeAnno(try self.parseTypeIdentToken());
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
+        if (!self.consumeComma()) {
             break;
         }
     }
