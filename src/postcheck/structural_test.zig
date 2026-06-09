@@ -87,6 +87,34 @@ test "post-check row entries carry checked label ids until LIR indices" {
     try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u16);
 }
 
+test "Monotype record expression lowering does not keep mutable field-store slices across child lowering" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr", "fn recordUpdateFieldValue");
+
+    try expectContains(lower_record_expr, "const target_fields");
+    try expectContains(lower_record_expr, "const target_field_count");
+    try expectContains(lower_record_expr, "self.builder.program.types.fieldSpan(target_fields)[i]");
+    try std.testing.expect(std.mem.find(u8, lower_record_expr, "for (target_fields") == null);
+}
+
+test "Monotype lookup lowering uses explicit resolved use types" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const lower_call = sourceSliceBetween(lower_source, "fn lowerCall", "fn directCallInstantiationSourceFnType");
+    const lower_expr_type = sourceSliceBetween(lower_source, "fn lowerExprType", "fn lowerExpr(self:");
+    const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
+    const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
+
+    try expectContains(lower_call, "const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {");
+    try expectContains(lower_call, "break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);");
+    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
+    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
+
+    try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved)");
+    try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
+    try expectContains(lower_lookup_at_type, ".platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty)");
+    try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty)");
+}
+
 test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Lifted.Fn, "captures"));
     try std.testing.expect(Lifted.ExprId == Mono.ExprId);
