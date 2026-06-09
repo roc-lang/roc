@@ -2550,6 +2550,27 @@ pub const Coordinator = struct {
         );
     }
 
+    fn resolvedDirectImportsHaveCheckedOutput(
+        env: *const ModuleEnv,
+        checked_imports: []const check.CheckedArtifact.PublishImportArtifact,
+    ) bool {
+        for (env.imports.imports.items.items, 0..) |_, i| {
+            const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+            const resolved_module_idx = env.imports.getResolvedModule(import_idx) orelse continue;
+
+            var found = false;
+            for (checked_imports) |checked_import| {
+                if (checked_import.module_idx == resolved_module_idx) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+
+        return true;
+    }
+
     fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
@@ -2587,6 +2608,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
+        if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts) catch return false;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
@@ -3998,6 +4020,29 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
         overwritten += 1;
     }
     return overwritten;
+}
+
+test "Coordinator checked cache key requires checked direct imports" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "import Host\n");
+    defer env.deinit();
+    try env.initCIRFields("W4");
+
+    const import_idx = try env.imports.getOrPut(allocator, &env.common.strings, "Host");
+    env.imports.setResolvedModule(import_idx, 1);
+
+    try std.testing.expect(!Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
+
+    const checked_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = .{},
+        .view = undefined,
+    }};
+    try std.testing.expect(Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &checked_imports));
+
+    env.imports.clearResolvedModules();
+    try std.testing.expect(Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
 }
 
 test "Coordinator checked module cache hits on second compile" {

@@ -6038,6 +6038,7 @@ fn checkedExprDataDiverges(
 ) bool {
     return switch (data) {
         .crash,
+        .ellipsis,
         .return_,
         => true,
         .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
@@ -6120,7 +6121,6 @@ fn checkedExprDataDiverges(
         .method_eq,
         .type_dispatch_call,
         .runtime_error,
-        .ellipsis,
         .anno_only,
         => false,
     };

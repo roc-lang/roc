@@ -1088,6 +1088,32 @@ const Builder = struct {
         };
     }
 
+    fn tupleItemSpan(self: *Builder, ty: Type.TypeId) Type.Span {
+        return switch (self.shapeContent(ty)) {
+            .tuple => |items| items,
+            else => Common.invariant("tuple pattern had a non-tuple checked type"),
+        };
+    }
+
+    fn recordFieldsSpan(self: *Builder, ty: Type.TypeId) Type.Span {
+        return switch (self.shapeContent(ty)) {
+            .record => |fields| fields,
+            else => Common.invariant("record pattern had a non-record checked type"),
+        };
+    }
+
+    fn tagPayloadSpan(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.Span {
+        return switch (self.shapeContent(ty)) {
+            .tag_union => |tags| {
+                for (self.program.types.tagSpan(tags)) |tag| {
+                    if (self.program.names.tagLabelTextEql(tag.name, name)) return tag.payloads;
+                }
+                Common.invariant("tag pattern was absent from checked tag-union type");
+            },
+            else => Common.invariant("tag pattern had a non-tag-union checked type"),
+        };
+    }
+
     fn lowerNominalBackingType(
         self: *Builder,
         view: ModuleView,
@@ -1104,34 +1130,18 @@ const Builder = struct {
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) []const Type.TypeId {
-        return switch (self.shapeContent(ty)) {
-            .tuple => |items| self.program.types.span(items),
-            else => Common.invariant("tuple pattern had a non-tuple checked type"),
-        };
+        return self.program.types.span(self.tupleItemSpan(ty));
     }
 
     fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
-        return switch (self.shapeContent(ty)) {
-            .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
-                    if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field.ty;
-                }
-                Common.invariant("record pattern field was absent from checked record type");
-            },
-            else => Common.invariant("record pattern had a non-record checked type"),
-        };
+        for (self.program.types.fieldSpan(self.recordFieldsSpan(ty))) |field| {
+            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field.ty;
+        }
+        Common.invariant("record pattern field was absent from checked record type");
     }
 
     fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) []const Type.TypeId {
-        return switch (self.shapeContent(ty)) {
-            .tag_union => |tags| {
-                for (self.program.types.tagSpan(tags)) |tag| {
-                    if (self.program.names.tagLabelTextEql(tag.name, name)) return self.program.types.span(tag.payloads);
-                }
-                Common.invariant("tag pattern was absent from checked tag-union type");
-            },
-            else => Common.invariant("tag pattern had a non-tag-union checked type"),
-        };
+        return self.program.types.span(self.tagPayloadSpan(ty, name));
     }
 
     fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
@@ -1745,12 +1755,14 @@ const Builder = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const item_tys = self.tupleItemTypes(ty);
-        if (item_tys.len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+        const item_span = self.tupleItemSpan(ty);
+        const item_count: usize = @intCast(item_span.len);
+        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_tys[index]);
+            const item_ty = self.program.types.span(item_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_ty);
         }
         return try self.program.addExprSpan(lowered);
     }
@@ -1762,14 +1774,16 @@ const Builder = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const fields = self.constRecordFields(ty);
-        if (fields.len != items.len) Common.invariant("ConstStore record length differs from checked type");
+        const field_span = self.recordFieldsSpan(ty);
+        const field_count: usize = @intCast(field_span.len);
+        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
+            const field = self.program.types.fieldSpan(field_span)[index];
             lowered[index] = .{
-                .name = fields[index].name,
-                .value = try self.restoreConstNodeAtType(store_view, type_view, item, fields[index].ty),
+                .name = field.name,
+                .value = try self.restoreConstNodeAtType(store_view, type_view, item, field.ty),
             };
         }
         return try self.program.addFieldExprSpan(lowered);
@@ -1783,12 +1797,14 @@ const Builder = struct {
         tag: anytype,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
         const mono_tag_name = try self.program.names.internTagLabel(tag.tag_name);
-        const payload_tys = self.tagPayloadTypes(ty, mono_tag_name);
-        if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+        const payload_span = self.tagPayloadSpan(ty, mono_tag_name);
+        const payload_count: usize = @intCast(payload_span.len);
+        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
         defer self.allocator.free(lowered);
         for (tag.payloads, 0..) |payload, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_tys[index]);
+            const payload_ty = self.program.types.span(payload_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_ty);
         }
         return try self.program.addExprSpan(lowered);
     }
@@ -1808,10 +1824,7 @@ const Builder = struct {
     }
 
     fn constRecordFields(self: *Builder, ty: Type.TypeId) []const Type.Field {
-        return switch (self.shapeContent(ty)) {
-            .record => |fields| self.program.types.fieldSpan(fields),
-            else => Common.invariant("ConstStore record restored with a non-record monotype"),
-        };
+        return self.program.types.fieldSpan(self.recordFieldsSpan(ty));
     }
 
     fn inspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -4237,7 +4250,6 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
-            .ellipsis,
             .anno_only,
             .runtime_error,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
@@ -4301,6 +4313,7 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
+            .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
@@ -5782,12 +5795,14 @@ const BodyContext = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const item_tys = self.builder.tupleItemTypes(ty);
-        if (item_tys.len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+        const item_span = self.builder.tupleItemSpan(ty);
+        const item_count: usize = @intCast(item_span.len);
+        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_tys[index]);
+            const item_ty = self.builder.program.types.span(item_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_ty);
         }
         return try self.builder.program.addExprSpan(lowered);
     }
@@ -5799,14 +5814,16 @@ const BodyContext = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const fields = self.constRecordFields(ty);
-        if (fields.len != items.len) Common.invariant("ConstStore record length differs from checked type");
+        const field_span = self.builder.recordFieldsSpan(ty);
+        const field_count: usize = @intCast(field_span.len);
+        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
+            const field = self.builder.program.types.fieldSpan(field_span)[index];
             lowered[index] = .{
-                .name = fields[index].name,
-                .value = try self.restoreConstNodeAtType(store_view, type_view, item, fields[index].ty),
+                .name = field.name,
+                .value = try self.restoreConstNodeAtType(store_view, type_view, item, field.ty),
             };
         }
         return try self.builder.program.addFieldExprSpan(lowered);
@@ -5820,12 +5837,14 @@ const BodyContext = struct {
         tag: anytype,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
         const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
-        const payload_tys = self.builder.tagPayloadTypes(ty, mono_tag_name);
-        if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+        const payload_span = self.builder.tagPayloadSpan(ty, mono_tag_name);
+        const payload_count: usize = @intCast(payload_span.len);
+        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
         defer self.allocator.free(lowered);
         for (tag.payloads, 0..) |payload, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_tys[index]);
+            const payload_ty = self.builder.program.types.span(payload_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_ty);
         }
         return try self.builder.program.addExprSpan(lowered);
     }
@@ -5845,10 +5864,7 @@ const BodyContext = struct {
     }
 
     fn constRecordFields(self: *BodyContext, ty: Type.TypeId) []const Type.Field {
-        return switch (self.builder.shapeContent(ty)) {
-            .record => |fields| self.builder.program.types.fieldSpan(fields),
-            else => Common.invariant("ConstStore record restored with a non-record monotype"),
-        };
+        return self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
     }
 
     fn restoreConstFn(
@@ -5992,23 +6008,116 @@ const BodyContext = struct {
         }
         const expected_digest = self.builder.program.types.typeDigest(&self.builder.program.names, expected);
         const actual_digest = self.builder.program.types.typeDigest(&self.builder.program.names, actual);
-        return std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..]);
+        if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
+
+        return self.sameTypeContent(expected, actual, depth + 1);
+    }
+
+    fn sameTypeContent(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+        const expected_content = self.builder.program.types.get(expected);
+        const actual_content = self.builder.program.types.get(actual);
+        return switch (expected_content) {
+            .primitive => |primitive| switch (actual_content) {
+                .primitive => |actual_primitive| primitive == actual_primitive,
+                else => false,
+            },
+            .named => |named| switch (actual_content) {
+                .named => |actual_named| self.sameNamedType(named, actual_named, depth),
+                else => false,
+            },
+            .record => |fields| switch (actual_content) {
+                .record => |actual_fields| self.sameRecordFields(fields, actual_fields, depth),
+                else => false,
+            },
+            .tuple => |items| switch (actual_content) {
+                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, depth),
+                else => false,
+            },
+            .tag_union => |tags| switch (actual_content) {
+                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, depth),
+                else => false,
+            },
+            .list => |elem| switch (actual_content) {
+                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                else => false,
+            },
+            .box => |elem| switch (actual_content) {
+                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                else => false,
+            },
+            .func => |function| switch (actual_content) {
+                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, depth) and
+                    self.sameTypeInner(function.ret, actual_function.ret, depth),
+                else => false,
+            },
+            .erased => |erased| switch (actual_content) {
+                .erased => |actual_erased| std.mem.eql(u8, erased.bytes[0..], actual_erased.bytes[0..]),
+                else => false,
+            },
+            .zst => switch (actual_content) {
+                .zst => true,
+                else => false,
+            },
+        };
+    }
+
+    fn sameNamedType(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+        if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
+        if (expected.def.module_name != actual.def.module_name) return false;
+        if (expected.def.source_decl != actual.def.source_decl) return false;
+        if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
+        if (expected.kind != actual.kind) return false;
+        if (expected.builtin_owner != actual.builtin_owner) return false;
+        return self.sameTypeSpans(expected.args, actual.args, depth);
+    }
+
+    fn sameTypeSpans(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_items = self.builder.program.types.span(expected);
+        const actual_items = self.builder.program.types.span(actual);
+        if (expected_items.len != actual_items.len) return false;
+        for (expected_items, actual_items) |expected_item, actual_item| {
+            if (!self.sameTypeInner(expected_item, actual_item, depth)) return false;
+        }
+        return true;
+    }
+
+    fn sameRecordFields(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_fields = self.builder.program.types.fieldSpan(expected);
+        const actual_fields = self.builder.program.types.fieldSpan(actual);
+        if (expected_fields.len != actual_fields.len) return false;
+        for (expected_fields, actual_fields) |expected_field, actual_field| {
+            if (expected_field.name != actual_field.name) return false;
+            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, depth)) return false;
+        }
+        return true;
+    }
+
+    fn sameTags(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_tags = self.builder.program.types.tagSpan(expected);
+        const actual_tags = self.builder.program.types.tagSpan(actual);
+        if (expected_tags.len != actual_tags.len) return false;
+        for (expected_tags, actual_tags) |expected_tag, actual_tag| {
+            if (expected_tag.name != actual_tag.name) return false;
+            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, depth)) return false;
+        }
+        return true;
     }
 
     fn lowerRecordExpr(self: *BodyContext, record: anytype, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const target_field_span = switch (self.builder.shapeContent(ty)) {
+        const target_fields = switch (self.builder.shapeContent(ty)) {
             .record => |fields| fields,
             else => Common.invariant("record expression had a non-record monotype"),
         };
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, target_field_span.len);
+        const target_field_count: usize = @intCast(target_fields.len);
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, target_field_count);
         defer self.allocator.free(lowered);
         const base_record = if (record.ext) |ext| try self.lowerExpr(ext) else null;
         const base_ty = if (base_record) |base_expr| self.builder.program.exprs.items[@intFromEnum(base_expr)].ty else ty;
         const base_local = if (base_record) |_| try self.builder.program.addLocal(self.builder.symbols.fresh(), base_ty) else null;
         const base_expr = if (base_local) |local| try self.builder.localExpr(local, base_ty) else null;
 
-        for (0..target_field_span.len) |i| {
-            const field = self.builder.program.types.fieldSpan(target_field_span)[i];
+        for (0..target_field_count) |i| {
+            const field = self.builder.program.types.fieldSpan(target_fields)[i];
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value|
                 try self.lowerExprAtType(field_value, field.ty)
             else if (base_expr) |base_value|
@@ -6244,16 +6353,18 @@ const BodyContext = struct {
         literal: can.ModuleEnv.NumeralLiteral,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const fields = switch (self.builder.shapeContent(ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
+        const field_span = switch (self.builder.shapeContent(ty)) {
+            .record => |span| span,
             else => Common.invariant("Numeral Literal payload was not a record"),
         };
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        const field_count: usize = @intCast(field_span.len);
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, field_count);
         defer self.allocator.free(lowered);
 
         const before = self.view.module_env.numeralDigitsBefore(literal);
         const after = self.view.module_env.numeralDigitsAfter(literal);
-        for (fields, 0..) |field, i| {
+        for (0..field_count) |i| {
+            const field = self.builder.program.types.fieldSpan(field_span)[i];
             const label = self.builder.program.names.recordFieldLabelText(field.name);
             const value = if (Ident.textEql(label, "is_negative"))
                 try self.boolLiteral(literal.isNegative(), field.ty)
@@ -8459,6 +8570,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
+            .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),

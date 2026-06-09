@@ -2454,7 +2454,15 @@ pub fn build(b: *std.Build) void {
     });
     wasm_host_fixture_files.step.dependOn(wasm_host_step);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
+    const llvm_codegen_module = b.addModule("llvm_codegen", .{
+        .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
+    });
+    llvm_codegen_module.addImport("layout", roc_modules.layout);
+    llvm_codegen_module.addImport("lir", roc_modules.lir);
+    llvm_codegen_module.addImport("ctx", roc_modules.ctx);
+    llvm_codegen_module.addImport("builtins", roc_modules.builtins);
+
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
@@ -2489,6 +2497,7 @@ pub fn build(b: *std.Build) void {
             release_zstd,
             compiled_builtins_module,
             write_compiled_builtins,
+            llvm_codegen_module,
             null, // No tracy
         );
         if (release_exe) |exe| {
@@ -2588,14 +2597,6 @@ pub fn build(b: *std.Build) void {
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     roc_exe.step.dependOn(&write_compiled_builtins.step);
-
-    const llvm_codegen_module = b.addModule("llvm_codegen", .{
-        .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
-    });
-    llvm_codegen_module.addImport("layout", roc_modules.layout);
-    llvm_codegen_module.addImport("lir", roc_modules.lir);
-    llvm_codegen_module.addImport("ctx", roc_modules.ctx);
-    llvm_codegen_module.addImport("builtins", roc_modules.builtins);
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -3077,6 +3078,7 @@ pub fn build(b: *std.Build) void {
             "--target=wasm32",
             "--output=test/wasm/app.wasm",
         });
+        build_wasm_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
 
         const wasm_test_exe = b.addExecutable(.{
@@ -4077,6 +4079,7 @@ fn addMainExe(
     zstd: *Dependency,
     compiled_builtins_module: *std.Build.Module,
     write_compiled_builtins: *Step.WriteFile,
+    llvm_codegen_module: *std.Build.Module,
     flag_enable_tracy: ?[]const u8,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
@@ -4097,6 +4100,7 @@ fn addMainExe(
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = 64 * 1024 * 1024;
     configureBackend(exe, target);
+    exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
 
     // Build str and int test platform host libraries for native target
     // (fx and fx-open are only built by build-test-hosts for CLI platform tests)
@@ -4339,6 +4343,7 @@ fn addLlvmSupportToStep(
     step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
     try addStaticLlvmOptionsToModule(step.root_module);
+    step.root_module.addImport("llvm_codegen", llvm_codegen_module);
     step.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{

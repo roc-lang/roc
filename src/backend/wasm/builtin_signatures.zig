@@ -4,6 +4,7 @@
 //! then emit a relocation to the listed `roc_builtins_*` symbol.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
 const SymbolIndex = @import("index_types.zig").SymbolIndex;
 
@@ -135,6 +136,19 @@ pub fn sigOf(kind: BuiltinKind) Sig {
 
 /// Relocation symbol table indexed by builtin kind.
 pub const SymbolTable = std.enums.EnumArray(BuiltinKind, SymbolIndex);
+
+/// Declare every builtin wrapper as an undefined function symbol in a generated
+/// relocatable wasm object.
+pub fn declareUndefinedRelocs(module: *WasmModule) Allocator.Error!SymbolTable {
+    var result = SymbolTable.initUndefined();
+    inline for (std.meta.tags(BuiltinKind)) |kind| {
+        const sig = sigOf(kind);
+        const type_idx = try module.addFuncType(sig.wasm_params, sig.wasm_results);
+        const imported = try module.addFunctionImportWithSymbol("env", sig.name, type_idx);
+        result.set(kind, imported.symbol);
+    }
+    return result;
+}
 
 /// Locate builtin function symbols in a merged wasm module.
 pub fn populateForRelocs(module: *const WasmModule) WasmModule.SymbolLookupError!SymbolTable {

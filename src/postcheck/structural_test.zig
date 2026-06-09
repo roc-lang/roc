@@ -91,8 +91,9 @@ test "Monotype record expression lowering does not keep mutable field-store slic
     const lower_source = @embedFile("monotype/lower.zig");
     const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr", "fn recordUpdateFieldValue");
 
-    try expectContains(lower_record_expr, "const target_field_span");
-    try expectContains(lower_record_expr, "self.builder.program.types.fieldSpan(target_field_span)[i]");
+    try expectContains(lower_record_expr, "const target_fields");
+    try expectContains(lower_record_expr, "const target_field_count");
+    try expectContains(lower_record_expr, "self.builder.program.types.fieldSpan(target_fields)[i]");
     try std.testing.expect(std.mem.find(u8, lower_record_expr, "for (target_fields") == null);
 }
 
