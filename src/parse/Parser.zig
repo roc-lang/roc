@@ -1655,207 +1655,55 @@ const QualificationResult = struct {
     is_upper: bool,
 };
 
-const ExprBlockStack = struct {
-    current: ?ExprBlockState = null,
-    stack: std.ArrayList(ExprBlockState) = .empty,
+fn CurrentStack(comptime State: type) type {
+    return struct {
+        current: ?State = null,
+        stack: std.ArrayList(State) = .empty,
 
-    fn deinit(self: *ExprBlockStack, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
+        const Self = @This();
 
-    inline fn enter(self: *ExprBlockStack, allocator: std.mem.Allocator, state: ExprBlockState) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.stack.deinit(allocator);
         }
-        self.current = state;
-    }
 
-    inline fn active(self: *ExprBlockStack) *ExprBlockState {
-        return &self.current.?;
-    }
-
-    inline fn leave(self: *ExprBlockStack) ExprBlockState {
-        const state = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return state;
-    }
-
-    fn clearRetainingCapacity(self: *ExprBlockStack) void {
-        self.current = null;
-        self.stack.clearRetainingCapacity();
-    }
-
-    fn isEmpty(self: *const ExprBlockStack) bool {
-        return self.current == null and self.stack.items.len == 0;
-    }
-
-    inline fn depth(self: *const ExprBlockStack) usize {
-        return self.stack.items.len + @intFromBool(self.current != null);
-    }
-};
-
-const ExprBinaryRhsStack = struct {
-    current: ?ExprAfterBinaryRhsState = null,
-    stack: std.ArrayList(ExprAfterBinaryRhsState) = .empty,
-
-    fn deinit(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn enter(self: *ExprBinaryRhsStack, allocator: std.mem.Allocator, state: ExprAfterBinaryRhsState) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
+        inline fn enter(self: *Self, allocator: std.mem.Allocator, state: State) Error!void {
+            if (self.current) |current| {
+                try self.stack.append(allocator, current);
+            }
+            self.current = state;
         }
-        self.current = state;
-    }
 
-    inline fn leave(self: *ExprBinaryRhsStack) ExprAfterBinaryRhsState {
-        const state = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return state;
-    }
-
-    fn clearRetainingCapacity(self: *ExprBinaryRhsStack) void {
-        self.current = null;
-        self.stack.clearRetainingCapacity();
-    }
-
-    fn isEmpty(self: *const ExprBinaryRhsStack) bool {
-        return self.current == null and self.stack.items.len == 0;
-    }
-};
-
-const ExprLambdaBodyStack = struct {
-    current: ?ExprLambdaAfterBodyState = null,
-    stack: std.ArrayList(ExprLambdaAfterBodyState) = .empty,
-
-    fn deinit(self: *ExprLambdaBodyStack, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn enter(self: *ExprLambdaBodyStack, allocator: std.mem.Allocator, state: ExprLambdaAfterBodyState) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
+        inline fn active(self: *Self) *State {
+            return &self.current.?;
         }
-        self.current = state;
-    }
 
-    inline fn leave(self: *ExprLambdaBodyStack) ExprLambdaAfterBodyState {
-        const state = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return state;
-    }
-
-    fn clearRetainingCapacity(self: *ExprLambdaBodyStack) void {
-        self.current = null;
-        self.stack.clearRetainingCapacity();
-    }
-
-    fn isEmpty(self: *const ExprLambdaBodyStack) bool {
-        return self.current == null and self.stack.items.len == 0;
-    }
-};
-
-const PatternRootStack = struct {
-    current: ?PatternRootState = null,
-    stack: std.ArrayList(PatternRootState) = .empty,
-
-    fn deinit(self: *PatternRootStack, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn enter(self: *PatternRootStack, allocator: std.mem.Allocator, state: PatternRootState) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
+        inline fn leave(self: *Self) State {
+            const state = self.current orelse unreachable;
+            self.current = self.stack.pop();
+            return state;
         }
-        self.current = state;
-    }
 
-    inline fn leave(self: *PatternRootStack) PatternRootState {
-        const state = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return state;
-    }
-
-    fn clearRetainingCapacity(self: *PatternRootStack) void {
-        self.current = null;
-        self.stack.clearRetainingCapacity();
-    }
-
-    fn isEmpty(self: *const PatternRootStack) bool {
-        return self.current == null and self.stack.items.len == 0;
-    }
-};
-
-const ExprCollectionStack = struct {
-    current: ?ExprCollectionState = null,
-    stack: std.ArrayList(ExprCollectionState) = .empty,
-
-    fn deinit(self: *ExprCollectionStack, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn enter(self: *ExprCollectionStack, allocator: std.mem.Allocator, state: ExprCollectionState) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
+        fn clearRetainingCapacity(self: *Self) void {
+            self.current = null;
+            self.stack.clearRetainingCapacity();
         }
-        self.current = state;
-    }
 
-    inline fn active(self: *ExprCollectionStack) *ExprCollectionState {
-        return &self.current.?;
-    }
-
-    inline fn leave(self: *ExprCollectionStack) ExprCollectionState {
-        const state = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return state;
-    }
-
-    fn clearRetainingCapacity(self: *ExprCollectionStack) void {
-        self.current = null;
-        self.stack.clearRetainingCapacity();
-    }
-
-    fn isEmpty(self: *const ExprCollectionStack) bool {
-        return self.current == null and self.stack.items.len == 0;
-    }
-};
-
-const StatementAssociatedBlockStack = struct {
-    current: ?StatementAssociatedBlockState = null,
-    stack: std.ArrayList(StatementAssociatedBlockState) = .empty,
-
-    fn deinit(self: *StatementAssociatedBlockStack, allocator: std.mem.Allocator) void {
-        self.stack.deinit(allocator);
-    }
-
-    inline fn enter(self: *StatementAssociatedBlockStack, allocator: std.mem.Allocator, state: StatementAssociatedBlockState) Error!void {
-        if (self.current) |current| {
-            try self.stack.append(allocator, current);
+        fn isEmpty(self: *const Self) bool {
+            return self.current == null and self.stack.items.len == 0;
         }
-        self.current = state;
-    }
 
-    inline fn active(self: *StatementAssociatedBlockStack) *StatementAssociatedBlockState {
-        return &self.current.?;
-    }
+        inline fn depth(self: *const Self) usize {
+            return self.stack.items.len + @intFromBool(self.current != null);
+        }
+    };
+}
 
-    inline fn leave(self: *StatementAssociatedBlockStack) StatementAssociatedBlockState {
-        const state = self.current orelse unreachable;
-        self.current = self.stack.pop();
-        return state;
-    }
-
-    fn clearRetainingCapacity(self: *StatementAssociatedBlockStack) void {
-        self.current = null;
-        self.stack.clearRetainingCapacity();
-    }
-
-    fn isEmpty(self: *const StatementAssociatedBlockStack) bool {
-        return self.current == null and self.stack.items.len == 0;
-    }
-};
+const ExprBlockStack = CurrentStack(ExprBlockState);
+const ExprBinaryRhsStack = CurrentStack(ExprAfterBinaryRhsState);
+const ExprLambdaBodyStack = CurrentStack(ExprLambdaAfterBodyState);
+const PatternRootStack = CurrentStack(PatternRootState);
+const ExprCollectionStack = CurrentStack(ExprCollectionState);
+const StatementAssociatedBlockStack = CurrentStack(StatementAssociatedBlockState);
 
 const PatternRootState = struct {
     outer_start: Token.Idx,
