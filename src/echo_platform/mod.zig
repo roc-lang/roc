@@ -35,11 +35,11 @@ pub const EchoEnv = struct {
 /// "RC hosted call transfers unused refcounted arg to host", and the test
 /// platform host in `test/fx/platform/host.zig` which decrefs every RocStr
 /// arg). Without this decref every `echo!` call leaks one heap RocStr.
-pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
-    const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
-    defer roc_str.decref(ops);
+pub fn echoHostedFn(ops: *host_abi.RocOps, str: RocStr) callconv(.c) void {
+    var owned = str;
+    defer owned.decref(ops);
 
-    const message = roc_str.asSlice();
+    const message = owned.asSlice();
 
     if (comptime is_wasm) {
         const js = struct {
