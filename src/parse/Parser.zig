@@ -2284,33 +2284,22 @@ const ParserKernelScratch = struct {
     associated_blocks: StatementAssociatedBlockStack = .{},
 
     fn deinit(self: *ParserKernelScratch, allocator: std.mem.Allocator) void {
-        self.open_syntax.deinit(allocator);
-        self.collections.deinit(allocator);
-        self.binary_rhs.deinit(allocator);
-        self.lambda_body.deinit(allocator);
-        self.blocks.deinit(allocator);
-        self.pattern_roots.deinit(allocator);
-        self.associated_blocks.deinit(allocator);
+        inline for (std.meta.fields(ParserKernelScratch)) |field| {
+            @field(self, field.name).deinit(allocator);
+        }
     }
 
     fn clearRetainingCapacity(self: *ParserKernelScratch) void {
-        self.open_syntax.clearRetainingCapacity();
-        self.collections.clearRetainingCapacity();
-        self.binary_rhs.clearRetainingCapacity();
-        self.lambda_body.clearRetainingCapacity();
-        self.blocks.clearRetainingCapacity();
-        self.pattern_roots.clearRetainingCapacity();
-        self.associated_blocks.clearRetainingCapacity();
+        inline for (std.meta.fields(ParserKernelScratch)) |field| {
+            @field(self, field.name).clearRetainingCapacity();
+        }
     }
 
     fn isEmpty(self: *const ParserKernelScratch) bool {
-        return self.open_syntax.isEmpty() and
-            self.collections.isEmpty() and
-            self.binary_rhs.isEmpty() and
-            self.lambda_body.isEmpty() and
-            self.blocks.isEmpty() and
-            self.pattern_roots.isEmpty() and
-            self.associated_blocks.isEmpty();
+        inline for (std.meta.fields(ParserKernelScratch)) |field| {
+            if (!@field(self, field.name).isEmpty()) return false;
+        }
+        return true;
     }
 };
 
