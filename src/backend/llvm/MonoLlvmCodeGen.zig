@@ -602,10 +602,11 @@ pub const MonoLlvmCodeGen = struct {
         const params = self.store.getLocalSpan(proc.args);
         const arg_layouts = try self.procArgLayouts(proc, false);
         defer self.allocator.free(arg_layouts);
-        const args_buf = try self.allocHostedArgBuffer(arg_layouts);
-        try self.packSequentialArgsFromLocals(args_buf, params, arg_layouts);
+        const arg_ptrs = try self.allocator.alloc(LlvmBuilder.Value, params.len);
+        defer self.allocator.free(arg_ptrs);
+        for (params, arg_ptrs) |param, *p| p.* = self.slot(param).ptr;
         const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
-        try self.callHostedFunction(hosted.dispatch_index, ret_ptr, args_buf);
+        try self.emitHostedCallCAbi(hosted.dispatch_index, arg_ptrs, arg_layouts, ret_ptr, proc.ret_layout);
         const wip = self.wip orelse return error.CompilationFailed;
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
@@ -850,9 +851,10 @@ pub const MonoLlvmCodeGen = struct {
             const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
             defer self.allocator.free(arg_layouts);
             for (param_locals, arg_layouts) |param, *slot_layout| slot_layout.* = self.store.getLocal(param).layout_idx;
-            const args_buf = try self.allocHostedArgBuffer(arg_layouts);
-            try self.packSequentialArgsFromLocals(args_buf, arg_locals, arg_layouts);
-            try self.callHostedFunction(hosted.dispatch_index, self.slot(target).ptr, args_buf);
+            const arg_ptrs = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
+            defer self.allocator.free(arg_ptrs);
+            for (arg_locals, arg_ptrs) |arg_local, *p| p.* = self.slot(arg_local).ptr;
+            try self.emitHostedCallCAbi(hosted.dispatch_index, arg_ptrs, arg_layouts, self.slot(target).ptr, self.localLayout(target));
             return;
         }
 
@@ -3457,6 +3459,147 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ptr = try self.loadPointer(fn_ptr_ptr);
         const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
         _ = wip.call(.normal, .ccc, .none, fn_ty, fn_ptr, &.{ self.rocOps(), ret_ptr, args_ptr }, "") catch return error.OutOfMemory;
+    }
+
+    /// The C-ABI target this build is compiling for.
+    fn abiTarget(self: *const MonoLlvmCodeGen) layout.abi.Target {
+        return switch (self.target.cpu.arch) {
+            .aarch64, .aarch64_be => .aarch64,
+            .x86_64 => if (self.target.os.tag == .windows) .x86_64_windows else .x86_64_sysv,
+            .wasm32 => .wasm32,
+            .wasm64 => .wasm64,
+            else => std.debug.panic("hosted C-ABI calls are not supported for arch {s}", .{@tagName(self.target.cpu.arch)}),
+        };
+    }
+
+    /// The LLVM type carrying one register piece of a value.
+    fn pieceLlvmType(builder: *LlvmBuilder, piece: layout.abi.RegPiece) Error!LlvmBuilder.Type {
+        return switch (piece.class) {
+            .integer => builder.intType(@as(u24, piece.size) * 8) catch return error.OutOfMemory,
+            .float => switch (piece.size) {
+                2 => .half,
+                4 => .float,
+                8 => .double,
+                else => .fp128,
+            },
+        };
+    }
+
+    /// A type with the exact size and alignment of `layout_idx`, for a `byval`/`sret`
+    /// pointer parameter (LLVM derives the memory convention and alignment from it).
+    fn memoryLlvmTypeForLayout(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, layout_idx: layout.Idx) Error!LlvmBuilder.Type {
+        const sa = self.sizeAlignOf(layout_idx);
+        const align_bytes: u32 = @intCast(sa.alignment.toByteUnits());
+        const elem = builder.intType(@intCast(align_bytes * 8)) catch return error.OutOfMemory;
+        return builder.arrayType(sa.size / align_bytes, elem) catch return error.OutOfMemory;
+    }
+
+    /// Emit a hosted-function call using the platform C ABI: small arguments and the return
+    /// travel in registers per `abi.lower`, with `*RocOps` threaded only when the signature
+    /// touches Roc-managed memory. `arg_ptrs` point at each argument's value bytes; the result
+    /// is written into `ret_ptr` (used directly as the sret pointer for memory-class returns).
+    fn emitHostedCallCAbi(
+        self: *MonoLlvmCodeGen,
+        dispatch_index: u32,
+        arg_ptrs: []const LlvmBuilder.Value,
+        arg_layouts: []const layout.Idx,
+        ret_ptr: LlvmBuilder.Value,
+        ret_layout: layout.Idx,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const needs_ops = layout.abi.needsRocOps(self.layouts(), arg_layouts, ret_layout);
+        const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, ret_layout, needs_ops) catch return error.OutOfMemory;
+
+        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer param_types.deinit(self.allocator);
+        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
+        defer call_args.deinit(self.allocator);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+
+        // Return value: registers (coerced struct/scalar) or sret pointer.
+        var ret_ty: LlvmBuilder.Type = .void;
+        var ret_pieces: []const layout.abi.RegPiece = &.{};
+        switch (lowered.ret) {
+            .none => {},
+            .indirect => {
+                const r_ty = try self.memoryLlvmTypeForLayout(builder, ret_layout);
+                try attrs_wip.addParamAttr(param_types.items.len, .{ .sret = r_ty }, builder);
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, ret_ptr);
+            },
+            .registers => |pieces| {
+                ret_pieces = pieces;
+                if (pieces.len == 1) {
+                    ret_ty = try pieceLlvmType(builder, pieces[0]);
+                } else {
+                    const field_types = try arena.alloc(LlvmBuilder.Type, pieces.len);
+                    for (pieces, field_types) |piece, *t| t.* = try pieceLlvmType(builder, piece);
+                    ret_ty = builder.structType(.normal, field_types) catch return error.OutOfMemory;
+                }
+            },
+        }
+
+        if (lowered.leading_ops) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, self.rocOps());
+        }
+
+        // Arguments: register pieces are flattened into separate values, each loaded exactly
+        // from its byte offset (avoiding struct-padding over-reads); memory args pass a byval
+        // pointer.
+        for (lowered.args, arg_ptrs, arg_layouts) |placement, arg_ptr, arg_layout| {
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    const a_ty = try self.memoryLlvmTypeForLayout(builder, arg_layout);
+                    try attrs_wip.addParamAttr(param_types.items.len, .{ .byval = a_ty }, builder);
+                    try param_types.append(self.allocator, ptr_ty);
+                    try call_args.append(self.allocator, arg_ptr);
+                },
+                .registers => |pieces| {
+                    const arg_align = self.alignmentForLayout(arg_layout);
+                    for (pieces) |piece| {
+                        const piece_ty = try pieceLlvmType(builder, piece);
+                        const src = try self.offsetPtr(arg_ptr, piece.offset);
+                        const val = wip.load(.normal, piece_ty, src, arg_align, "") catch return error.OutOfMemory;
+                        try param_types.append(self.allocator, piece_ty);
+                        try call_args.append(self.allocator, val);
+                    }
+                },
+            }
+        }
+
+        const table_ptr_ptr = try self.offsetPtr(self.rocOps(), self.rocOpsHostedFnsPtrOffset());
+        const table_ptr = try self.loadPointer(table_ptr_ptr);
+        const fn_ptr_ptr = try self.offsetPtr(table_ptr, dispatch_index * self.targetWordSize());
+        const fn_ptr = try self.loadPointer(fn_ptr_ptr);
+
+        const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
+        const attrs = attrs_wip.finish(builder) catch return error.OutOfMemory;
+        const result = wip.call(.normal, .ccc, attrs, fn_ty, fn_ptr, call_args.items, "") catch return error.OutOfMemory;
+
+        // Register return: store each piece back into the result slot at its byte offset.
+        if (ret_pieces.len > 0) {
+            const ret_align = self.alignmentForLayout(ret_layout);
+            if (ret_pieces.len == 1) {
+                const dst = try self.offsetPtr(ret_ptr, ret_pieces[0].offset);
+                _ = wip.store(.normal, result, dst, ret_align) catch return error.OutOfMemory;
+            } else {
+                for (ret_pieces, 0..) |piece, i| {
+                    const field = wip.extractValue(result, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                    const dst = try self.offsetPtr(ret_ptr, piece.offset);
+                    _ = wip.store(.normal, field, dst, ret_align) catch return error.OutOfMemory;
+                }
+            }
+        }
     }
 
     fn callBuiltin(
