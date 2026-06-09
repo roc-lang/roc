@@ -952,10 +952,10 @@ pub const MonoLlvmCodeGen = struct {
         }
         try self.callBuiltinVoid(
             "roc_builtins_list_with_capacity",
-            &.{ try self.ptrType(), self.ptrSizedIntType(), .i32, self.ptrSizedIntType(), .i1, try self.ptrType() },
+            &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1, try self.ptrType() },
             &.{
                 target_ptr,
-                builder.intValue(self.ptrSizedIntType(), elem_locals.len) catch return error.OutOfMemory,
+                builder.intValue(.i64, elem_locals.len) catch return error.OutOfMemory,
                 builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
                 builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory,
                 builder.intValue(.i1, @intFromBool(abi.contains_refcounted)) catch return error.OutOfMemory,
@@ -1663,8 +1663,8 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitStrWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, capacity: LocalId) Error!void {
-        const cap = try self.coerceScalar(try self.loadScalar(self.slot(capacity).ptr, self.localLayout(capacity)), self.ptrSizedIntType(), false);
-        try self.callBuiltinVoid("roc_builtins_str_with_capacity", &.{ try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() }, &.{ self.slot(target).ptr, cap, self.rocOps() });
+        const cap = try self.coerceScalar(try self.loadScalar(self.slot(capacity).ptr, self.localLayout(capacity)), .i64, false);
+        try self.callBuiltinVoid("roc_builtins_str_with_capacity", &.{ try self.ptrType(), .i64, try self.ptrType() }, &.{ self.slot(target).ptr, cap, self.rocOps() });
     }
 
     fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
@@ -1930,8 +1930,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
-        const cap = try self.coerceScalar(try self.loadScalar(self.slot(args[0]).ptr, self.localLayout(args[0])), self.ptrSizedIntType(), false);
-        try self.callBuiltinVoid("roc_builtins_list_with_capacity", &.{ try self.ptrType(), self.ptrSizedIntType(), .i32, self.ptrSizedIntType(), .i1, try self.ptrType() }, &.{
+        const cap = try self.coerceScalar(try self.loadScalar(self.slot(args[0]).ptr, self.localLayout(args[0])), .i64, false);
+        try self.callBuiltinVoid("roc_builtins_list_with_capacity", &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1, try self.ptrType() }, &.{
             self.slot(target).ptr,
             cap,
             builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
@@ -2027,8 +2027,8 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), slice.start);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), slice.len);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
         try self.appendListElementRcArgs(&call_args, abi, false, true);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_sublist", call_args.types.items, call_args.values.items);
@@ -2082,7 +2082,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), self.ptrSizedIntType(), false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_drop_at", call_args.types.items, call_args.values.items);
@@ -2095,7 +2095,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), self.ptrSizedIntType(), false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try call_args.append(self.allocator, try self.ptrType(), self.slot(args[2]).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
@@ -2111,7 +2111,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), self.ptrSizedIntType(), false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());

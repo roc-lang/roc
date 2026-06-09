@@ -5930,7 +5930,99 @@ const BodyContext = struct {
         }
         const expected_digest = self.builder.program.types.typeDigest(&self.builder.program.names, expected);
         const actual_digest = self.builder.program.types.typeDigest(&self.builder.program.names, actual);
-        return std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..]);
+        if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
+
+        return self.sameTypeContent(expected, actual, depth + 1);
+    }
+
+    fn sameTypeContent(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+        const expected_content = self.builder.program.types.get(expected);
+        const actual_content = self.builder.program.types.get(actual);
+        return switch (expected_content) {
+            .primitive => |primitive| switch (actual_content) {
+                .primitive => |actual_primitive| primitive == actual_primitive,
+                else => false,
+            },
+            .named => |named| switch (actual_content) {
+                .named => |actual_named| self.sameNamedType(named, actual_named, depth),
+                else => false,
+            },
+            .record => |fields| switch (actual_content) {
+                .record => |actual_fields| self.sameRecordFields(fields, actual_fields, depth),
+                else => false,
+            },
+            .tuple => |items| switch (actual_content) {
+                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, depth),
+                else => false,
+            },
+            .tag_union => |tags| switch (actual_content) {
+                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, depth),
+                else => false,
+            },
+            .list => |elem| switch (actual_content) {
+                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                else => false,
+            },
+            .box => |elem| switch (actual_content) {
+                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                else => false,
+            },
+            .func => |function| switch (actual_content) {
+                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, depth) and
+                    self.sameTypeInner(function.ret, actual_function.ret, depth),
+                else => false,
+            },
+            .erased => |erased| switch (actual_content) {
+                .erased => |actual_erased| std.mem.eql(u8, erased.bytes[0..], actual_erased.bytes[0..]),
+                else => false,
+            },
+            .zst => switch (actual_content) {
+                .zst => true,
+                else => false,
+            },
+        };
+    }
+
+    fn sameNamedType(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+        if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
+        if (expected.def.module_name != actual.def.module_name) return false;
+        if (expected.def.source_decl != actual.def.source_decl) return false;
+        if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
+        if (expected.kind != actual.kind) return false;
+        if (expected.builtin_owner != actual.builtin_owner) return false;
+        return self.sameTypeSpans(expected.args, actual.args, depth);
+    }
+
+    fn sameTypeSpans(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_items = self.builder.program.types.span(expected);
+        const actual_items = self.builder.program.types.span(actual);
+        if (expected_items.len != actual_items.len) return false;
+        for (expected_items, actual_items) |expected_item, actual_item| {
+            if (!self.sameTypeInner(expected_item, actual_item, depth)) return false;
+        }
+        return true;
+    }
+
+    fn sameRecordFields(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_fields = self.builder.program.types.fieldSpan(expected);
+        const actual_fields = self.builder.program.types.fieldSpan(actual);
+        if (expected_fields.len != actual_fields.len) return false;
+        for (expected_fields, actual_fields) |expected_field, actual_field| {
+            if (expected_field.name != actual_field.name) return false;
+            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, depth)) return false;
+        }
+        return true;
+    }
+
+    fn sameTags(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_tags = self.builder.program.types.tagSpan(expected);
+        const actual_tags = self.builder.program.types.tagSpan(actual);
+        if (expected_tags.len != actual_tags.len) return false;
+        for (expected_tags, actual_tags) |expected_tag, actual_tag| {
+            if (expected_tag.name != actual_tag.name) return false;
+            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, depth)) return false;
+        }
+        return true;
     }
 
     fn lowerRecordExpr(self: *BodyContext, record: anytype, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
