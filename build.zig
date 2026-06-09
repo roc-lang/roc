@@ -2476,6 +2476,8 @@ pub fn build(b: *std.Build) void {
     run_builtin_format.step.dependOn(build_roc_step);
     run_check_builtin_format_step.dependOn(&run_builtin_format.step);
 
+    var release_exe_for_llvm_embedded: ?*Step.Compile = null;
+
     // Release build with platform-optimal settings
     {
         const release_target = b.resolveTargetQuery(getReleaseTargetQuery());
@@ -2504,6 +2506,7 @@ pub fn build(b: *std.Build) void {
             roc_modules.addAll(exe);
             exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
             exe.step.dependOn(&write_compiled_builtins.step);
+            release_exe_for_llvm_embedded = exe;
             const install = b.addInstallArtifact(exe, .{});
             build_release_step.dependOn(&install.step);
         }
@@ -2649,6 +2652,10 @@ pub fn build(b: *std.Build) void {
     });
     roc_exe.step.dependOn(&llvm_embedded_files.step);
     roc_exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
+    if (release_exe_for_llvm_embedded) |exe| {
+        exe.step.dependOn(&llvm_embedded_files.step);
+        exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
+    }
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
