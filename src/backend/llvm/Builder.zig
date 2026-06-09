@@ -96,6 +96,7 @@ pub const Options = struct {
     name: []const u8 = &.{},
     target: *const std.Target = &builtin.target,
     triple: []const u8 = &.{},
+    data_layout: []const u8 = &.{},
 };
 
 /// Interned string handle for efficient string storage and comparison.
@@ -8809,6 +8810,10 @@ pub fn init(options: Options) Allocator.Error!Builder {
 
     if (options.triple.len > 0) {
         self.target_triple = try self.string(options.triple);
+    }
+
+    if (options.data_layout.len > 0) {
+        self.data_layout = try self.string(options.data_layout);
     }
 
     {
