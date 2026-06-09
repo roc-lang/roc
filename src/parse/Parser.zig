@@ -2090,49 +2090,23 @@ const OpenSyntaxStack = struct {
     }
 
     inline fn payloadStack(self: *OpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
-        if (Payload == ExprAfterUnaryState) return &self.expr_after_unary;
-        if (Payload == ExprArrowAfterInnerState) return &self.expr_arrow_after_inner;
-        if (Payload == ExprStringState) return &self.expr_string;
-        if (Payload == ExprRecordExtState) return &self.expr_record_ext;
-        if (Payload == ExprRecordFieldState) return &self.expr_record_field;
-        if (Payload == ExprAfterExprState) return &self.expr_after_expr;
-        if (Payload == ExprIfAfterThenState) return &self.expr_if_after_then;
-        if (Payload == ExprIfAfterElseState) return &self.expr_if_after_else;
-        if (Payload == ExprMatchBranchAfterPatternState) return &self.expr_match_after_pattern;
-        if (Payload == ExprMatchBranchAfterGuardState) return &self.expr_match_after_guard;
-        if (Payload == ExprMatchBranchAfterBodyState) return &self.expr_match_after_body;
-        if (Payload == ExprForAfterListState) return &self.expr_for_after_list;
-        if (Payload == ExprForAfterBodyState) return &self.expr_for_after_body;
-        if (Payload == ExprLambdaArgsState) return &self.expr_lambda_args;
-        if (Payload == Token.Idx) return &self.statement_token;
-        if (Payload == StatementDeclBodyState) return &self.statement_decl_body;
-        if (Payload == StatementVarBodyState) return &self.statement_var_body;
-        if (Payload == StatementForExprState) return &self.statement_for_expr;
-        if (Payload == StatementForBodyState) return &self.statement_for_body;
-        if (Payload == StatementWhileBodyState) return &self.statement_while_body;
-        if (Payload == StatementTypeAnnoState) return &self.statement_type_anno;
-        if (Payload == StatementTypeDeclAnnoState) return &self.statement_type_decl_anno;
-        if (Payload == TypeDeclAssociatedState) return &self.statement_type_decl_associated;
-        if (Payload == StatementAssociatedStatementState) return &self.statement_type_associated_statement;
-        if (Payload == StatementTypeAnnoAfterWhereState) return &self.where_statement_type_anno;
-        if (Payload == StatementTypeDeclAfterWhereState) return &self.where_statement_type_decl;
-        if (Payload == WhereClauseTypeState) return &self.where_clause_type;
-        if (Payload == PatternStringState) return &self.pattern_string;
-        if (Payload == PatternTagArgsState) return &self.pattern_tag_args;
-        if (Payload == PatternListState) return &self.pattern_list;
-        if (Payload == PatternTupleState) return &self.pattern_tuple;
-        if (Payload == PatternRecordFieldState) return &self.pattern_record_field;
-        if (Payload == TypeApplyState) return &self.type_apply;
-        if (Payload == TypeParenAfterItemState) return &self.type_paren_item;
-        if (Payload == TypeParenFnRetState) return &self.type_paren_fn_ret;
-        if (Payload == TypeZeroArgFnRetState) return &self.type_zero_arg_fn_ret;
-        if (Payload == TypeRecordExtState) return &self.type_record_ext;
-        if (Payload == TypeRecordFieldState) return &self.type_record_field;
-        if (Payload == TypeTagUnionExtState) return &self.type_tag_union_ext;
-        if (Payload == TypeTagUnionItemState) return &self.type_tag_union_item;
-        if (Payload == TypeFnArgsState) return &self.type_fn_arg;
-        if (Payload == TypeFnAfterRetState) return &self.type_fn_ret;
-        @compileError("unsupported expression open syntax payload: " ++ @typeName(Payload));
+        @setEvalBranchQuota(10_000);
+        const Stack = std.ArrayList(Payload);
+        comptime var matches = 0;
+        comptime var stack_field_name: []const u8 = "";
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            if (field.type == Stack) {
+                matches += 1;
+                stack_field_name = field.name;
+            }
+        }
+        if (matches == 0) {
+            @compileError("unsupported expression open syntax payload: " ++ @typeName(Payload));
+        }
+        if (matches > 1) {
+            @compileError("ambiguous expression open syntax payload: " ++ @typeName(Payload));
+        }
+        return &@field(self, stack_field_name);
     }
 
     inline fn peekPayload(self: *OpenSyntaxStack, comptime Payload: type) Payload {
