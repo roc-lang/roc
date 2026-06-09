@@ -431,29 +431,7 @@ pub fn decrefDataPtrC(
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
 
     const data_ptr = @intFromPtr(bytes);
-
-    // Verify original pointer is properly aligned
-    // Use roc_ops.crash() instead of std.debug.panic for WASM compatibility
-    if (comptime builtin.mode == .Debug) {
-        if (data_ptr % @alignOf(usize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "decrefDataPtrC: data_ptr=0x{x} not {d}-byte aligned", .{ data_ptr, @alignOf(usize) }) catch "decrefDataPtrC: alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
-
     const unmasked_ptr = data_ptr & ~tag_mask;
-
-    // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
-        if (unmasked_ptr % @alignOf(isize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "decrefDataPtrC: unmasked=0x{x} (data=0x{x}) not {d}-byte aligned", .{ unmasked_ptr, data_ptr, @alignOf(isize) }) catch "decrefDataPtrC: unmasked alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(unmasked_ptr));
     const rc_ptr = isizes - 1;
@@ -478,16 +456,6 @@ pub fn increfDataPtrC(
     const masked_ptr = ptr & ~tag_mask;
     const rc_addr = masked_ptr - @sizeOf(usize);
 
-    // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
-        if (rc_addr % @alignOf(isize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: rc_addr=0x{x} (ptr=0x{x}, masked=0x{x}) is not {d}-byte aligned", .{ rc_addr, ptr, masked_ptr, @alignOf(isize) }) catch "increfDataPtrC: rc_addr alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
-
     const isizes: *isize = @as(*isize, @ptrFromInt(rc_addr));
     return increfRcPtrC(isizes, inc_amount, roc_ops);
 }
@@ -506,16 +474,6 @@ pub fn freeDataPtrC(
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
-
-    // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
-        if (masked_ptr % @alignOf(isize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "freeDataPtrC: masked_ptr=0x{x} (ptr=0x{x}) is not {d}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) }) catch "freeDataPtrC: alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
@@ -649,23 +607,13 @@ inline fn decref_ptr_to_refcount(
 /// Handles tag bits in the pointer and extracts the reference count
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) bool {
     const bytes = bytes_or_null orelse return true;
 
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
-
-    // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
-        if (masked_ptr % @alignOf(isize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "isUnique: masked_ptr=0x{x} (ptr=0x{x}) is not {d}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) }) catch "isUnique: alignment error";
-            roc_ops.crash(msg);
-            return false;
-        }
-    }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
