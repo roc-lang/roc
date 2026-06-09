@@ -33,6 +33,7 @@ pub const LinkItem = union(enum) {
     win_gui,
 };
 
+/// Optional wasm-specific settings from a target record in a platform header.
 pub const WasmTargetConfig = struct {
     import_memory: bool = false,
     minimum_memory: ?usize = null,
@@ -53,6 +54,7 @@ pub const WasmTargetConfig = struct {
         if (self.global_base_ident) |ident| allocator.free(ident);
     }
 
+    /// Whether any settings still need to be resolved from top-level constants.
     pub fn hasIdentifierBackedValues(self: WasmTargetConfig) bool {
         return self.import_memory_ident != null or
             self.minimum_memory_ident != null or
@@ -62,6 +64,7 @@ pub const WasmTargetConfig = struct {
     }
 };
 
+/// Reason an identifier-backed target config field could not be resolved.
 pub const TargetConfigResolveReason = enum {
     missing_top_level_value,
     not_constant,
@@ -82,6 +85,7 @@ pub const TargetConfigResolveReason = enum {
     }
 };
 
+/// Context for reporting an invalid identifier-backed target config field.
 pub const TargetConfigResolveDiagnostic = struct {
     target: RocTarget,
     link_type: LinkType,

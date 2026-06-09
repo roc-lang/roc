@@ -2344,6 +2344,7 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
     // Table will be set during finalization if table_func_indices are populated.
 }
 
+/// Memory settings used when finalizing a wasm module after code generation.
 pub const FinalMemoryConfig = struct {
     stack_bytes: u32,
     import_memory: bool = false,
@@ -2352,6 +2353,7 @@ pub const FinalMemoryConfig = struct {
     export_memory: bool = true,
 };
 
+/// Set the byte offset where this module's data segments begin.
 pub fn setDataBase(self: *Self, offset: u32) void {
     std.debug.assert(self.data_segments.items.len == 0);
     self.data_offset = offset;
@@ -2368,6 +2370,7 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     try self.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = stack_bytes });
 }
 
+/// Finalize memory and table layout using explicit target configuration.
 pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) Allocator.Error!void {
     // Calculate the highest data segment end address.
     var data_end: u32 = self.data_offset;
