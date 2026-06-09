@@ -123,7 +123,6 @@ const StackPrefixBytes = struct {
 const LayoutStore = layout.Store;
 const wasm_roc_ops_alloc_offset: u32 = 4;
 const wasm_roc_ops_dealloc_offset: u32 = 8;
-const wasm_roc_ops_realloc_offset: u32 = 12;
 const wasm_roc_ops_dbg_offset: u32 = 16;
 const wasm_roc_ops_expect_failed_offset: u32 = 20;
 const wasm_roc_ops_crashed_offset: u32 = 24;

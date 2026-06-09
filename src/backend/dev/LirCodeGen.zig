@@ -703,7 +703,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// debug crash sites in a proc keeps the frame from growing linearly
         /// with the number of debug asserts. Lazily allocated on first use.
         proc_debug_msg_slot: ?i32 = null,
-        proc_debug_args_slot: ?i32 = null,
 
         /// Counter for unique temporary local IDs.
         /// Starts at 0x8000_0000 to avoid collision with real local variables.
@@ -1126,7 +1125,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear any leftover state from compileAllProcSpecs
             self.local_locations.clearRetainingCapacity();
             self.proc_debug_msg_slot = null;
-            self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -11791,7 +11789,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_proc_debug_msg_slot = self.proc_debug_msg_slot;
-            const saved_proc_debug_args_slot = self.proc_debug_args_slot;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
             defer saved_local_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
@@ -11813,7 +11810,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.local_locations.clearRetainingCapacity();
             self.clearFunctionControlFlowState();
             self.proc_debug_msg_slot = null;
-            self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
@@ -11891,7 +11887,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
                 self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
-                self.proc_debug_args_slot = saved_proc_debug_args_slot;
                 // Restore the saved maps by swapping them back into place. This
                 // cannot allocate (so it is safe in an errdefer that cannot
                 // propagate errors): the mutated maps end up in the saved_*
@@ -12086,7 +12081,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
             self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
-            self.proc_debug_args_slot = saved_proc_debug_args_slot;
             self.local_locations.deinit();
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.join_points.deinit();
@@ -13752,12 +13746,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.proc_debug_msg_slot = slot;
                 break :blk slot;
             } else self.codegen.allocStackSlot(effective_size);
-            const args_slot = if (can_share) blk: {
-                if (self.proc_debug_args_slot) |existing| break :blk existing;
-                const slot = self.codegen.allocStackSlot(16);
-                self.proc_debug_args_slot = slot;
-                break :blk slot;
-            } else self.codegen.allocStackSlot(16);
 
             const base_reg = frame_ptr;
             const tmp = try self.allocTempGeneral();
@@ -13778,8 +13766,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
                 }
             }
-
-            _ = args_slot;
 
             // New RocOps callback ABI: callback(ops: *RocOps, bytes: [*]const u8, len: usize).
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));

@@ -23,7 +23,6 @@ const wasm = @import("wasm.zig");
 
 const Store = store_mod.Store;
 const Idx = layout.Idx;
-const Layout = layout.Layout;
 
 /// Which register file a piece of a value travels in.
 pub const RegClass = enum { integer, float };
@@ -208,7 +207,7 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.me
 
 const testing = std.testing;
 
-fn testStruct(store: *Store, field_idxs: []const Idx) !Idx {
+fn testStruct(store: *Store, field_idxs: []const Idx) std.mem.Allocator.Error!Idx {
     var fields: [16]layout.StructField = undefined;
     for (field_idxs, 0..) |field_idx, i| {
         fields[i] = .{ .index = @intCast(i), .layout = field_idx };
@@ -216,7 +215,7 @@ fn testStruct(store: *Store, field_idxs: []const Idx) !Idx {
     return store.putStructFields(fields[0..field_idxs.len]);
 }
 
-fn expectRegisters(expected: []const RegPiece, actual: Placement) !void {
+fn expectRegisters(expected: []const RegPiece, actual: Placement) anyerror!void {
     try testing.expect(actual == .registers);
     try testing.expectEqualSlices(RegPiece, expected, actual.registers);
 }

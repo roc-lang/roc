@@ -1017,26 +1017,337 @@ fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) anyerror!void 
     };
 }
 
-fn interpreterExeCacheName(
-    ctx: *CliCtx,
-    app_path: []const u8,
+fn updateHashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .little);
+    hasher.update(&buf);
+}
+
+fn updateHashBool(hasher: *std.crypto.hash.sha2.Sha256, value: bool) void {
+    hasher.update(if (value) "\x01" else "\x00");
+}
+
+fn updateHashBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+    var len_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, @intCast(bytes.len), .little);
+    hasher.update(&len_buf);
+    hasher.update(bytes);
+}
+
+fn bytesDigest(bytes: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return hasher.finalResult();
+}
+
+fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
+    const file = std.Io.Dir.cwd().openFile(ctx.io.std_io, path, .{}) catch |err| {
+        return ctx.fail(.{ .file_read_failed = .{
+            .path = path,
+            .err = err,
+        } });
+    };
+    defer file.close(ctx.io.std_io);
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var read_buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => {
+                return ctx.fail(.{ .file_read_failed = .{
+                    .path = path,
+                    .err = err,
+                } });
+            },
+        };
+        if (bytes_read == 0) break;
+        hasher.update(read_buf[0..bytes_read]);
+    }
+    return hasher.finalResult();
+}
+
+fn platformHostShimIdentity(target: RocTarget, entrypoint_names: []const []const u8, debug: bool) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-platform-host-shim-v1");
+    updateHashBytes(&hasher, target.toTriple());
+    updateHashBool(&hasher, debug);
+    updateHashU32(&hasher, @intCast(entrypoint_names.len));
+    for (entrypoint_names) |name| {
+        updateHashBytes(&hasher, name);
+    }
+    return hasher.finalResult();
+}
+
+const HostedCacheEntry = struct {
+    module_key: [32]u8,
+    order_key: []const u8,
+    external_symbol_name: []const u8,
+    def_idx: u32,
+    deterministic_index: u32,
+};
+
+fn checkedModuleKeySeen(seen_keys: []const [32]u8, key: [32]u8) bool {
+    for (seen_keys) |seen_key| {
+        if (std.mem.eql(u8, &seen_key, &key)) return true;
+    }
+    return false;
+}
+
+fn appendHostedCacheEntriesFromView(
+    allocator: Allocator,
+    entries: *std.ArrayList(HostedCacheEntry),
+    seen_keys: *std.ArrayList([32]u8),
+    view: check.CheckedArtifact.ImportedModuleView,
+) Allocator.Error!void {
+    if (checkedModuleKeySeen(seen_keys.items, view.key.bytes)) return;
+    try seen_keys.append(allocator, view.key.bytes);
+
+    for (view.hosted_procs.procs) |proc| {
+        try entries.append(allocator, .{
+            .module_key = view.key.bytes,
+            .order_key = proc.order_key,
+            .external_symbol_name = view.canonical_names.externalSymbolNameText(proc.external_symbol_name),
+            .def_idx = @intFromEnum(proc.def_idx),
+            .deterministic_index = proc.deterministic_index,
+        });
+    }
+}
+
+fn checkedInterpreterHostIdentity(
+    allocator: Allocator,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    entrypoint_names: []const []const u8,
+    target_usize: base.target.TargetUsize,
+) Allocator.Error![32]u8 {
+    var hosted_entries = std.ArrayList(HostedCacheEntry).empty;
+    defer hosted_entries.deinit(allocator);
+    var seen_keys = std.ArrayList([32]u8).empty;
+    defer seen_keys.deinit(allocator);
+
+    try appendHostedCacheEntriesFromView(
+        allocator,
+        &hosted_entries,
+        &seen_keys,
+        check.CheckedArtifact.importedView(root_artifact),
+    );
+    for (imported_artifacts) |view| {
+        try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
+    }
+    for (relation_artifacts) |view| {
+        try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
+    }
+
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
+            return switch (std.mem.order(u8, a.order_key, b.order_key)) {
+                .lt => true,
+                .gt => false,
+                .eq => if (a.def_idx != b.def_idx)
+                    a.def_idx < b.def_idx
+                else
+                    std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
+            };
+        }
+    };
+    std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-checked-host-interface-v1");
+    updateHashU32(&hasher, @intFromEnum(target_usize));
+
+    const declarations_hash = root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names);
+    hasher.update(&declarations_hash);
+
+    updateHashU32(&hasher, @intCast(entrypoint_names.len));
+    for (entrypoint_names) |name| {
+        updateHashBytes(&hasher, name);
+    }
+
+    updateHashU32(&hasher, @intCast(hosted_entries.items.len));
+    for (hosted_entries.items, 0..) |entry, dispatch_index| {
+        updateHashU32(&hasher, @intCast(dispatch_index));
+        hasher.update(&entry.module_key);
+        updateHashBytes(&hasher, entry.order_key);
+        updateHashBytes(&hasher, entry.external_symbol_name);
+        updateHashU32(&hasher, entry.def_idx);
+        updateHashU32(&hasher, entry.deterministic_index);
+    }
+
+    return hasher.finalResult();
+}
+
+fn updateInterpreterExeFileLinkInput(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    declared_path: []const u8,
+    resolved_path: []const u8,
+    content_digest: [32]u8,
+) void {
+    updateHashBytes(hasher, "file");
+    updateHashBytes(hasher, declared_path);
+    updateHashBytes(hasher, resolved_path);
+    hasher.update(&content_digest);
+}
+
+fn updateInterpreterExeAppLinkInput(
+    hasher: *std.crypto.hash.sha2.Sha256,
     target: RocTarget,
     entrypoint_names: []const []const u8,
-) (Allocator.Error || error{CliError})![]const u8 {
-    var hash = std.hash.Crc32.init();
-    hash.update("roc-run-lir-shared-memory-v1");
-    hash.update(build_options.compiler_version);
+    debug: bool,
+) void {
+    updateHashBytes(hasher, "app");
     const shim_digest = interpreterShimDigest(target);
-    hash.update(&shim_digest);
-    hash.update(app_path);
-    hash.update(@tagName(target));
-    for (entrypoint_names) |name| {
-        hash.update(&[_]u8{0});
-        hash.update(name);
+    hasher.update(&shim_digest);
+    updateHashBool(hasher, llvm_available);
+    if (llvm_available) {
+        const platform_shim_identity = platformHostShimIdentity(target, entrypoint_names, debug);
+        hasher.update(&platform_shim_identity);
     }
-    return std.fmt.allocPrint(ctx.arena, "roc_{x}", .{hash.final()}) catch |err| {
+}
+
+fn interpreterExeLinkInputsIdentity(
+    ctx: *CliCtx,
+    link_spec: roc_target.TargetLinkSpec,
+    platform_dir: []const u8,
+    files_dir: []const u8,
+    target: RocTarget,
+    entrypoint_names: []const []const u8,
+    debug: bool,
+) (Allocator.Error || CliError)![32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-link-inputs-v1");
+    updateHashBytes(&hasher, @tagName(target));
+
+    const target_name = @tagName(target);
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |file_name| {
+                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, file_name });
+                const content_digest = try fileContentsDigest(ctx, full_path);
+                updateInterpreterExeFileLinkInput(&hasher, file_name, full_path, content_digest);
+            },
+            .app => updateInterpreterExeAppLinkInput(&hasher, target, entrypoint_names, debug),
+            .win_gui => updateHashBytes(&hasher, "win_gui"),
+        }
+    }
+
+    return hasher.finalResult();
+}
+
+const InterpreterExeCacheInputs = struct {
+    target: RocTarget,
+    debug: bool,
+    checked_host_identity: [32]u8,
+    link_inputs_identity: [32]u8,
+};
+
+fn interpreterExeCacheDigest(inputs: InterpreterExeCacheInputs) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-lir-shared-memory-v2");
+    updateHashBytes(&hasher, build_options.compiler_version);
+    updateHashBytes(&hasher, @tagName(inputs.target));
+    updateHashBool(&hasher, inputs.debug);
+    const shim_digest = interpreterShimDigest(inputs.target);
+    hasher.update(&shim_digest);
+    hasher.update(&inputs.checked_host_identity);
+    hasher.update(&inputs.link_inputs_identity);
+    return hasher.finalResult();
+}
+
+fn interpreterExeCacheName(
+    ctx: *CliCtx,
+    inputs: InterpreterExeCacheInputs,
+) (Allocator.Error || error{CliError})![]const u8 {
+    const digest = interpreterExeCacheDigest(inputs);
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    return std.fmt.allocPrint(ctx.arena, "roc_{s}", .{digest_hex[0..]}) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
+}
+
+fn testDigest(byte: u8) [32]u8 {
+    return [_]u8{byte} ** 32;
+}
+
+fn testCacheDigest(checked_host_identity: [32]u8, link_inputs_identity: [32]u8) [32]u8 {
+    return interpreterExeCacheDigest(.{
+        .target = .x64linux,
+        .debug = false,
+        .checked_host_identity = checked_host_identity,
+        .link_inputs_identity = link_inputs_identity,
+    });
+}
+
+fn testLinkInputsIdentityForFiles(
+    first_declared: []const u8,
+    first_resolved: []const u8,
+    first_contents: []const u8,
+    second_declared: []const u8,
+    second_resolved: []const u8,
+    second_contents: []const u8,
+) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-link-inputs-v1");
+    updateHashBytes(&hasher, @tagName(RocTarget.x64linux));
+    updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, bytesDigest(first_contents));
+    updateInterpreterExeFileLinkInput(&hasher, second_declared, second_resolved, bytesDigest(second_contents));
+    return hasher.finalResult();
+}
+
+test "interpreter executable cache digest changes for checked host identity" {
+    const baseline = testCacheDigest(testDigest(1), testDigest(2));
+    const changed = testCacheDigest(testDigest(3), testDigest(2));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &changed));
+}
+
+test "interpreter executable cache digest changes for linked host file contents" {
+    const link_a = testLinkInputsIdentityForFiles(
+        "libhost.a",
+        "/platform/targets/x64linux/libhost.a",
+        "old-host",
+        "libsupport.a",
+        "/platform/targets/x64linux/libsupport.a",
+        "support",
+    );
+    const link_b = testLinkInputsIdentityForFiles(
+        "libhost.a",
+        "/platform/targets/x64linux/libhost.a",
+        "new-host",
+        "libsupport.a",
+        "/platform/targets/x64linux/libsupport.a",
+        "support",
+    );
+    try std.testing.expect(!std.mem.eql(u8, &link_a, &link_b));
+}
+
+test "interpreter executable cache digest changes for declared link order" {
+    const link_a = testLinkInputsIdentityForFiles(
+        "first.a",
+        "/platform/targets/x64linux/first.a",
+        "first",
+        "second.a",
+        "/platform/targets/x64linux/second.a",
+        "second",
+    );
+    const link_b = testLinkInputsIdentityForFiles(
+        "second.a",
+        "/platform/targets/x64linux/second.a",
+        "second",
+        "first.a",
+        "/platform/targets/x64linux/first.a",
+        "first",
+    );
+    try std.testing.expect(!std.mem.eql(u8, &link_a, &link_b));
+}
+
+test "interpreter executable cache digest changes for platform host shim entrypoints" {
+    const entrypoints_a = [_][]const u8{"init!"};
+    const entrypoints_b = [_][]const u8{ "init!", "render!" };
+    const shim_a = platformHostShimIdentity(.x64linux, &entrypoints_a, false);
+    const shim_b = platformHostShimIdentity(.x64linux, &entrypoints_b, false);
+    try std.testing.expect(!std.mem.eql(u8, &shim_a, &shim_b));
 }
 
 fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
@@ -1171,7 +1482,38 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     }
 
     const selected_target = validated_link_spec.target;
-    const exe_cache_name = try interpreterExeCacheName(ctx, args.path, selected_target, entrypoint_names);
+    const enable_debug = builtin.mode == .Debug;
+
+    const checked_host_identity = shm_result.checked_host_identity orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("roc run invariant violated: missing checked host identity after successful LIR image build", .{});
+        }
+        unreachable;
+    };
+
+    const platform_dir = if (platform_paths.platform_source_path) |p|
+        std.fs.path.dirname(p) orelse "."
+    else
+        ".";
+    const files_dir = if (targets_config) |cfg| cfg.files_dir orelse "targets" else "targets";
+    const target_name = @tagName(selected_target);
+
+    const link_inputs_identity = try interpreterExeLinkInputsIdentity(
+        ctx,
+        validated_link_spec,
+        platform_dir,
+        files_dir,
+        selected_target,
+        entrypoint_names,
+        enable_debug,
+    );
+
+    const exe_cache_name = try interpreterExeCacheName(ctx, .{
+        .target = selected_target,
+        .debug = enable_debug,
+        .checked_host_identity = checked_host_identity,
+        .link_inputs_identity = link_inputs_identity,
+    });
     const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
         std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
             return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
@@ -1223,7 +1565,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, null, enable_debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
@@ -1243,16 +1585,6 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         var object_files = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 16) catch {
             return error.OutOfMemory;
         };
-
-        // Get the platform directory for resolving relative paths
-        const platform_dir = if (platform_paths.platform_source_path) |p|
-            std.fs.path.dirname(p) orelse "."
-        else
-            ".";
-
-        // Get files_dir and target name for path resolution
-        const files_dir = if (targets_config) |cfg| cfg.files_dir orelse "targets" else "targets";
-        const target_name = @tagName(validated_link_spec.target);
 
         std.log.debug("Platform dir: {s}, files_dir: {s}, target: {s}", .{ platform_dir, files_dir, target_name });
 
@@ -1852,6 +2184,7 @@ pub const SharedMemoryHandle = struct {
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     entrypoint_names: []const []const u8,
+    checked_host_identity: ?[32]u8,
     error_count: usize,
     warning_count: usize,
 };
@@ -1898,6 +2231,7 @@ fn sharedMemoryResult(
     shm: *SharedMemoryAllocator,
     counts: CoordinatorReportCounts,
     entrypoint_names: []const []const u8,
+    checked_host_identity: ?[32]u8,
 ) SharedMemoryResult {
     return .{
         .handle = .{
@@ -1907,6 +2241,7 @@ fn sharedMemoryResult(
             .mapped_size = shm.total_size,
         },
         .entrypoint_names = entrypoint_names,
+        .checked_host_identity = checked_host_identity,
         .error_count = counts.errors,
         .warning_count = counts.warnings,
     };
@@ -2106,14 +2441,14 @@ pub fn buildLirImageWithCoordinator(
     const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (counts.errors > 0) {
         shm.updateHeader();
-        return sharedMemoryResult(&shm, counts, &.{});
+        return sharedMemoryResult(&shm, counts, &.{}, null);
     }
 
     try coord.finalizeExecutableArtifacts();
     const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
     if (finalized_counts.errors > 0) {
         shm.updateHeader();
-        return sharedMemoryResult(&shm, finalized_counts, &.{});
+        return sharedMemoryResult(&shm, finalized_counts, &.{}, null);
     }
 
     const root_artifact = coord.executableRootCheckedArtifact();
@@ -2136,6 +2471,14 @@ pub fn buildLirImageWithCoordinator(
 
     const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
+    const checked_host_identity = try checkedInterpreterHostIdentity(
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        entrypoint_names,
+        lowered.target_usize,
+    );
 
     try lir.LirImage.fillHeaderInSharedMemory(
         image_header,
@@ -2147,7 +2490,7 @@ pub fn buildLirImageWithCoordinator(
     );
 
     shm.updateHeader();
-    return sharedMemoryResult(&shm, finalized_counts, entrypoint_names);
+    return sharedMemoryResult(&shm, finalized_counts, entrypoint_names, checked_host_identity);
 }
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.

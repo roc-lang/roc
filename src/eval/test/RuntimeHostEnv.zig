@@ -285,8 +285,7 @@ fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyo
     return @ptrCast(alloc_ptr);
 }
 
-fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    _ = alignment;
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     const alloc_ptr = @intFromPtr(ptr);
     const alloc_info = self.allocation_tracker.fetchRemove(alloc_ptr) orelse {

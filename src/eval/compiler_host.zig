@@ -65,8 +65,7 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*an
     return @ptrCast(ptr);
 }
 
-fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    _ = alignment;
+fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
     const removed = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse
         @panic("compiler RocOps deallocated unknown pointer");

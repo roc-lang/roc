@@ -104,7 +104,7 @@ pub fn call(
         gp_n += 1;
     }
 
-    for (lowered.args, arg_layouts, arg_offsets) |placement, arg_layout, arg_offset| {
+    for (lowered.args, arg_offsets) |placement, arg_offset| {
         const value = args_buf + arg_offset;
         switch (placement) {
             .none => {},
@@ -114,7 +114,6 @@ pub fn call(
                 if (gp_n >= max_gp) return Error.TooManyRegisters;
                 gp[gp_n] = @intFromPtr(value);
                 gp_n += 1;
-                _ = arg_layout;
             },
             .registers => |pieces| {
                 for (pieces) |piece| {
@@ -175,7 +174,7 @@ pub fn call(
 fn readUnaligned(comptime T: type, ptr: [*]const u8, size: u8) T {
     var buf: [@sizeOf(T)]u8 = @splat(0);
     @memcpy(buf[0..size], ptr[0..size]);
-    return std.mem.bytesToValue(T, &buf);
+    return @as(*align(1) const T, @ptrCast(&buf)).*;
 }
 
 fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {

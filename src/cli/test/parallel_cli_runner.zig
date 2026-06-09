@@ -196,6 +196,7 @@ const CustomCase = enum {
     glue_zig,
     glue_zig_compiles,
     glue_rust,
+    glue_zig_bang_record_fields,
     glue_c_tests,
 };
 
@@ -452,6 +453,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -536,10 +538,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/int/app.roc" }, .body = .{ .custom = .noop } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build --no-link lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-link", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build executable runs correctly (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=dev executable runs correctly for test/int/app.roc", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "NOT FOUND" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 no-link succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-link", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
@@ -592,6 +596,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test polymorphic list reverse within same module", .body = .{ .command = .{ .args = &.{"test"}, .roc_file = "test/cli/PolymorphicListReverseMod.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9388 List.sort_with top-level expect does not overflow", .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue9388SortWithTopLevelExpect.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9487 static dispatch result compares to tag literal", .skip = .{ .windows = "issue 9487 static dispatch repro is run on POSIX only" }, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue9487StaticDispatchEq.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test eq on tag union with list payload does not panic", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/EqTagWithListPayload.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9392 numeric utility expects are deterministic with no cache", .body = .{ .custom = .issue_9392_deterministic_no_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run issue 9208 open union tag before Exit matches wildcard", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/test_bar_error.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "exited with other error: Bar" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build issue 9435 hosted nominal return builds without mono panic", .body = .{ .custom = .build_issue_9435_hosted_nominal_return } },
@@ -1374,6 +1379,7 @@ fn runCustomCase(
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_bang_record_fields => customGlueZigBangRecordFields(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
 
@@ -1575,15 +1581,15 @@ fn customListBuiltinInlined(
     }
 
     const marker = "Object file generated: ";
-    const marker_idx = std.mem.indexOf(u8, result.stdout, marker) orelse
+    const marker_idx = std.mem.find(u8, result.stdout, marker) orelse
         return customFailure(allocator, timer, "roc build --no-link did not report an object path", .{});
     const after_marker = result.stdout[marker_idx + marker.len ..];
-    const newline = std.mem.indexOfScalar(u8, after_marker, '\n') orelse after_marker.len;
+    const newline = std.mem.findScalar(u8, after_marker, '\n') orelse after_marker.len;
     const obj_path = std.mem.trim(u8, after_marker[0..newline], " \r\t");
 
     const obj_bytes = std.Io.Dir.cwd().readFileAlloc(io, obj_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
         return customInfraFailure(allocator, timer, "failed to read object {s}: {}", .{ obj_path, err });
-    if (std.mem.indexOf(u8, obj_bytes, "roc_builtins_list_append_unsafe") != null) {
+    if (std.mem.find(u8, obj_bytes, "roc_builtins_list_append_unsafe") != null) {
         return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed object (it still references the builtin symbol)", .{});
     }
     return null;
@@ -2112,9 +2118,12 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
     // natural-signature PlatformHostedFns, the register-style RocOps, RocStr, and the
     // HostedFunctions table). Importing the file also runs its comptime size/alignment
     // assertions. Then compile to an object to confirm the generated Zig is well-formed.
-    const test_zig_content =
-        \\const abi = @import("roc_platform_abi.zig");
-        \\export fn _roc_glue_abi_check() void {
+    // The generated ABI file name is interpolated rather than written as a literal import
+    // path so the dead-files lint does not mistake this test fixture for a real import of an
+    // untracked source file.
+    const test_zig_content = std.fmt.allocPrint(allocator,
+        \\const abi = @import("{s}");
+        \\export fn _roc_glue_abi_check() void {{
         \\    var ops: abi.RocOps = undefined;
         \\    var str: abi.RocStr = undefined;
         \\    var funcs: abi.HostedFunctions = undefined;
@@ -2123,8 +2132,9 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         \\    _ = &str;
         \\    _ = &funcs;
         \\    _ = &hosted;
-        \\}
-    ;
+        \\}}
+    , .{"roc_platform_abi.zig"}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
     const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
@@ -2172,11 +2182,163 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
     const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
-    for ([_][]const u8{ "pub const RocStr", "pub const RocOps", "Entrypoint" }) |needle| {
+    for ([_][]const u8{
+        "pub const RocStr",
+        "pub const RocOps",
+        "pub fn increfBox",
+        "pub fn decrefBox",
+        "pub fn decrefBoxWith",
+        "Entrypoint",
+    }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
         }
     }
+    if (customGlueZigBoxHelperTest(io, allocator, env, timer, timeout_ms, output_dir, generated_path)) |failure| return failure;
+    return null;
+}
+
+fn customGlueZigBoxHelperTest(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    output_dir: []const u8,
+    generated_path: []const u8,
+) ?TestResult {
+    const test_source =
+        \\const std = @import("std");
+        \\const abi = @import("abi");
+        \\
+        \\const Env = struct {
+        \\    callback_count: usize = 0,
+        \\    callback_rc: isize = -1,
+        \\    dealloc_count: usize = 0,
+        \\    dealloc_ptr: usize = 0,
+        \\    dealloc_alignment: usize = 0,
+        \\};
+        \\
+        \\fn dummyHostedFn() callconv(.c) void {}
+        \\
+        \\var hosted_fns = [_]abi.HostedFn{@ptrCast(&dummyHostedFn)};
+        \\
+        \\fn rocAlloc(_: *abi.RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        \\    unreachable;
+        \\}
+        \\
+        \\fn rocDealloc(ops: *abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        \\    const env_ref: *Env = @ptrCast(@alignCast(ops.env));
+        \\    env_ref.dealloc_count += 1;
+        \\    env_ref.dealloc_ptr = @intFromPtr(ptr);
+        \\    env_ref.dealloc_alignment = alignment;
+        \\}
+        \\
+        \\fn rocRealloc(_: *abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
+        \\    unreachable;
+        \\}
+        \\
+        \\fn rocDbg(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocExpectFailed(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocCrashed(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\
+        \\fn makeOps(env_ref: *Env) abi.RocOps {
+        \\    return .{
+        \\        .env = @ptrCast(env_ref),
+        \\        .roc_alloc = &rocAlloc,
+        \\        .roc_dealloc = &rocDealloc,
+        \\        .roc_realloc = &rocRealloc,
+        \\        .roc_dbg = &rocDbg,
+        \\        .roc_expect_failed = &rocExpectFailed,
+        \\        .roc_crashed = &rocCrashed,
+        \\        .hosted_fns = .{ .count = 0, .fns = &hosted_fns },
+        \\    };
+        \\}
+        \\
+        \\fn dataPtr(comptime payload_contains_refcounted: bool, backing: *align(16) [64]u8) *anyopaque {
+        \\    const header_bytes = if (payload_contains_refcounted) 2 * @sizeOf(usize) else @sizeOf(usize);
+        \\    const base: [*]u8 = @ptrCast(backing);
+        \\    return @ptrCast(base + header_bytes);
+        \\}
+        \\
+        \\fn refcountPtr(data_ptr: *anyopaque) *isize {
+        \\    return @ptrFromInt(@intFromPtr(data_ptr) - @sizeOf(isize));
+        \\}
+        \\
+        \\fn payloadDrop(data_ptr: ?*anyopaque, roc_ops: *abi.RocOps) callconv(.c) void {
+        \\    const env_ref: *Env = @ptrCast(@alignCast(roc_ops.env));
+        \\    env_ref.callback_count += 1;
+        \\    env_ref.callback_rc = refcountPtr(data_ptr orelse unreachable).*;
+        \\}
+        \\
+        \\test "decrefBoxWith runs payload callback after final atomic decrement" {
+        \\    var env_value = Env{};
+        \\    var ops = makeOps(&env_value);
+        \\    var backing: [64]u8 align(16) = undefined;
+        \\    const ptr = dataPtr(true, &backing);
+        \\
+        \\    refcountPtr(ptr).* = 1;
+        \\    abi.decrefBoxWith(ptr, @alignOf(usize), &payloadDrop, &ops);
+        \\
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.callback_count);
+        \\    try std.testing.expectEqual(@as(isize, 0), env_value.callback_rc);
+        \\    try std.testing.expectEqual(@as(usize, 1), env_value.dealloc_count);
+        \\    try std.testing.expectEqual(@intFromPtr(&backing), env_value.dealloc_ptr);
+        \\    try std.testing.expectEqual(@as(usize, @alignOf(usize)), env_value.dealloc_alignment);
+        \\}
+        \\
+        \\test "isUniqueBox returns false for static refcount" {
+        \\    var env_value = Env{};
+        \\    var ops = makeOps(&env_value);
+        \\    var backing: [64]u8 align(16) = undefined;
+        \\    const ptr = dataPtr(false, &backing);
+        \\
+        \\    refcountPtr(ptr).* = 0;
+        \\
+        \\    try std.testing.expect(!abi.isUniqueBox(ptr));
+        \\    abi.decrefBox(ptr, &ops);
+        \\    try std.testing.expectEqual(@as(usize, 0), env_value.dealloc_count);
+        \\}
+    ;
+
+    const test_path = std.fs.path.join(allocator, &.{ output_dir, "box_helper_test.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig helper test path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_path, .data = test_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write generated Zig helper test: {}", .{err});
+
+    const root_module_arg = std.fmt.allocPrint(allocator, "-Mroot={s}", .{test_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig helper test root module arg: {}", .{err});
+    const abi_module_arg = std.fmt.allocPrint(allocator, "-Mabi={s}", .{generated_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig ABI module arg: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "test", "--dep", "abi", root_module_arg, abi_module_arg }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueZigBangRecordFields(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-bang-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/postcheck/platform_required_init/platform/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
+
+    for ([_][]const u8{ "@\"init!\": *anyopaque", "@\"render!\": *anyopaque" }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{ "    init!:", "    render!:" }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Zig file contained unquoted bang field {s}", .{needle});
+        }
+    }
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "ast-check", generated_path }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 

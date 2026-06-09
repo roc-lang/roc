@@ -11,7 +11,6 @@
 //! classifier covers arm64 macOS, Linux, and Windows.
 
 const std = @import("std");
-const types = @import("types");
 
 const layout = @import("../layout.zig");
 const store_mod = @import("../store.zig");
@@ -142,7 +141,7 @@ fn countFloats(store: *const Store, idx: Idx, maybe_float_bits: *?u16) u8 {
 const testing = std.testing;
 
 /// Build a struct layout from the given field layout indices (in semantic order).
-fn testStruct(store: *Store, field_idxs: []const Idx) !Idx {
+fn testStruct(store: *Store, field_idxs: []const Idx) std.mem.Allocator.Error!Idx {
     var fields: [16]layout.StructField = undefined;
     for (field_idxs, 0..) |field_idx, i| {
         fields[i] = .{ .index = @intCast(i), .layout = field_idx };

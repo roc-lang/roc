@@ -12,7 +12,6 @@
 //! branches present in the upstream code.
 
 const std = @import("std");
-const types = @import("types");
 
 const layout = @import("../layout.zig");
 const store_mod = @import("../store.zig");
@@ -125,8 +124,8 @@ pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
                 .opaque_ptr => return Class.one_integer,
                 .int => return integerAggregateSysV(size),
                 .frac => switch (scalar.getFrac()) {
-                    .f32 => return Class.@"f32",
-                    .f64 => return Class.@"f64",
+                    .f32 => return Class.f32,
+                    .f64 => return Class.f64,
                     .dec => return Class.two_integers, // i128-backed
                 },
                 // RocStr: three integer eightbytes -> exceeds 16 bytes -> memory.
@@ -198,9 +197,8 @@ fn classifyMemberSysV(store: *const Store, result: *[8]Class, offset: u32, idx: 
         .struct_, .tag_union, .closure => classifyAggregateSysV(store, result, offset, idx),
         else => {
             const member = classifySystemV(store, idx, .other);
-            const len = std.mem.indexOfScalar(Class, &member, .none) orelse member.len;
             var j: usize = 0;
-            while (j < len) : (j += 1) {
+            while (j < member.len and member[j] != .none) : (j += 1) {
                 combineInto(result, offset / 8 + j, member[j]);
             }
         },
@@ -225,8 +223,12 @@ fn finishSystemV(result_in: [8]Class, size: u32) [8]Class {
 
     // "If the size of the aggregate exceeds two eightbytes and the first eightbyte isn't SSE
     // or any other eightbyte isn't SSEUP, the whole argument is passed in memory."
-    if (size > 16 and (result[0] != .sse or
-        std.mem.indexOfNone(Class, result[1..], &.{ .sseup, .none }) != null)) return Class.stack;
+    if (size > 16) {
+        if (result[0] != .sse) return Class.stack;
+        for (result[1..]) |class| {
+            if (class != .sseup and class != .none) return Class.stack;
+        }
+    }
 
     // "If SSEUP is not preceded by SSE or SSEUP, it is converted to SSE."
     for (&result, 0..) |*item, i| {
@@ -240,7 +242,7 @@ fn finishSystemV(result_in: [8]Class, size: u32) [8]Class {
 
 const testing = std.testing;
 
-fn testStruct(store: *Store, field_idxs: []const Idx) !Idx {
+fn testStruct(store: *Store, field_idxs: []const Idx) std.mem.Allocator.Error!Idx {
     var fields: [16]layout.StructField = undefined;
     for (field_idxs, 0..) |field_idx, i| {
         fields[i] = .{ .index = @intCast(i), .layout = field_idx };
@@ -257,8 +259,8 @@ test "x86_64 SysV: scalars" {
     try testing.expectEqual(Class.two_integers, classifySystemV(&store, .i128, .arg));
     try testing.expectEqual(Class.two_integers, classifySystemV(&store, .dec, .arg));
     try testing.expectEqual(Class.one_integer, classifySystemV(&store, .opaque_ptr, .arg));
-    try testing.expectEqual(Class.@"f32", classifySystemV(&store, .f32, .arg));
-    try testing.expectEqual(Class.@"f64", classifySystemV(&store, .f64, .arg));
+    try testing.expectEqual(Class.f32, classifySystemV(&store, .f32, .arg));
+    try testing.expectEqual(Class.f64, classifySystemV(&store, .f64, .arg));
 }
 
 test "x86_64 SysV: Plant and other small structs use registers" {

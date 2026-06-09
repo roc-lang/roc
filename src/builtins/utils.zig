@@ -187,8 +187,7 @@ pub const TestEnv = struct {
         return result;
     }
 
-    fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-        _ = alignment;
+    fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         if (self.allocation_map.fetchRemove(ptr)) |entry| {
@@ -209,8 +208,7 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-        _ = alignment;
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) ?*anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Look up the old allocation

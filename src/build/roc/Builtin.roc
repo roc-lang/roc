@@ -475,7 +475,9 @@ Builtin :: [].{
 		## Returns the iterator's length if it is known up front, so collections
 		## can pre-size their allocation.
 		size_hint : Iter(item) -> [Known(U64), Unknown]
-		size_hint = |iterator| match iterator { { len_if_known, .. } => len_if_known }
+		size_hint = |iterator| match iterator {
+			{ len_if_known, .. } => len_if_known
+		}
 
 		## Collect this iterator into any output type that provides `from_iter`.
 		collect : Iter(item) -> output
@@ -614,6 +616,7 @@ Builtin :: [].{
 		len_if_known : [Known(U64), Unknown],
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 	}.{
+
 		## Lift a pure [Iter] into a [Stream]. The lifted steps do no effect themselves,
 		## but the stream can then be combined with effectful operations like [Stream.map].
 		## Carries the source's length forward so [Stream.collect!] can pre-size.
@@ -663,11 +666,15 @@ Builtin :: [].{
 
 		## Advance the stream by one step.
 		next! : Stream(item) => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]
-		next! = |stream| match stream { { step!, .. } => step!() }
+		next! = |stream| match stream {
+			{ step!, .. } => step!()
+		}
 
 		## Returns the stream's length if it is known up front.
 		size_hint : Stream(item) -> [Known(U64), Unknown]
-		size_hint = |stream| match stream { { len_if_known, .. } => len_if_known }
+		size_hint = |stream| match stream {
+			{ len_if_known, .. } => len_if_known
+		}
 
 		## Drive the stream to completion with an explicit loop, collecting its items
 		## into a [List] (pre-sized from `len_if_known` when known).
@@ -799,7 +806,7 @@ Builtin :: [].{
 				match List.first(list) {
 					Ok(pivot) => {
 						rest = List.drop_first(list, 1)
-						less_or_equal =
+						less_or_equal = 
 							List.keep_if(
 								rest,
 								|item|
@@ -809,7 +816,7 @@ Builtin :: [].{
 										GT => False
 									},
 							)
-						greater =
+						greater = 
 							List.keep_if(
 								rest,
 								|item|

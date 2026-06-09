@@ -10,7 +10,6 @@
 //! passed indirectly through a pointer.
 
 const std = @import("std");
-const types = @import("types");
 
 const layout = @import("../layout.zig");
 const store_mod = @import("../store.zig");
@@ -76,7 +75,7 @@ pub fn lowerAsDoubleI64(store: *const Store, idx: Idx) bool {
 
 const testing = std.testing;
 
-fn testStruct(store: *Store, field_idxs: []const Idx) !Idx {
+fn testStruct(store: *Store, field_idxs: []const Idx) std.mem.Allocator.Error!Idx {
     var fields: [16]layout.StructField = undefined;
     for (field_idxs, 0..) |field_idx, i| {
         fields[i] = .{ .index = @intCast(i), .layout = field_idx };

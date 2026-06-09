@@ -358,7 +358,6 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         }
     }
 
-
     // 5. Create target
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
