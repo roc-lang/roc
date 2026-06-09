@@ -4775,7 +4775,8 @@ fn runExprStatementKernel(
             .DoubleDot => {
                 const double_dot_pos = self.pos;
                 self.advance();
-                if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                const ext_tok = self.peek();
+                if (ext_tok == .LowerIdent or ext_tok == .NamedUnderscore) {
                     try open_syntax.pushType(open_allocator, .type_tag_union_ext, TypeTagUnionExtState, .{
                         .start = type_tag_union_state.start,
                         .scratch_top = type_tag_union_state.scratch_top,
