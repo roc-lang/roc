@@ -104,6 +104,7 @@ pub const Output = struct {
     }
 };
 
+/// Options used by solved-to-LIR lowering.
 pub const Options = struct {
     inline_plan: SolvedInline.Plan = .{},
 };

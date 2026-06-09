@@ -1,3 +1,5 @@
+//! Structural LIR tests for post-check wrapper inlining.
+
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
@@ -22,7 +24,7 @@ fn lowerModule(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-) !LoweredSource {
+) anyerror!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -60,7 +62,7 @@ fn lowerModule(
     };
 }
 
-fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) !LIR.LirProcSpecId {
+fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) anyerror!LIR.LirProcSpecId {
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
     return lowered.lir_result.root_procs.items[0];
 }
@@ -69,7 +71,7 @@ fn collectAssignCallProcs(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     proc_id: LIR.LirProcSpecId,
-) ![]LIR.LirProcSpecId {
+) anyerror![]LIR.LirProcSpecId {
     const proc = lowered.lir_result.store.getProcSpec(proc_id);
     const body = proc.body orelse return allocator.alloc(LIR.LirProcSpecId, 0);
 
@@ -133,7 +135,7 @@ fn collectAssignCallProcs(
 fn rootDirectCallTarget(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) !LIR.LirProcSpecId {
+) anyerror!LIR.LirProcSpecId {
     const root = try rootProc(lowered);
     const root_calls = try collectAssignCallProcs(allocator, lowered, root);
     defer allocator.free(root_calls);
@@ -146,7 +148,7 @@ fn expectRootTargetCallCount(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
     expected: usize,
-) !void {
+) anyerror!void {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator, source, inline_mode);
     defer lowered_source.deinit(allocator);
@@ -161,7 +163,7 @@ fn expectRootTargetCallCount(
 fn expectRootTargetHasCalls(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-) !void {
+) anyerror!void {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator, source, inline_mode);
     defer lowered_source.deinit(allocator);

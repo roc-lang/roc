@@ -7,11 +7,13 @@ const Lifted = @import("monotype_lifted/ast.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 
+/// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
     direct_call_wrappers,
 };
 
+/// Immutable inline eligibility table consumed by later lowering stages.
 pub const Plan = struct {
     inline_bodies: []const ?Lifted.ExprId = &.{},
 
@@ -26,6 +28,7 @@ pub const Plan = struct {
     }
 };
 
+/// Allocator-owned storage for a post-check inline plan.
 pub const OwnedPlan = struct {
     allocator: std.mem.Allocator,
     inline_bodies: []?Lifted.ExprId,
@@ -44,6 +47,7 @@ pub const OwnedPlan = struct {
     }
 };
 
+/// Analyze a Lambda Solved program and produce explicit inline decisions.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
