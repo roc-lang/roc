@@ -18,6 +18,14 @@ pub const aarch64 = @import("aarch64.zig");
 pub const x86_64 = @import("x86_64.zig");
 pub const wasm = @import("wasm.zig");
 
+pub const call = @import("call.zig");
+pub const LoweredCall = call.LoweredCall;
+pub const Placement = call.Placement;
+pub const RegPiece = call.RegPiece;
+pub const RegClass = call.RegClass;
+pub const Target = call.Target;
+pub const lower = call.lower;
+
 /// Whether a hosted function with these argument and return layouts must be passed a leading
 /// `*RocOps` — i.e. whether it could allocate or free Roc-managed memory. True exactly when
 /// its return type or any argument type transitively contains a heap-allocated (refcounted)
@@ -40,6 +48,7 @@ test {
     std.testing.refAllDecls(aarch64);
     std.testing.refAllDecls(x86_64);
     std.testing.refAllDecls(wasm);
+    std.testing.refAllDecls(call);
 }
 
 test "needsRocOps: flat scalars and structs do not need ops" {
