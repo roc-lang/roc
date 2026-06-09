@@ -17,6 +17,10 @@ pub const Program = core.Program;
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.
 pub const Arc = @import("arc.zig");
+/// ARC-stage per-proc ownership signatures.
+pub const ArcSig = @import("arc_sig.zig");
+/// Debug borrow certifier for ARC-complete LIR.
+pub const ArcCertify = @import("arc_certify.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
 
@@ -66,5 +70,7 @@ test "lir tests" {
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(Arc);
+    std.testing.refAllDecls(ArcSig);
+    std.testing.refAllDecls(ArcCertify);
     std.testing.refAllDecls(LirImage);
 }

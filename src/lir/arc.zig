@@ -6,9 +6,13 @@
 //! reference-counting analysis.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const arc_sig = @import("arc_sig.zig");
+const arc_solve = @import("arc_solve.zig");
+const arc_certify = @import("arc_certify.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -27,6 +31,14 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
         local_contains_refcounted[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
     inserter.local_contains_refcounted = local_contains_refcounted;
+
+    var solution = try arc_solve.solve(store.allocator, store, local_contains_refcounted);
+    defer solution.deinit();
+    inserter.solution = &solution;
+
+    var scan_needles = try OwnedSet.init(store.allocator, store.locals.items.len);
+    defer scan_needles.deinit();
+    inserter.scan_needles = &scan_needles;
 
     for (store.proc_specs.items) |*proc| {
         const body = proc.body orelse continue;
@@ -52,6 +64,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
         }
         proc.body = try inserter.rewritePath(body, &owned, .{});
         try inserter.writeProcJoinPoints(proc);
+    }
+
+    if (builtin.mode == .Debug) {
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, arc_sig.SigTable.all_owned);
     }
 }
 
@@ -126,12 +142,26 @@ const LinearRewriteFrame = struct {
     head: LIR.CFStmtId,
     retain_assign_ref_target: bool = true,
     retain_set_target: bool = true,
+    /// Span-indexed operand positions whose ownership unit moves into the
+    /// constructed value instead of being retained.
+    transfer_mask: u64 = 0,
+    /// Move the tag payload or packed capture instead of retaining it.
+    transfer_single: bool = false,
+    /// Skip the low-level retain_result incref: the result binding is
+    /// borrowed and emits no RC statements.
+    skip_result_retain: bool = false,
+    /// Locals whose lifetime ends at this statement; released right after it.
+    /// Owned by the frame and freed when the frame is patched or destroyed.
+    post_release: []const LIR.LocalId = &.{},
 };
 
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
+    solution: *const arc_solve.Solution = undefined,
+    /// Scratch needle set reused by liveness-group scans.
+    scan_needles: *OwnedSet = undefined,
     join_bodies: ?*const JoinBodyMap = null,
     rewritten_joins: ?*RewrittenJoinMap = null,
 
@@ -292,7 +322,13 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     var retain_assign_ref_target = true;
-                    switch (assign.op) {
+                    const target_borrowed = self.solution.isBorrowed(assign.target);
+                    if (target_borrowed) {
+                        // Borrowed bindings carry no ownership unit and emit
+                        // no RC statements; the lender's liveness group keeps
+                        // the value alive across every use.
+                        retain_assign_ref_target = false;
+                    } else switch (assign.op) {
                         .local => |source| {
                             if (assign.target != source) {
                                 const move_value = try self.canMoveSetLocalValue(&path.owned, source, assign.next, path.options.loop_keep);
@@ -311,17 +347,30 @@ const Inserter = struct {
                             self.addOwnedIfRc(&path.owned, assign.target);
                         },
                     }
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .retain_assign_ref_target = retain_assign_ref_target,
+                        .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
                 },
                 .assign_literal => |assign| {
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
@@ -333,7 +382,15 @@ const Inserter = struct {
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
@@ -346,13 +403,34 @@ const Inserter = struct {
                     self.addOwnedIfRc(&path.owned, assign.target);
                     current_start = try self.retainLocalIfRc(assign.closure, current_start);
                     current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.closure, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
+                    var transfer_single = false;
+                    if (assign.capture) |capture| {
+                        transfer_single = try self.singleTransfer(capture, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    }
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_low_level => |assign| {
@@ -375,29 +453,78 @@ const Inserter = struct {
                     if (assign.rc_effect.consume_args != 0) {
                         self.unsetMaskedArgsExcept(&path.owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
                     }
+                    // Retained positions whose group dies here move their
+                    // unit into the result instead of paying a retain.
+                    var transfer_mask: u64 = 0;
+                    if (assign.rc_effect.retain_args != 0) {
+                        transfer_mask = try self.spanTransferMask(assign.args, assign.rc_effect.retain_args, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     if (assign.rc_effect.consume_args != 0) {
                         current_start = try self.retainMaskedArgs(assign.args, preserve_consumed_args, current_start);
                     }
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_mask = transfer_mask,
+                        .skip_result_retain = self.solution.isBorrowed(assign.target),
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_list => |assign| {
+                    const transfer_mask = try self.spanTransferMask(assign.elems, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.elems, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_mask = transfer_mask,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
+                    const transfer_mask = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.options.loop_keep);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.fields, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_mask = transfer_mask,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .assign_tag => |assign| {
+                    var transfer_single = false;
+                    if (assign.payload) |payload| {
+                        transfer_single = try self.singleTransfer(payload, assign.next, assign.target, &path.owned, path.options.loop_keep);
+                    }
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .transfer_single = transfer_single,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = assign.next;
                 },
                 .set_local => |assign| {
@@ -414,19 +541,40 @@ const Inserter = struct {
                         }
                         self.addOwnedIfRc(&path.owned, assign.target);
                     }
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{ assign.value, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
                         .retain_set_target = retain_set_target,
+                        .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{debug_stmt.message};
+                    try self.postStmtDeaths(&path.owned, &singles, null, debug_stmt.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = debug_stmt.next;
                 },
                 .expect => |expect_stmt| {
-                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    var deaths: std.ArrayList(LIR.LocalId) = .empty;
+                    errdefer deaths.deinit(self.store.allocator);
+                    const singles = [_]LIR.LocalId{expect_stmt.condition};
+                    try self.postStmtDeaths(&path.owned, &singles, null, expect_stmt.next, path.options.loop_keep, &deaths);
+                    try path.frames.append(self.store.allocator, .{
+                        .stmt = path.cursor,
+                        .head = current_start,
+                        .post_release = try self.takePostReleases(&deaths),
+                    });
                     path.cursor = expect_stmt.next;
                 },
                 .incref => |rc| {
@@ -486,8 +634,15 @@ const Inserter = struct {
                 },
                 .ret => |ret_stmt| {
                     var tail = path.cursor;
-                    tail = try self.releaseAll(&path.owned, tail);
-                    tail = try self.retainLocalIfRc(ret_stmt.value, tail);
+                    if (path.owned.contains(ret_stmt.value)) {
+                        // Move on return: the binding's own unit transfers to
+                        // the caller; no retain/release pair is needed.
+                        path.owned.unset(ret_stmt.value);
+                        tail = try self.releaseAll(&path.owned, tail);
+                    } else {
+                        tail = try self.releaseAll(&path.owned, tail);
+                        tail = try self.retainLocalIfRc(ret_stmt.value, tail);
+                    }
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
                     self.destroyRewritePath(path);
                     return;
@@ -522,6 +677,19 @@ const Inserter = struct {
         const stmt = self.store.getCFStmt(frame.stmt);
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
+
+        // Lifetime-ending releases come right after the statement and its
+        // own retains.
+        {
+            var i = frame.post_release.len;
+            while (i > 0) {
+                i -= 1;
+                next = try self.releaseLocalIfRc(frame.post_release[i], next);
+            }
+            if (frame.post_release.len != 0) {
+                self.store.allocator.free(frame.post_release);
+            }
+        }
         switch (stmt) {
             .assign_ref => |assign| {
                 if (frame.retain_assign_ref_target) {
@@ -559,7 +727,9 @@ const Inserter = struct {
             },
             .assign_packed_erased_fn => |assign| {
                 if (assign.capture) |capture| {
-                    next = try self.retainLocalIfRc(capture, next);
+                    if (!frame.transfer_single) {
+                        next = try self.retainLocalIfRc(capture, next);
+                    }
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = assign.target,
@@ -572,9 +742,9 @@ const Inserter = struct {
             },
             .assign_low_level => |assign| {
                 if (assign.rc_effect.retain_args != 0) {
-                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args, next);
+                    next = try self.retainMaskedArgs(assign.args, assign.rc_effect.retain_args & ~frame.transfer_mask, next);
                 }
-                if (assign.rc_effect.retain_result) {
+                if (assign.rc_effect.retain_result and !frame.skip_result_retain) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_low_level = .{
@@ -586,7 +756,7 @@ const Inserter = struct {
                 } });
             },
             .assign_list => |assign| {
-                next = try self.retainSpan(assign.elems, next);
+                next = try self.retainSpanExcept(assign.elems, frame.transfer_mask, next);
                 cloned = try self.store.addCFStmt(.{ .assign_list = .{
                     .target = assign.target,
                     .elems = assign.elems,
@@ -594,7 +764,7 @@ const Inserter = struct {
                 } });
             },
             .assign_struct => |assign| {
-                next = try self.retainSpan(assign.fields, next);
+                next = try self.retainSpanExcept(assign.fields, frame.transfer_mask, next);
                 cloned = try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = assign.target,
                     .fields = assign.fields,
@@ -603,7 +773,9 @@ const Inserter = struct {
             },
             .assign_tag => |assign| {
                 if (assign.payload) |payload| {
-                    next = try self.retainLocalIfRc(payload, next);
+                    if (!frame.transfer_single) {
+                        next = try self.retainLocalIfRc(payload, next);
+                    }
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
@@ -1016,20 +1188,26 @@ const Inserter = struct {
             const stmt = self.store.getCFStmt(path.cursor);
             switch (stmt) {
                 .assign_ref => |assign| {
-                    switch (assign.op) {
-                        .local => |source| {
-                            if (assign.target != source) {
-                                const move_value = try self.canMoveSetLocalValue(&path.owned, source, assign.next, path.loop_keep);
-                                if (move_value) path.owned.unset(source);
-                                self.addOwnedIfRc(&path.owned, assign.target);
-                            }
-                        },
-                        else => self.addOwnedIfRc(&path.owned, assign.target),
+                    if (!self.solution.isBorrowed(assign.target)) {
+                        switch (assign.op) {
+                            .local => |source| {
+                                if (assign.target != source) {
+                                    const move_value = try self.canMoveSetLocalValue(&path.owned, source, assign.next, path.loop_keep);
+                                    if (move_value) path.owned.unset(source);
+                                    self.addOwnedIfRc(&path.owned, assign.target);
+                                }
+                            },
+                            else => self.addOwnedIfRc(&path.owned, assign.target),
+                        }
                     }
+                    const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_literal => |assign| {
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
@@ -1037,6 +1215,8 @@ const Inserter = struct {
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
@@ -1044,10 +1224,17 @@ const Inserter = struct {
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.closure, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
+                    if (assign.capture) |capture| {
+                        _ = try self.singleTransfer(capture, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_low_level => |assign| {
@@ -1063,19 +1250,35 @@ const Inserter = struct {
                         path.owned.unset(assign.target);
                     }
                     self.unsetMaskedArgsExcept(&path.owned, assign.args, assign.rc_effect.consume_args & ~preserve_consumed_args, assign.target);
+                    if (assign.rc_effect.retain_args != 0) {
+                        _ = try self.spanTransferMask(assign.args, assign.rc_effect.retain_args, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_list => |assign| {
+                    _ = try self.spanTransferMask(assign.elems, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep);
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.elems, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
+                    _ = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.target, &path.owned, path.loop_keep);
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&path.owned, &singles, assign.fields, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_tag => |assign| {
+                    if (assign.payload) |payload| {
+                        _ = try self.singleTransfer(payload, assign.next, assign.target, &path.owned, path.loop_keep);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .set_local => |assign| {
@@ -1088,10 +1291,20 @@ const Inserter = struct {
                         if (move_value) path.owned.unset(assign.value);
                     }
                     self.addOwnedIfRc(&path.owned, assign.target);
+                    const singles = [_]LIR.LocalId{ assign.value, assign.target };
+                    try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
-                .debug => |debug_stmt| path.cursor = debug_stmt.next,
-                .expect => |expect_stmt| path.cursor = expect_stmt.next,
+                .debug => |debug_stmt| {
+                    const singles = [_]LIR.LocalId{debug_stmt.message};
+                    try self.postStmtDeaths(&path.owned, &singles, null, debug_stmt.next, path.loop_keep, null);
+                    path.cursor = debug_stmt.next;
+                },
+                .expect => |expect_stmt| {
+                    const singles = [_]LIR.LocalId{expect_stmt.condition};
+                    try self.postStmtDeaths(&path.owned, &singles, null, expect_stmt.next, path.loop_keep, null);
+                    path.cursor = expect_stmt.next;
+                },
                 .incref => |rc| {
                     self.addOwnedIfRc(&path.owned, rc.value);
                     path.cursor = rc.next;
@@ -1178,14 +1391,23 @@ const Inserter = struct {
         }
     }
 
+    fn destroyFrames(self: *Inserter, frames: *std.ArrayList(LinearRewriteFrame)) void {
+        for (frames.items) |frame| {
+            if (frame.post_release.len != 0) {
+                self.store.allocator.free(frame.post_release);
+            }
+        }
+        frames.deinit(self.store.allocator);
+    }
+
     fn destroyRewritePath(self: *Inserter, path: *RewritePathTask) void {
-        path.frames.deinit(self.store.allocator);
+        self.destroyFrames(&path.frames);
         path.owned.deinit();
         self.store.allocator.destroy(path);
     }
 
     fn destroyRewriteJoin(self: *Inserter, state: *RewriteJoinTask) void {
-        state.frames.deinit(self.store.allocator);
+        self.destroyFrames(&state.frames);
         if (state.join_keeps.len != 0) self.store.allocator.free(state.join_keeps);
         state.incoming_owned.deinit();
         state.entry_keep.deinit();
@@ -1194,13 +1416,13 @@ const Inserter = struct {
     }
 
     fn destroyRewriteSwitchNoContinuation(self: *Inserter, state: *RewriteSwitchNoContinuationTask) void {
-        state.frames.deinit(self.store.allocator);
+        self.destroyFrames(&state.frames);
         self.store.allocator.free(state.branch_results);
         self.store.allocator.destroy(state);
     }
 
     fn destroyRewriteSwitchContinuation(self: *Inserter, state: *RewriteSwitchContinuationTask) void {
-        state.frames.deinit(self.store.allocator);
+        self.destroyFrames(&state.frames);
         state.entry_owned.deinit();
         state.common.deinit();
         if (state.nested_boundaries.len != 0) self.store.allocator.free(state.nested_boundaries);
@@ -1227,7 +1449,9 @@ const Inserter = struct {
     }
 
     fn addOwnedIfRc(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
-        if (self.localContainsRefcounted(local)) owned.set(local);
+        if (!self.localContainsRefcounted(local)) return;
+        if (self.solution.isBorrowed(local)) return;
+        owned.set(local);
     }
 
     fn joinBodyOwnedSet(
@@ -1241,7 +1465,7 @@ const Inserter = struct {
         var iter = entry_owned.bits.iterator(.{});
         while (iter.next()) |i| {
             const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
-            if (try self.localValueUsedInPath(body, local, null)) {
+            if (try self.groupUsedInPath(body, local, null)) {
                 owned.set(local);
             }
         }
@@ -1261,11 +1485,105 @@ const Inserter = struct {
         var iter = entry_owned.bits.iterator(.{});
         while (iter.next()) |i| {
             const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
-            if (try self.localValueUsedInPath(remainder, local, null)) {
+            if (try self.groupUsedInPath(remainder, local, null)) {
                 owned.set(local);
             }
         }
         return owned;
+    }
+
+    /// Computes which operand positions in `span` (restricted to
+    /// `position_mask`) can move their ownership unit into the value being
+    /// constructed: the operand is owned and its liveness group has no use
+    /// after this statement. Transferred operands leave the owned set.
+    fn spanTransferMask(
+        self: *Inserter,
+        span: LIR.LocalSpan,
+        position_mask: u64,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+        owned: *OwnedSet,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!u64 {
+        var transfer: u64 = 0;
+        const locals = self.store.getLocalSpan(span);
+        for (locals, 0..) |local, i| {
+            if (i >= 64) break;
+            const bit = argMaskBit(i);
+            if ((position_mask & bit) == 0) continue;
+            if (local == target) continue;
+            if (!self.localContainsRefcounted(local)) continue;
+            if (!owned.contains(local)) continue;
+            if (try self.groupUsedInPath(next, local, loop_keep)) continue;
+            owned.unset(local);
+            transfer |= bit;
+        }
+        return transfer;
+    }
+
+    /// Single-operand variant of `spanTransferMask` for tag payloads and
+    /// packed captures.
+    fn singleTransfer(
+        self: *Inserter,
+        local: LIR.LocalId,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+        owned: *OwnedSet,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
+        if (local == target) return false;
+        if (!self.localContainsRefcounted(local)) return false;
+        if (!owned.contains(local)) return false;
+        if (try self.groupUsedInPath(next, local, loop_keep)) return false;
+        owned.unset(local);
+        return true;
+    }
+
+    /// Releases every owned operand whose liveness group has no use after
+    /// this statement, returning the list for emission right after the
+    /// statement. When `collected` is null the deaths only leave the owned
+    /// set (analysis mirror).
+    fn postStmtDeaths(
+        self: *Inserter,
+        owned: *OwnedSet,
+        singles: []const LIR.LocalId,
+        span: ?LIR.LocalSpan,
+        next: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+        collected: ?*std.ArrayList(LIR.LocalId),
+    ) ResourceError!void {
+        for (singles) |local| {
+            try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
+        }
+        if (span) |operand_span| {
+            for (self.store.getLocalSpan(operand_span)) |local| {
+                try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
+            }
+        }
+    }
+
+    fn noteDeathIfUnused(
+        self: *Inserter,
+        owned: *OwnedSet,
+        local: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+        collected: ?*std.ArrayList(LIR.LocalId),
+    ) ResourceError!void {
+        // A borrowed operand's lifetime event belongs to its owning leader:
+        // the leader dies when no group member has a later use.
+        const owner = self.solution.leaderOf(local);
+        if (!owned.contains(owner)) return;
+        if (try self.groupUsedInPath(next, owner, loop_keep)) return;
+        owned.unset(owner);
+        if (collected) |list| {
+            try list.append(self.store.allocator, owner);
+        }
+    }
+
+    fn takePostReleases(self: *Inserter, deaths: *std.ArrayList(LIR.LocalId)) ResourceError![]const LIR.LocalId {
+        if (deaths.items.len == 0) return &.{};
+        return try deaths.toOwnedSlice(self.store.allocator);
     }
 
     fn releaseOldTargetIfNeeded(self: *Inserter, target: LIR.LocalId, owned: *OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -1283,7 +1601,7 @@ const Inserter = struct {
     ) ResourceError!bool {
         if (!owned.contains(value)) return false;
         if (!self.localContainsRefcounted(value)) return false;
-        return !(try self.localValueUsedInPath(next, value, loop_keep));
+        return !(try self.groupUsedInPath(next, value, loop_keep));
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -1326,7 +1644,7 @@ const Inserter = struct {
             const bit = argMaskBit(i);
             if ((mask & bit) == 0) continue;
             if (local == target) continue;
-            if (try self.localValueUsedInPath(next, local, loop_keep)) {
+            if (try self.groupUsedInPath(next, local, loop_keep)) {
                 preserve |= bit;
             }
         }
@@ -1350,7 +1668,7 @@ const Inserter = struct {
         for (locals) |local| {
             if (!self.localContainsRefcounted(local)) continue;
 
-            const used_after_call = local != target and try self.localValueUsedInPath(next, local, loop_keep);
+            const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
             const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
 
             if (can_transfer) {
@@ -1660,12 +1978,156 @@ const Inserter = struct {
         return false;
     }
 
+    /// Liveness for one owned local extended over its borrow group: the
+    /// local's value must stay live while the local itself or any borrow
+    /// anchored on it is still used.
+    fn groupUsedInPath(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        local: LIR.LocalId,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
+        const members = self.solution.groupMembers(self.solution.leaderOf(local));
+        if (members.len <= 1) {
+            return self.localValueUsedInPath(start, local, loop_keep);
+        }
+        for (members) |member| {
+            self.scan_needles.set(@enumFromInt(member));
+        }
+        defer for (members) |member| {
+            self.scan_needles.unset(@enumFromInt(member));
+        };
+        return self.anyNeedleUsedInPath(start, loop_keep);
+    }
+
+    /// Multi-needle variant of `localValueUsedInPath` over the scratch
+    /// needle set. Group members are bound exactly once (the solver excludes
+    /// multi-bound locals from borrow groups), so rebinding never invalidates
+    /// a needle mid-scan; re-encountering a defining statement on a loop back
+    /// edge conservatively counts later reads as uses.
+    fn anyNeedleUsedInPath(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
+        const needles = self.scan_needles;
+        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.store.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(self.store.allocator);
+        try stack.append(self.store.allocator, start);
+
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
+                .assign_ref => |assign| {
+                    if (refOpUsesAny(assign.op, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_literal => |assign| {
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_call => |assign| {
+                    if (self.spanUsesAny(assign.args, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_call_erased => |assign| {
+                    if (needles.contains(assign.closure) or self.spanUsesAny(assign.args, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_packed_erased_fn => |assign| {
+                    if (assign.capture != null and needles.contains(assign.capture.?)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_low_level => |assign| {
+                    if (self.spanUsesAny(assign.args, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_list => |assign| {
+                    if (self.spanUsesAny(assign.elems, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_struct => |assign| {
+                    if (self.spanUsesAny(assign.fields, needles)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .assign_tag => |assign| {
+                    if (assign.payload != null and needles.contains(assign.payload.?)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .set_local => |assign| {
+                    if (needles.contains(assign.value)) return true;
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .debug => |debug_stmt| {
+                    if (needles.contains(debug_stmt.message)) return true;
+                    try stack.append(self.store.allocator, debug_stmt.next);
+                },
+                .expect => |expect_stmt| {
+                    if (needles.contains(expect_stmt.condition)) return true;
+                    try stack.append(self.store.allocator, expect_stmt.next);
+                },
+                .switch_stmt => |switch_stmt| {
+                    if (needles.contains(switch_stmt.cond)) return true;
+                    if (switch_stmt.continuation) |continuation| {
+                        try stack.append(self.store.allocator, continuation);
+                    }
+                    try stack.append(self.store.allocator, switch_stmt.default_branch);
+                    for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                        try stack.append(self.store.allocator, branch.body);
+                    }
+                },
+                .join => |join_stmt| {
+                    try stack.append(self.store.allocator, join_stmt.remainder);
+                    try stack.append(self.store.allocator, join_stmt.body);
+                },
+                .jump => |jump_stmt| {
+                    const join_bodies = self.join_bodies orelse arcInvariant("ARC liveness reached jump without collected join bodies");
+                    const target_body = join_bodies.get(jump_stmt.target) orelse arcInvariant("ARC liveness reached jump to unknown join point");
+                    try stack.append(self.store.allocator, target_body);
+                },
+                .ret => |ret_stmt| if (needles.contains(ret_stmt.value)) return true,
+                .loop_continue,
+                .loop_break,
+                => if (loop_keep) |keep| {
+                    var iter = needles.bits.iterator(.{});
+                    while (iter.next()) |i| {
+                        if (keep.bits.isSet(i)) return true;
+                    }
+                },
+                .runtime_error,
+                .crash,
+                => {},
+                .incref => |rc| try stack.append(self.store.allocator, rc.next),
+                .decref => |rc| try stack.append(self.store.allocator, rc.next),
+                .free => |rc| try stack.append(self.store.allocator, rc.next),
+            }
+        }
+
+        return false;
+    }
+
+    fn spanUsesAny(self: *Inserter, span: LIR.LocalSpan, needles: *const OwnedSet) bool {
+        for (self.store.getLocalSpan(span)) |local| {
+            if (needles.contains(local)) return true;
+        }
+        return false;
+    }
+
     fn retainSpan(self: *Inserter, span: LIR.LocalSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        return self.retainSpanExcept(span, 0, next);
+    }
+
+    fn retainSpanExcept(self: *Inserter, span: LIR.LocalSpan, skip_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
         const locals = self.store.getLocalSpan(span);
         var i = locals.len;
         while (i > 0) {
             i -= 1;
+            if (i < 64 and (skip_mask & argMaskBit(i)) != 0) continue;
             current = try self.retainLocalIfRc(locals[i], current);
         }
         return current;
@@ -1803,6 +2265,18 @@ const OwnedSet = struct {
     }
 };
 
+fn refOpSource(op: LIR.RefOp) LIR.LocalId {
+    return switch (op) {
+        .local => |local| local,
+        .discriminant => |ref| ref.source,
+        .field => |ref| ref.source,
+        .tag_payload => |ref| ref.source,
+        .tag_payload_struct => |ref| ref.source,
+        .list_reinterpret => |ref| ref.backing_ref,
+        .nominal => |ref| ref.backing_ref,
+    };
+}
+
 fn refOpUsesLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
     return switch (op) {
         .local => |local| local == needle,
@@ -1812,6 +2286,18 @@ fn refOpUsesLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
         .tag_payload_struct => |ref| ref.source == needle,
         .list_reinterpret => |ref| ref.backing_ref == needle,
         .nominal => |ref| ref.backing_ref == needle,
+    };
+}
+
+fn refOpUsesAny(op: LIR.RefOp, needles: *const OwnedSet) bool {
+    return switch (op) {
+        .local => |local| needles.contains(local),
+        .discriminant => |ref| needles.contains(ref.source),
+        .field => |ref| needles.contains(ref.source),
+        .tag_payload => |ref| needles.contains(ref.source),
+        .tag_payload_struct => |ref| needles.contains(ref.source),
+        .list_reinterpret => |ref| needles.contains(ref.backing_ref),
+        .nominal => |ref| needles.contains(ref.backing_ref),
     };
 }
 
@@ -2935,4 +3421,217 @@ test "dev lowering: mutable list reassignment keeps both decrefs on the reassign
     var scenario = try setupMutation(true);
     defer scenario.fixture.deinit();
     try testing.expect(scenario.fixture.countRc(scenario.target, .decref) >= 2);
+}
+
+fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.LocalId, comptime stop_tag: std.meta.Tag(LIR.CFStmt)) !void {
+    var cursor = start;
+    var remaining: usize = f.store.cf_stmts.items.len + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == stop_tag) return error.DecrefNotBeforeStop;
+        switch (stmt) {
+            .decref => |rc| {
+                if (rc.value == local) return;
+                cursor = rc.next;
+            },
+            .incref => |rc| cursor = rc.next,
+            .free => |rc| cursor = rc.next,
+            .assign_ref => |a| cursor = a.next,
+            .assign_literal => |a| cursor = a.next,
+            .assign_call => |a| cursor = a.next,
+            .assign_call_erased => |a| cursor = a.next,
+            .assign_packed_erased_fn => |a| cursor = a.next,
+            .assign_low_level => |a| cursor = a.next,
+            .assign_list => |a| cursor = a.next,
+            .assign_struct => |a| cursor = a.next,
+            .assign_tag => |a| cursor = a.next,
+            .set_local => |a| cursor = a.next,
+            .debug => |a| cursor = a.next,
+            .expect => |a| cursor = a.next,
+            else => return error.NonLinearPath,
+        }
+    }
+    return error.CyclicPath;
+}
+
+test "RC borrow: read-only payload read emits no RC statements for the borrow" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_field = try f.expectStmt(field, result_assign);
+    const field_read = try f.assignRefField(field, pair, 0, use_field);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, field_read);
+    const assign_b = try f.assignStr(b, "b", pair_assign);
+    const body = try f.assignStr(a, "a", assign_b);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    // The field borrow needs no RC statements; the pair is released after
+    // the borrow's last use; a and b move into the pair.
+    try f.expectRc(field, 0, 0, 0);
+    try f.expectRc(pair, 0, 1, 0);
+    try f.expectRc(a, 0, 0, 0);
+    try f.expectRc(b, 0, 0, 0);
+}
+
+test "RC borrow: payload read consumed by a call stays owned" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const ret = try f.ret(call_result);
+    const call = try f.assignCall(call_result, &.{field}, ret);
+    const field_read = try f.assignRefField(field, pair, 0, call);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, field_read);
+    const assign_b = try f.assignStr(b, "b", pair_assign);
+    const body = try f.assignStr(a, "a", assign_b);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    // The consumed read pays one retain at the read and is then moved into
+    // the call.
+    try f.expectRc(field, 1, 0, 0);
+    try f.expectRc(pair, 0, 1, 0);
+}
+
+test "RC borrow: alias of an owned local emits no RC statements" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const original = try f.local(.str);
+    const alias = try f.local(.str);
+    const ret = try f.ret(original);
+    const use_alias = try f.expectStmt(alias, ret);
+    const alias_stmt = try f.assignRefLocal(alias, original, use_alias);
+    const body = try f.assignStr(original, "shared", alias_stmt);
+    _ = try f.addProc(&.{}, body, .str);
+    try f.run();
+    try f.expectRc(alias, 0, 0, 0);
+    // The original moves out on return.
+    try f.expectRc(original, 0, 0, 0);
+}
+
+test "RC move on return leaves no RC statements" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const ret = try f.ret(value);
+    const body = try f.assignStr(value, "moved", ret);
+    _ = try f.addProc(&.{}, body, .str);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC move into aggregate at final use" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const ret = try f.ret(pair);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, ret);
+    const assign_b = try f.assignStr(b, "b", pair_assign);
+    const body = try f.assignStr(a, "a", assign_b);
+    _ = try f.addProc(&.{}, body, f.pair_str);
+    try f.run();
+    // Both operands move into the pair; the pair moves out on return.
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC early drop places the release right after the last use" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const unrelated = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const late_call = try f.assignCall(result, &.{}, ret);
+    const use_value = try f.expectStmt(value, late_call);
+    const body = try f.assignStr(value, "early", use_value);
+    _ = try f.addProc(&.{}, body, .i64);
+    _ = unrelated;
+    try f.run();
+    try f.expectRc(value, 0, 1, 0);
+    // The release lands before the unrelated call, not at the return.
+    try expectDecrefBeforeStmt(&f, f.procBody(), value, .assign_call);
+}
+
+test "RC borrow keeps the lender alive past a consuming use of the lender" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 7, ret);
+    const use_field = try f.expectStmt(field, result_assign);
+    const consuming_call = try f.assignCall(call_result, &.{pair}, use_field);
+    const field_read = try f.assignRefField(field, pair, 0, consuming_call);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, field_read);
+    const assign_b = try f.assignStr(b, "b", pair_assign);
+    const body = try f.assignStr(a, "a", assign_b);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    // The pair is consumed by the call while its borrow is still live, so the
+    // call argument pays a retain and the pair's own unit is released after
+    // the borrow's last use.
+    try f.expectRc(pair, 1, 1, 0);
+    try f.expectRc(field, 0, 0, 0);
+}
+
+test "RC borrow: reassigned lender forces the read to stay owned" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_field = try f.expectStmt(field, result_assign);
+    // Rebind the pair between the read and the use of the read.
+    const pair_rebind = try f.assignStruct(pair, &.{ a, b }, use_field);
+    const field_read = try f.assignRefField(field, pair, 0, pair_rebind);
+    const pair_assign = try f.assignStruct(pair, &.{ a, b }, field_read);
+    const incref_b2 = try f.assignStr(b, "b", pair_assign);
+    const body = try f.assignStr(a, "a", incref_b2);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    // The lender is bound twice, so the read cannot borrow.
+    try testing.expect(f.countRc(field, .incref) >= 1);
+}
+
+test "RC borrow: list element read via low-level borrows the list" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_str);
+    const index = try f.local(.i64);
+    const elem = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_elem = try f.expectStmt(elem, result_assign);
+    const get = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = elem,
+        .op = .list_get_unsafe,
+        .rc_effect = LIR.LowLevel.RcEffect.retainsResultBorrowingArgs(1),
+        .args = try f.span(&.{ list, index }),
+        .next = use_elem,
+    } });
+    const index_assign = try f.assignI64(index, 0, get);
+    const body = try f.assignList(list, &.{}, index_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    try f.expectRc(elem, 0, 0, 0);
+    try f.expectRc(list, 0, 1, 0);
 }

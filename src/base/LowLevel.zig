@@ -420,6 +420,11 @@ pub const LowLevel = enum {
         result_aliases_consumed_args: u64 = 0,
         retain_args: u64 = 0,
         retain_result: bool = false,
+        /// Argument positions whose payload data the result may point into
+        /// without owning it. When ARC insertion solves the result's binding
+        /// as borrowed, it emits no retain for the result and instead keeps
+        /// the lender argument live across every use of the result.
+        result_borrows_args: u64 = 0,
 
         pub fn none() RcEffect {
             return .{};
@@ -453,6 +458,14 @@ pub const LowLevel = enum {
             return .{
                 .may_retain_or_release = true,
                 .retain_result = true,
+            };
+        }
+
+        pub fn retainsResultBorrowingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = true,
+                .retain_result = true,
+                .result_borrows_args = mask,
             };
         }
 
@@ -549,7 +562,7 @@ pub const LowLevel = enum {
             .list_first,
             .list_last,
             .list_get_unsafe,
-            => RcEffect.retainsResult(),
+            => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
             .str_repeat,
             .str_from_utf8_lossy,
@@ -577,9 +590,12 @@ pub const LowLevel = enum {
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
-            .box_unbox,
-            .erased_capture_load,
-            => RcEffect.retainsResult(),
+            .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+
+            // The capture environment is read through the executing frame's
+            // closure, not through an explicit refcounted argument, so the
+            // result cannot name a lender to borrow from.
+            .erased_capture_load => RcEffect.retainsResult(),
 
             .str_is_eq,
             .str_contains,
