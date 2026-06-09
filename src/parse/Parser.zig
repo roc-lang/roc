@@ -2230,80 +2230,76 @@ const OpenSyntaxStack = struct {
         try self.pattern_kinds.append(allocator, kind);
     }
 
+    inline fn peekKind(comptime Kind: type, kind_stack: *const std.ArrayList(Kind)) ?Kind {
+        if (kind_stack.items.len == 0) return null;
+        return kind_stack.items[kind_stack.items.len - 1];
+    }
+
     inline fn peekExpr(self: *const OpenSyntaxStack) ?ExprParentKind {
-        if (self.expr_kinds.items.len == 0) return null;
-        return self.expr_kinds.items[self.expr_kinds.items.len - 1];
+        return peekKind(ExprParentKind, &self.expr_kinds);
     }
 
     inline fn peekPattern(self: *const OpenSyntaxStack) ?PatternParentKind {
-        if (self.pattern_kinds.items.len == 0) return null;
-        return self.pattern_kinds.items[self.pattern_kinds.items.len - 1];
+        return peekKind(PatternParentKind, &self.pattern_kinds);
     }
 
     inline fn peekType(self: *const OpenSyntaxStack) ?TypeParentKind {
-        if (self.type_kinds.items.len == 0) return null;
-        return self.type_kinds.items[self.type_kinds.items.len - 1];
+        return peekKind(TypeParentKind, &self.type_kinds);
     }
 
     inline fn peekWhere(self: *const OpenSyntaxStack) ?WhereParentKind {
-        if (self.where_kinds.items.len == 0) return null;
-        return self.where_kinds.items[self.where_kinds.items.len - 1];
+        return peekKind(WhereParentKind, &self.where_kinds);
     }
 
     inline fn peekStatement(self: *const OpenSyntaxStack) ?StatementParentKind {
-        if (self.statement_kinds.items.len == 0) return null;
-        return self.statement_kinds.items[self.statement_kinds.items.len - 1];
+        return peekKind(StatementParentKind, &self.statement_kinds);
     }
 
     inline fn peekAssociated(self: *const OpenSyntaxStack) ?AssociatedParentKind {
-        if (self.associated_kinds.items.len == 0) return null;
-        return self.associated_kinds.items[self.associated_kinds.items.len - 1];
+        return peekKind(AssociatedParentKind, &self.associated_kinds);
+    }
+
+    inline fn popPayloadWithKind(self: *OpenSyntaxStack, comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind, comptime Payload: type) Payload {
+        const kind = kind_stack.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
     inline fn popExprPayload(self: *OpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
-        const kind = self.expr_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.popPayloadWithKind(ExprParentKind, &self.expr_kinds, expected, Payload);
     }
 
     inline fn popPatternPayload(self: *OpenSyntaxStack, expected: PatternParentKind, comptime Payload: type) Payload {
-        const kind = self.pattern_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.popPayloadWithKind(PatternParentKind, &self.pattern_kinds, expected, Payload);
     }
 
     inline fn popTypePayload(self: *OpenSyntaxStack, expected: TypeParentKind, comptime Payload: type) Payload {
-        const kind = self.type_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.popPayloadWithKind(TypeParentKind, &self.type_kinds, expected, Payload);
     }
 
     inline fn popWherePayload(self: *OpenSyntaxStack, expected: WhereParentKind, comptime Payload: type) Payload {
-        const kind = self.where_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.popPayloadWithKind(WhereParentKind, &self.where_kinds, expected, Payload);
     }
 
     inline fn popStatementPayload(self: *OpenSyntaxStack, expected: StatementParentKind, comptime Payload: type) Payload {
-        const kind = self.statement_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.popPayloadWithKind(StatementParentKind, &self.statement_kinds, expected, Payload);
     }
 
     inline fn popAssociatedPayload(self: *OpenSyntaxStack, expected: AssociatedParentKind, comptime Payload: type) Payload {
-        const kind = self.associated_kinds.pop() orelse unreachable;
+        return self.popPayloadWithKind(AssociatedParentKind, &self.associated_kinds, expected, Payload);
+    }
+
+    inline fn popMarkerWithKind(comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind) void {
+        const kind = kind_stack.pop() orelse unreachable;
         std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
     inline fn popExprMarker(self: *OpenSyntaxStack, expected: ExprParentKind) void {
-        const kind = self.expr_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
+        popMarkerWithKind(ExprParentKind, &self.expr_kinds, expected);
     }
 
     inline fn popPatternMarker(self: *OpenSyntaxStack, expected: PatternParentKind) void {
-        const kind = self.pattern_kinds.pop() orelse unreachable;
-        std.debug.assert(kind == expected);
+        popMarkerWithKind(PatternParentKind, &self.pattern_kinds, expected);
     }
 
     fn clearRetainingCapacity(self: *OpenSyntaxStack) void {
