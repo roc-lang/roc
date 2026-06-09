@@ -1,9 +1,15 @@
-//! Mechanical ARC insertion for LIR.
+//! ARC insertion for LIR: borrow inference plus RC statement emission.
 //!
 //! This pass is the only non-builtin stage that may synthesize explicit
-//! baseline automatic `incref` and `decref` statements. `decref` owns ordinary
-//! zero-count cleanup; backends consume explicit RC statements without doing
-//! reference-counting analysis.
+//! `incref`, `decref`, and `free` statements. It first solves binding modes
+//! and proc ownership signatures (`arc_solve`), then walks each proc once and
+//! emits RC statements from the solution: borrowed bindings emit nothing,
+//! owned final occurrences move, and lifetime-ending releases land right
+//! after the last use of a binding's borrow group. Optimized builds also emit
+//! mode-specialized proc variants for call sites that can move arguments into
+//! positions the solved signature borrows. Debug builds re-check the output
+//! with the borrow certifier (`arc_certify`). Backends consume explicit RC
+//! statements without doing reference-counting analysis.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -1653,6 +1659,7 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
+        if (!self.localContainsRefcounted(target)) return 0;
         const locals = self.store.getLocalSpan(span);
         for (locals, 0..) |local, i| {
             if (i >= 64) break;
@@ -1679,6 +1686,7 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!bool {
         if (local == target) return false;
+        if (!self.localContainsRefcounted(target)) return false;
         if (!self.localContainsRefcounted(local)) return false;
         if (!owned.contains(local)) return false;
         if (try self.groupUsedInPath(next, local, loop_keep)) return false;
@@ -2991,9 +2999,11 @@ test "RC if result matched later tail-cleans matched binding" {
     const body = try f.assignI64(cond, 1, branch_assign);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
-    // Each branch moves its value into the result, and the result moves out
-    // on return.
-    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+    // Each branch moves its value into the result and releases the other
+    // branch's value; the result moves out on return.
+    try testing.expectEqual(@as(usize, 0), f.countRc(result, .incref) + f.countRc(result, .decref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(branch_value, .decref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(default_value, .decref));
 }
 
 test "RC identity call result matched later tail-cleans matched binding" {
@@ -3387,14 +3397,14 @@ test "RC early_return nested in call arguments gets cleanup decrefs" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const value = try f.local(.str);
-    const result = try f.local(.i64);
+    const result = try f.local(f.box_str);
     const crash = try f.crash("nested early return");
     const use_once = try f.assignLowLevel(result, &.{value}, LIR.LowLevel.RcEffect.allocatesRetainingArgs(1), crash);
     const body = try f.assignStr(value, "nested", use_once);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
-    // The value's unit moves into the op result at its final use; the result
-    // is released before the crash.
+    // The value's unit moves into the box at its final use; the box is
+    // released before the crash.
     try f.expectRc(value, 0, 0, 0);
     try f.expectReachableRcBefore(f.procBody(), .decref, result, .crash);
 }

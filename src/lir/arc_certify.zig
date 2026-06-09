@@ -346,10 +346,8 @@ const JoinRecord = struct {
     /// Jump states must agree only on these; everything else was settled
     /// before the jump.
     relevant: std.bit_set.DynamicBitSetUnmanaged,
-    /// Agreed state at every jump to this join; set by the first jump.
+    /// Agreed state at every jump to this join; met with each further jump.
     expected: ?[]LocalSummary,
-    /// Statement of the jump that set `expected`, for diagnostics.
-    first_jump: LIR.CFStmtId,
     body_scheduled: bool,
 };
 
@@ -1388,7 +1386,6 @@ const Certifier = struct {
                             .params = join_stmt.params,
                             .relevant = try self.computeJoinRelevant(join_stmt.params, join_stmt.body),
                             .expected = null,
-                            .first_jump = cursor,
                             .body_scheduled = false,
                         };
                     }

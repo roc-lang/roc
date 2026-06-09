@@ -137,9 +137,9 @@ const Solver = struct {
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
     defs: []DefKind,
+    /// Ownership demands per local. Returns never demand: a returned borrow
+    /// pays one retain at the return when the signature's return is owned.
     demand: []bool,
-    /// Demand excluding return occurrences, for borrowed-return checks.
-    demand_non_ret: []bool,
     /// Parameter position per local when the local is a proc parameter
     /// (positions >= 64 are recorded as owned-only).
     param_position: []u32,
@@ -171,7 +171,6 @@ pub fn solve(
         .scc = try allocator.alloc(u32, proc_count),
         .defs = try allocator.alloc(DefKind, local_count),
         .demand = try allocator.alloc(bool, local_count),
-        .demand_non_ret = try allocator.alloc(bool, local_count),
         .param_position = try allocator.alloc(u32, local_count),
         .param_proc = try allocator.alloc(u32, local_count),
         .join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
@@ -188,7 +187,6 @@ pub fn solve(
         allocator.free(solver.scc);
         allocator.free(solver.defs);
         allocator.free(solver.demand);
-        allocator.free(solver.demand_non_ret);
         allocator.free(solver.param_position);
         allocator.free(solver.param_proc);
         if (!solver_sigs_kept) solver.join_param.deinit(allocator);
@@ -455,7 +453,7 @@ fn retLenders(
                 if (!anchored) return null;
                 if (!paramIsBorrowed(solver, leader)) return null;
                 if (solver.param_proc[leader] != proc_index) return null;
-                if (!retOnlyDemand(solver, value_index)) return null;
+                if (solver.demand[value_index]) return null;
                 const position = solver.param_position[leader];
                 if (position >= 64) return null;
                 lenders |= @as(u64, 1) << @as(u6, @intCast(position));
@@ -485,12 +483,7 @@ fn retLenders(
     return lenders;
 }
 
-/// True when the local's only ownership demand can be the return position:
-/// the demand flag may be set, but only by `ret` occurrences. Demands are
-/// collected per kind, so this re-derives the non-return demand.
-fn retOnlyDemand(solver: *const Solver, value_index: u32) bool {
-    return !solver.demand_non_ret[value_index];
-}
+
 
 const RetTreatment = enum {
     returns_owned,
@@ -500,7 +493,6 @@ const RetTreatment = enum {
 fn collectAll(solver: *Solver, ret_treatment: RetTreatment) SolveError!void {
     @memset(solver.defs, .none);
     @memset(solver.demand, false);
-    @memset(solver.demand_non_ret, false);
 
     const store = solver.store;
     for (store.proc_specs.items, 0..) |proc, proc_index| {
@@ -528,11 +520,6 @@ fn noteDef(defs: []DefKind, local: LIR.LocalId, kind: DefKind) void {
 }
 
 fn noteDemand(solver: *Solver, local: LIR.LocalId) void {
-    solver.demand[@intFromEnum(local)] = true;
-    solver.demand_non_ret[@intFromEnum(local)] = true;
-}
-
-fn noteRetDemand(solver: *Solver, local: LIR.LocalId) void {
     solver.demand[@intFromEnum(local)] = true;
 }
 
@@ -678,16 +665,7 @@ fn collectStmt(
             try solver.stack.append(allocator, join_stmt.body);
             try solver.stack.append(allocator, join_stmt.remainder);
         },
-        .ret => |ret_stmt| {
-            switch (ret_treatment) {
-                .returns_owned => noteRetDemand(solver, ret_stmt.value),
-                .returns_solved => {
-                    if (solver.sigs[proc_index].ret_mode == .owned) {
-                        noteRetDemand(solver, ret_stmt.value);
-                    }
-                },
-            }
-        },
+        .ret => {},
         .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
     }
 }
