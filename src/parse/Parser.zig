@@ -1372,18 +1372,9 @@ fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
     }
 }
 
-fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
-    const start = self.pos;
-    if (self.peek() != .LowerIdent) {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
-    }
-    const target_name = self.pos;
-    self.advance();
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
-    };
+fn parseTargetFileList(self: *Parser) (Error || error{ExpectedNotFound})!AST.TargetFile.Span {
     self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start);
+        return error.ExpectedNotFound;
     };
 
     const files_top = self.store.scratchTargetFileTop();
@@ -1395,12 +1386,155 @@ fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
     }
     if (self.peek() != .CloseSquare) {
         self.store.clearScratchTargetFilesFrom(files_top);
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
+        return error.ExpectedNotFound;
     }
     self.advance();
+    return try self.store.targetFileSpanFrom(files_top);
+}
+
+fn parseTargetConfigValueTokens(self: *Parser) Error!AST.TargetConfigValue.Idx {
+    const start = self.pos;
+    switch (self.peek()) {
+        .Int => {
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .int_literal = start });
+        },
+        .StringStart => {
+            self.advance();
+            var content_tok = start;
+            if (self.peek() == .StringPart) {
+                content_tok = self.pos;
+                self.advance();
+            }
+            while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            if (self.peek() == .EndOfFile) {
+                return try self.store.addTargetConfigValue(.{ .malformed = .{
+                    .reason = .expected_target_file_string_end,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .string_literal = content_tok });
+        },
+        .UpperIdent => {
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .tag_literal = start });
+        },
+        .LowerIdent => {
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .ident = start });
+        },
+        .OpenSquare => {
+            self.advance();
+            const values_top = self.store.scratchTargetConfigValueTop();
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                try self.store.addScratchTargetConfigValue(try self.parseTargetConfigValueTokens());
+                if (!self.consumeComma()) {
+                    break;
+                }
+            }
+            if (self.peek() != .CloseSquare) {
+                self.store.clearScratchTargetConfigValuesFrom(values_top);
+                return try self.store.addTargetConfigValue(.{ .malformed = .{
+                    .reason = .expected_target_files_close_square,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
+            self.advance();
+            const values_span = try self.store.targetConfigValueSpanFrom(values_top);
+            return try self.store.addTargetConfigValue(.{ .list = values_span });
+        },
+        else => {
+            return try self.store.addTargetConfigValue(.{ .malformed = .{
+                .reason = .expected_target_file,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        },
+    }
+}
+
+fn parseTargetConfigEntryTokens(self: *Parser) Error!AST.TargetConfigEntry.Idx {
+    const start = self.pos;
+    if (self.peek() != .LowerIdent) {
+        return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_name, start);
+    }
+    const name = self.pos;
+    self.advance();
+
+    const value = if (self.peek() == .Comma or self.peek() == .CloseCurly) blk: {
+        break :blk try self.store.addTargetConfigValue(.{ .ident = name });
+    } else blk: {
+        self.expect(.OpColon) catch {
+            return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_colon, start);
+        };
+
+        if (std.mem.eql(u8, self.tokenText(name), "files")) {
+            const files_span = self.parseTargetFileList() catch |err| switch (err) {
+                error.ExpectedNotFound => {
+                    return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_target_files_open_square, start);
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            break :blk try self.store.addTargetConfigValue(.{ .files = files_span });
+        } else {
+            break :blk try self.parseTargetConfigValueTokens();
+        }
+    };
+
+    return try self.store.addTargetConfigEntry(.{
+        .name = name,
+        .value = value,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseTargetConfigTokens(self: *Parser) Error!AST.TargetConfig.Idx {
+    const start = self.pos;
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetConfig.Idx, .expected_targets_open_curly, start);
+    };
+
+    const entries_top = self.store.scratchTargetConfigEntryTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchTargetConfigEntry(try self.parseTargetConfigEntryTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchTargetConfigEntriesFrom(entries_top);
+        return try self.pushMalformed(AST.TargetConfig.Idx, .expected_targets_close_curly, start);
+    }
+    self.advance();
+    const entries_span = try self.store.targetConfigEntrySpanFrom(entries_top);
+
+    return try self.store.addTargetConfig(.{
+        .entries = entries_span,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
+    const start = self.pos;
+    if (self.peek() != .LowerIdent) {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
+    }
+    const target_name = self.pos;
+    self.advance();
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
+    };
+
+    if (self.peek() != .OpenCurly) {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_targets_open_curly, start);
+    }
+    const config = try self.parseTargetConfigTokens();
+
     return try self.store.addTargetEntry(.{
         .target = target_name,
-        .files = try self.store.targetFileSpanFrom(files_top),
+        .config = config,
         .region = .{ .start = start, .end = self.pos },
     });
 }

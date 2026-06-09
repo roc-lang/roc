@@ -603,6 +603,11 @@ pub const BuildEnv = struct {
         const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].module_role = self.root_module_role;
+        if (self.packages.get(pkg_name)) |queued_root_pkg| {
+            if (queued_root_pkg.kind == .platform) {
+                coord_pkg.modules.items[root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(queued_root_pkg.targets_config);
+            }
+        }
         coord_pkg.modules.items[root_id].depth = 0;
         coord_pkg.root_module_id = root_id;
         coord_pkg.remaining_modules += 1;
@@ -626,6 +631,7 @@ pub const BuildEnv = struct {
                     const plat_module_name = PackageEnv.moduleNameFromPath(pf_pkg.root_file);
                     const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
                     if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
+                        platform_coord_pkg.modules.items[plat_root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(pf_pkg.targets_config);
                         platform_coord_pkg.modules.items[plat_root_id].depth = 1;
                         platform_coord_pkg.root_module_id = plat_root_id;
                         platform_coord_pkg.remaining_modules += 1;
@@ -657,12 +663,67 @@ pub const BuildEnv = struct {
         // Transfer results back to PackageEnv before platform validation and emission.
         try self.transferCoordinatorResults();
 
+        try self.resolvePlatformTargetConfigConstants();
+
         // Deterministic emission
         try self.emitDeterministic();
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] compileDiscovered complete\n", .{});
         }
+    }
+
+    fn targetConfigRootIdentNames(
+        self: *BuildEnv,
+        maybe_targets_config: ?targets_config_mod.TargetsConfig,
+    ) Allocator.Error![]const []const u8 {
+        var names = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (names.items) |name| self.gpa.free(name);
+            names.deinit(self.gpa);
+        }
+
+        const targets_config = maybe_targets_config orelse return try names.toOwnedSlice(self.gpa);
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.exe);
+        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.static_lib);
+        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.shared_lib);
+
+        return try names.toOwnedSlice(self.gpa);
+    }
+
+    fn appendTargetConfigRootIdentNames(
+        self: *BuildEnv,
+        names: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        specs: []const targets_config_mod.TargetLinkSpec,
+    ) Allocator.Error!void {
+        for (specs) |spec| {
+            const wasm = spec.wasm orelse continue;
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.import_memory_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.minimum_memory_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.maximum_memory_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.initial_stack_size_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.global_base_ident);
+        }
+    }
+
+    fn appendTargetConfigRootIdentName(
+        self: *BuildEnv,
+        names: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        maybe_ident: ?[]const u8,
+    ) Allocator.Error!void {
+        const ident = maybe_ident orelse return;
+        const entry = try seen.getOrPut(self.gpa, ident);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+        errdefer _ = seen.remove(ident);
+        const owned = try self.gpa.dupe(u8, ident);
+        errdefer self.gpa.free(owned);
+        try names.append(self.gpa, owned);
     }
 
     /// Transfer compilation results from Coordinator to PackageEnv.
@@ -1791,13 +1852,54 @@ pub const BuildEnv = struct {
         }
     }
 
-    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) Allocator.Error!void {
-        var rep = Report.init(self.gpa, "Invalid package dependency", .runtime_error);
+    fn emitWorkspaceReport(self: *BuildEnv, title: []const u8, msg: []const u8) Allocator.Error!void {
+        var rep = Report.init(self.gpa, title, .runtime_error);
         const owned = try rep.addOwnedString(msg);
         try rep.addErrorMessage(owned);
         // Route through OrderedSink with a stable fully-qualified identity so it participates in ordering.
         // We use "workspace:root" as the fq module identity.
         try self.sink.emitReport("workspace", "root", rep);
+    }
+
+    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) Allocator.Error!void {
+        try self.emitWorkspaceReport("Invalid package dependency", msg);
+    }
+
+    fn resolvePlatformTargetConfigConstants(self: *BuildEnv) Allocator.Error!void {
+        const semantic = self.getPlatformSemanticData() orelse return;
+        const checked_module = semantic.checked_artifact orelse return;
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (entry.value_ptr.kind != .platform) continue;
+            const targets_config = entry.value_ptr.targets_config orelse continue;
+            var diagnostic: targets_config_mod.TargetConfigResolveDiagnostic = undefined;
+            targets_config.resolveCheckedConstants(self.gpa, checked_module, &diagnostic) catch |err| switch (err) {
+                error.TargetConfigInvalid => {
+                    try self.emitTargetConfigResolveError(diagnostic);
+                    return;
+                },
+            };
+        }
+    }
+
+    fn emitTargetConfigResolveError(
+        self: *BuildEnv,
+        diagnostic: targets_config_mod.TargetConfigResolveDiagnostic,
+    ) Allocator.Error!void {
+        const msg = try std.fmt.allocPrint(
+            self.gpa,
+            "The target configuration field `{s}` for {s}.{s} uses identifier `{s}`, but it {s}.",
+            .{
+                diagnostic.field_name,
+                @tagName(diagnostic.target),
+                @tagName(diagnostic.link_type),
+                diagnostic.ident_name,
+                diagnostic.reason.message(),
+            },
+        );
+        defer self.gpa.free(msg);
+        try self.emitWorkspaceReport("INVALID TARGET CONFIGURATION", msg);
     }
 
     // Compute global deterministic emission of accumulated reports:

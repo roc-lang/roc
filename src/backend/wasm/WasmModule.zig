@@ -409,7 +409,9 @@ data_segments: std.ArrayList(DataSegment),
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
 has_memory: bool,
+memory_import: bool,
 memory_min_pages: u32,
+memory_max_pages: ?u32,
 has_stack_pointer: bool,
 stack_pointer_init: u32,
 /// Whether the module has a funcref table (for call_indirect).
@@ -462,7 +464,9 @@ pub fn init(allocator: Allocator) Self {
         .data_segments = .empty,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
+        .memory_import = false,
         .memory_min_pages = 1,
+        .memory_max_pages = null,
         .has_stack_pointer = false,
         .stack_pointer_init = 65536,
         .has_table = false,
@@ -602,6 +606,7 @@ pub fn addStackPointerImportWithSymbol(self: *Self) Allocator.Error!SymbolIndex 
 /// Import linear memory for a generated relocatable object.
 pub fn addMemoryImport(self: *Self) void {
     self.has_memory = true;
+    self.memory_import = true;
     self.memory_min_pages = @max(self.memory_min_pages, 1);
 }
 
@@ -822,6 +827,7 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allo
 /// Enable memory section with the given minimum page count.
 pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
+    self.memory_import = false;
     self.memory_min_pages = min_pages;
 }
 
@@ -1360,6 +1366,21 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
     if (mode == .relocatable_object and source.has_memory) {
         self.addMemoryImport();
         self.memory_min_pages = @max(self.memory_min_pages, source.memory_min_pages);
+        if (source.memory_max_pages) |max_pages| {
+            self.memory_max_pages = if (self.memory_max_pages) |current|
+                @min(current, max_pages)
+            else
+                max_pages;
+        }
+    } else if (mode == .final_link and source.has_memory) {
+        self.has_memory = true;
+        self.memory_min_pages = @max(self.memory_min_pages, source.memory_min_pages);
+        if (source.memory_max_pages) |max_pages| {
+            self.memory_max_pages = if (self.memory_max_pages) |current|
+                @min(current, max_pages)
+            else
+                max_pages;
+        }
     }
 
     // --- 2. Compute function index mapping ---
@@ -2323,6 +2344,21 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
     // Table will be set during finalization if table_func_indices are populated.
 }
 
+/// Memory settings used when finalizing a wasm module after code generation.
+pub const FinalMemoryConfig = struct {
+    stack_bytes: u32,
+    import_memory: bool = false,
+    minimum_memory: ?usize = null,
+    maximum_memory: ?usize = null,
+    export_memory: bool = true,
+};
+
+/// Set the byte offset where this module's data segments begin.
+pub fn setDataBase(self: *Self, offset: u32) void {
+    std.debug.assert(self.data_segments.items.len == 0);
+    self.data_offset = offset;
+}
+
 /// Finalization step (called after all code generation and surgical linking,
 /// before encode):
 ///
@@ -2331,6 +2367,11 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
 /// 3. Configure table size based on actual element count
 /// 4. Export memory as "memory" for host/runtime access
 pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!void {
+    try self.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = stack_bytes });
+}
+
+/// Finalize memory and table layout using explicit target configuration.
+pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) Allocator.Error!void {
     // Calculate the highest data segment end address.
     var data_end: u32 = self.data_offset;
     for (self.data_segments.items) |ds| {
@@ -2339,18 +2380,25 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     }
 
     // Calculate memory pages: data + stack, rounded up to page boundary.
-    const total_bytes: u64 = @as(u64, data_end) + @as(u64, stack_bytes);
+    const required_bytes = @as(u64, data_end) + @as(u64, config.stack_bytes);
+    const configured_min = config.minimum_memory orelse 0;
+    const total_bytes: u64 = @max(required_bytes, @as(u64, configured_min));
     const page_size: u64 = 65536;
     const pages: u32 = @intCast(@max(1, (total_bytes + page_size - 1) / page_size));
     self.memory_min_pages = pages;
+    self.memory_max_pages = if (config.maximum_memory) |maximum_memory|
+        @intCast(@max(1, (@as(u64, maximum_memory) + page_size - 1) / page_size))
+    else
+        null;
 
     // Define __stack_pointer as a mutable i32 global.
     // Initial value = top of memory (stack grows downward).
     self.has_stack_pointer = true;
     self.stack_pointer_init = pages * @as(u32, 65536);
 
-    // Ensure memory is defined (not imported) in the final module.
+    // Ensure memory is present in the final module.
     self.has_memory = true;
+    self.memory_import = config.import_memory;
 
     // Configure table if we have any function indices to place in it.
     if (self.table_func_indices.items.len > 0) {
@@ -2358,11 +2406,13 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     }
 
     // Export memory as "memory" for host/runtime access.
-    try self.exports.append(self.allocator, .{
-        .name = "memory",
-        .kind = .memory,
-        .idx = 0,
-    });
+    if (config.export_memory and !config.import_memory) {
+        try self.exports.append(self.allocator, .{
+            .name = "memory",
+            .kind = .memory,
+            .idx = 0,
+        });
+    }
 }
 
 // --- Parsing (preload) ---
@@ -2559,11 +2609,12 @@ fn parseImportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
             },
             0x02 => { // memory import
                 self.has_memory = true;
+                self.memory_import = true;
                 if (cursor.* >= bytes.len) return error.UnexpectedEnd;
                 const limits_flag = bytes[cursor.*];
                 cursor.* += 1;
                 self.memory_min_pages = try readU32(bytes, cursor);
-                if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+                if (limits_flag == 0x01) self.memory_max_pages = try readU32(bytes, cursor);
             },
             0x03 => { // global import (e.g. __stack_pointer)
                 const val_type_byte = try readU32(bytes, cursor);
@@ -2609,13 +2660,14 @@ fn parseMemorySection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErro
     const section_size = try beginSection(bytes, cursor, .memory_section) orelse return;
     const section_end = cursor.* + section_size;
     self.has_memory = true;
+    self.memory_import = false;
     const count = try readU32(bytes, cursor);
     if (count > 0) {
         if (cursor.* >= bytes.len) return error.UnexpectedEnd;
         const limits_flag = bytes[cursor.*];
         cursor.* += 1;
         self.memory_min_pages = try readU32(bytes, cursor);
-        if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+        if (limits_flag == 0x01) self.memory_max_pages = try readU32(bytes, cursor);
     }
     cursor.* = section_end;
 }
@@ -2828,7 +2880,7 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Import section (must be between type and function sections)
-    if (self.imports.items.len > 0) {
+    if (self.imports.items.len > 0 or self.memory_import) {
         try self.encodeImportSection(allocator, &output);
     }
 
@@ -2843,7 +2895,7 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Memory section
-    if (self.has_memory) {
+    if (self.has_memory and !self.memory_import) {
         try self.encodeMemorySection(allocator, &output);
     }
 
@@ -3043,8 +3095,14 @@ fn encodeRelocatableImportSection(self: *Self, gpa: Allocator, output: *std.Arra
         try leb128WriteU32(gpa, &section_data, 15);
         try section_data.appendSlice(gpa, "__linear_memory");
         try section_data.append(gpa, 0x02);
-        try section_data.append(gpa, 0x00);
-        try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+        if (self.memory_max_pages) |max_pages| {
+            try section_data.append(gpa, 0x01);
+            try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+            try leb128WriteU32(gpa, &section_data, max_pages);
+        } else {
+            try section_data.append(gpa, 0x00);
+            try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+        }
     }
 
     for (self.global_imports.items) |imp| {
@@ -3238,7 +3296,8 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
-    try leb128WriteU32(gpa, &section_data, @intCast(self.imports.items.len));
+    const memory_import_count: u32 = if (self.memory_import) 1 else 0;
+    try leb128WriteU32(gpa, &section_data, @as(u32, @intCast(self.imports.items.len)) + memory_import_count);
     for (self.imports.items) |imp| {
         // Module name
         try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
@@ -3250,6 +3309,22 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try section_data.append(gpa, 0x00);
         // Type index
         try leb128WriteU32(gpa, &section_data, imp.type_idx);
+    }
+
+    if (self.memory_import) {
+        try leb128WriteU32(gpa, &section_data, 3);
+        try section_data.appendSlice(gpa, "env");
+        try leb128WriteU32(gpa, &section_data, 6);
+        try section_data.appendSlice(gpa, "memory");
+        try section_data.append(gpa, 0x02);
+        if (self.memory_max_pages) |max_pages| {
+            try section_data.append(gpa, 0x01);
+            try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+            try leb128WriteU32(gpa, &section_data, max_pages);
+        } else {
+            try section_data.append(gpa, 0x00);
+            try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+        }
     }
 
     try output.append(gpa, @intFromEnum(SectionId.import_section));
@@ -3276,8 +3351,14 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, 1); // 1 memory
-    try section_data.append(gpa, 0x00); // no max
-    try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+    if (self.memory_max_pages) |max_pages| {
+        try section_data.append(gpa, 0x01);
+        try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+        try leb128WriteU32(gpa, &section_data, max_pages);
+    } else {
+        try section_data.append(gpa, 0x00); // no max
+        try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+    }
 
     try output.append(gpa, @intFromEnum(SectionId.memory_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));

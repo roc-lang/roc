@@ -2028,24 +2028,98 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    /// Format a single target entry: x64linux: ["host.o", app]
+    /// Format a single target entry: x64linux: { files: ["host.o", app] }
     fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
         const entry = fmt.ast.store.getTargetEntry(entry_idx);
-        const files = fmt.ast.store.targetFileSlice(entry.files);
 
         // Format target name (e.g., x64linux)
         try fmt.pushTokenText(entry.target);
-        try fmt.pushAll(": [");
+        try fmt.pushAll(": ");
+        try fmt.formatTargetConfig(entry.config);
+    }
 
-        // Format file list
-        for (files, 0..) |file_idx, i| {
-            try fmt.formatTargetFile(file_idx);
-            if (i < files.len - 1) {
-                try fmt.pushAll(", ");
+    fn formatTargetConfig(fmt: *Formatter, config_idx: AST.TargetConfig.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const config = fmt.ast.store.getTargetConfig(config_idx);
+        const entries = fmt.ast.store.targetConfigEntrySlice(config.entries);
+        const base_indent = fmt.curr_indent;
+
+        if (entries.len == 1) {
+            const entry = fmt.ast.store.getTargetConfigEntry(entries[0]);
+            try fmt.pushAll("{ ");
+            try fmt.formatTargetConfigEntry(entry);
+            try fmt.pushAll(" }");
+            return;
+        }
+
+        try fmt.push('{');
+        for (entries, 0..) |entry_idx, i| {
+            const entry = fmt.ast.store.getTargetConfigEntry(entry_idx);
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent + 1;
+            try fmt.pushIndent();
+            try fmt.formatTargetConfigEntry(entry);
+            if (i < entries.len - 1 or entries.len > 0) {
+                try fmt.push(',');
             }
         }
 
-        try fmt.push(']');
+        if (entries.len > 0) {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
+    fn formatTargetConfigEntry(fmt: *Formatter, entry: AST.TargetConfigEntry) (Allocator.Error || error{WriteFailed})!void {
+        try fmt.pushTokenText(entry.name);
+        if (fmt.targetConfigEntryIsPunned(entry)) return;
+        try fmt.pushAll(": ");
+        try fmt.formatTargetConfigValue(entry.value);
+    }
+
+    fn targetConfigEntryIsPunned(fmt: *Formatter, entry: AST.TargetConfigEntry) bool {
+        return switch (fmt.ast.store.getTargetConfigValue(entry.value)) {
+            .ident => |token| token == entry.name,
+            else => false,
+        };
+    }
+
+    fn formatTargetConfigValue(fmt: *Formatter, value_idx: AST.TargetConfigValue.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const value = fmt.ast.store.getTargetConfigValue(value_idx);
+        switch (value) {
+            .int_literal, .tag_literal, .ident => |token| {
+                try fmt.pushTokenText(token);
+            },
+            .string_literal => |token| {
+                try fmt.push('"');
+                try fmt.pushTokenText(token);
+                try fmt.push('"');
+            },
+            .list => |span| {
+                const values = fmt.ast.store.targetConfigValueSlice(span);
+                try fmt.push('[');
+                for (values, 0..) |child_idx, i| {
+                    try fmt.formatTargetConfigValue(child_idx);
+                    if (i < values.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+            },
+            .files => |span| {
+                const files = fmt.ast.store.targetFileSlice(span);
+                try fmt.push('[');
+                for (files, 0..) |file_idx, i| {
+                    try fmt.formatTargetFile(file_idx);
+                    if (i < files.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+            },
+            .malformed => {},
+        }
     }
 
     /// Format a single target file entry
@@ -3303,8 +3377,8 @@ test "issue 8989: platform header targets section is preserved" {
         \\    targets: {
         \\        files: "build/",
         \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: ["host.o", app],
+        \\            x64linux: { files: ["host.o", app] },
+        \\            arm64linux: { files: ["host.o", app] },
         \\        },
         \\    }
     ;
