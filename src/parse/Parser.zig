@@ -38,7 +38,7 @@ scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
-expr_kernel_scratch: ExprKernelScratch,
+expr_kernel_scratch: ParserKernelScratch,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
@@ -2192,7 +2192,7 @@ const ExprBlockState = struct {
     previous_type_path_visible_start: usize,
 };
 
-const ExprOpenSyntaxStack = struct {
+const OpenSyntaxStack = struct {
     expr_kinds: std.ArrayList(ExprParentKind) = .empty,
     pattern_kinds: std.ArrayList(PatternParentKind) = .empty,
     type_kinds: std.ArrayList(TypeParentKind) = .empty,
@@ -2242,7 +2242,7 @@ const ExprOpenSyntaxStack = struct {
     type_fn_arg: std.ArrayList(TypeFnArgsState) = .empty,
     type_fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
 
-    fn deinit(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator) void {
+    fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
         self.expr_kinds.deinit(allocator);
         self.pattern_kinds.deinit(allocator);
         self.type_kinds.deinit(allocator);
@@ -2293,7 +2293,7 @@ const ExprOpenSyntaxStack = struct {
         self.type_fn_ret.deinit(allocator);
     }
 
-    inline fn payloadStack(self: *ExprOpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
+    inline fn payloadStack(self: *OpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
         if (Payload == ExprAfterUnaryState) return &self.expr_after_unary;
         if (Payload == ExprArrowAfterInnerState) return &self.expr_arrow_after_inner;
         if (Payload == ExprStringState) return &self.expr_string;
@@ -2339,127 +2339,127 @@ const ExprOpenSyntaxStack = struct {
         @compileError("unsupported expression open syntax payload: " ++ @typeName(Payload));
     }
 
-    inline fn peekPayload(self: *ExprOpenSyntaxStack, comptime Payload: type) Payload {
+    inline fn peekPayload(self: *OpenSyntaxStack, comptime Payload: type) Payload {
         const stack = self.payloadStack(Payload);
         return stack.items[stack.items.len - 1];
     }
 
-    inline fn pushWithKind(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushWithKind(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) Error!void {
         const stack = self.payloadStack(Payload);
         try stack.append(allocator, payload);
         errdefer _ = stack.pop();
         try kind_stack.append(allocator, kind);
     }
 
-    inline fn pushExpr(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushExpr(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind, comptime Payload: type, payload: Payload) Error!void {
         try self.pushWithKind(allocator, &self.expr_kinds, kind, Payload, payload);
     }
 
-    inline fn pushPattern(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushPattern(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind, comptime Payload: type, payload: Payload) Error!void {
         try self.pushWithKind(allocator, &self.pattern_kinds, kind, Payload, payload);
     }
 
-    inline fn pushType(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: TypeParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushType(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: TypeParentKind, comptime Payload: type, payload: Payload) Error!void {
         try self.pushWithKind(allocator, &self.type_kinds, kind, Payload, payload);
     }
 
-    inline fn pushWhere(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: WhereParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushWhere(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: WhereParentKind, comptime Payload: type, payload: Payload) Error!void {
         try self.pushWithKind(allocator, &self.where_kinds, kind, Payload, payload);
     }
 
-    inline fn pushStatement(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: StatementParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushStatement(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: StatementParentKind, comptime Payload: type, payload: Payload) Error!void {
         try self.pushWithKind(allocator, &self.statement_kinds, kind, Payload, payload);
     }
 
-    inline fn pushAssociated(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: AssociatedParentKind, comptime Payload: type, payload: Payload) Error!void {
+    inline fn pushAssociated(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: AssociatedParentKind, comptime Payload: type, payload: Payload) Error!void {
         try self.pushWithKind(allocator, &self.associated_kinds, kind, Payload, payload);
     }
 
-    inline fn pushExprMarker(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind) Error!void {
+    inline fn pushExprMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind) Error!void {
         try self.expr_kinds.append(allocator, kind);
     }
 
-    inline fn pushPatternMarker(self: *ExprOpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind) Error!void {
+    inline fn pushPatternMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind) Error!void {
         try self.pattern_kinds.append(allocator, kind);
     }
 
-    inline fn peekExpr(self: *const ExprOpenSyntaxStack) ?ExprParentKind {
+    inline fn peekExpr(self: *const OpenSyntaxStack) ?ExprParentKind {
         if (self.expr_kinds.items.len == 0) return null;
         return self.expr_kinds.items[self.expr_kinds.items.len - 1];
     }
 
-    inline fn peekPattern(self: *const ExprOpenSyntaxStack) ?PatternParentKind {
+    inline fn peekPattern(self: *const OpenSyntaxStack) ?PatternParentKind {
         if (self.pattern_kinds.items.len == 0) return null;
         return self.pattern_kinds.items[self.pattern_kinds.items.len - 1];
     }
 
-    inline fn peekType(self: *const ExprOpenSyntaxStack) ?TypeParentKind {
+    inline fn peekType(self: *const OpenSyntaxStack) ?TypeParentKind {
         if (self.type_kinds.items.len == 0) return null;
         return self.type_kinds.items[self.type_kinds.items.len - 1];
     }
 
-    inline fn peekWhere(self: *const ExprOpenSyntaxStack) ?WhereParentKind {
+    inline fn peekWhere(self: *const OpenSyntaxStack) ?WhereParentKind {
         if (self.where_kinds.items.len == 0) return null;
         return self.where_kinds.items[self.where_kinds.items.len - 1];
     }
 
-    inline fn peekStatement(self: *const ExprOpenSyntaxStack) ?StatementParentKind {
+    inline fn peekStatement(self: *const OpenSyntaxStack) ?StatementParentKind {
         if (self.statement_kinds.items.len == 0) return null;
         return self.statement_kinds.items[self.statement_kinds.items.len - 1];
     }
 
-    inline fn peekAssociated(self: *const ExprOpenSyntaxStack) ?AssociatedParentKind {
+    inline fn peekAssociated(self: *const OpenSyntaxStack) ?AssociatedParentKind {
         if (self.associated_kinds.items.len == 0) return null;
         return self.associated_kinds.items[self.associated_kinds.items.len - 1];
     }
 
-    inline fn popExprPayload(self: *ExprOpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
+    inline fn popExprPayload(self: *OpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
         const kind = self.expr_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popPatternPayload(self: *ExprOpenSyntaxStack, expected: PatternParentKind, comptime Payload: type) Payload {
+    inline fn popPatternPayload(self: *OpenSyntaxStack, expected: PatternParentKind, comptime Payload: type) Payload {
         const kind = self.pattern_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popTypePayload(self: *ExprOpenSyntaxStack, expected: TypeParentKind, comptime Payload: type) Payload {
+    inline fn popTypePayload(self: *OpenSyntaxStack, expected: TypeParentKind, comptime Payload: type) Payload {
         const kind = self.type_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popWherePayload(self: *ExprOpenSyntaxStack, expected: WhereParentKind, comptime Payload: type) Payload {
+    inline fn popWherePayload(self: *OpenSyntaxStack, expected: WhereParentKind, comptime Payload: type) Payload {
         const kind = self.where_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popStatementPayload(self: *ExprOpenSyntaxStack, expected: StatementParentKind, comptime Payload: type) Payload {
+    inline fn popStatementPayload(self: *OpenSyntaxStack, expected: StatementParentKind, comptime Payload: type) Payload {
         const kind = self.statement_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popAssociatedPayload(self: *ExprOpenSyntaxStack, expected: AssociatedParentKind, comptime Payload: type) Payload {
+    inline fn popAssociatedPayload(self: *OpenSyntaxStack, expected: AssociatedParentKind, comptime Payload: type) Payload {
         const kind = self.associated_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
         return self.payloadStack(Payload).pop() orelse unreachable;
     }
 
-    inline fn popExprMarker(self: *ExprOpenSyntaxStack, expected: ExprParentKind) void {
+    inline fn popExprMarker(self: *OpenSyntaxStack, expected: ExprParentKind) void {
         const kind = self.expr_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
     }
 
-    inline fn popPatternMarker(self: *ExprOpenSyntaxStack, expected: PatternParentKind) void {
+    inline fn popPatternMarker(self: *OpenSyntaxStack, expected: PatternParentKind) void {
         const kind = self.pattern_kinds.pop() orelse unreachable;
         std.debug.assert(kind == expected);
     }
 
-    fn clearRetainingCapacity(self: *ExprOpenSyntaxStack) void {
+    fn clearRetainingCapacity(self: *OpenSyntaxStack) void {
         self.expr_kinds.clearRetainingCapacity();
         self.pattern_kinds.clearRetainingCapacity();
         self.type_kinds.clearRetainingCapacity();
@@ -2510,7 +2510,7 @@ const ExprOpenSyntaxStack = struct {
         self.type_fn_ret.clearRetainingCapacity();
     }
 
-    fn isEmpty(self: *const ExprOpenSyntaxStack) bool {
+    fn isEmpty(self: *const OpenSyntaxStack) bool {
         return self.expr_kinds.items.len == 0 and
             self.pattern_kinds.items.len == 0 and
             self.type_kinds.items.len == 0 and
@@ -2562,8 +2562,8 @@ const ExprOpenSyntaxStack = struct {
     }
 };
 
-const ExprKernelScratch = struct {
-    open_syntax: ExprOpenSyntaxStack = .{},
+const ParserKernelScratch = struct {
+    open_syntax: OpenSyntaxStack = .{},
     collections: ExprCollectionStack = .{},
     binary_rhs: ExprBinaryRhsStack = .{},
     lambda_body: ExprLambdaBodyStack = .{},
@@ -2571,7 +2571,7 @@ const ExprKernelScratch = struct {
     pattern_roots: PatternRootStack = .{},
     associated_blocks: StatementAssociatedBlockStack = .{},
 
-    fn deinit(self: *ExprKernelScratch, allocator: std.mem.Allocator) void {
+    fn deinit(self: *ParserKernelScratch, allocator: std.mem.Allocator) void {
         self.open_syntax.deinit(allocator);
         self.collections.deinit(allocator);
         self.binary_rhs.deinit(allocator);
@@ -2581,7 +2581,7 @@ const ExprKernelScratch = struct {
         self.associated_blocks.deinit(allocator);
     }
 
-    fn clearRetainingCapacity(self: *ExprKernelScratch) void {
+    fn clearRetainingCapacity(self: *ParserKernelScratch) void {
         self.open_syntax.clearRetainingCapacity();
         self.collections.clearRetainingCapacity();
         self.binary_rhs.clearRetainingCapacity();
@@ -2591,7 +2591,7 @@ const ExprKernelScratch = struct {
         self.associated_blocks.clearRetainingCapacity();
     }
 
-    fn isEmpty(self: *const ExprKernelScratch) bool {
+    fn isEmpty(self: *const ParserKernelScratch) bool {
         return self.open_syntax.isEmpty() and
             self.collections.isEmpty() and
             self.binary_rhs.isEmpty() and
