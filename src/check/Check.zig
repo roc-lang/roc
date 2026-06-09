@@ -10354,6 +10354,11 @@ fn validateUnsignedFromNumeralLiteral(
     return null;
 }
 
+test "unsuffixed positive integer literal validates against unsigned builtin type" {
+    const info = types_mod.NumeralInfo.fromI128(42, false, false, Region.zero());
+    try std.testing.expectEqual(@as(?BuiltinFromNumeralLiteralProblem, null), validateBuiltinFromNumeralLiteral(.u64, info));
+}
+
 fn validateSignedFromNumeralLiteral(
     comptime T: type,
     num_literal: types_mod.NumeralInfo,
