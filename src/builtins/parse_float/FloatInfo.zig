@@ -52,7 +52,7 @@ max_exponent_round_to_even: comptime_int,
 // Largest exponent value `(1 << EXP_BITS) - 1`.
 infinite_power: comptime_int,
 
-// Following should compute based on derived calculations where possible.
+/// Return conversion bounds and exponent constants for a float type.
 pub fn from(comptime T: type) Self {
     return switch (T) {
         f16 => .{

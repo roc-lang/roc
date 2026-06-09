@@ -6,6 +6,7 @@ const std = @import("std");
 
 const special_exponent = 0x7fffffff;
 
+/// Decimal mantissa, exponent, and sign produced by Ryu conversion.
 pub fn FloatDecimal(comptime T: type) type {
     comptime std.debug.assert(T == u64 or T == u128);
     return struct {
@@ -212,6 +213,7 @@ fn mulShift64(m: u64, mul: *const [2]u64, j: u32) u64 {
     }
 }
 
+/// Full f64 Ryu lookup tables and arithmetic hooks.
 pub const Backend64_TablesFull = struct {
     const T = u64;
     const mulShift = mulShift64;

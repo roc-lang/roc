@@ -7,23 +7,23 @@ const FloatStream = @import("FloatStream.zig");
 const isEightDigits = @import("common.zig").isEightDigits;
 const mantissaType = common.mantissaType;
 
-// Arbitrary-precision decimal class for fallback algorithms.
-//
-// This is only used if the fast-path (native floats) and
-// the Eisel-Lemire algorithm are unable to unambiguously
-// determine the float.
-//
-// The technique used is "Simple Decimal Conversion", developed
-// by Nigel Tao and Ken Thompson. A detailed description of the
-// algorithm can be found in "ParseNumberF64 by Simple Decimal Conversion",
-// available online: <https://nigeltao.github.io/blog/2020/parse-number-f64-simple.html>.
-//
-// Big-decimal implementation. We do not use the big.Int routines since we only require a maximum
-// fixed region of memory. Further, we require only a small subset of operations.
-//
-// This accepts a floating point parameter and will generate a Decimal which can correctly parse
-// the input with sufficient accuracy. Internally this means either a u64 mantissa (f16, f32 or f64)
-// or a u128 mantissa (f128).
+/// Arbitrary-precision decimal class for fallback algorithms.
+///
+/// This is only used if the fast-path (native floats) and
+/// the Eisel-Lemire algorithm are unable to unambiguously
+/// determine the float.
+///
+/// The technique used is "Simple Decimal Conversion", developed
+/// by Nigel Tao and Ken Thompson. A detailed description of the
+/// algorithm can be found in "ParseNumberF64 by Simple Decimal Conversion",
+/// available online: <https://nigeltao.github.io/blog/2020/parse-number-f64-simple.html>.
+///
+/// Big-decimal implementation. We do not use the big.Int routines since we only require a maximum
+/// fixed region of memory. Further, we require only a small subset of operations.
+///
+/// This accepts a floating point parameter and will generate a Decimal which can correctly parse
+/// the input with sufficient accuracy. Internally this means either a u64 mantissa (f16, f32 or f64)
+/// or a u128 mantissa (f128).
 pub fn Decimal(comptime T: type) type {
     const MantissaT = mantissaType(T);
     std.debug.assert(MantissaT == u64 or MantissaT == u128);

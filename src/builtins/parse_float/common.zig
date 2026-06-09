@@ -46,6 +46,7 @@ pub fn BiasedFp(comptime T: type) type {
     };
 }
 
+/// Reinterpret unsigned float bits as the requested floating-point type.
 pub fn floatFromUnsigned(comptime T: type, comptime MantissaT: type, v: MantissaT) T {
     return switch (T) {
         f16 => @as(f16, @bitCast(@as(u16, @truncate(v)))),
@@ -78,6 +79,7 @@ pub fn isEightDigits(v: u64) bool {
     return ((a | b) & 0x8080_8080_8080_8080) == 0;
 }
 
+/// Return whether a byte is a digit in the requested base.
 pub fn isDigit(c: u8, comptime base: u8) bool {
     std.debug.assert(base == 10 or base == 16);
 

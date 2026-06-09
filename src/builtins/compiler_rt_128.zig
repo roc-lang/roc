@@ -618,6 +618,7 @@ pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
     return u128_to_str_inner(buf, @as(u128, @intCast(val)));
 }
 
+/// Return the maximum decimal digit count needed to format an integer type.
 pub fn int_string_capacity(comptime T: type) comptime_int {
     const info = @typeInfo(T).int;
     return switch (info.signedness) {
@@ -640,6 +641,7 @@ pub fn int_string_capacity(comptime T: type) comptime_int {
     };
 }
 
+/// Format an integer as decimal text into the provided buffer.
 pub fn int_to_str(comptime T: type, buf: []u8, val: T) []const u8 {
     const info = @typeInfo(T).int;
     return switch (info.signedness) {

@@ -103,6 +103,7 @@ fn fastIntPow10(comptime T: type, i: usize) T {
     };
 }
 
+/// Convert a parsed float using fast native arithmetic when it can round exactly.
 pub fn convertFast(comptime T: type, n: Number(T)) ?T {
     const MantissaT = common.mantissaType(T);
 

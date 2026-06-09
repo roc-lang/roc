@@ -237,6 +237,7 @@ fn parsePartialNumber(comptime T: type, s: []const u8, negative: bool, n: *usize
     }
 }
 
+/// Parse a complete finite float literal into components.
 pub fn parseNumber(comptime T: type, s: []const u8, negative: bool) ?Number(T) {
     var consumed: usize = 0;
     if (parsePartialNumber(T, s, negative, &consumed)) |number| {
@@ -267,6 +268,7 @@ fn parsePartialInfOrNan(comptime T: type, s: []const u8, negative: bool, n: *usi
     return null;
 }
 
+/// Parse a complete infinity or NaN literal.
 pub fn parseInfOrNan(comptime T: type, s: []const u8, negative: bool) ?T {
     var consumed: usize = 0;
     if (parsePartialInfOrNan(T, s, negative, &consumed)) |special| {
@@ -277,6 +279,7 @@ pub fn parseInfOrNan(comptime T: type, s: []const u8, negative: bool) ?T {
     return null;
 }
 
+/// Return whether underscores appear only between digits for the requested base.
 pub fn validUnderscores(s: []const u8, comptime base: u8) bool {
     var i: usize = 0;
     while (i < s.len) : (i += 1) {

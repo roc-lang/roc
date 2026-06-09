@@ -8,10 +8,12 @@ const convertFast = @import("parse_float/convert_fast.zig").convertFast;
 const convertEiselLemire = @import("parse_float/convert_eisel_lemire.zig").convertEiselLemire;
 const convertSlow = @import("parse_float/convert_slow.zig").convertSlow;
 
+/// Errors returned by Roc builtin float parsing.
 pub const ParseFloatError = error{
     InvalidCharacter,
 };
 
+/// Parse a decimal or hexadecimal float into the requested float type.
 pub fn parseFloat(comptime T: type, s: []const u8) ParseFloatError!T {
     if (@typeInfo(T) != .float) {
         @compileError("Cannot parse a float into a non-floating point type.");

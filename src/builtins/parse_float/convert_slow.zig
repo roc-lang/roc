@@ -11,6 +11,7 @@ const max_shift = 60;
 const num_powers = 19;
 const powers = [_]u8{ 0, 3, 6, 9, 13, 16, 19, 23, 26, 29, 33, 36, 39, 43, 46, 49, 53, 56, 59 };
 
+/// Return the decimal shift used by the slow conversion algorithm.
 pub fn getShift(n: usize) usize {
     return if (n < num_powers) powers[n] else max_shift;
 }

@@ -133,6 +133,7 @@ fn parseIntNoFmt(comptime T: type, bytes: []const u8) ParseIntError!T {
     }
 }
 
+/// Parse an unsigned decimal integer, returning null on invalid input or overflow.
 pub fn parseUnsignedDecimal(comptime T: type, bytes: []const u8) ?T {
     const info = @typeInfo(T).int;
     const limit: u128 = switch (info.signedness) {

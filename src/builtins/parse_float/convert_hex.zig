@@ -10,12 +10,9 @@ const common = @import("common.zig");
 const Number = common.Number;
 const floatFromUnsigned = common.floatFromUnsigned;
 
-// converts the form 0xMMM.NNNpEEE.
-//
-// MMM.NNN = mantissa
-// EEE = exponent
-//
-// MMM.NNN is stored as an integer, the exponent is offset.
+/// Convert the form 0xMMM.NNNpEEE, where MMM.NNN is the mantissa and EEE is the exponent.
+///
+/// MMM.NNN is stored as an integer, the exponent is offset.
 pub fn convertHex(comptime T: type, n_: Number(T)) T {
     const MantissaT = common.mantissaType(T);
     var n = n_;
