@@ -5114,7 +5114,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Direct call-argument lambdas are consumed immediately, so they must not
     // generalize independently. Doing so lets their generalized vars escape
     // into the enclosing value via unification.
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg;
+    //
+    // We also generalize a binding whose RHS is a bare reference to an already-
+    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
+    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
+    // raises none of the duplicate-work or duplicate-effect concerns that motivate
+    // restricting generalization to syntactic functions. In practice the only
+    // generalized schemes are functions (numeric literals use the separate
+    // defaulting path), so this never re-generalizes numbers or tag unions.
+    const is_value_alias = !is_call_arg and
+        (expr == .e_lookup_local or expr == .e_lookup_external);
+    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
