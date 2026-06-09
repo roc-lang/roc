@@ -753,7 +753,7 @@ fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
 
 fn parseStringExprTokens(self: *Parser) Error!AST.Expr.Idx {
     std.debug.assert(self.peek() == .StringStart);
-    return try self.runExprDirect(0);
+    return try self.runExprRoot(0);
 }
 
 fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
@@ -765,7 +765,7 @@ fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
     var value: ?AST.Expr.Idx = null;
     if (self.peek() == .OpColon) {
         self.advance();
-        value = try self.runExprDirect(0);
+        value = try self.runExprRoot(0);
     }
     return try self.store.addRecordField(.{
         .name = name,
@@ -1604,7 +1604,7 @@ fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Sta
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runStatementDirect(statementType);
+    return try self.runStatementRoot(statementType);
 }
 
 fn addTopLevelUnexpectedStatement(self: *Parser) Error!AST.Statement.Idx {
@@ -1625,7 +1625,7 @@ pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.I
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runPatternRootDirect(alternatives);
+    return try self.runPatternRoot(alternatives);
 }
 
 fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
@@ -2759,7 +2759,7 @@ pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runExprDirect(min_bp);
+    return try self.runExprRoot(min_bp);
 }
 
 const TyFnArgs = enum {
@@ -2786,23 +2786,23 @@ fn ExprKernelReturn(comptime root: ExprKernelRoot) type {
     };
 }
 
-fn runExprDirect(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+fn runExprRoot(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     return try self.runExprStatementKernel(.expr, min_bp, undefined, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runStatementDirect(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
+fn runStatementRoot(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
     return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runAssociatedBlockDirect(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
     return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
 }
 
-fn runPatternRootDirect(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+fn runPatternRoot(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
 }
 
-fn runTypeAnnoRootDirect(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
+fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
 }
 
@@ -6060,7 +6060,7 @@ pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.runTypeAnnoRootDirect(looking_for_args);
+    return try self.runTypeAnnoRoot(looking_for_args);
 }
 
 fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
@@ -6195,7 +6195,7 @@ fn recordTypeDependencyFromQualifiedTokens(
 ///     <stmtN>
 /// }
 pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    return try self.runAssociatedBlockDirect(start, owner_type_path);
+    return try self.runAssociatedBlockRoot(start, owner_type_path);
 }
 
 fn finishRecordExpr(
