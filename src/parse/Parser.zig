@@ -1289,9 +1289,7 @@ fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
                     .rigid_name = rigid_name,
                     .region = .{ .start = alias_start, .end = self.pos },
                 }));
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else {
+                if (!self.consumeComma()) {
                     break;
                 }
             }
@@ -1328,9 +1326,7 @@ fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
             .region = .{ .start = entry_start, .end = self.pos },
         }));
 
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
+        if (!self.consumeComma()) {
             break;
         }
     }
