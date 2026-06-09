@@ -1612,7 +1612,7 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
-/// Run the direct token dispatch with a pattern goal and return the completed pattern.
+/// Run the token parser kernel with a pattern goal and return the completed pattern.
 pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -5746,7 +5746,7 @@ fn runExprStatementKernel(
     }
 }
 
-/// Run the direct token dispatch with a type-annotation goal and return the completed type.
+/// Run the token parser kernel with a type-annotation goal and return the completed type.
 pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
