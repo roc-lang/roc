@@ -14,6 +14,7 @@ const build_options = @import("build_options");
 const bindings = @import("bindings.zig");
 const embedded_lld = @import("embedded_lld");
 const llvm_embedded = @import("llvm_embedded");
+const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 
@@ -99,8 +100,10 @@ pub const CompileOptions = struct {
     /// Whether to place each function in its own section.
     /// Set to false for JIT mode (single .text section is simpler).
     function_sections: bool = true,
-    /// Optimization level for code generation.
-    opt_level: bindings.CodeGenOptLevel = .Default,
+    /// Optimization level for LLVM IR and target-machine code generation.
+    optimization: bindings.IrOptimizationLevel = .O3,
+    /// Whether to include debug information in the generated object.
+    debug: bool = false,
     /// Relocation model to use when emitting the object file.
     reloc_mode: bindings.RelocMode = .Default,
     /// Whether to use the module's native target triple instead of LLVM's default.
@@ -180,7 +183,7 @@ fn emitMergedBitcodeToObjectFile(
         triple,
         cpu,
         "", // No specific features
-        options.opt_level, // optimization level
+        options.optimization.toCodeGenOptLevel(),
         options.reloc_mode,
         .Default, // code model
         options.function_sections, // function_sections
@@ -254,8 +257,8 @@ fn emitMergedBitcodeToObjectFile(
     };
 
     const emit_options = bindings.TargetMachine.EmitOptions{
-        .is_debug = options.opt_level == .None,
-        .is_small = false,
+        .is_debug = options.debug,
+        .ir_opt_level = options.optimization,
         .time_report_out = null,
         .tsan = false,
         .sancov = false,
@@ -358,7 +361,7 @@ fn linkSharedLibrary(
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = collections.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -435,7 +438,7 @@ fn linkSharedLibrary(
     };
 }
 
-fn getTempDir(allocator: Allocator) ![]u8 {
+fn getTempDir(allocator: Allocator) (Allocator.Error || error{TempDirUnavailable})![]u8 {
     const names: []const [:0]const u8 = if (builtin.os.tag == .windows)
         &.{ "TEMP", "TMP" }
     else
@@ -452,7 +455,7 @@ fn getTempDir(allocator: Allocator) ![]u8 {
 }
 
 /// Create a unique temporary file path for an artifact output.
-fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) ![:0]const u8 {
+fn createTempPath(allocator: Allocator, io: std.Io, extension: []const u8) anyerror![:0]const u8 {
     const counter = temp_path_counter.fetchAdd(1, .monotonic);
     // zig 0.16 removed std.crypto.random; seed a PRNG from the per-call counter
     // mixed with the pid for cross-process uniqueness of the temp path.

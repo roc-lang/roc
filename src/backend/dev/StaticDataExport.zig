@@ -21,12 +21,19 @@ pub const StaticDataExport = struct {
 
 /// One pointer relocation inside a readonly static-data symbol.
 pub const StaticDataRelocation = struct {
+    pub const Kind = enum {
+        address,
+        function_pointer,
+    };
+
     /// Byte offset inside `StaticDataExport.bytes` where the pointer is stored.
     offset: u64,
     /// Symbol whose address should be written at `offset`.
     target_symbol_name: []const u8,
     /// Addend applied to the target symbol address.
     addend: i64 = 0,
+    /// Runtime meaning of the stored pointer.
+    kind: Kind = .address,
     /// Whether `target_symbol_name` is owned by this relocation and must be freed
     /// with the static data graph.
     owns_target_symbol_name: bool = false,

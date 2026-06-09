@@ -55,10 +55,10 @@ fn shimIo() std.Io {
 }
 
 fn allocator() Allocator {
-    return std.heap.smp_allocator;
+    return std.heap.page_allocator;
 }
 
-fn openRuntimeState(gpa: Allocator) !RuntimeState {
+fn openRuntimeState(gpa: Allocator) anyerror!RuntimeState {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
     errdefer shm.deinit(gpa);

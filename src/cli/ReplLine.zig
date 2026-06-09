@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
+const base = @import("base");
 
 const SupportedOS = enum { windows, linux, macos };
 
@@ -168,7 +169,7 @@ pub const InputParser = struct {
 ///
 /// Both `\n` and standalone `\r` trigger indentation; the `\r` of a `\r\n`
 /// pair is left unindented to avoid double-padding.
-fn writeAlignedToPrompt(out: *std.Io.Writer, buf: []const u8, indent: usize) !void {
+fn writeAlignedToPrompt(out: *std.Io.Writer, buf: []const u8, indent: usize) error{WriteFailed}!void {
     var i: usize = 0;
     while (i < buf.len) : (i += 1) {
         const b = buf[i];
@@ -201,7 +202,7 @@ const History = struct {
         self.entries.deinit(self.allocator);
     }
 
-    pub fn append(self: *History, input: []const u8) !void {
+    pub fn append(self: *History, input: []const u8) Allocator.Error!void {
         const input_copy = try self.allocator.alloc(u8, input.len);
         @memcpy(input_copy, input);
         try self.entries.append(self.allocator, input_copy);
@@ -245,7 +246,7 @@ const LineState = struct {
     history_index: ?usize,
 };
 
-fn printChar(state: *LineState) !void {
+fn printChar(state: *LineState) CommandError!void {
     // Reset history navigation on new input
     state.history_index = null;
 
@@ -262,7 +263,7 @@ fn printChar(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn deleteBefore(state: *LineState) !void {
+fn deleteBefore(state: *LineState) CommandError!void {
     if (state.col_offset == 0) return;
     state.col_offset -= 1;
     _ = state.line_buffer.orderedRemove(state.col_offset);
@@ -272,17 +273,17 @@ fn deleteBefore(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn doNothing(_: *LineState) !void {}
+fn doNothing(_: *LineState) Allocator.Error!void {}
 
-fn exitRepl(_: *LineState) !void {
+fn exitRepl(_: *LineState) CommandError!void {
     return error.ExitRepl;
 }
 
-fn acceptLine(_: *LineState) !void {
+fn acceptLine(_: *LineState) CommandError!void {
     return error.NewLine;
 }
 
-fn cancelLine(state: *LineState) !void {
+fn cancelLine(state: *LineState) CommandError!void {
     // Clear the buffer and reset cursor position
     state.line_buffer.clearAndFree(state.temp);
     state.col_offset = 0;
@@ -294,7 +295,7 @@ fn cancelLine(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width);
 }
 
-fn clearScreen(state: *LineState) !void {
+fn clearScreen(state: *LineState) CommandError!void {
     try ansi_term.clearEntireScreen(state.out);
     try ansi_term.setCursor(state.out, 0, 0);
 
@@ -305,17 +306,17 @@ fn clearScreen(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn moveCursorRight(state: *LineState) !void {
+fn moveCursorRight(state: *LineState) CommandError!void {
     state.col_offset = @min(state.col_offset + 1, state.line_buffer.items.len);
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn moveCursorLeft(state: *LineState) !void {
+fn moveCursorLeft(state: *LineState) CommandError!void {
     state.col_offset -|= 1;
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn historyBackward(state: *LineState) !void {
+fn historyBackward(state: *LineState) CommandError!void {
     const hist_len = state.history.entries.items.len;
     if (hist_len == 0) return;
 
@@ -336,7 +337,7 @@ fn historyBackward(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
-fn historyForward(state: *LineState) !void {
+fn historyForward(state: *LineState) CommandError!void {
     const hist_len = state.history.entries.items.len;
     if (hist_len == 0 or state.history_index == null) return;
 
@@ -464,8 +465,8 @@ fn readLineSimple(outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *
     return .{ .line = try line_buffer.toOwnedSlice(outlive) };
 }
 
-fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) !ReadLineResult {
-    var arena_allocator = std.heap.ArenaAllocator.init(outlive);
+fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u8, out: *std.Io.Writer, in: std.Io.File) ReadLineError!ReplLine.ReadLineResult {
+    var arena_allocator = base.SingleThreadArena.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
 
@@ -599,7 +600,7 @@ const testing = std.testing;
 
 /// Run `parser.feed` for each chunk in `chunks` against a fresh event list and
 /// return the accumulated events. Caller owns the returned ArrayList.
-fn collectEvents(parser: *InputParser, chunks: []const []const u8) !std.ArrayList(InputEvent) {
+fn collectEvents(parser: *InputParser, chunks: []const []const u8) Allocator.Error!std.ArrayList(InputEvent) {
     var events = std.ArrayList(InputEvent).empty;
     errdefer events.deinit(testing.allocator);
     for (chunks) |chunk| {
@@ -608,7 +609,7 @@ fn collectEvents(parser: *InputParser, chunks: []const []const u8) !std.ArrayLis
     return events;
 }
 
-fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) !void {
+fn expectEventsEqual(expected: []const InputEvent, actual: []const InputEvent) anyerror!void {
     try testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |e, a| {
         try testing.expectEqualDeep(e, a);
@@ -917,7 +918,7 @@ test "InputParser: bytes around a paste in the same chunk" {
     }, events.items);
 }
 
-fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) !void {
+fn expectAlignedOutput(input: []const u8, indent: usize, expected: []const u8) anyerror!void {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try writeAlignedToPrompt(&aw.writer, input, indent);

@@ -5,6 +5,7 @@
 //! 2. Cross-module type resolution for static dispatch is accurate
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const types = @import("types");
 const parse = @import("parse");
@@ -55,7 +56,7 @@ const LoadedModule = struct {
 };
 
 /// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
+fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) Allocator.Error!CIR.BuiltinIndices {
     const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
     defer gpa.free(aligned_buffer);
     @memcpy(aligned_buffer, bin_data);
@@ -64,7 +65,7 @@ fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.
 }
 
 /// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
+fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) Allocator.Error!LoadedModule {
     const CompactWriter = collections.CompactWriter;
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
     @memcpy(buffer, bin_data);
@@ -133,7 +134,7 @@ const MonoTestEnv = struct {
     const Self = @This();
 
     /// Initialize a single module test environment
-    pub fn init(module_name: []const u8, source: []const u8) !Self {
+    pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -189,7 +190,7 @@ const MonoTestEnv = struct {
         try imported_envs_list.append(gpa, builtin_module.env);
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -219,7 +220,7 @@ const MonoTestEnv = struct {
     }
 
     /// Initialize with an imported module
-    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) !Self {
+    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -303,7 +304,7 @@ const MonoTestEnv = struct {
         }
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -335,7 +336,7 @@ const MonoTestEnv = struct {
     const ImportedModule = struct { name: []const u8, env: *const MonoTestEnv };
 
     /// Initialize with multiple imported modules
-    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) !Self {
+    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -423,7 +424,7 @@ const MonoTestEnv = struct {
         }
 
         module_env.imports.clearResolvedModules();
-        module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+        try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
         var checker = try Check.init(
             gpa,
@@ -742,7 +743,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     try imported_envs_list.append(gpa, builtin_module.env);
 
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
 
     var checker = try Check.init(
         gpa,

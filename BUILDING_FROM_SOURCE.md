@@ -1,7 +1,5 @@
 # Building the new Roc compiler from source
 
-Note: If you're looking to build the old compiler from source, go [here](./crates/BUILDING_FROM_SOURCE.md).
-
 If you run into any problems getting Roc built from source, please ask for help in the `#beginners` channel on [Roc Zulip](https://roc.zulipchat.com) (the fastest way), or create an issue in this repo!
 
 ## Recommended way

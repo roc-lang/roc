@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const collections = @import("collections");
 
 /// Object format handled by one of the embedded LLD frontends.
 pub const Format = enum {
@@ -48,7 +49,7 @@ pub fn link(
     args: []const []const u8,
     options: Options,
 ) Error!void {
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = collections.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 

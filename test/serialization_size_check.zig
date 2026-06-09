@@ -8,7 +8,7 @@
 //! their expected platform-independent sizes. The build will fail if any type has
 //! the wrong size, preventing accidental introduction of pointers/slices.
 //!
-//! Run with: zig build test-serialization-sizes
+//! Run with: zig build run-test-serialization-sizes
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -25,7 +25,7 @@ const Node = can.CIR.Node;
 
 // Expected sizes for Serialized types (platform-independent, matching 32-bit wasm32)
 // NOTE: These constants must be updated if the Serialized type definitions change.
-// When you modify a Serialized type, rebuild with `zig build test-serialization-sizes`
+// When you modify a Serialized type, rebuild with `zig build run-test-serialization-sizes`
 // and update these constants based on the compile error messages.
 const expected_safelist_u8_size = 24;
 const expected_safelist_u32_size = 24;

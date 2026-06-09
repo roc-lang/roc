@@ -6,6 +6,7 @@
 //! interned (and deduplicated) data instead of storing the values themselves.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const types_mod = @import("types");
 const collections = @import("collections");
@@ -709,7 +710,7 @@ pub fn relocate(self: *Self, offset: isize) void {
 }
 
 /// Initialize the compilation fields in an existing ModuleEnv
-pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
+pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void {
     self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
     self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
@@ -730,7 +731,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
-pub fn initModuleEnvFields(self: *Self, module_name: []const u8) !void {
+pub fn initModuleEnvFields(self: *Self, module_name: []const u8) Allocator.Error!void {
     return self.initCIRFields(module_name);
 }
 
@@ -936,7 +937,7 @@ pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
 pub const Report = CIR.Report;
 
 /// Convert a canonicalization diagnostic to a Report for rendering.
-pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !Report {
+pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!Report {
     return switch (diagnostic) {
         .invalid_num_literal => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
@@ -2931,7 +2932,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 }
 
 /// Get region info for a given region
-pub fn getRegionInfo(self: *const Self, region: Region) !RegionInfo {
+pub fn getRegionInfo(self: *const Self, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }!RegionInfo {
     return self.common.getRegionInfo(region);
 }
 
@@ -2948,7 +2949,7 @@ pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32
 }
 
 /// Get the source line for a given region
-pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
+pub fn getSourceLine(self: *const Self, region: Region) error{ BeginTooLarge, EndTooLarge, InvalidPosition, NoLineStarts, OutOfOrder }![]const u8 {
     return self.common.getSourceLine(region);
 }
 
@@ -2999,7 +3000,7 @@ pub const Serialized = extern struct {
         env: *const Self,
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
-    ) !void {
+    ) Allocator.Error!void {
         try self.common.serialize(&env.common, allocator, writer);
         try self.types.serialize(&env.types, allocator, writer);
 
@@ -3348,12 +3349,12 @@ pub fn numericSuffixTypeForNode(self: *const Self, node_idx: Node.Idx) ?NumericS
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.
-pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) !void {
+pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) Allocator.Error!void {
     return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));
 }
 
 /// Associates a node index with an exposed identifier.
-pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) !void {
+pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
     return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
 }
 
@@ -3942,13 +3943,13 @@ pub fn insertQualifiedIdent(
 }
 
 /// Registers a method identifier mapping for an explicit owner declaration.
-pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
+pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) Allocator.Error!void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
 /// Registers a method definition mapping for an explicit owner declaration.
-pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) !void {
+pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) Allocator.Error!void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_defs.put(self.gpa, key, binding);
 }

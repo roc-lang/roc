@@ -418,6 +418,10 @@ const Solver = struct {
                 try self.bindPattern(let_.bind, value_ty);
                 _ = try self.expectExpr(let_.rest, expected);
             },
+            .lambda,
+            .def_ref,
+            .fn_def,
+            => Common.invariant("pre-lift function expression reached Lambda Solved"),
             .fn_ref => |fn_id| try self.unify(expected, self.program.fn_tys.items[@intFromEnum(fn_id)]),
             .call_value => |call| {
                 const func = try self.functionShape(try self.inferExpr(call.callee));
@@ -429,7 +433,8 @@ const Solver = struct {
                 }
             },
             .call_proc => |call| {
-                const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(call.callee)]);
+                const callee = Lifted.callProcCallee(call);
+                const func = try self.functionShape(self.program.fn_tys.items[@intFromEnum(callee)]);
                 const args = self.program.lifted.exprSpan(call.args);
                 if (func.args.count() != args.len) Common.invariant("procedure call arity differs from its checked type");
                 try self.unify(expected, func.ret);
@@ -597,7 +602,7 @@ const Solver = struct {
         const ty = switch (expr.data) {
             .local => |local| self.localTy(local),
             .fn_ref => |fn_id| self.program.fn_tys.items[@intFromEnum(fn_id)],
-            .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(call.callee)])).ret,
+            .call_proc => |call| (try self.functionShape(self.program.fn_tys.items[@intFromEnum(Lifted.callProcCallee(call))])).ret,
             else => try self.lowerTypeFresh(expr.ty),
         };
         self.expr_tys[index] = ty;

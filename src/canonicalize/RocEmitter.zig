@@ -8,6 +8,7 @@
 //! The emitter walks the CIR expression tree and writes corresponding Roc syntax.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const builtins = @import("builtins");
 
@@ -93,12 +94,12 @@ pub fn reset(self: *Self) void {
 }
 
 /// Emit an expression as Roc source code
-pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) !void {
+pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) EmitError!void {
     try self.emitFromFrame(.{ .expr = expr_idx });
 }
 
 /// Emit a pattern as Roc source code
-pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
+pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) EmitError!void {
     try self.emitFromFrame(.{ .pattern = pattern_idx });
 }
 
@@ -714,7 +715,7 @@ fn base256ToDecimalDigits(self: *Self, bytes_be: []const u8) std.mem.Allocator.E
     return out;
 }
 
-fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
+fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
     const pattern = self.module_env.store.getPattern(pattern_idx);
     if (pattern == .assign) {
         const name = self.module_env.getIdent(pattern.assign.ident);
@@ -724,18 +725,18 @@ fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     // but for now just handling simple assigns
 }
 
-fn emitIntValue(self: *Self, value: CIR.IntValue) !void {
+fn emitIntValue(self: *Self, value: CIR.IntValue) Allocator.Error!void {
     const str = try value.bufPrint(try self.scratchBuffer(40));
     try self.write(str);
 }
 
-fn emitIndent(self: *Self) !void {
+fn emitIndent(self: *Self) Allocator.Error!void {
     for (0..self.indent_level) |_| {
         try self.write("\t");
     }
 }
 
-fn write(self: *Self, str: []const u8) !void {
+fn write(self: *Self, str: []const u8) Allocator.Error!void {
     try self.output.appendSlice(self.allocator, str);
 }
 
@@ -768,7 +769,7 @@ fn formatF64(self: *Self, value: f64) std.mem.Allocator.Error![]const u8 {
 /// This handles closure tag names like "#1_foo" which become "C1_foo" in output.
 /// The `#` prefix is used internally because it's reserved for comments in Roc
 /// source code, ensuring no collision with user-defined tag names.
-fn emitTagName(self: *Self, name: []const u8) !void {
+fn emitTagName(self: *Self, name: []const u8) Allocator.Error!void {
     if (name.len > 0 and name[0] == '#') {
         // Compiler-generated tag: replace # with C (uppercase for tags)
         try self.output.append(self.allocator, 'C');
@@ -783,7 +784,7 @@ fn emitTagName(self: *Self, name: []const u8) !void {
 /// This handles lifted function names like "#1_foo" which become "c1_foo" in output.
 /// The `#` prefix is used internally because it's reserved for comments in Roc
 /// source code, ensuring no collision with user-defined identifiers.
-fn emitIdent(self: *Self, name: []const u8) !void {
+fn emitIdent(self: *Self, name: []const u8) Allocator.Error!void {
     if (name.len > 0 and name[0] == '#') {
         // Compiler-generated ident: replace # with c (lowercase for functions)
         try self.output.append(self.allocator, 'c');

@@ -96,6 +96,7 @@ pub const Options = struct {
     name: []const u8 = &.{},
     target: *const std.Target = &builtin.target,
     triple: []const u8 = &.{},
+    data_layout: []const u8 = &.{},
 };
 
 /// Interned string handle for efficient string storage and comparison.
@@ -8593,7 +8594,7 @@ pub const Metadata = packed struct(u32) {
             }
         }
         inline fn fmt(formatter: *Formatter, prefix: []const u8, node: anytype, special: ?FormatFlags) switch (@TypeOf(node)) {
-            Metadata, Metadata.Optional, ?Metadata => Allocator.Error,
+            Metadata, Metadata.Optional, ?Metadata => Allocator.Error || error{WriteFailed},
             else => error{},
         }!std.fmt.Alt(FormatData, format) {
             const Node = @TypeOf(node);
@@ -8651,7 +8652,7 @@ pub const Metadata = packed struct(u32) {
             prefix: []const u8,
             value: Value,
             function: Function.Index,
-        ) Allocator.Error!std.fmt.Alt(FormatData, format) {
+        ) (Allocator.Error || error{WriteFailed})!std.fmt.Alt(FormatData, format) {
             return .{ .data = .{
                 .formatter = formatter,
                 .prefix = prefix,
@@ -8681,7 +8682,7 @@ pub const Metadata = packed struct(u32) {
                 .specialized = null,
             } };
         }
-        fn refUnwrapped(formatter: *Formatter, node: Metadata) Allocator.Error!FormatData.Node {
+        fn refUnwrapped(formatter: *Formatter, node: Metadata) (Allocator.Error || error{WriteFailed})!FormatData.Node {
             const builder = formatter.builder;
             const unwrapped_metadata = node.unwrap(builder);
             switch (unwrapped_metadata.tag(builder)) {
@@ -8715,7 +8716,7 @@ pub const Metadata = packed struct(u32) {
             },
             nodes: anytype,
             w: *Writer,
-        ) !void {
+        ) (Allocator.Error || error{WriteFailed})!void {
             const names = comptime std.meta.fieldNames(@TypeOf(nodes));
 
             comptime var fmt_str: []const u8 = "{[distinct]s}{[node]s}(";
@@ -8809,6 +8810,10 @@ pub fn init(options: Options) Allocator.Error!Builder {
 
     if (options.triple.len > 0) {
         self.target_triple = try self.string(options.triple);
+    }
+
+    if (options.data_layout.len > 0) {
+        self.data_layout = try self.string(options.data_layout);
     }
 
     {
@@ -9792,7 +9797,7 @@ pub fn dump(b: *Builder, io: Io) void {
 }
 
 /// Prints the LLVM IR to a file at the given path.
-pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void {
+pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) Allocator.Error!void {
     var buffer: [4000]u8 = undefined;
     const file = try dir.createFile(io, path, .{});
     defer file.close(io);
@@ -9800,7 +9805,7 @@ pub fn printToFilePath(b: *Builder, io: Io, dir: Io.Dir, path: []const u8) !void
 }
 
 /// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) !void {
+pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) Allocator.Error!void {
     var fw = file.writer(io, buffer);
     try print(b, &fw.interface);
     try fw.interface.flush();

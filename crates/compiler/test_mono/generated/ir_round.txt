@@ -1,8 +1,0 @@
-procedure Num.45 (#Attr.2):
-    let Num.289 : I64 = lowlevel NumRound #Attr.2;
-    ret Num.289;
-
-procedure Test.0 ():
-    let Test.2 : Decimal = 3.6dec;
-    let Test.1 : I64 = CallByName Num.45 Test.2;
-    ret Test.1;

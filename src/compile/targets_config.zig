@@ -185,7 +185,7 @@ pub const TargetsConfig = struct {
     /// Returns null if the platform header has no targets section.
     /// All string values are duped with the provided allocator, so the
     /// returned TargetsConfig owns its memory and is independent of the AST.
-    pub fn fromAST(allocator: Allocator, ast: anytype) !?TargetsConfig {
+    pub fn fromAST(allocator: Allocator, ast: anytype) Allocator.Error!?TargetsConfig {
         const NodeStore = parse.NodeStore;
 
         const store: *const NodeStore = &ast.store;
@@ -237,7 +237,7 @@ pub const TargetsConfig = struct {
         store: *const parse.NodeStore,
         ast: anytype,
         link_type_idx: anytype,
-    ) ![]const TargetLinkSpec {
+    ) Allocator.Error![]const TargetLinkSpec {
         const idx = link_type_idx orelse return &.{};
 
         const link_type = store.getTargetLinkType(idx);

@@ -1,6 +1,0 @@
-@0-6 ParensAround(
-    Var {
-        module_name: "",
-        ident: "whee",
-    },
-)

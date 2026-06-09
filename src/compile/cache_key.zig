@@ -6,6 +6,7 @@
 //! belong to later target-specific caches only.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const check = @import("check");
 
 const CheckedArtifact = check.CheckedArtifact;
@@ -85,7 +86,7 @@ fn testInput() CacheKeyInput {
     };
 }
 
-fn expectDifferent(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) !void {
+fn expectDifferent(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) anyerror!void {
     try std.testing.expect(!eql(a, b));
 }
 

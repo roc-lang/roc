@@ -5,6 +5,7 @@
 //! and returns them in the LSP delta-encoded format.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const semantic_tokens = @import("../semantic_tokens.zig");
 const line_info = @import("../line_info.zig");
@@ -13,7 +14,7 @@ const uri_util = @import("../uri.zig");
 /// Returns the semantic tokens handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             if (self.state != .running) {
                 try ServerType.sendError(self, id, .server_not_initialized, "server not initialized");
                 return;
@@ -23,8 +24,9 @@ pub fn handler(comptime ServerType: type) type {
                 return try ServerType.sendError(self, id, .invalid_params, "semanticTokens requires params");
             };
 
-            var params = protocol.SemanticTokensParams.fromJson(self.allocator, params_value) catch {
-                return try ServerType.sendError(self, id, .invalid_params, "invalid semanticTokens params");
+            var params = protocol.SemanticTokensParams.fromJson(self.allocator, params_value) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return try ServerType.sendError(self, id, .invalid_params, "invalid semanticTokens params"),
             };
             defer params.deinit(self.allocator);
 
@@ -34,9 +36,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Build line info for position conversion
-            var info = line_info.LineInfo.init(self.allocator, doc.text) catch {
-                return try ServerType.sendError(self, id, .internal_error, "failed to build line info");
-            };
+            var info = try line_info.LineInfo.init(self.allocator, doc.text);
             defer info.deinit();
 
             // Try to get imported ModuleEnvs for cross-module semantic tokens
@@ -44,33 +44,33 @@ pub fn handler(comptime ServerType: type) type {
             defer if (imported_envs) |envs| self.allocator.free(envs);
 
             // Convert URI to path and get imports
-            if (uri_util.uriToPath(self.allocator, params.textDocument.uri)) |path| {
+            {
+                const path = try uri_util.uriToPath(self.allocator, params.textDocument.uri);
                 defer self.allocator.free(path);
-                // Get absolute path
-                if (std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator)) |abs_path| {
-                    defer self.allocator.free(abs_path);
+                // Get absolute path. A missing on-disk file is fine; we just skip
+                // cross-module enrichment, but a genuine OOM must surface.
+                const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => null,
+                };
+                if (abs_path) |ap| {
+                    defer self.allocator.free(ap);
                     // Get imported modules from the syntax checker's cached build
-                    if (self.syntax_checker.getImportedModuleEnvs(abs_path)) |maybe_envs| {
-                        imported_envs = maybe_envs;
-                    } else |_| {}
-                } else |_| {}
-            } else |_| {}
+                    imported_envs = try self.syntax_checker.getImportedModuleEnvs(ap);
+                }
+            }
 
             // Extract semantic tokens using CIR with cross-module context
-            const tokens = semantic_tokens.extractSemanticTokensWithImports(
+            const tokens = try semantic_tokens.extractSemanticTokensWithImports(
                 self.allocator,
                 doc.text,
                 &info,
                 imported_envs,
-            ) catch {
-                return try ServerType.sendError(self, id, .internal_error, "failed to extract tokens");
-            };
+            );
             defer self.allocator.free(tokens);
 
             // Delta-encode the tokens
-            const data = semantic_tokens.deltaEncode(self.allocator, tokens) catch {
-                return try ServerType.sendError(self, id, .internal_error, "failed to encode tokens");
-            };
+            const data = try semantic_tokens.deltaEncode(self.allocator, tokens);
             defer if (data.len > 0) self.allocator.free(data);
 
             // Send the response

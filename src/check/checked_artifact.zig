@@ -4431,7 +4431,7 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     return null;
 }
 
-fn testTypeDeclSourceDeclForIdent(module_env: *const ModuleEnv, type_ident: base.Ident.Idx) !u32 {
+fn testTypeDeclSourceDeclForIdent(module_env: *const ModuleEnv, type_ident: base.Ident.Idx) error{MissingTestTypeDecl}!u32 {
     for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
         const source_decl = @intFromEnum(statement_idx);
         const candidate = sourceDeclTypeIdent(module_env, source_decl) orelse continue;
@@ -6038,6 +6038,7 @@ fn checkedExprDataDiverges(
 ) bool {
     return switch (data) {
         .crash,
+        .ellipsis,
         .return_,
         => true,
         .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
@@ -6120,7 +6121,6 @@ fn checkedExprDataDiverges(
         .method_eq,
         .type_dispatch_call,
         .runtime_error,
-        .ellipsis,
         .anno_only,
         => false,
     };
@@ -15274,7 +15274,7 @@ pub const CheckedModuleArtifact = struct {
         }
     }
 
-    pub fn verifyComplete(self: *const CheckedModuleArtifact) void {
+    pub fn verifyComplete(self: *const CheckedModuleArtifact) Allocator.Error!void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
@@ -15675,7 +15675,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         self.const_templates.verifySealed();
-        self.const_store.verifyComplete();
+        try self.const_store.verifyComplete();
         self.interface_capabilities.verifyComplete();
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@intFromEnum(record.expr) < self.checked_bodies.exprs.len);
@@ -17423,7 +17423,7 @@ pub fn publishFromTypedModule(
         inputs.relation_artifacts,
         inputs.problem_store,
     );
-    artifact.verifyComplete();
+    try artifact.verifyComplete();
     return artifact;
 }
 
@@ -17436,7 +17436,7 @@ const ProvidedExportKindExpectation = struct {
 fn expectProvidedExportKind(
     source: []const u8,
     expected: ProvidedExportKindExpectation,
-) !void {
+) anyerror!void {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;

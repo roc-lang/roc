@@ -63,6 +63,10 @@ pub const ParseTask = struct {
     module_name: []const u8,
     /// Filesystem path to the .roc file
     path: []const u8,
+    /// Source-relative import base directory. Distinct from `dirname(path)` when
+    /// the module is staged elsewhere (e.g. a default app written to a temp dir),
+    /// so sibling imports resolve against the user's original directory.
+    source_dir: []const u8,
     /// Compiler role for this source module
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
@@ -273,6 +277,19 @@ pub const CycleDetected = struct {
     module_env: *ModuleEnv,
 };
 
+/// Result when a worker stage ran out of memory. Carries just enough identity
+/// to report which module was being processed; the coordinator turns this into
+/// `error.OutOfMemory` and aborts the whole compilation rather than letting the
+/// failure masquerade as an ordinary stage failure.
+pub const WorkerOom = struct {
+    /// Package this module belongs to
+    package_name: []const u8,
+    /// Module identifier
+    module_id: ModuleId,
+    /// Module name
+    module_name: []const u8,
+};
+
 /// Result sent from workers - contains ALL outputs from the operation
 pub const WorkerResult = union(enum) {
     /// Module was successfully parsed
@@ -287,6 +304,8 @@ pub const WorkerResult = union(enum) {
     compile_failed: CompileFailure,
     /// Import cycle was detected
     cycle_detected: CycleDetected,
+    /// A worker stage ran out of memory
+    worker_oom: WorkerOom,
 
     pub fn getPackageName(self: WorkerResult) []const u8 {
         return switch (self) {
@@ -296,6 +315,7 @@ pub const WorkerResult = union(enum) {
             .parse_failed => |r| r.package_name,
             .compile_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
+            .worker_oom => |r| r.package_name,
         };
     }
 
@@ -307,6 +327,7 @@ pub const WorkerResult = union(enum) {
             .parse_failed => |r| r.module_id,
             .compile_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
+            .worker_oom => |r| r.module_id,
         };
     }
 
@@ -318,6 +339,7 @@ pub const WorkerResult = union(enum) {
             .parse_failed => |r| r.module_name,
             .compile_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
+            .worker_oom => |r| r.module_name,
         };
     }
 
@@ -369,6 +391,7 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
+            .worker_oom => {},
         }
     }
 };
@@ -394,6 +417,7 @@ test "WorkerTask accessors" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/path/to/Main.roc",
+            .source_dir = "/path/to",
             .depth = 0,
             .module_role = .user,
         },

@@ -63,9 +63,14 @@ enum ZigLLVMThinOrFullLTOPhase {
     ZigLLVMThinOrFullLTOPhase_FullPostLink,
 };
 
+enum ZigLLVMIROptimizationLevel {
+    ZigLLVMIROptimizationLevel_Oz = 0,
+    ZigLLVMIROptimizationLevel_O3,
+};
+
 struct ZigLLVMEmitOptions {
     bool is_debug;
-    bool is_small;
+    ZigLLVMIROptimizationLevel ir_opt_level;
     // If not null, and `ZigLLVMTargetMachineEmitToFile` returns `false` indicating success, this
     // `char *` will be populated with a `malloc`-allocated string containing the serialized (as
     // JSON) time report data. The caller is responsible for freeing that memory.

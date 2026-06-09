@@ -121,13 +121,39 @@ pub const ObjectFileCompiler = struct {
             return CompilationError.ObjectGenerationFailed;
         };
     }
+
+    /// Emit a data-only object from already materialized readonly exports.
+    pub fn compileStaticDataObject(
+        self: *ObjectFileCompiler,
+        static_data_exports: []const StaticDataExport,
+        target: RocTarget,
+    ) CompilationError!CompilationResult {
+        return compileStaticDataObjectBytes(self.allocator, static_data_exports, target);
+    }
+
+    /// Emit a data-only object and write it to a path.
+    pub fn compileStaticDataObjectAndWrite(
+        self: *ObjectFileCompiler,
+        static_data_exports: []const StaticDataExport,
+        target: RocTarget,
+        output_path: []const u8,
+        roc_ctx: CoreCtx,
+    ) CompilationError!void {
+        var result = try self.compileStaticDataObject(static_data_exports, target);
+        defer result.deinit();
+
+        writeFileWindowsAvSafe(roc_ctx.std_io, output_path, result.object_bytes) catch |err| {
+            std.log.err("failed to write static data object file {s}: {}", .{ output_path, err });
+            return CompilationError.ObjectGenerationFailed;
+        };
+    }
 };
 
 /// On Windows, filter drivers (Defender, EDR agents) can transiently hold a
 /// just-created file open and return AccessDenied on a follow-up write from a
 /// sibling process. Retry a few times with exponential backoff. Other OSes
 /// pass through to a single writeFile call.
-pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8) !void {
+pub fn writeFileWindowsAvSafe(io: std.Io, sub_path: []const u8, data: []const u8) anyerror!void {
     if (comptime builtin.os.tag != .windows) {
         return CoreCtx.writeFileCwd(io, sub_path, data);
     }
@@ -430,6 +456,84 @@ fn appendStaticDataExport(
             return CompilationError.OutOfMemory;
         };
     }
+}
+
+fn compileStaticDataObjectBytes(
+    allocator: Allocator,
+    static_data_exports: []const StaticDataExport,
+    target: RocTarget,
+) CompilationError!CompilationResult {
+    if (static_data_exports.len == 0) {
+        return CompilationError.NoEntrypoints;
+    }
+
+    var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
+    defer symbols.deinit(allocator);
+
+    var rodata = std.ArrayList(u8).empty;
+    defer rodata.deinit(allocator);
+
+    var rodata_relocations = std.ArrayList(ObjectWriter.DataRelocation).empty;
+    defer rodata_relocations.deinit(allocator);
+
+    var static_data_symbols = std.ArrayList(ObjectWriter.Symbol).empty;
+    defer static_data_symbols.deinit(allocator);
+
+    for (static_data_exports) |data_export| {
+        try appendStaticDataExport(allocator, data_export, &rodata, &rodata_relocations, &static_data_symbols);
+    }
+
+    for (static_data_symbols.items) |sym| {
+        if (sym.is_global) continue;
+        symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
+    }
+    for (static_data_symbols.items) |sym| {
+        if (!sym.is_global) continue;
+        symbols.append(allocator, sym) catch return CompilationError.OutOfMemory;
+    }
+
+    for (rodata_relocations.items) |reloc| {
+        var found = false;
+        for (symbols.items) |sym| {
+            if (std.mem.eql(u8, sym.name, reloc.target_symbol_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            symbols.append(allocator, .{
+                .name = reloc.target_symbol_name,
+                .offset = 0,
+                .size = 0,
+                .is_global = false,
+                .is_function = false,
+                .is_external = true,
+                .section = .undef,
+            }) catch return CompilationError.OutOfMemory;
+        }
+    }
+
+    var output = std.ArrayList(u8).empty;
+    errdefer output.deinit(allocator);
+
+    ObjectWriter.generateObjectFile(
+        allocator,
+        target,
+        &.{},
+        rodata.items,
+        symbols.items,
+        &.{},
+        rodata_relocations.items,
+        &output,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.UnsupportedTarget => return CompilationError.UnsupportedTarget,
+    };
+
+    return .{
+        .object_bytes = output.toOwnedSlice(allocator) catch return CompilationError.OutOfMemory,
+        .allocator = allocator,
+    };
 }
 
 /// Runtime-to-comptime dispatch for compilation.

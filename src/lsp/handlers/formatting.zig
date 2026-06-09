@@ -3,6 +3,7 @@
 //! Formats Roc source code using the built-in formatter.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const fmt = @import("fmt");
 const parse = @import("parse");
@@ -10,7 +11,7 @@ const can = @import("can");
 /// Handler for `textDocument/formatting` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
-        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) !void {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
             const params = maybe_params orelse {
                 try self.sendError(id, .invalid_params, "formatting requires params");
                 return;
@@ -56,10 +57,13 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Format the document
-            const formatted = formatSource(self.allocator, text) catch |err| {
-                std.log.err("formatting failed: {s}", .{@errorName(err)});
-                try self.sendNullResponse(id);
-                return;
+            const formatted = formatSource(self.allocator, text) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("formatting failed: {s}", .{@errorName(err)});
+                    try self.sendNullResponse(id);
+                    return;
+                },
             };
             defer self.allocator.free(formatted);
 
@@ -111,7 +115,7 @@ const Position = struct {
 };
 
 /// Format source code and return the formatted result.
-fn formatSource(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
+fn formatSource(allocator: std.mem.Allocator, source: []const u8) anyerror![]u8 {
     // Create ModuleEnv for parsing
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();

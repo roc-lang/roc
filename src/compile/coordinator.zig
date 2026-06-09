@@ -138,21 +138,11 @@ const RetiredCheckedArtifact = struct {
     }
 };
 
-/// Thread-safe allocator used for worker-thread allocations and shared
-/// coordinator buffers (channels, per-package maps) when running multi-threaded.
-///
-/// On platforms with threads, `std.heap.smp_allocator` is used: it maintains
-/// per-thread freelists backed by a shared global pool, avoiding the per-call
-/// `mmap`/`munmap` serialization on the kernel VM lock that `page_allocator`
-/// incurs (the prior cause of the multi-threaded performance cliff).
-///
-/// On wasm/freestanding (no threads), `smp_allocator` is unreachable at
-/// runtime but the constant must still compile, so it resolves to
-/// `page_allocator` (which on wasm is backed by `WasmAllocator`).
-const thread_safe_allocator: Allocator = if (threads_available)
-    std.heap.smp_allocator
-else
-    std.heap.page_allocator;
+/// Thread-safe allocator for worker-thread allocations and shared coordinator
+/// buffers (channels, per-package maps) in multi-threaded mode. base.defaultGpa
+/// resolves per target to a thread-safe, non-page_allocator choice: libc's
+/// malloc, smp_allocator on musl, or wasm_allocator on freestanding (no threads).
+const thread_safe_allocator: Allocator = base.defaultGpa();
 
 const StageTimer = if (threads_available) std.Io.Timestamp else void;
 
@@ -265,13 +255,14 @@ pub const WorkerAllocators = struct {
     /// In multi-threaded mode, this is smp_allocator for thread safety.
     gpa: Allocator,
 
-    /// Underlying arena implementation
-    arena_impl: std.heap.ArenaAllocator,
+    /// Underlying arena implementation. Each worker (and the inline path) owns
+    /// its own `WorkerAllocators`, so this arena is never touched concurrently.
+    arena_impl: base.SingleThreadArena,
 
     pub fn init(backing: Allocator) WorkerAllocators {
         return .{
             .gpa = backing,
-            .arena_impl = std.heap.ArenaAllocator.init(backing),
+            .arena_impl = base.SingleThreadArena.init(backing),
         };
     }
 
@@ -580,7 +571,7 @@ pub const PackageState = struct {
     }
 
     /// Ensure a module exists, creating it if necessary
-    pub fn ensureModule(self: *PackageState, gpa: Allocator, name: []const u8, path: []const u8) !ModuleId {
+    pub fn ensureModule(self: *PackageState, gpa: Allocator, name: []const u8, path: []const u8) Allocator.Error!ModuleId {
         if (self.module_names.get(name)) |id| {
             return id;
         }
@@ -633,7 +624,7 @@ pub const PackageState = struct {
         module_id: ModuleId,
         reachable_id: ModuleId,
         delta: ?*std.ArrayList(ModuleId),
-    ) !bool {
+    ) Allocator.Error!bool {
         const reachable = &self.modules.items[module_id].reachable_local_imports;
         const needed_len = @as(usize, reachable_id) + 1;
         if (reachable.bit_length < needed_len) {
@@ -651,7 +642,7 @@ pub const PackageState = struct {
         gpa: Allocator,
         module_id: ModuleId,
         imported_id: ModuleId,
-    ) !void {
+    ) Allocator.Error!void {
         var initial_delta = std.ArrayList(ModuleId).empty;
         defer initial_delta.deinit(gpa);
 
@@ -674,7 +665,7 @@ pub const PackageState = struct {
         gpa: Allocator,
         module_id: ModuleId,
         initial_delta: []const ModuleId,
-    ) !void {
+    ) Allocator.Error!void {
         const WorkItem = struct {
             module_id: ModuleId,
             delta_start: usize,
@@ -749,6 +740,13 @@ pub const Coordinator = struct {
     /// Set by shutdown() to tell workers to stop promptly instead of draining
     /// remaining tasks from the channel.
     shutting_down: std.atomic.Value(bool),
+
+    /// Set by a worker thread when it runs out of memory while producing a
+    /// result (e.g. constructing a failure report). Worker threads have a
+    /// `void` signature and cannot return errors, so they record the OOM here;
+    /// the coordinator loop observes it and aborts the build with
+    /// `error.OutOfMemory` instead of hanging or silently dropping the failure.
+    worker_oom: std.atomic.Value(bool),
 
     /// Total modules remaining across all packages
     total_remaining: usize,
@@ -826,7 +824,7 @@ pub const Coordinator = struct {
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
         roc_ctx: CoreCtx,
-    ) !Coordinator {
+    ) Allocator.Error!Coordinator {
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
         // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
@@ -844,6 +842,7 @@ pub const Coordinator = struct {
             .workers = std.ArrayList(Thread).empty,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
+            .worker_oom = std.atomic.Value(bool).init(false),
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
@@ -959,7 +958,7 @@ pub const Coordinator = struct {
     }
 
     /// Create or get a package
-    pub fn ensurePackage(self: *Coordinator, name: []const u8, root_dir: []const u8) !*PackageState {
+    pub fn ensurePackage(self: *Coordinator, name: []const u8, root_dir: []const u8) Allocator.Error!*PackageState {
         if (self.packages.get(name)) |pkg| {
             return pkg;
         }
@@ -1068,7 +1067,7 @@ pub const Coordinator = struct {
         platform_dir: []const u8,
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
-    ) !void {
+    ) Allocator.Error!void {
         const pf_pkg = try self.ensurePackage("pf", platform_dir);
 
         if (qualifier) |qual| {
@@ -1097,7 +1096,7 @@ pub const Coordinator = struct {
         package_root_dir: []const u8,
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
-    ) !*PackageState {
+    ) Allocator.Error!*PackageState {
         const pkg = try self.ensurePackage(package_name, package_root_dir);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
@@ -1715,7 +1714,7 @@ pub const Coordinator = struct {
     /// Must only be called after `coordinatorLoop` returns and after the
     /// caller has confirmed `hasUserErrors() == false`. Returns
     /// `error.HasUserErrors` if called while user-facing diagnostics exist.
-    pub fn finalizeExecutableArtifacts(self: *Coordinator) !void {
+    pub fn finalizeExecutableArtifacts(self: *Coordinator) anyerror!void {
         if (self.hasUserErrors()) return error.HasUserErrors;
 
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse {
@@ -1782,7 +1781,7 @@ pub const Coordinator = struct {
         });
     }
 
-    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) !void {
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) anyerror!void {
         if (self.hasUserErrors()) {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
@@ -1843,7 +1842,7 @@ pub const Coordinator = struct {
         app_mod: *ModuleState,
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         missing: check.CheckedArtifact.PlatformRequirementMissingValue,
-    ) !void {
+    ) Allocator.Error!void {
         var report = Report.init(self.gpa, "MISSING REQUIRED VALUE", .runtime_error);
         errdefer report.deinit();
 
@@ -1861,7 +1860,7 @@ pub const Coordinator = struct {
         platform_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         app_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         mismatch: check.CheckedArtifact.PlatformRequirementTypeMismatch,
-    ) !void {
+    ) Allocator.Error!void {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
@@ -1997,7 +1996,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         publication: compile_package.ArtifactPublicationInputs,
-    ) !void {
+    ) anyerror!void {
         const env = mod.moduleEnv() orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env for {s}", .{mod.name});
@@ -2192,7 +2191,7 @@ pub const Coordinator = struct {
     /// Start the coordinator and spawn worker threads (for multi-threaded mode).
     /// max_threads <= 1 is treated as single-threaded (inline execution); callers
     /// that want auto-detection should resolve 0 to the CPU count before init.
-    pub fn start(self: *Coordinator) !void {
+    pub fn start(self: *Coordinator) (Allocator.Error || std.Thread.SpawnError)!void {
         if (self.mode == .single_threaded or self.max_threads <= 1) return;
         if (comptime !is_freestanding) {
             const n = if (self.max_threads == 0) (std.Thread.getCpuCount() catch 1) else self.max_threads;
@@ -2229,7 +2228,7 @@ pub const Coordinator = struct {
     }
 
     /// Enqueue a task for processing
-    pub fn enqueueTask(self: *Coordinator, task: WorkerTask) !void {
+    pub fn enqueueTask(self: *Coordinator, task: WorkerTask) Allocator.Error!void {
         if (comptime trace_build) {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
@@ -2265,7 +2264,7 @@ pub const Coordinator = struct {
     }
 
     /// Enqueue a parse task for a module
-    pub fn enqueueParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) !void {
+    pub fn enqueueParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
         const pkg = self.packages.get(pkg_name) orelse return;
         const mod = pkg.getModule(module_id) orelse return;
 
@@ -2277,6 +2276,7 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .source_dir = mod.canonicalSourceDir(),
                 .module_role = mod.module_role,
                 .depth = mod.depth,
             },
@@ -2284,18 +2284,22 @@ pub const Coordinator = struct {
     }
 
     /// Main coordinator loop - unified for single and multi-threaded modes
-    pub fn coordinatorLoop(self: *Coordinator) !void {
+    pub fn coordinatorLoop(self: *Coordinator) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         var inline_worker_allocs = WorkerAllocators.init(self.gpa);
         defer inline_worker_allocs.deinit();
         var iterations_without_progress: u32 = 0;
 
         while (!self.isComplete()) {
+            // A worker thread ran out of memory while producing a result. It
+            // cannot return the error itself, so it recorded the OOM here.
+            if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
+
             var made_progress = false;
 
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
-                    const result = self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
+                    const result = try self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
                     inline_worker_allocs.resetArena();
                     try self.handleResult(result);
                     made_progress = true;
@@ -2389,7 +2393,7 @@ pub const Coordinator = struct {
 
     /// Try to unblock all modules waiting on external imports
     /// Returns true if any module was unblocked
-    fn tryUnblockAllWaiting(self: *Coordinator) !bool {
+    fn tryUnblockAllWaiting(self: *Coordinator) Allocator.Error!bool {
         var any_unblocked = false;
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -2420,7 +2424,7 @@ pub const Coordinator = struct {
     }
 
     /// Execute a task inline with explicit worker allocators.
-    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) WorkerResult {
+    fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         return switch (task) {
             .parse => |t| self.executeParse(t, allocators),
             .canonicalize => |t| self.executeCanonicalize(t, allocators),
@@ -2494,7 +2498,7 @@ pub const Coordinator = struct {
 
     fn serializeModuleEnvForCache(self: *Coordinator, env: *const ModuleEnv) Allocator.Error![]u8 {
         const allocator = self.cache_manager.?.allocator;
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = base.SingleThreadArena.init(allocator);
         defer arena.deinit();
         const arena_alloc = arena.allocator();
 
@@ -2546,6 +2550,27 @@ pub const Coordinator = struct {
         );
     }
 
+    fn resolvedDirectImportsHaveCheckedOutput(
+        env: *const ModuleEnv,
+        checked_imports: []const check.CheckedArtifact.PublishImportArtifact,
+    ) bool {
+        for (env.imports.imports.items.items, 0..) |_, i| {
+            const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+            const resolved_module_idx = env.imports.getResolvedModule(import_idx) orelse continue;
+
+            var found = false;
+            for (checked_imports) |checked_import| {
+                if (checked_import.module_idx == resolved_module_idx) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+
+        return true;
+    }
+
     fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
@@ -2583,6 +2608,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
+        if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts) catch return false;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
@@ -2705,7 +2731,7 @@ pub const Coordinator = struct {
         return true;
     }
 
-    fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) !void {
+    fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
         const module_time = mod.compile_time_ns;
         if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
@@ -2737,7 +2763,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a result from a worker
-    fn handleResult(self: *Coordinator, result: WorkerResult) !void {
+    fn handleResult(self: *Coordinator, result: WorkerResult) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         // Make a mutable copy so we can deinit after handling
         var res = result;
         // Use worker allocator to match what workers used for allocation
@@ -2751,11 +2777,12 @@ pub const Coordinator = struct {
             .parse_failed => |*r| try self.handleParseFailed(r),
             .compile_failed => |*r| try self.handleCompileFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
+            .worker_oom => return error.OutOfMemory,
         }
     }
 
     /// Handle a successful parse result
-    fn handleParsed(self: *Coordinator, result: *ParsedResult) !void {
+    fn handleParsed(self: *Coordinator, result: *ParsedResult) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -2855,7 +2882,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a successful canonicalization result
-    fn handleCanonicalized(self: *Coordinator, result: *CanonicalizedResult) !void {
+    fn handleCanonicalized(self: *Coordinator, result: *CanonicalizedResult) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: pkg={s} module={s} result_reports={}\n", .{
                 result.package_name,
@@ -2963,7 +2990,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a successful type-check result
-    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) !void {
+    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -3054,7 +3081,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a parse failure
-    fn handleParseFailed(self: *Coordinator, result: *messages.ParseFailure) !void {
+    fn handleParseFailed(self: *Coordinator, result: *messages.ParseFailure) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -3100,7 +3127,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a non-parsing compilation failure.
-    fn handleCompileFailed(self: *Coordinator, result: *CompileFailure) !void {
+    fn handleCompileFailed(self: *Coordinator, result: *CompileFailure) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] COMPILE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -3140,7 +3167,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle cycle detection
-    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) !void {
+    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) Allocator.Error!void {
         const pkg = self.packages.get(result.package_name) orelse {
             self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
                 result.package_name, result.module_id,
@@ -3173,7 +3200,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle cycle detection inline during canonicalization result processing
-    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, child_id: ModuleId) !void {
+    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, child_id: ModuleId) Allocator.Error!void {
         const mod = pkg.getModule(module_id).?;
         const child = pkg.getModule(child_id).?;
 
@@ -3208,7 +3235,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
-    ) ![]const CanonicalizeImport {
+    ) Allocator.Error![]const CanonicalizeImport {
         var imports = std.ArrayList(CanonicalizeImport).empty;
         errdefer imports.deinit(allocator);
 
@@ -3241,7 +3268,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
-    ) ![]const *ModuleEnv {
+    ) Allocator.Error![]const *ModuleEnv {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
@@ -3294,7 +3321,7 @@ pub const Coordinator = struct {
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
-    ) ![]const check.CheckedArtifact.PublishImportArtifact {
+    ) Allocator.Error![]const check.CheckedArtifact.PublishImportArtifact {
         var imports = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
         errdefer imports.deinit(allocator);
 
@@ -3339,7 +3366,7 @@ pub const Coordinator = struct {
     }
 
     /// Try to unblock a module waiting on imports
-    fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) !void {
+    fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) Allocator.Error!void {
         const mod = pkg.getModule(module_id) orelse return;
         if (mod.phase != .WaitingOnImports) return;
 
@@ -3391,7 +3418,7 @@ pub const Coordinator = struct {
 
     /// Schedule an external import in its owning package
     /// Also registers the source module as a cross-package dependent of the target
-    pub fn scheduleExternalImport(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) !void {
+    pub fn scheduleExternalImport(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] SCHEDULE EXT IMPORT: from {s} importing {s}\n", .{ source_pkg, import_name });
         }
@@ -3445,7 +3472,7 @@ pub const Coordinator = struct {
         target_module_id: ModuleId,
         source_pkg: []const u8,
         source_module_id: ModuleId,
-    ) !void {
+    ) Allocator.Error!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] REGISTER CROSS-PKG DEP: {s}:{} depends on {s}:{}\n", .{ source_pkg, source_module_id, target_pkg, target_module_id });
         }
@@ -3470,7 +3497,7 @@ pub const Coordinator = struct {
     }
 
     /// Wake all cross-package dependents of a completed module
-    fn wakeCrossPackageDependents(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) !void {
+    fn wakeCrossPackageDependents(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
         // Build key
         var key_buf: [256]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{d}", .{ pkg_name, module_id }) catch return;
@@ -3553,12 +3580,12 @@ pub const Coordinator = struct {
     }
 
     /// Resolve a module name to a path
-    fn resolveModulePath(self: *Coordinator, root_dir: []const u8, mod_name: []const u8) ![]const u8 {
+    fn resolveModulePath(self: *Coordinator, root_dir: []const u8, mod_name: []const u8) Allocator.Error![]const u8 {
         return self.resolveModulePathWithAllocator(root_dir, mod_name, self.gpa);
     }
 
     /// Resolve a module name to a path using a specific allocator
-    fn resolveModulePathWithAllocator(_: *Coordinator, root_dir: []const u8, mod_name: []const u8, alloc: Allocator) ![]const u8 {
+    fn resolveModulePathWithAllocator(_: *Coordinator, root_dir: []const u8, mod_name: []const u8, alloc: Allocator) Allocator.Error![]const u8 {
         var buffer = std.ArrayList(u8).empty;
         defer buffer.deinit(alloc);
 
@@ -3578,25 +3605,30 @@ pub const Coordinator = struct {
 
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeParseFallible(task, allocators) catch |err| {
-            const title = switch (err) {
-                error.FileNotFound => "FILE NOT FOUND",
-                else => "PARSING FAILED",
-            };
-            return .{
-                .parse_failed = .{
+        return self.executeParseFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| blk: {
+                const title = switch (e) {
+                    error.FileNotFound => "FILE NOT FOUND",
+                    else => "PARSING FAILED",
+                };
+                break :blk WorkerResult{ .parse_failed = .{
                     .package_name = task.package_name,
                     .module_id = task.module_id,
                     .module_name = task.module_name,
                     .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, title, task.path, err),
+                    .reports = self.workerFailureReports(allocators.result, title, task.path, e),
                     .partial_env = null,
-                },
-            };
+                } };
+            },
         };
     }
 
-    fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
+    fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
         const src = try self.readModuleSource(task.path, task_allocs.module);
@@ -3665,7 +3697,7 @@ pub const Coordinator = struct {
             discovered_local_imports.deinit(worker_alloc);
         }
         const local_import_names = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
-        const module_dir = std.fs.path.dirname(task.path) orelse "";
+        const module_dir = task.source_dir;
         for (local_import_names) |module_name| {
             const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
             errdefer worker_alloc.free(path);
@@ -3709,21 +3741,16 @@ pub const Coordinator = struct {
 
     /// Execute a canonicalize task (pure function)
     fn executeCanonicalize(self: *Coordinator, task: CanonicalizeTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeCanonicalizeFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "CANONICALIZATION FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+        return self.executeCanonicalizeFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
         };
     }
 
-    fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
+    fn executeCanonicalizeFallible(self: *Coordinator, task: CanonicalizeTask, task_allocs: WorkerTaskAllocators) Allocator.Error!WorkerResult {
         var canonicalize_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
@@ -3793,21 +3820,24 @@ pub const Coordinator = struct {
 
     /// Execute a type-check task (pure function)
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
-        return self.executeTypeCheckFallible(task, allocators) catch |err| {
-            return .{
-                .compile_failed = .{
-                    .package_name = task.package_name,
-                    .module_id = task.module_id,
-                    .module_name = task.module_name,
-                    .path = task.path,
-                    .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, err),
-                    .partial_env = task.module_env,
-                },
-            };
+        return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
+            error.OutOfMemory => WorkerResult{ .worker_oom = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+            } },
+            else => |e| WorkerResult{ .compile_failed = .{
+                .package_name = task.package_name,
+                .module_id = task.module_id,
+                .module_name = task.module_name,
+                .path = task.path,
+                .reports = self.workerFailureReports(allocators.result, "TYPE CHECKING FAILED", task.path, e),
+                .partial_env = task.module_env,
+            } },
         };
     }
 
-    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) !WorkerResult {
+    fn executeTypeCheckFallible(self: *Coordinator, task: TypeCheckTask, task_allocs: WorkerTaskAllocators) anyerror!WorkerResult {
         var check_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
@@ -3880,7 +3910,7 @@ pub const Coordinator = struct {
     }
 
     /// Read module source using the Io abstraction.
-    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) ![]u8 {
+    fn readModuleSource(self: *Coordinator, path: []const u8, module_alloc: Allocator) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })![]u8 {
         const data = try self.roc_ctx.readFile(path, module_alloc);
         errdefer module_alloc.free(data);
 
@@ -3909,8 +3939,15 @@ pub const Coordinator = struct {
             // is closed and drained.
             const t = self.task_channel.recv() orelse break;
 
-            // Execute task
-            const result = self.executeTaskInline(t, worker_allocs.taskAllocators());
+            // Execute task. On OOM we cannot return an error from this `void`
+            // thread entry point, so record it for the coordinator to observe
+            // and stop pulling work — the coordinator aborts the build.
+            const result = self.executeTaskInline(t, worker_allocs.taskAllocators()) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    self.worker_oom.store(true, .release);
+                    break;
+                },
+            };
 
             // Reset arena between tasks to reclaim temporary allocations
             worker_allocs.resetArena();
@@ -3930,7 +3967,7 @@ fn compileAppWithCheckedModuleCache(
     allocator: Allocator,
     cache_dir: []const u8,
     app_path: []const u8,
-) !CheckedModuleCacheRunStats {
+) anyerror!CheckedModuleCacheRunStats {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = true,
@@ -3953,7 +3990,7 @@ fn compileAppWithCheckedModuleCache(
     defer coord.deinit();
     coord.enable_hosted_transform = true;
 
-    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
@@ -3968,7 +4005,7 @@ fn compileAppWithCheckedModuleCache(
     };
 }
 
-fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) !usize {
+fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) anyerror!usize {
     const io = std.testing.io;
     var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
     defer dir.close(io);
@@ -3983,6 +4020,29 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
         overwritten += 1;
     }
     return overwritten;
+}
+
+test "Coordinator checked cache key requires checked direct imports" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "import Host\n");
+    defer env.deinit();
+    try env.initCIRFields("W4");
+
+    const import_idx = try env.imports.getOrPut(allocator, &env.common.strings, "Host");
+    env.imports.setResolvedModule(import_idx, 1);
+
+    try std.testing.expect(!Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
+
+    const checked_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = .{},
+        .view = undefined,
+    }};
+    try std.testing.expect(Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &checked_imports));
+
+    env.imports.clearResolvedModules();
+    try std.testing.expect(Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
 }
 
 test "Coordinator checked module cache hits on second compile" {
@@ -4129,6 +4189,7 @@ test "Coordinator task queue" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/test/app/Main.roc",
+            .source_dir = "/test/app",
             .depth = 0,
             .module_role = .user,
         },
@@ -4173,6 +4234,7 @@ test "Coordinator isComplete logic" {
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4216,6 +4278,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4255,6 +4318,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },
@@ -4305,6 +4369,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },

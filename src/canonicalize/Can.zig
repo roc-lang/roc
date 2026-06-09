@@ -4,6 +4,7 @@
 //! constructs into a simplified, normalized form suitable for type inference.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
@@ -173,6 +174,10 @@ in_statement_position: bool = true,
 /// When true, the ? operator crashes on Err instead of returning early.
 in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .empty,
+/// Set when a scope-exit (run from a `defer`, which cannot propagate an error)
+/// fails to allocate. `canonicalizeFile` re-raises it as `error.OutOfMemory`,
+/// so the OOM propagates instead of being silently swallowed by the `defer`.
+scope_exit_oom: bool = false,
 /// Parser declaration scopes corresponding to the active canonical scopes.
 decl_scope_stack: std.ArrayListUnmanaged(ActiveDeclScope) = .empty,
 /// Top active declaration owner for each non-block value name.
@@ -816,7 +821,7 @@ fn populateBuiltinAutoImportedTypes(
     gpa: std.mem.Allocator,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
-) !void {
+) Allocator.Error!void {
     // All auto-imported types with their statement index and fully-qualified ident
     // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
     // Nested types under Num: "Builtin.Num.U8", etc.
@@ -875,7 +880,7 @@ pub fn populateModuleEnvs(
     calling_module_env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
-) !void {
+) Allocator.Error!void {
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
@@ -2368,7 +2373,7 @@ fn enterAssociatedBlockState(
     };
 
     try self.scopeEnter(self.env.gpa, false);
-    errdefer self.scopeExit(self.env.gpa) catch unreachable;
+    errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     try self.declScopeEnter(work.scope);
     errdefer self.declScopeExit();
 
@@ -2383,7 +2388,7 @@ fn enterAssociatedBlockState(
 fn exitAssociatedBlockState(self: *Self, state: *AssociatedItemsState) void {
     const work = state.work;
     self.declScopeExit();
-    self.scopeExit(self.env.gpa) catch unreachable;
+    self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     if (work.owns_alias_sinks) {
         self.env.gpa.free(work.alias_sinks);
     }
@@ -3928,6 +3933,10 @@ pub fn canonicalizeFile(
     // published span, so this is the explicit hand-off of canonicalization's
     // diagnostic output to later stages.
     try self.env.publishScratchDiagnostics();
+
+    // A scope-exit `defer` cannot propagate an allocation failure, so it records
+    // it here; re-raise it now rather than letting the OOM be swallowed.
+    if (self.scope_exit_oom) return error.OutOfMemory;
 }
 
 fn poisonRecursiveNonFunctionDefs(
@@ -4295,7 +4304,7 @@ const TypeAnnoIdent = struct {
     anno_region: Region,
 };
 
-fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
+fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
     var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
     const stack_allocator = stack_allocator_state.get();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
@@ -4374,7 +4383,7 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
     }
 }
 
-fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
+fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
     var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
     const stack_allocator = stack_allocator_state.get();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
@@ -5550,13 +5559,18 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         full_path,
         self.env.gpa,
     ) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
         const path_string = try self.env.insertString(path_text);
         const diag: Diagnostic = switch (err) {
+            error.OutOfMemory => unreachable,
             error.FileNotFound => .{ .file_import_not_found = .{
                 .path = path_string,
                 .region = region,
             } },
-            else => .{ .file_import_io_error = .{
+            error.AccessDenied, error.StreamTooLong, error.IoError => .{ .file_import_io_error = .{
                 .path = path_string,
                 .region = region,
             } },
@@ -5808,13 +5822,11 @@ fn introduceItemsAliased(
             const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
             const item_name_text = self.env.getIdent(exposed_item.name);
 
-            // Check if the item is exposed by the module
-            // We need to look up by string because the identifiers are from different modules
-            // First, try to find this identifier in the target module's ident store
-            const is_exposed = if (module_env.common.findIdent(item_name_text)) |target_ident|
-                module_env.containsExposedById(target_ident)
-            else
-                false;
+            // Check if the item is exposed by the module. The identifiers are
+            // from different modules, so look up by string. A type module's
+            // associated items are exposed under `<MainType>.<item>`, which
+            // lookupImportedExposedNode resolves in addition to the bare name.
+            const is_exposed = (try self.lookupImportedExposedNode(module_env, item_name_text)) != null;
 
             if (!is_exposed) {
                 // Determine if it's a type or value based on capitalization
@@ -5908,44 +5920,13 @@ fn introduceItemsUnaliased(
             const local_ident = exposed_item.alias orelse exposed_item.name;
             const local_name_text = self.env.getIdent(local_ident);
 
-            const target_ident = module_env.common.findIdent(self.env.getIdent(exposed_item.name));
+            const item_name_text = self.env.getIdent(exposed_item.name);
             const is_type_name = local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z';
 
-            if (target_ident) |ident_in_module| {
-                if (!module_env.containsExposedById(ident_in_module)) {
-                    if (is_type_name) {
-                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
-                            .module_name = module_name,
-                            .type_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    } else {
-                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
-                            .module_name = module_name,
-                            .value_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    }
-                    continue;
-                }
-
-                const target_node_idx = module_env.getExposedNodeIndexById(ident_in_module) orelse {
-                    if (is_type_name) {
-                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
-                            .module_name = module_name,
-                            .type_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    } else {
-                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
-                            .module_name = module_name,
-                            .value_name = exposed_item.name,
-                            .region = import_region,
-                        } });
-                    }
-                    continue;
-                };
-
+            // A type module's associated items are exposed under
+            // `<MainType>.<item>`; lookupImportedExposedNode resolves both that
+            // qualified form and the bare module-style name.
+            if (try self.lookupImportedExposedNode(module_env, item_name_text)) |target_node_idx| {
                 const item_info = Scope.ExposedItemInfo{
                     .module_name = module_name,
                     .original_name = exposed_item.name,
@@ -5968,20 +5949,18 @@ fn introduceItemsUnaliased(
                         .module_was_found,
                     );
                 }
+            } else if (is_type_name) {
+                try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = exposed_item.name,
+                    .region = import_region,
+                } });
             } else {
-                if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
-                    try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = exposed_item.name,
-                        .region = import_region,
-                    } });
-                } else {
-                    try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
-                        .module_name = module_name,
-                        .value_name = exposed_item.name,
-                        .region = import_region,
-                    } });
-                }
+                try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                    .module_name = module_name,
+                    .value_name = exposed_item.name,
+                    .region = import_region,
+                } });
             }
         }
     } else {
@@ -6147,7 +6126,7 @@ fn canonicalizeSingleQuote(
 }
 
 /// Parse an integer with underscores.
-pub fn parseIntWithUnderscores(allocator: std.mem.Allocator, comptime T: type, text: []const u8, int_base: u8) !T {
+pub fn parseIntWithUnderscores(allocator: std.mem.Allocator, comptime T: type, text: []const u8, int_base: u8) (Allocator.Error || error{ InvalidCharacter, Overflow })!T {
     const buf = try allocator.alloc(u8, text.len);
     defer allocator.free(buf);
 
@@ -6201,7 +6180,7 @@ fn recordNumeralLiteralForExpr(
 
 /// Parse an integer literal's textual form into a CIR.IntValue, honoring an
 /// optional leading minus and `0x`/`0o`/`0b`/`0d` base prefixes.
-pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) ?CIR.IntValue {
+pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) std.mem.Allocator.Error!?CIR.IntValue {
     const is_negated = num_text[0] == '-';
     const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
@@ -6235,8 +6214,9 @@ pub fn parseIntText(allocator: std.mem.Allocator, num_text: []const u8) ?CIR.Int
 
     const digit_part = num_text[first_digit..];
 
-    const u128_val = parseIntWithUnderscores(allocator, u128, digit_part, int_base) catch {
-        return null;
+    const u128_val = parseIntWithUnderscores(allocator, u128, digit_part, int_base) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidCharacter, error.Overflow => return null,
     };
 
     // If this had a minus sign, but negating it would result in a negative number
@@ -6659,10 +6639,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                 const field_text = self.env.getIdent(exposed_info.original_name);
                 const target_node_idx_opt: ?u32 = blk: {
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
-                        const module_env = auto_imported_type.env;
-                        if (module_env.common.findIdent(field_text)) |target_ident| {
-                            break :blk module_env.getExposedNodeIndexById(target_ident);
-                        }
+                        break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
                     }
                     break :blk null;
                 };
@@ -6802,7 +6779,7 @@ fn finishSuffixSingleQuestionExpr(
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         // Create the assign pattern for the Ok value
         const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
@@ -6872,7 +6849,7 @@ fn finishSuffixSingleQuestionExpr(
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         // Create the assign pattern for the Err value
         const err_assign_pattern_idx = try self.env.addPattern(Pattern{
@@ -7031,7 +7008,7 @@ fn finishBlockState(
     block: BlockState,
     maybe_final_expr: ?CanonicalizedExpr,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     defer self.declScopeExit();
     defer self.defining_patterns_start = block.saved_defining_patterns_start;
     defer self.defining_pattern = block.saved_defining_pattern;
@@ -7759,7 +7736,7 @@ fn canonicalizeStandaloneTypeAnnoStatement(
         const where_start = self.env.store.scratchWhereClauseTop();
 
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         for (where_slice) |where_idx| {
             const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
@@ -7843,7 +7820,7 @@ fn canonicalizeStandaloneForStatement(
     self.scratch_free_vars.clearFrom(list_free_vars_start);
 
     try self.scopeEnter(self.env.gpa, false);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     const ptrn = try self.canonicalizePatternOrMalformed(for_stmt.patt);
     try self.collectBoundVarsToScratch(ptrn);
@@ -8325,7 +8302,7 @@ fn runExprKernel(
                     errdefer self.exitFunction();
 
                     try self.scopeEnter(self.env.gpa, true);
-                    errdefer self.scopeExit(self.env.gpa) catch {};
+                    errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                     const args_start = self.env.store.scratch.?.patterns.top();
                     for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
@@ -8462,7 +8439,7 @@ fn runExprKernel(
                     const block_region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
                     try self.scopeEnter(self.env.gpa, false);
-                    errdefer self.scopeExit(self.env.gpa) catch {};
+                    errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
                     try self.declScopeEnter(e.scope);
                     errdefer self.declScopeExit();
 
@@ -9170,7 +9147,7 @@ fn runExprKernel(
                         const where_start = self.env.store.scratchWhereClauseTop();
 
                         try self.scopeEnter(self.env.gpa, false);
-                        defer self.scopeExit(self.env.gpa) catch {};
+                        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                         for (where_slice) |where_idx| {
                             const canonicalized_where = try self.canonicalizeWhereClause(where_idx, .local_anno);
@@ -9557,7 +9534,7 @@ fn runExprKernel(
             child_slots.shrinkRetainingCapacity(state.block.result_start);
 
             try self.scopeEnter(self.env.gpa, false);
-            errdefer self.scopeExit(self.env.gpa) catch {};
+            errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
             const ptrn = try self.canonicalizePatternOrMalformed(state.ast_patt);
             try self.collectBoundVarsToScratch(ptrn);
@@ -9586,7 +9563,7 @@ fn runExprKernel(
         },
         .finish_block_for_stmt => {
             const state = stacks.takeFinishBlockForStmt();
-            defer self.scopeExit(self.env.gpa) catch {};
+            defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.loop_depth -= 1;
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
@@ -10500,7 +10477,7 @@ fn runExprKernel(
         .finish_lambda => {
             const state = stacks.takeFinishLambda();
             defer self.exitFunction();
-            defer self.scopeExit(self.env.gpa) catch {};
+            defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
@@ -10768,7 +10745,7 @@ fn runExprKernel(
             self.scratch_free_vars.clearFrom(state.list_free_vars_start);
 
             try self.scopeEnter(self.env.gpa, false);
-            errdefer self.scopeExit(self.env.gpa) catch {};
+            errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
             const ptrn = try self.canonicalizePatternOrMalformed(state.ast_patt);
             try self.collectBoundVarsToScratch(ptrn);
@@ -10794,7 +10771,7 @@ fn runExprKernel(
         .finish_for_expr => {
             const state = stacks.takeFinishForExpr();
             defer self.loop_depth -= 1;
-            defer self.scopeExit(self.env.gpa) catch {};
+            defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
             defer self.in_statement_position = state.saved_stmt_pos;
@@ -10881,7 +10858,7 @@ fn runExprKernel(
             const ast_branch = self.parse_ir.store.getBranch(ast_branch_idx);
 
             try self.scopeEnter(self.env.gpa, false);
-            errdefer self.scopeExit(self.env.gpa) catch {};
+            errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
             const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
             {
@@ -10902,7 +10879,7 @@ fn runExprKernel(
 
                             const lowered: LoweredAltPattern = blk: {
                                 try self.scopeEnter(self.env.gpa, false);
-                                defer self.scopeExit(self.env.gpa) catch {};
+                                defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                                 const pattern_idx = if (try self.canonicalizePattern(alt_pattern_idx)) |pattern_idx|
                                     pattern_idx
@@ -11060,7 +11037,7 @@ fn runExprKernel(
         },
         .match_after_body => {
             const state = stacks.takeMatchAfterBody();
-            defer self.scopeExit(self.env.gpa) catch {};
+            defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.scratch_bound_vars.clearFrom(state.branch_bound_vars_top);
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
@@ -11226,7 +11203,7 @@ fn canonicalizeDoubleQuestionOp(
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         // Create the assign pattern for the Ok value
         const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
@@ -11296,7 +11273,7 @@ fn canonicalizeDoubleQuestionOp(
     {
         // Enter a new scope for this branch
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         // Create a wildcard pattern for the Err payload (we don't use it)
         const wildcard_pattern_idx = try self.env.addPattern(Pattern{
@@ -11420,7 +11397,7 @@ fn finishSingleQuestionBinop(
     // === Branch 1: Ok(#ok) => #ok ===
     {
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
             .assign = .{ .ident = ok_val_ident },
@@ -11481,7 +11458,7 @@ fn finishSingleQuestionBinop(
     // === Branch 2: Err(#err) => return Err(<rhs>(#err)) ===
     {
         try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch {};
+        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
         const err_assign_pattern_idx = try self.env.addPattern(Pattern{
             .assign = .{ .ident = err_val_ident },
@@ -11727,7 +11704,7 @@ fn buildInnerMap2WithTuple(
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     // Create patterns for parameters
     const patterns_start = self.env.store.scratch.?.patterns.top();
@@ -11779,7 +11756,7 @@ fn buildIntermediateMap2(
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     const patterns_start = self.env.store.scratch.?.patterns.top();
 
@@ -11841,7 +11818,7 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     // Create patterns for all parameters
     const patterns_start = self.env.store.scratch.?.patterns.top();
@@ -11882,7 +11859,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     try self.enterFunction(region);
     defer self.exitFunction();
     try self.scopeEnter(self.env.gpa, true);
-    defer self.scopeExit(self.env.gpa) catch {};
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
     const patterns_start = self.env.store.scratch.?.patterns.top();
 
@@ -11947,22 +11924,27 @@ fn validateImportedNominalTagTarget(
     }
 }
 
-fn lookupImportedExposedTypeNode(
+/// Resolve the exposed-node index for an item exposed by `imported_env`,
+/// handling both module-style exposure (the item is exposed under its bare
+/// name) and type-module associated items (exposed under `<MainType>.<item>`,
+/// since the module's main type name equals its module name). Used for both
+/// exposed types and exposed values.
+fn lookupImportedExposedNode(
     self: *Self,
     imported_env: *const ModuleEnv,
-    type_path_text: []const u8,
+    item_text: []const u8,
 ) std.mem.Allocator.Error!?u32 {
     const module_name_text = imported_env.module_name;
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
-    const module_qualified_text = try self.scratchQualifiedText(module_name_text, type_path_text);
+    const module_qualified_text = try self.scratchQualifiedText(module_name_text, item_text);
     const module_qualified_node_idx = lookupExposedNodeByText(imported_env, module_qualified_text);
 
     if (module_qualified_node_idx) |target_node_idx| {
         return target_node_idx;
     }
 
-    return lookupExposedNodeByText(imported_env, type_path_text);
+    return lookupExposedNodeByText(imported_env, item_text);
 }
 
 fn lookupExposedNodeByText(
@@ -12121,7 +12103,7 @@ fn finishTagExprWithArgs(
             };
             const target_node_idx = blk: {
                 const original_name_text = self.env.getIdent(exposed_info.original_name);
-                break :blk (try self.lookupImportedExposedTypeNode(imported_type.env, original_name_text)) orelse {
+                break :blk (try self.lookupImportedExposedNode(imported_type.env, original_name_text)) orelse {
                     // Type is not exposed by the imported module
                     return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
@@ -12180,7 +12162,7 @@ fn finishTagExprWithArgs(
             };
 
             const tag_text = self.env.getIdent(tag_name);
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, tag_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, tag_text)) orelse {
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = tag_name,
@@ -12331,7 +12313,7 @@ fn finishTagExprWithArgs(
 
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedNode(imported_type.env, type_name)) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -12612,7 +12594,7 @@ fn finishTagPattern(
                 } });
             };
 
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedNode(auto_imported_type.env, type_name)) orelse {
                 return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_name_ident,
@@ -16107,7 +16089,7 @@ fn canonicalizeTypeAnnoBasicType(
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
                         // Convert identifier from current module to target module's interner
                         const original_name_text = self.env.getIdent(exposed_info.original_name);
-                        const target_node_idx = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, original_name_text)) orelse {
+                        const target_node_idx = (try self.lookupImportedExposedNode(auto_imported_type.env, original_name_text)) orelse {
                             // Type is not exposed by the imported module
                             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                                 .module_name = exposed_info.module_name,
@@ -16196,7 +16178,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, type_path_text)) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_path_ident,
@@ -16262,7 +16244,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedNode(auto_imported_type.env, type_name_text)) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -16615,6 +16597,18 @@ pub fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
     popped_scope.deinit(gpa);
 }
 
+/// Records a failure from a `defer`-invoked `scopeExit`. `defer` cannot propagate
+/// an error, so the call sites route it here; `canonicalizeFile` then re-raises
+/// it. `scopeExit` always pops a scope a matching `scopeEnter` pushed, so a failed
+/// exit leaves a surplus scope (never an underflow) and can only fail with OOM;
+/// any other error would be a scope-balance bug.
+fn recordScopeExitError(self: *Self, err: Scope.Error) void {
+    switch (err) {
+        error.OutOfMemory => self.scope_exit_oom = true,
+        else => unreachable,
+    }
+}
+
 /// Append an existing scope
 pub fn scopeAppend(self: *Self, gpa: std.mem.Allocator, scope: Scope) std.mem.Allocator.Error!void {
     try self.scopes.append(gpa, scope);
@@ -16664,7 +16658,7 @@ fn currentScopeIdx(self: *Self) usize {
 }
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
-pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx {
+pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) Allocator.Error!Expr.Idx {
     // then in the final slot the actual expr is inserted
     const expr_idx = try self.env.addExpr(
         CIR.Expr{
@@ -17381,7 +17375,7 @@ fn setExternalTypeBinding(
     module_import_idx: CIR.Import.Idx,
     origin_region: Region,
     module_found_status: ModuleFoundStatus,
-) !void {
+) Allocator.Error!void {
     // Check if type already exists in this scope (mirrors Scope.introduceTypeDecl logic)
     if (scope.type_bindings.get(local_ident)) |existing_binding| {
         // Extract the original region from the existing binding for the diagnostic
@@ -17835,10 +17829,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
         const field_text = self.env.getIdent(method_name);
         const target_node_idx_opt: ?u32 = blk: {
             if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-                const module_env = auto_imported_type.env;
-                if (module_env.common.findIdent(field_text)) |target_ident| {
-                    break :blk module_env.getExposedNodeIndexById(target_ident);
-                }
+                break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
             }
             break :blk null;
         };
@@ -17912,10 +17903,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
     const field_text = self.env.getIdent(field_name);
     const target_node_idx_opt: ?u32 = blk: {
         if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-            const module_env = auto_imported_type.env;
-            if (module_env.common.findIdent(field_text)) |target_ident| {
-                break :blk module_env.getExposedNodeIndexById(target_ident);
-            }
+            break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
         }
         break :blk null;
     };
@@ -17975,22 +17963,26 @@ fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error
         const hint_name = self.env.getIdent(h);
         // Use # prefix which can't appear in user code (reserved for comments)
         // Format: #N_hint where N is the counter
+        var tag_name_sfa = std.heap.stackFallback(64, self.env.gpa);
+        const tag_name_alloc = tag_name_sfa.get();
         const tag_name = try std.fmt.allocPrint(
-            self.env.gpa,
+            tag_name_alloc,
             "#{d}_{s}",
             .{ self.closure_counter, hint_name },
         );
-        defer self.env.gpa.free(tag_name);
+        defer tag_name_alloc.free(tag_name);
         return try self.env.insertIdent(base.Ident.for_text(tag_name));
     }
 
     // Otherwise generate a numeric name
+    var tag_name_sfa = std.heap.stackFallback(16, self.env.gpa);
+    const tag_name_alloc = tag_name_sfa.get();
     const tag_name = try std.fmt.allocPrint(
-        self.env.gpa,
+        tag_name_alloc,
         "#{d}",
         .{self.closure_counter},
     );
-    defer self.env.gpa.free(tag_name);
+    defer tag_name_alloc.free(tag_name);
     return try self.env.insertIdent(base.Ident.for_text(tag_name));
 }
 

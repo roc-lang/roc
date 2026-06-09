@@ -1,6 +1,7 @@
 //! Test environment for canonicalization testing, providing utilities to parse, canonicalize, and inspect Roc expressions.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const CIR = @import("../CIR.zig");
@@ -18,7 +19,7 @@ builtin_ctx: BuiltinTestContext,
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 pub const TestEnv = @This();
 
-pub fn init(source: []const u8) !TestEnv {
+pub fn init(source: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -76,7 +77,7 @@ pub fn deinit(self: *TestEnv) void {
 }
 
 /// Canonicalizes the root expression from the parsed AST, returning null if there are parse errors.
-pub fn canonicalizeExpr(self: *TestEnv) !?Can.CanonicalizedExpr {
+pub fn canonicalizeExpr(self: *TestEnv) Allocator.Error!?Can.CanonicalizedExpr {
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(self.parse_ast.root_node_idx);
 
     if (self.parse_ast.parse_diagnostics.items.len > 0 or
@@ -109,6 +110,6 @@ pub fn hasParseErrors(self: *TestEnv) bool {
 }
 
 /// Returns all diagnostics from the module environment.
-pub fn getDiagnostics(self: *TestEnv) ![]CIR.Diagnostic {
+pub fn getDiagnostics(self: *TestEnv) Allocator.Error![]CIR.Diagnostic {
     return self.module_env.getDiagnostics();
 }

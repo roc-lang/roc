@@ -6,6 +6,7 @@
 //! following the "Inform Don't Block" philosophy.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const tracy = @import("tracy");
 
@@ -551,7 +552,7 @@ pub fn parseFile(self: *Parser) Error!void {
 /// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
 ///
 /// Returns the ending position of the collection
-fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) Error!void, parser: fn (*Parser) Error!T) !void {
+fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) Error!void, parser: fn (*Parser) Error!T) (Allocator.Error || error{ExpectedNotFound})!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 

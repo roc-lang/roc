@@ -115,6 +115,12 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// The requested optimization level is not implemented for this command
+    unsupported_opt_level: struct {
+        command: []const u8,
+        opt: []const u8,
+    },
+
     /// Compilation produced errors
     compilation_failed: struct {
         path: []const u8,
@@ -224,6 +230,7 @@ pub const CliProblem = union(enum) {
             .platform_not_found,
             .no_platform_found,
             .build_not_supported_for_headerless,
+            .unsupported_opt_level,
             .compilation_failed,
             .linker_failed,
             => .fatal,
@@ -261,7 +268,7 @@ pub const CliProblem = union(enum) {
     }
 
     /// Generate a Report from this problem
-    pub fn toReport(self: CliProblem, allocator: Allocator) !Report {
+    pub fn toReport(self: CliProblem, allocator: Allocator) Allocator.Error!Report {
         return switch (self) {
             .file_not_found => |info| try createFileNotFoundReport(allocator, info),
             .file_read_failed => |info| try createFileReadFailedReport(allocator, info),
@@ -280,6 +287,7 @@ pub const CliProblem = union(enum) {
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
+            .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -323,7 +331,7 @@ pub const FileContext = enum {
 
 // Report Generation Functions
 
-fn createFileNotFoundReport(allocator: Allocator, info: anytype) !Report {
+fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "FILE NOT FOUND", .fatal);
 
     try report.document.addText("I could not find the ");
@@ -339,7 +347,7 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createFileReadFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "FILE READ FAILED", .runtime_error);
 
     try report.document.addText("I could not read the file ");
@@ -352,7 +360,7 @@ fn createFileReadFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createFileWriteFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "FILE WRITE FAILED", .runtime_error);
 
     try report.document.addText("I could not write to the file ");
@@ -365,7 +373,7 @@ fn createFileWriteFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "DIRECTORY CREATE FAILED", .runtime_error);
 
     try report.document.addText("I could not create the directory ");
@@ -378,7 +386,7 @@ fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) !Repor
     return report;
 }
 
-fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) !Report {
+fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "DIRECTORY NOT FOUND", .runtime_error);
 
     try report.document.addText("The directory does not exist: ");
@@ -390,7 +398,7 @@ fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createTempDirFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createTempDirFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "TEMPORARY DIRECTORY FAILED", .runtime_error);
 
     try report.document.addText("I could not create a temporary directory.");
@@ -402,7 +410,7 @@ fn createTempDirFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) !Report {
+fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "CACHE DIRECTORY UNAVAILABLE", .runtime_error);
 
     try report.document.addText("The cache directory is not available.");
@@ -414,7 +422,7 @@ fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) !Report 
     return report;
 }
 
-fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) !Report {
+fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "NO PLATFORM FOUND", .fatal);
 
     try report.document.addText("The app file ");
@@ -431,7 +439,7 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) !Report {
+fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PLATFORM NOT FOUND", .fatal);
 
     try report.document.addText("I could not find the platform file:");
@@ -446,7 +454,7 @@ fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) !Report {
+fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PLATFORM SOURCE NOT FOUND", .runtime_error);
 
     try report.document.addText("Could not find the platform source file.");
@@ -465,7 +473,7 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) !Repo
     return report;
 }
 
-fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) !Report {
+fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "MISSING PLATFORM MODULE", .runtime_error);
 
     try report.document.addText("The platform at ");
@@ -477,7 +485,7 @@ fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) !Repor
     return report;
 }
 
-fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) !Report {
+fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "MISSING TYPE IN MODULE", .runtime_error);
 
     try report.document.addText("Module ");
@@ -491,7 +499,7 @@ fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) !Report 
     return report;
 }
 
-fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) !Report {
+fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "CIRCULAR PLATFORM DEPENDENCY", .runtime_error);
 
     try report.document.addText("A circular dependency was detected in the platform modules:");
@@ -507,7 +515,7 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) !
     return report;
 }
 
-fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PLATFORM VALIDATION FAILED", .runtime_error);
 
     try report.document.addText(info.message);
@@ -515,7 +523,7 @@ fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) !Re
     return report;
 }
 
-fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) !Report {
+fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "ABSOLUTE PLATFORM PATH", .runtime_error);
 
     try report.document.addText("Absolute paths are not allowed for platform specifications:");
@@ -532,7 +540,7 @@ fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) !Report
     return report;
 }
 
-fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) !Report {
+fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "INVALID APP HEADER", .runtime_error);
 
     try report.document.addText("The file ");
@@ -555,7 +563,7 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) !Report {
+fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "BUILD NOT SUPPORTED", .fatal);
 
     try report.document.addText("The file ");
@@ -580,7 +588,26 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     return report;
 }
 
-fn createCompilationFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = Report.init(allocator, "OPTIMIZATION MODE NOT IMPLEMENTED", .fatal);
+
+    try report.document.addText("The optimization mode ");
+    try report.document.addAnnotated(info.opt, .emphasized);
+    try report.document.addText(" is not implemented for ");
+    try report.document.addAnnotated(info.command, .emphasized);
+    try report.document.addText(" yet.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Use ");
+    try report.document.addAnnotated("--opt=dev", .emphasized);
+    try report.document.addText(" for compiled builds, or ");
+    try report.document.addAnnotated("--opt=interpreter", .emphasized);
+    try report.document.addText(" for interpreter builds.");
+
+    return report;
+}
+
+fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "COMPILATION FAILED", .fatal);
 
     try report.document.addText("Compilation of ");
@@ -598,7 +625,7 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createLinkerFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "LINKER FAILED", .fatal);
 
     try report.document.addText("The linker failed while building for target ");
@@ -611,7 +638,7 @@ fn createLinkerFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "OBJECT COMPILATION FAILED", .runtime_error);
 
     try report.document.addText("Failed to compile object file for ");
@@ -624,7 +651,7 @@ fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) !Rep
     return report;
 }
 
-fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "SHIM GENERATION FAILED", .runtime_error);
 
     try report.document.addText("Failed to generate the platform shim.");
@@ -636,7 +663,7 @@ fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) !Report
     return report;
 }
 
-fn createInvalidUrlReport(allocator: Allocator, info: anytype) !Report {
+fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "INVALID URL", .runtime_error);
 
     try report.document.addText("The URL is invalid: ");
@@ -649,7 +676,7 @@ fn createInvalidUrlReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createDownloadFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "DOWNLOAD FAILED", .runtime_error);
 
     switch (info.err) {
@@ -692,7 +719,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) !Report {
+fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PACKAGE CACHE ERROR", .runtime_error);
 
     try report.document.addText("Error with cached package ");
@@ -705,7 +732,7 @@ fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PROCESS SPAWN FAILED", .runtime_error);
 
     try report.document.addText("Failed to start process: ");
@@ -718,7 +745,7 @@ fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) !Rep
     return report;
 }
 
-fn createChildProcessFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createChildProcessFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PROCESS FAILED", .runtime_error);
 
     try report.document.addText("Process ");
@@ -732,7 +759,7 @@ fn createChildProcessFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) !Report {
+fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PROCESS SIGNALED", .runtime_error);
 
     try report.document.addText("Process ");
@@ -746,7 +773,7 @@ fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) !Report
     return report;
 }
 
-fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "PROCESS WAIT FAILED", .runtime_error);
 
     try report.document.addText("Failed to wait for process ");
@@ -759,7 +786,7 @@ fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) !Repo
     return report;
 }
 
-fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "SHARED MEMORY FAILED", .runtime_error);
 
     try report.document.addText("Shared memory operation '");
@@ -773,7 +800,7 @@ fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) !Report {
+fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "EXPECTED APP HEADER", .runtime_error);
 
     try report.document.addText("Expected an app header in ");
@@ -800,7 +827,7 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) !Report {
+fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "EXPECTED PLATFORM STRING", .runtime_error);
 
     try report.document.addText("Expected a platform string in the app header of ");
@@ -816,7 +843,7 @@ fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) !Repo
     return report;
 }
 
-fn createModuleInitFailedReport(allocator: Allocator, info: anytype) !Report {
+fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "MODULE INITIALIZATION FAILED", .runtime_error);
 
     try report.document.addText("Failed to initialize module ");
@@ -829,7 +856,7 @@ fn createModuleInitFailedReport(allocator: Allocator, info: anytype) !Report {
     return report;
 }
 
-fn createNoExportsFoundReport(allocator: Allocator, info: anytype) !Report {
+fn createNoExportsFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "NO EXPORTS FOUND", .runtime_error);
 
     try report.document.addText("No exports were found in ");
@@ -870,6 +897,21 @@ test "compilation_failed generates correct report" {
     defer report.deinit();
 
     try std.testing.expectEqualStrings("COMPILATION FAILED", report.title);
+    try std.testing.expectEqual(Severity.fatal, report.severity);
+}
+
+test "unsupported_opt_level generates correct report" {
+    const allocator = std.testing.allocator;
+
+    const problem = CliProblem{ .unsupported_opt_level = .{
+        .command = "roc build",
+        .opt = "size",
+    } };
+
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("OPTIMIZATION MODE NOT IMPLEMENTED", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 

@@ -118,8 +118,10 @@ pub fn applyRelocations(
                 try patchLinkedDataRelocation(code, code_base_addr, data_reloc.offset, target_addr, data_reloc.kind);
             },
             .local_data => |local_reloc| {
-                const owned_data = try std.heap.page_allocator.dupe(u8, local_reloc.data);
-                const target_addr = @intFromPtr(owned_data.ptr);
+                // The data's address is baked into the generated code, so the
+                // referenced bytes must outlive that code — the caller owns
+                // that lifetime.
+                const target_addr = @intFromPtr(local_reloc.data.ptr);
                 try patchLinkedDataRelocation(code, code_base_addr, local_reloc.offset, target_addr, .abs64);
             },
             .jmp_to_return => |jmp_reloc| {

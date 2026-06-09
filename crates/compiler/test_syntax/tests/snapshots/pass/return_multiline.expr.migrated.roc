@@ -1,5 +1,0 @@
-return
-something
-.(pipeToFunction)()
-.(andAnother)()
-

@@ -1,6 +1,7 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const parse = @import("parse");
 const collections = @import("collections");
@@ -37,7 +38,7 @@ pub const FormattingResult = struct {
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io, stderr: *std.Io.Writer) !FormattingResult {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, check: bool, io: std.Io, stderr: *std.Io.Writer) anyerror!FormattingResult {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
 
@@ -118,7 +119,7 @@ fn binarySearch(
 
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io, stderr: *std.Io.Writer) !void {
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []const u8, unformatted_files: ?*std.array_list.Managed([]const u8), io: std.Io, stderr: *std.Io.Writer) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -176,7 +177,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -199,7 +200,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
 }
 
 /// Format the contents of stdin and output the result to stdout
-pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) !void {
+pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdout: std.Io.File, stderr: *std.Io.Writer) anyerror!void {
     const contents = blk: {
         var read_buf: [4096]u8 = undefined;
         var stdin_reader = stdin.readerStreaming(io, &read_buf);
@@ -225,7 +226,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
 
     // If there are any parsing problems, print them to stderr
     if (parse_ast.parse_diagnostics.items.len > 0) {
-        parse_ast.toSExprStr(gpa, &module_env.common, stderr) catch @panic("Failed to print SExpr");
+        try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
@@ -235,7 +236,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
     try formatAst(parse_ast.*, &stdout_writer.interface);
 }
 
-fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) !void {
+fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
     // compute offsets of each line, looping over bytes of the input
     var line_offsets = try SafeList(u32).initCapacity(gpa, 256);
     defer line_offsets.deinit(gpa);
@@ -271,7 +272,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     }
 }
 
-fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatter) anyerror!void) !void {
+fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatter) anyerror!void) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -283,37 +284,37 @@ fn formatIRNode(ast: AST, writer: *std.Io.Writer, formatter: *const fn (*Formatt
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatAst(ast: AST, writer: *std.Io.Writer) !void {
+pub fn formatAst(ast: AST, writer: *std.Io.Writer) anyerror!void {
     return formatIRNode(ast, writer, Formatter.formatFile);
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatHeader(ast: AST, writer: *std.Io.Writer) !void {
+pub fn formatHeader(ast: AST, writer: *std.Io.Writer) anyerror!void {
     return formatIRNode(ast, writer, formatHeaderInner);
 }
 
-fn formatHeaderInner(fmt: *Formatter) !void {
+fn formatHeaderInner(fmt: *Formatter) anyerror!void {
     return fmt.formatHeader(@enumFromInt(fmt.ast.root_node_idx));
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatStatement(ast: AST, writer: *std.Io.Writer) !void {
+pub fn formatStatement(ast: AST, writer: *std.Io.Writer) anyerror!void {
     return formatIRNode(ast, writer, formatStatementInner);
 }
 
-fn formatStatementInner(fmt: *Formatter) !void {
+fn formatStatementInner(fmt: *Formatter) anyerror!void {
     return fmt.formatStatement(@enumFromInt(fmt.ast.root_node_idx));
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
 /// Only returns an error if the underlying writer returns an error.
-pub fn formatExpr(ast: AST, writer: *std.Io.Writer) !void {
+pub fn formatExpr(ast: AST, writer: *std.Io.Writer) anyerror!void {
     return formatIRNode(ast, writer, formatExprNode);
 }
 
-fn formatExprNode(fmt: *Formatter) !void {
+fn formatExprNode(fmt: *Formatter) anyerror!void {
     try fmt.formatExprDiscard(@enumFromInt(fmt.ast.root_node_idx));
 }
 
@@ -336,13 +337,13 @@ const Formatter = struct {
     }
 
     /// Deinits all data owned by the formatter object.
-    fn flush(fmt: *Formatter) !void {
+    fn flush(fmt: *Formatter) error{WriteFailed}!void {
         try fmt.writer.flush();
     }
 
     /// Emits a string containing the well-formed source of a Roc parse IR (AST).
     /// The resulting string is owned by the caller.
-    pub fn formatFile(fmt: *Formatter) !void {
+    pub fn formatFile(fmt: *Formatter) anyerror!void {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
         const header = fmt.ast.store.getHeader(file.header);
@@ -414,7 +415,7 @@ const Formatter = struct {
         return std.mem.eql(u8, prev_name, curr_name);
     }
 
-    fn formatStatement(fmt: *Formatter, si: AST.Statement.Idx) !void {
+    fn formatStatement(fmt: *Formatter, si: AST.Statement.Idx) anyerror!void {
         const statement = fmt.ast.store.getStatement(si);
         const multiline = fmt.nodeWillBeMultiline(AST.Statement.Idx, si);
         const orig_indent = fmt.curr_indent;
@@ -772,7 +773,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx, multiline: bool) !void {
+    fn formatWhereConstraint(fmt: *Formatter, w: AST.Collection.Idx, multiline: bool) anyerror!void {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
         const clause_coll = fmt.ast.store.getCollection(w);
@@ -819,7 +820,7 @@ const Formatter = struct {
         try fmt.push(']');
     }
 
-    fn formatIdent(fmt: *Formatter, ident: Token.Idx, qualifier: ?Token.Idx) !void {
+    fn formatIdent(fmt: *Formatter, ident: Token.Idx, qualifier: ?Token.Idx) (Allocator.Error || error{WriteFailed})!void {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -849,7 +850,7 @@ const Formatter = struct {
         has_unusual_spacing: bool, // True if DotUpperIdent (space before dot) was encountered
     };
 
-    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx, exposes: AST.ExposedItem.Span) !ModulePathResult {
+    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx, exposes: AST.ExposedItem.Span) (Allocator.Error || error{WriteFailed})!ModulePathResult {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -940,7 +941,7 @@ const Formatter = struct {
         }
     };
 
-    fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) !void {
+    fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) anyerror!void {
         const multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(T, items);
         const curr_indent = fmt.curr_indent;
         defer {
@@ -1053,7 +1054,7 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.TokenizedRegion {
+    fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) anyerror!AST.TokenizedRegion {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
         if (field.value) |v| {
@@ -1069,7 +1070,7 @@ const Formatter = struct {
         no_indent_on_access,
     };
 
-    fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) !void {
+    fn formatStringInterpolation(fmt: *Formatter, idx: AST.Expr.Idx) anyerror!void {
         try fmt.pushAll("${");
         const part_region = fmt.nodeRegion(@intFromEnum(idx));
         // Parts don't include the StringInterpolationStart and StringInterpolationEnd tokens
@@ -1128,14 +1129,14 @@ const Formatter = struct {
         Formatter.discardRegion(region);
     }
 
-    fn flushCommentsBeforeDiscard(fmt: *Formatter, tokenIdx: Token.Idx) !void {
+    fn flushCommentsBeforeDiscard(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!void {
         const flushed = try fmt.flushCommentsBefore(tokenIdx);
         if (flushed) {
             return;
         }
     }
 
-    fn flushCommentsAfterDiscard(fmt: *Formatter, tokenIdx: Token.Idx) !void {
+    fn flushCommentsAfterDiscard(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!void {
         const flushed = try fmt.flushCommentsAfter(tokenIdx);
         if (flushed) {
             return;
@@ -1740,7 +1741,7 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) !AST.TokenizedRegion {
+    fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) anyerror!AST.TokenizedRegion {
         const field = fmt.ast.store.getPatternRecordField(idx);
         const multiline = fmt.nodeWillBeMultiline(AST.PatternRecordField.Idx, idx);
         const curr_indent = fmt.curr_indent;
@@ -1777,7 +1778,7 @@ const Formatter = struct {
         return field.region;
     }
 
-    fn formatPattern(fmt: *Formatter, pi: AST.Pattern.Idx) !AST.TokenizedRegion {
+    fn formatPattern(fmt: *Formatter, pi: AST.Pattern.Idx) anyerror!AST.TokenizedRegion {
         const pattern = fmt.ast.store.getPattern(pi);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         const multiline = fmt.nodeWillBeMultiline(AST.Pattern.Idx, pi);
@@ -1916,7 +1917,7 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatExposedItem(fmt: *Formatter, idx: AST.ExposedItem.Idx) !AST.TokenizedRegion {
+    fn formatExposedItem(fmt: *Formatter, idx: AST.ExposedItem.Idx) error{WriteFailed}!AST.TokenizedRegion {
         const item = fmt.ast.store.getExposedItem(idx);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         switch (item) {
@@ -1951,7 +1952,7 @@ const Formatter = struct {
     }
 
     /// Format a targets section in a platform header
-    fn formatTargetsSection(fmt: *Formatter, targets_idx: AST.TargetsSection.Idx) !void {
+    fn formatTargetsSection(fmt: *Formatter, targets_idx: AST.TargetsSection.Idx) (Allocator.Error || error{WriteFailed})!void {
         const targets = fmt.ast.store.getTargetsSection(targets_idx);
         const start_indent = fmt.curr_indent;
 
@@ -2003,7 +2004,7 @@ const Formatter = struct {
     }
 
     /// Format a target link type (exe, static_lib, shared_lib) section
-    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) !void {
+    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
         const link_type = fmt.ast.store.getTargetLinkType(link_type_idx);
         const entries = fmt.ast.store.targetEntrySlice(link_type.entries);
 
@@ -2028,7 +2029,7 @@ const Formatter = struct {
     }
 
     /// Format a single target entry: x64linux: ["host.o", app]
-    fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) !void {
+    fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
         const entry = fmt.ast.store.getTargetEntry(entry_idx);
         const files = fmt.ast.store.targetFileSlice(entry.files);
 
@@ -2048,7 +2049,7 @@ const Formatter = struct {
     }
 
     /// Format a single target file entry
-    fn formatTargetFile(fmt: *Formatter, file_idx: AST.TargetFile.Idx) !void {
+    fn formatTargetFile(fmt: *Formatter, file_idx: AST.TargetFile.Idx) error{WriteFailed}!void {
         const file = fmt.ast.store.getTargetFile(file_idx);
         switch (file) {
             .string_literal => |token| {
@@ -2065,7 +2066,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) !void {
+    fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) anyerror!void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
         defer {
@@ -2380,7 +2381,7 @@ const Formatter = struct {
         return fmt.ast.store.nodes.items.items(.region)[idx];
     }
 
-    fn formatBlock(fmt: *Formatter, block: AST.Block) !void {
+    fn formatBlock(fmt: *Formatter, block: AST.Block) anyerror!void {
         if (block.statements.span.len > 0) {
             fmt.curr_indent += 1;
             try fmt.push('{');
@@ -2404,7 +2405,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatTypeHeader(fmt: *Formatter, header: AST.TypeHeader.Idx) !void {
+    fn formatTypeHeader(fmt: *Formatter, header: AST.TypeHeader.Idx) anyerror!void {
         // Check if the type header node is malformed before calling getTypeHeader
         const h = fmt.ast.store.getTypeHeader(header) catch {
             // Handle malformed type header by outputting placeholder text
@@ -2418,7 +2419,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatAnnoRecordField(fmt: *Formatter, idx: AST.AnnoRecordField.Idx) !AST.TokenizedRegion {
+    fn formatAnnoRecordField(fmt: *Formatter, idx: AST.AnnoRecordField.Idx) anyerror!AST.TokenizedRegion {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -2449,7 +2450,7 @@ const Formatter = struct {
         return field.region;
     }
 
-    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx) !void {
+    fn formatWhereClause(fmt: *Formatter, idx: AST.WhereClause.Idx) anyerror!void {
         const clause = fmt.ast.store.getWhereClause(idx);
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
@@ -2528,7 +2529,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) !AST.TokenizedRegion {
+    fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion {
         const a = fmt.ast.store.getTypeAnno(anno);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         const multiline = fmt.nodeWillBeMultiline(AST.TypeAnno.Idx, anno);
@@ -2694,18 +2695,18 @@ const Formatter = struct {
         return region;
     }
 
-    fn ensureNewline(fmt: *Formatter) !void {
+    fn ensureNewline(fmt: *Formatter) error{WriteFailed}!void {
         if (fmt.has_newline) {
             return;
         }
         try fmt.newline();
     }
 
-    fn newline(fmt: *Formatter) !void {
+    fn newline(fmt: *Formatter) error{WriteFailed}!void {
         try fmt.push('\n');
     }
 
-    fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
+    fn flushCommentsBefore(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!bool {
         return fmt.flushCommentsBeforeMin(tokenIdx, 0);
     }
 
@@ -2723,19 +2724,19 @@ const Formatter = struct {
     /// Like `flushCommentsBefore`, but ensures at least `min_leading_newlines` newlines
     /// are emitted before any comment or trailing content. Used to insert blank lines
     /// between top-level defs.
-    fn flushCommentsBeforeMin(fmt: *Formatter, tokenIdx: Token.Idx, min_leading_newlines: u8) !bool {
+    fn flushCommentsBeforeMin(fmt: *Formatter, tokenIdx: Token.Idx, min_leading_newlines: u8) error{WriteFailed}!bool {
         const start = if (tokenIdx == 0) 0 else fmt.ast.tokens.resolve(tokenIdx - 1).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx).start.offset;
         return fmt.flushComments(fmt.ast.env.source[start..end], min_leading_newlines);
     }
 
-    fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) !bool {
+    fn flushCommentsAfter(fmt: *Formatter, tokenIdx: Token.Idx) error{WriteFailed}!bool {
         const start = fmt.ast.tokens.resolve(tokenIdx).end.offset;
         const end = fmt.ast.tokens.resolve(tokenIdx + 1).start.offset;
         return fmt.flushComments(fmt.ast.env.source[start..end], 0);
     }
 
-    fn flushCommentsEOF(fmt: *Formatter) !void {
+    fn flushCommentsEOF(fmt: *Formatter) error{WriteFailed}!void {
         const last_token_idx = if (fmt.ast.tokens.tokens.len >= 2) fmt.ast.tokens.tokens.len - 2 else 0;
         const start = fmt.ast.tokens.resolve(last_token_idx).end.offset;
         const end = fmt.ast.env.source.len;
@@ -2779,7 +2780,7 @@ const Formatter = struct {
         try fmt.ensureNewline();
     }
 
-    fn flushComments(fmt: *Formatter, between_text: []const u8, min_leading_newlines: u8) !bool {
+    fn flushComments(fmt: *Formatter, between_text: []const u8, min_leading_newlines: u8) error{WriteFailed}!bool {
         var newline_count: usize = 0;
         var prev_was_comment: bool = false;
         // True once we've either upgraded a source newline into a blank line
@@ -2868,7 +2869,7 @@ const Formatter = struct {
         return newline_count > 0;
     }
 
-    fn push(fmt: *Formatter, c: u8) !void {
+    fn push(fmt: *Formatter, c: u8) error{WriteFailed}!void {
         if (c != '\t') {
             fmt.has_newline = c == '\n';
         }
@@ -2876,7 +2877,7 @@ const Formatter = struct {
         try fmt.writer.writeByte(c);
     }
 
-    fn pushAll(fmt: *Formatter, str: []const u8) !void {
+    fn pushAll(fmt: *Formatter, str: []const u8) error{WriteFailed}!void {
         if (str.len == 0) {
             return;
         }
@@ -2890,7 +2891,7 @@ const Formatter = struct {
         try fmt.writer.writeAll(str);
     }
 
-    fn pushIndent(fmt: *Formatter) !void {
+    fn pushIndent(fmt: *Formatter) error{WriteFailed}!void {
         if (fmt.curr_indent == 0 or !fmt.has_newline) {
             return;
         }
@@ -2899,7 +2900,7 @@ const Formatter = struct {
         }
     }
 
-    fn pushTokenText(fmt: *Formatter, ti: Token.Idx) !void {
+    fn pushTokenText(fmt: *Formatter, ti: Token.Idx) error{WriteFailed}!void {
         const tag = fmt.ast.tokens.tokens.items(.tag)[ti];
         const region = fmt.ast.tokens.resolve(ti);
         var start = region.start.offset;
@@ -3170,7 +3171,7 @@ const Formatter = struct {
 
 /// Asserts a module when formatted twice in a row results in the same final output.
 /// Returns that final output.
-pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
+pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) anyerror![]const u8 {
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
@@ -3193,7 +3194,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
     return formatted_twice;
 }
 
-fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
+fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) anyerror![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 

@@ -38,7 +38,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(import_json, import_json_duplicate);
     try std.testing.expectEqual(@as(usize, 2), original.imports.imports.len());
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
@@ -150,7 +150,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Note: the deserialized StringLiteral.Store points into the cache buffer and
     // cannot be grown (SafeList.deserializeInto contract), so we only test lookup
     // of already-serialized strings here.
-    var test_arena = std.heap.ArenaAllocator.init(gpa);
+    var test_arena = collections.SingleThreadArena.init(gpa);
     defer test_arena.deinit();
     const test_alloc = test_arena.allocator();
 
@@ -189,7 +189,7 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     });
     original.finalizeMethodTables();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
