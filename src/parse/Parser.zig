@@ -4698,7 +4698,8 @@ fn runExprStatementKernel(
             .DoubleDot => {
                 const double_dot_start = self.pos;
                 self.advance();
-                if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                const ext_tok = self.peek();
+                if (ext_tok == .LowerIdent or ext_tok == .NamedUnderscore) {
                     try open_syntax.pushType(open_allocator, .type_record_ext, TypeRecordExtState, .{
                         .start = type_record_state.start,
                         .scratch_top = type_record_state.scratch_top,
