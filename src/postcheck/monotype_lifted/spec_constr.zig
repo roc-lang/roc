@@ -322,13 +322,13 @@ const FnPlan = struct {
     }
 };
 
-const BindingKey = union(enum) {
+const BindingTarget = union(enum) {
     local: Ast.LocalId,
     binder: check.CheckedModule.PatternBinderId,
 };
 
 const BindingChange = struct {
-    key: BindingKey,
+    key: BindingTarget,
     previous: ?Value,
 };
 
@@ -1375,7 +1375,6 @@ const Cloner = struct {
                     return .{ .expr = try self.cloneExprPlain(expr_id) };
                 }
                 return try self.inlineDirectCallValue(
-                    expr.ty,
                     Ast.callProcCallee(call),
                     call.args,
                     expr_id,
@@ -2061,7 +2060,6 @@ const Cloner = struct {
 
     fn inlineDirectCallValue(
         self: *Cloner,
-        ty: Type.TypeId,
         callee: Ast.FnId,
         args_span: Ast.Span(Ast.ExprId),
         original_expr: Ast.ExprId,
@@ -2101,7 +2099,6 @@ const Cloner = struct {
             try self.putSubst(source_arg.local, try self.cloneExprValue(arg_expr));
         }
 
-        _ = ty;
         return try self.cloneExprValue(body);
     }
 
