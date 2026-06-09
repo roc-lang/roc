@@ -1056,6 +1056,19 @@ fn parseExposedCollectionTokens(
     }
 }
 
+inline fn parseHeaderExposedCollectionTokens(
+    self: *Parser,
+    open_error: AST.Diagnostic.Tag,
+    close_error: AST.Diagnostic.Tag,
+    malformed_close_error: AST.Diagnostic.Tag,
+    missing_open_pos: Token.Idx,
+) Error!ExposedCollectionResult {
+    if (self.peek() != .OpenSquare) {
+        return .{ .malformed = .{ .tag = open_error, .pos = missing_open_pos } };
+    }
+    return try self.parseExposedCollectionTokens(open_error, close_error, malformed_close_error);
+}
+
 fn parseRecordFieldCollectionTokens(
     self: *Parser,
     start: Token.Idx,
@@ -1090,10 +1103,7 @@ fn parseModuleHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwModule);
     self.advance();
-    if (self.peek() != .OpenSquare) {
-        return try self.pushMalformed(AST.Header.Idx, .header_expected_open_square, start);
-    }
-    const exposed = switch (try self.parseExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close)) {
+    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
         .ok => |ok| ok,
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
@@ -1107,10 +1117,7 @@ fn parseHostedHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwHosted);
     self.advance();
-    if (self.peek() != .OpenSquare) {
-        return try self.pushMalformed(AST.Header.Idx, .header_expected_open_square, start);
-    }
-    const exposed = switch (try self.parseExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close)) {
+    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
         .ok => |ok| ok,
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
@@ -1125,10 +1132,7 @@ fn parsePackageHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     std.debug.assert(self.peek() == .KwPackage);
     self.advance();
 
-    if (self.peek() != .OpenSquare) {
-        return try self.pushMalformed(AST.Header.Idx, .expected_provides_open_square, start);
-    }
-    const exposed = switch (try self.parseExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close)) {
+    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
         .ok => |ok| ok,
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
@@ -1153,10 +1157,7 @@ fn parseAppHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     std.debug.assert(self.peek() == .KwApp);
     self.advance();
 
-    if (self.peek() != .OpenSquare) {
-        return try self.pushMalformed(AST.Header.Idx, .expected_provides_open_square, start);
-    }
-    const provided = switch (try self.parseExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close)) {
+    const provided = switch (try self.parseHeaderExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
         .ok => |ok| ok,
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
