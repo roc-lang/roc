@@ -1742,14 +1742,10 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
     env.common.source = source;
     env.module_name = module_name;
 
-    const ast = parse.parse(ctx.gpa, &env.common) catch |err| switch (err) {
+    const ast = parse.file(ctx.gpa, &env.common) catch |err| switch (err) {
         error.OutOfMemory => {
             ctx.gpa.free(source);
             return error.OutOfMemory;
-        },
-        error.TooNested => {
-            ctx.gpa.free(source);
-            return null;
         },
     };
     defer ast.deinit();
@@ -2562,7 +2558,7 @@ fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) (Allocato
     };
 
     // Parse the source
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
+    const ast = parse.file(ctx.gpa, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,
@@ -6540,7 +6536,6 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) anyer
         error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
         error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
         error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors

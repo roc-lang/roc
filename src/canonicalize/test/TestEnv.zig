@@ -37,7 +37,7 @@ pub fn init(source: []const u8) (Allocator.Error || error{TooNested})!TestEnv {
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
-    const parse_ast = try parse.parseExpr(gpa, &module_env.common);
+    const parse_ast = try parse.expr(gpa, &module_env.common);
     errdefer parse_ast.deinit();
 
     // Phase 4: AST Structure Validation

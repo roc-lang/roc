@@ -87,10 +87,10 @@ pub fn parseSingleModule(
 
     // Parse based on mode - parse functions now return *AST directly
     const ast = switch (mode) {
-        .file => try parse.parse(gpa, &module_env.common),
-        .expr => try parse.parseExpr(gpa, &module_env.common),
-        .statement => try parse.parseStatement(gpa, &module_env.common),
-        .header => try parse.parseHeader(gpa, &module_env.common),
+        .file => try parse.file(gpa, &module_env.common),
+        .expr => try parse.expr(gpa, &module_env.common),
+        .statement => try parse.statement(gpa, &module_env.common),
+        .header => try parse.header(gpa, &module_env.common),
     };
     errdefer ast.deinit();
 

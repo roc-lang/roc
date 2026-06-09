@@ -898,7 +898,7 @@ test "fromAST captures punned wasm identifier config" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);

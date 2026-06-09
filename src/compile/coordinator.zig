@@ -3736,7 +3736,7 @@ pub const Coordinator = struct {
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
         errdefer deinitReports(&reports, worker_alloc);
 
-        const parse_ast = try parse.parse(worker_alloc, &env.common);
+        const parse_ast = try parse.file(worker_alloc, &env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 

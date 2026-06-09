@@ -742,7 +742,7 @@ test "validatePlatformHasTargets detects missing targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -783,7 +783,7 @@ test "validatePlatformHasTargets accepts platform with targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -808,7 +808,7 @@ test "validatePlatformHasTargets skips non-platform headers" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "app/main.roc");
@@ -846,7 +846,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -878,7 +878,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -912,7 +912,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     // Try to extract targets config from the AST

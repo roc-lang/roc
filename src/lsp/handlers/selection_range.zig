@@ -157,9 +157,8 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
+    const ast = parse.file(allocator, &module_env.common) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.TooNested => return error.ParseFailed,
     };
     defer ast.deinit();
 
