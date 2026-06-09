@@ -94,6 +94,12 @@ pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
     self.advance();
 }
 
+inline fn consumeComma(self: *Parser) bool {
+    if (self.peek() != .Comma) return false;
+    self.advance();
+    return true;
+}
+
 /// Peek at the token at the current position
 ///
 /// **note** caller is responsible to ensure this isn't the last token
@@ -1033,8 +1039,7 @@ fn parseExposedCollectionTokens(
             },
         }
 
-        if (self.peek() == .Comma) {
-            self.advance();
+        if (self.consumeComma()) {
             continue;
         }
         if (self.peek() == .CloseSquare) {
@@ -1069,9 +1074,7 @@ fn parseRecordFieldCollectionTokens(
     const scratch_top = self.store.scratchRecordFieldTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         try self.store.addScratchRecordField(try self.parseRecordFieldTokens());
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
+        if (!self.consumeComma()) {
             break;
         }
     }
