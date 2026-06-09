@@ -181,9 +181,9 @@ fn roc_crashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 }
 
 // Hosted function: Stdout.line! (index 0)
-// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const s = args.str.asSlice();
+// Natural C signature for `Stdout.line! : Str => {}` (needsRocOps = true).
+fn hostedStdoutLine(_: *RocOps, str: RocStr) callconv(.c) void {
+    const s = str.asSlice();
     env_imports.echo(s.ptr, s.len);
 }
 

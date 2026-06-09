@@ -121,7 +121,9 @@ const StackPrefixBytes = struct {
 };
 
 const LayoutStore = layout.Store;
-const wasm_roc_ops_env_offset: u32 = 0;
+const wasm_roc_ops_alloc_offset: u32 = 4;
+const wasm_roc_ops_dealloc_offset: u32 = 8;
+const wasm_roc_ops_realloc_offset: u32 = 12;
 const wasm_roc_ops_dbg_offset: u32 = 16;
 const wasm_roc_ops_expect_failed_offset: u32 = 20;
 const wasm_roc_ops_crashed_offset: u32 = 24;
@@ -222,10 +224,17 @@ static_data_name_counter: u32 = 0,
 func_type_cache: std.StringHashMap(u32),
 /// Scratch buffer for function type cache keys.
 func_type_key_scratch: std.ArrayList(u8),
-/// Type index for the RocOps function signature: (i32, i32) -> void.
+/// Type index for the generic 2-arg indirect call signature: (i32, i32) -> void.
+/// Used for erased-callable on_drop function pointers.
 roc_ops_type_idx: u32 = 0,
-/// Type index for hosted RocCall functions: (roc_ops, ret_ptr, args_ptr) -> void.
-hosted_fn_type_idx: u32 = 0,
+/// Type index for roc_alloc: (roc_ops, length, alignment) -> ptr.
+roc_alloc_type_idx: u32 = 0,
+/// Type index for roc_dealloc: (roc_ops, ptr, alignment) -> void.
+roc_dealloc_type_idx: u32 = 0,
+/// Type index for roc_realloc: (roc_ops, ptr, new_length, alignment) -> ptr.
+roc_realloc_type_idx: u32 = 0,
+/// Type index for roc_dbg/roc_expect_failed/roc_crashed: (roc_ops, bytes, len) -> void.
+roc_diag_type_idx: u32 = 0,
 indirect_call_types_registered: bool = false,
 /// Table indices for RocOps functions (used with erased calls via wasm `call_indirect`).
 roc_alloc_table_idx: u32 = 0,
@@ -855,7 +864,19 @@ pub fn registerIndirectCallTypes(self: *Self) Allocator.Error!void {
         &.{ .i32, .i32 },
         &.{},
     );
-    self.hosted_fn_type_idx = try self.module.addFuncType(
+    self.roc_alloc_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32 },
+        &.{.i32},
+    );
+    self.roc_dealloc_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32 },
+        &.{},
+    );
+    self.roc_realloc_type_idx = try self.module.addFuncType(
+        &.{ .i32, .i32, .i32, .i32 },
+        &.{.i32},
+    );
+    self.roc_diag_type_idx = try self.module.addFuncType(
         &.{ .i32, .i32, .i32 },
         &.{},
     );
@@ -900,27 +921,28 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     );
     self.list_eq_import = try self.module.addImport("env", "roc_list_eq", list_eq_type);
 
-    // RocOps function imports: all have signature (i32 args_ptr, i32 env_ptr) -> void.
-    // These are invoked for erased calls via the wasm funcref table and `call_indirect`.
+    // RocOps function imports follow the platform C ABI: each takes a leading `*RocOps`
+    // (the i32 pointer to the RocOps struct in linear memory) followed by its natural
+    // arguments. They are invoked via the wasm funcref table and `call_indirect`.
     try self.registerIndirectCallTypes();
 
     // Enable table and add each RocOps function as a table element
-    const roc_alloc_idx = try self.module.addImport("env", "roc_alloc", self.roc_ops_type_idx);
+    const roc_alloc_idx = try self.module.addImport("env", "roc_alloc", self.roc_alloc_type_idx);
     self.roc_alloc_table_idx = try self.module.addTableElement(roc_alloc_idx);
 
-    const roc_dealloc_idx = try self.module.addImport("env", "roc_dealloc", self.roc_ops_type_idx);
+    const roc_dealloc_idx = try self.module.addImport("env", "roc_dealloc", self.roc_dealloc_type_idx);
     self.roc_dealloc_table_idx = try self.module.addTableElement(roc_dealloc_idx);
 
-    const roc_realloc_idx = try self.module.addImport("env", "roc_realloc", self.roc_ops_type_idx);
+    const roc_realloc_idx = try self.module.addImport("env", "roc_realloc", self.roc_realloc_type_idx);
     self.roc_realloc_table_idx = try self.module.addTableElement(roc_realloc_idx);
 
-    const roc_dbg_idx = try self.module.addImport("env", "roc_dbg", self.roc_ops_type_idx);
+    const roc_dbg_idx = try self.module.addImport("env", "roc_dbg", self.roc_diag_type_idx);
     self.roc_dbg_table_idx = try self.module.addTableElement(roc_dbg_idx);
 
-    const roc_expect_failed_idx = try self.module.addImport("env", "roc_expect_failed", self.roc_ops_type_idx);
+    const roc_expect_failed_idx = try self.module.addImport("env", "roc_expect_failed", self.roc_diag_type_idx);
     self.roc_expect_failed_table_idx = try self.module.addTableElement(roc_expect_failed_idx);
 
-    const roc_crashed_idx = try self.module.addImport("env", "roc_crashed", self.roc_ops_type_idx);
+    const roc_crashed_idx = try self.module.addImport("env", "roc_crashed", self.roc_diag_type_idx);
     self.roc_crashed_table_idx = try self.module.addTableElement(roc_crashed_idx);
 
     // i128/u128 division and modulo host functions
@@ -1714,25 +1736,19 @@ fn emitPrepareListSliceMetadata(self: *Self, list_ptr_local: u32, elements_refco
 }
 
 fn emitCallRocDealloc(self: *Self, ptr_local: u32, alignment: u32) Allocator.Error!void {
-    const dealloc_slot = try self.allocStackMemory(8, 4);
+    // roc_dealloc(*RocOps, ptr, alignment) -> ()
+    try self.emitLocalGet(self.roc_ops_local);
 
-    try self.emitFpOffset(dealloc_slot);
+    try self.emitLocalGet(ptr_local);
+
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(alignment)) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i32, 0);
 
-    try self.emitFpOffset(dealloc_slot);
-    try self.emitLocalGet(ptr_local);
-    try self.emitStoreOp(.i32, 4);
-
-    try self.emitFpOffset(dealloc_slot);
+    // Load roc_dealloc table index from the RocOps struct (offset 8)
     try self.emitLocalGet(self.roc_ops_local);
-    try self.emitLoadOp(.i32, 0); // env ptr
+    try self.emitLoadOp(.i32, wasm_roc_ops_dealloc_offset);
 
-    try self.emitLocalGet(self.roc_ops_local);
-    try self.emitLoadOp(.i32, 8); // roc_dealloc table idx
-
-    try self.emitCallIndirect(self.roc_ops_type_idx);
+    try self.emitCallIndirect(self.roc_dealloc_type_idx);
 }
 
 fn emitBuiltinInternalFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
@@ -5618,45 +5634,23 @@ fn allocStackMemory(self: *Self, size: u32, alignment: u32) Allocator.Error!u32 
 /// `size_local` holds the size to allocate; `alignment` is the byte alignment.
 /// Leaves the allocated pointer on the wasm stack.
 fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!void {
-    // Allocate 12-byte RocAlloc struct on stack frame: {alignment: u32, length: u32, answer: u32}
-    const alloc_slot = try self.allocStackMemory(12, 4);
+    // roc_alloc(*RocOps, length, alignment) -> ptr
+    // Push the RocOps pointer, length, and alignment as direct wasm values.
+    try self.emitLocalGet(self.roc_ops_local);
 
-    // Write alignment field
-    try self.emitFpOffset(alloc_slot);
+    try self.emitLocalGet(size_local);
+
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(alignment)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-    // Write length field
-    try self.emitFpOffset(alloc_slot);
-    try self.emitLocalGet(size_local);
-    self.currentCode().append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
-
-    // Push erased-call args: (alloc_args_ptr, env_ptr)
-    try self.emitFpOffset(alloc_slot); // args_ptr
-    try self.emitLocalGet(self.roc_ops_local); // load roc_ops_ptr
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory; // load env from offset 0
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-
-    // Load roc_alloc table index from roc_ops_ptr offset 4
+    // Load roc_alloc table index from the RocOps struct (offset 4)
     try self.emitLocalGet(self.roc_ops_local);
     self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), wasm_roc_ops_alloc_offset) catch return error.OutOfMemory;
 
-    // wasm call_indirect with RocOps function type, table 0
-    try self.emitCallIndirect(self.roc_ops_type_idx);
-
-    // Read answer from struct (offset +8) → result pointer on stack
-    try self.emitFpOffset(alloc_slot);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 8) catch return error.OutOfMemory;
+    // call_indirect leaves the returned pointer on the wasm stack.
+    try self.emitCallIndirect(self.roc_alloc_type_idx);
 }
 
 /// Emit heap allocation via roc_alloc with a constant size.
@@ -6128,6 +6122,14 @@ fn storeEntrypointResult(
     }
 }
 
+/// Map a single ABI register piece to the wasm value type it travels in.
+fn pieceValType(piece: layout.abi.RegPiece) ValType {
+    return switch (piece.class) {
+        .integer => if (piece.size <= 4) .i32 else .i64,
+        .float => if (piece.size <= 4) .f32 else .f64,
+    };
+}
+
 fn emitHostedCall(
     self: *Self,
     hosted: LIR.HostedProc,
@@ -6148,7 +6150,9 @@ fn emitHostedCall(
     const arg_offsets = try self.allocator.alloc(u32, args.len);
     defer self.allocator.free(arg_offsets);
     const args_size = try self.computeHostedArgOffsets(arg_layouts, arg_offsets);
-    const args_slot = try self.allocStackMemory(@max(args_size, 4), 4);
+    // Pad by 8 bytes so a register piece loaded as a full 64-bit word from the tail of the
+    // slot never reads past it.
+    const args_slot = try self.allocStackMemory(@max(args_size, 4) + 8, 4);
     const args_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(args_slot);
     try self.emitLocalSet(args_ptr_local);
@@ -6157,11 +6161,68 @@ fn emitHostedCall(
         try self.copyProcLocalToHostedArgs(arg, arg_layout, args_ptr_local, arg_offsets[i]);
     }
 
-    try self.emitLocalGet(self.roc_ops_local);
-    try self.emitLocalGet(ret_ptr_local);
-    try self.emitLocalGet(args_ptr_local);
+    // Lower the call to the wasm C ABI (shared classifier, same as the other backends).
+    var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const needs_ops = layout.abi.needsRocOps(self.getLayoutStore(), arg_layouts, ret_layout);
+    const lowered = layout.abi.lower(arena, self.getLayoutStore(), .wasm32, arg_layouts, ret_layout, needs_ops) catch return error.OutOfMemory;
 
-    // Load hosted_fns.fns[dispatch_index] from RocOps.
+    // Build the call_indirect func type and push the wasm call arguments in order.
+    var params = std.ArrayList(ValType).empty;
+    defer params.deinit(self.allocator);
+    var results = std.ArrayList(ValType).empty;
+    defer results.deinit(self.allocator);
+
+    // Leading *RocOps (the pointer to the RocOps struct in linear memory).
+    if (lowered.leading_ops) {
+        try params.append(self.allocator, .i32);
+        try self.emitLocalGet(self.roc_ops_local);
+    }
+
+    // An indirect return is passed as a result pointer (wasm has no sret register).
+    if (lowered.ret == .indirect) {
+        try params.append(self.allocator, .i32);
+        try self.emitLocalGet(ret_ptr_local);
+    }
+
+    for (lowered.args, arg_offsets) |placement, arg_offset| {
+        switch (placement) {
+            .none => {},
+            .indirect => {
+                // Pass a pointer to the argument's bytes in the packed args slot.
+                try params.append(self.allocator, .i32);
+                try self.emitLocalGet(args_ptr_local);
+                if (arg_offset != 0) {
+                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(arg_offset)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                }
+            },
+            .registers => |pieces| {
+                for (pieces) |piece| {
+                    const vt = pieceValType(piece);
+                    try params.append(self.allocator, vt);
+                    try self.emitLocalGet(args_ptr_local);
+                    try self.emitLoadOpSized(vt, piece.size, arg_offset + piece.offset);
+                }
+            },
+        }
+    }
+
+    // A register-class return is a single wasm result value.
+    switch (lowered.ret) {
+        .none, .indirect => {},
+        .registers => |pieces| {
+            for (pieces) |piece| {
+                try results.append(self.allocator, pieceValType(piece));
+            }
+        },
+    }
+
+    const call_type_idx = try self.internFuncType(params.items, results.items);
+
+    // Load hosted_fns.fns[dispatch_index] from RocOps and push it as the table index.
     try self.emitLocalGet(self.roc_ops_local);
     try self.emitLoadOp(.i32, wasm_roc_ops_hosted_fns_ptr_offset);
     if (hosted.dispatch_index != 0) {
@@ -6171,7 +6232,21 @@ fn emitHostedCall(
     }
     try self.emitLoadOp(.i32, 0);
 
-    try self.emitCallIndirect(self.hosted_fn_type_idx);
+    try self.emitCallIndirect(call_type_idx);
+
+    // Store a register-class return into the return slot. Multiple wasm results sit on the
+    // stack with the last result on top, so store them in reverse order.
+    switch (lowered.ret) {
+        .none, .indirect => {},
+        .registers => |pieces| {
+            var i: usize = pieces.len;
+            while (i > 0) {
+                i -= 1;
+                const piece = pieces[i];
+                try self.emitStoreToMemSized(ret_ptr_local, piece.offset, pieceValType(piece), piece.size);
+            }
+        },
+    }
 
     if (ret_size == 0) {
         self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -6740,43 +6815,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .crash => |crash| {
             const msg_bytes = self.store.getString(crash.msg);
-            const segment_name = try self.allocStaticDataName(".rodata.roc_crash");
-            const symbol_name = try self.allocStaticDataName("roc.crash");
-            const msg_address = try self.addStaticDataSymbol(
-                msg_bytes,
-                1,
-                segment_name,
-                symbol_name,
-                0,
-                @intCast(msg_bytes.len),
-            );
-
-            const crashed_slot = try self.allocStackMemory(8, 4);
-            try self.emitFpOffset(crashed_slot);
-            try self.emitDataAddressConst(msg_address, 0);
-            self.currentCode().append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-
-            try self.emitFpOffset(crashed_slot);
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(msg_bytes.len)) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_store) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
-
-            try self.emitFpOffset(crashed_slot);
-            try self.emitLocalGet(self.roc_ops_local);
-            self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-
-            try self.emitLocalGet(self.roc_ops_local);
-            self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 24) catch return error.OutOfMemory;
-
-            try self.emitCallIndirect(self.roc_ops_type_idx);
+            try self.emitRocStaticStringCall(wasm_roc_ops_crashed_offset, msg_bytes);
 
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
@@ -6873,20 +6912,25 @@ fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx)
     }
 }
 
+/// Emit a diagnostic RocOps callback (dbg/expect_failed/crashed) following the C ABI:
+/// (*RocOps, bytes_ptr, len) -> (). The bytes pointer and length are sourced from the
+/// two i32 fields packed at `args_slot` (field 0 = bytes_ptr, field 4 = len).
 fn emitRocOpsCall(self: *Self, args_slot: u32, table_offset: u32) Allocator.Error!void {
+    try self.emitLocalGet(self.roc_ops_local);
+
+    // bytes_ptr from args_slot field 0
     try self.emitFpOffset(args_slot);
+    try self.emitLoadOp(.i32, 0);
 
+    // len from args_slot field 4
+    try self.emitFpOffset(args_slot);
+    try self.emitLoadOp(.i32, 4);
+
+    // Load the callback's table index from the RocOps struct.
     try self.emitLocalGet(self.roc_ops_local);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), wasm_roc_ops_env_offset) catch return error.OutOfMemory;
+    try self.emitLoadOp(.i32, table_offset);
 
-    try self.emitLocalGet(self.roc_ops_local);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), table_offset) catch return error.OutOfMemory;
-
-    try self.emitCallIndirect(self.roc_ops_type_idx);
+    try self.emitCallIndirect(self.roc_diag_type_idx);
 }
 
 fn emitRocStaticStringCall(self: *Self, table_offset: u32, msg: []const u8) Allocator.Error!void {
