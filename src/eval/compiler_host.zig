@@ -4,12 +4,6 @@ const std = @import("std");
 const builtins = @import("builtins");
 
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 
 const CompilerHost = @This();
 
@@ -56,67 +50,64 @@ pub fn ops(self: *CompilerHost) *RocOps {
     return &self.roc_ops.?;
 }
 
-fn rocAlloc(args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const self: *CompilerHost = @ptrCast(@alignCast(env));
-    const allocation: Allocation = .{ .size = args.length, .alignment = args.alignment };
-    const ptr = allocateBytes(self.allocator, args.length, args.alignment) orelse {
+fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
+    const allocation: Allocation = .{ .size = length, .alignment = alignment };
+    const ptr = allocateBytes(self.allocator, length, alignment) orelse {
         // OOM: signal failure to the caller (the interpreter turns this into a
         // Roc crash) instead of aborting the whole compiler.
-        args.answer = null;
-        return;
+        return null;
     };
     self.allocations.put(@intFromPtr(ptr), allocation) catch {
         freeBytes(self.allocator, ptr, allocation);
-        args.answer = null;
-        return;
+        return null;
     };
-    args.answer = @ptrCast(ptr);
+    return @ptrCast(ptr);
 }
 
-fn rocDealloc(args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const self: *CompilerHost = @ptrCast(@alignCast(env));
-    const removed = self.allocations.fetchRemove(@intFromPtr(args.ptr)) orelse
+fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    _ = alignment;
+    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
+    const removed = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse
         @panic("compiler RocOps deallocated unknown pointer");
-    freeBytes(self.allocator, args.ptr, removed.value);
+    freeBytes(self.allocator, ptr, removed.value);
 }
 
-fn rocRealloc(args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const self: *CompilerHost = @ptrCast(@alignCast(env));
-    const old_ptr = args.answer orelse @panic("compiler RocOps reallocated a null pointer");
-    const allocation: Allocation = .{ .size = args.new_length, .alignment = args.alignment };
+fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
+    const old_ptr = ptr;
+    const allocation: Allocation = .{ .size = new_length, .alignment = alignment };
 
     // Allocate the new block before touching the tracking map, so a failure
     // leaves the old allocation intact and tracked.
-    const new_ptr = allocateBytes(self.allocator, args.new_length, args.alignment) orelse {
-        args.answer = null;
-        return;
+    const new_ptr = allocateBytes(self.allocator, new_length, alignment) orelse {
+        return null;
     };
     const removed = self.allocations.fetchRemove(@intFromPtr(old_ptr)) orelse
         @panic("compiler RocOps reallocated unknown pointer");
     const old_bytes: [*]u8 = @ptrCast(@alignCast(old_ptr));
-    @memcpy(new_ptr[0..@min(removed.value.size, args.new_length)], old_bytes[0..@min(removed.value.size, args.new_length)]);
+    @memcpy(new_ptr[0..@min(removed.value.size, new_length)], old_bytes[0..@min(removed.value.size, new_length)]);
     freeBytes(self.allocator, old_ptr, removed.value);
 
     self.allocations.put(@intFromPtr(new_ptr), allocation) catch {
         freeBytes(self.allocator, new_ptr, allocation);
-        args.answer = null;
-        return;
+        return null;
     };
-    args.answer = @ptrCast(new_ptr);
+    return @ptrCast(new_ptr);
 }
 
-fn rocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
+fn rocDbg(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
 
-fn rocExpectFailed(args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const self: *CompilerHost = @ptrCast(@alignCast(env));
+fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
     if (self.expect_message) |msg| self.allocator.free(msg);
-    self.expect_message = self.allocator.dupe(u8, args.utf8_bytes[0..args.len]) catch null;
+    self.expect_message = self.allocator.dupe(u8, bytes[0..len]) catch null;
 }
 
-fn rocCrashed(args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    const self: *CompilerHost = @ptrCast(@alignCast(env));
+fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
     if (self.crash_message) |msg| self.allocator.free(msg);
-    self.crash_message = self.allocator.dupe(u8, args.utf8_bytes[0..args.len]) catch null;
+    self.crash_message = self.allocator.dupe(u8, bytes[0..len]) catch null;
 }
 
 /// Returns null on allocation failure (OOM); the caller signals that to the

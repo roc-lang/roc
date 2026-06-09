@@ -167,12 +167,8 @@ fn hostAllocFailed(host: *HostEnv) noreturn {
 }
 
 /// Roc allocation function with size-tracking metadata
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    const roc_alloc_addr = @intFromPtr(roc_alloc);
-    if (roc_alloc_addr % @alignOf(builtins.host_abi.RocAlloc) != 0) {
-        std.debug.panic("[rocAllocFn] roc_alloc ptr not aligned! addr=0x{x} required={}", .{ roc_alloc_addr, @alignOf(builtins.host_abi.RocAlloc) });
-    }
-
+fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const env = ops.env;
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("rocAllocFn: env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
@@ -181,11 +177,11 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const total_size = length + size_storage_bytes;
 
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
 
@@ -199,10 +195,10 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 
-    const answer_addr = @intFromPtr(roc_alloc.answer);
-    if (answer_addr % roc_alloc.alignment != 0) {
+    const answer_addr = @intFromPtr(answer);
+    if (answer_addr % alignment != 0) {
         @panic("Host allocator returned misaligned answer in rocAllocFn");
     }
 
@@ -214,12 +210,15 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     host.alloc_count += 1;
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
-        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
+        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ answer_addr, length, alignment });
     }
+
+    return answer;
 }
 
 /// Roc deallocation function with size-tracking metadata
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
+fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const env = ops.env;
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("[rocDeallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
@@ -227,23 +226,23 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
         std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
-            @intFromPtr(roc_dealloc.ptr),
-            roc_dealloc.alignment,
+            @intFromPtr(ptr),
+            alignment,
             total_size,
             size_storage_bytes,
         });
     }
 
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == base_ptr) {
@@ -258,7 +257,8 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 }
 
 /// Roc reallocation function with size-tracking metadata
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
+fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const env = ops.env;
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("[rocReallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
@@ -266,17 +266,17 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
 
     const old_total_size = old_size_ptr.*;
 
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
 
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
 
@@ -304,30 +304,32 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
     if (trace_refcount or (builtin.mode == .Debug and builtin.os.tag != .freestanding)) {
-        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(answer), new_length });
     }
+
+    return answer;
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
-    const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
+fn rocDbgFn(_: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const message = bytes[0..len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+fn rocExpectFailedFn(_: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const source_bytes = bytes[0..len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
-    const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
+fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    const message = bytes[0..len];
     const stderr: std.Io.File = .stderr();
     var buf: [256]u8 = undefined;
     var w = stderr.writer(host.std_io, &buf);

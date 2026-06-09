@@ -1551,27 +1551,16 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
 
+        // New RocOps callback ABI: roc_dbg(ops: *RocOps, bytes: [*]const u8, len: usize).
         const wip = self.wip orelse return error.CompilationFailed;
-        const args_ptr = wip.alloca(
-            .normal,
-            .i8,
-            builder.intValue(.i32, self.rocOpsMessageSize()) catch return error.OutOfMemory,
-            self.targetPointerAlignment(),
-            .default,
-            "roc_ops_msg",
-        ) catch return error.OutOfMemory;
-
-        try self.storePointer(args_ptr, try self.staticBytes(msg));
-        try self.storeUsize(
-            try self.offsetPtr(args_ptr, self.rocOpsMessageLenOffset()),
-            builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
-        );
-
-        const env_ptr = try self.loadPointer(try self.offsetPtr(self.rocOps(), self.rocOpsEnvOffset()));
         const callback_ptr_ptr = try self.offsetPtr(self.rocOps(), self.rocOpsCallbackOffset(callback));
         const callback_ptr = try self.loadPointer(callback_ptr_ptr);
-        const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
-        _ = wip.call(.normal, .ccc, .none, fn_ty, callback_ptr, &.{ args_ptr, env_ptr }, "") catch return error.OutOfMemory;
+        const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, self.ptrSizedIntType() }, .normal) catch return error.OutOfMemory;
+        _ = wip.call(.normal, .ccc, .none, fn_ty, callback_ptr, &.{
+            self.rocOps(),
+            try self.staticBytes(msg),
+            builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
+        }, "") catch return error.OutOfMemory;
     }
 
     fn copyLocal(self: *MonoLlvmCodeGen, target: LocalId, source: LocalId) Error!void {

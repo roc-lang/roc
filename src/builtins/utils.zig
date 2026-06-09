@@ -10,12 +10,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const RocOps = @import("host_abi.zig").RocOps;
-const RocDealloc = @import("host_abi.zig").RocDealloc;
-const RocAlloc = @import("host_abi.zig").RocAlloc;
-const RocRealloc = @import("host_abi.zig").RocRealloc;
-const RocDbg = @import("host_abi.zig").RocDbg;
-const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
-const RocCrashed = @import("host_abi.zig").RocCrashed;
 
 inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
     if (comptime builtin.os.tag != .freestanding) {
@@ -157,19 +151,19 @@ pub const TestEnv = struct {
         return self.allocation_map.count();
     }
 
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestEnv = @ptrCast(@alignCast(env));
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Allocate memory using the testing allocator with comptime alignment
-        const ptr = switch (roc_alloc.alignment) {
-            1 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"1", roc_alloc.length),
-            2 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"2", roc_alloc.length),
-            4 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"4", roc_alloc.length),
-            8 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", roc_alloc.length),
-            16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", roc_alloc.length),
+        const ptr = switch (alignment) {
+            1 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"1", length),
+            2 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"2", length),
+            4 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"4", length),
+            8 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", length),
+            16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", length),
             else => {
                 // Use unreachable since we can't call roc_ops.crash in test allocator
-                debugPrint("Unsupported alignment in test allocator: {d}\n", .{roc_alloc.alignment});
+                debugPrint("Unsupported alignment in test allocator: {d}\n", .{alignment});
                 unreachable;
             },
         } catch {
@@ -182,22 +176,23 @@ pub const TestEnv = struct {
 
         // Save the allocation in the map
         self.allocation_map.put(result, AllocationInfo{
-            .size = roc_alloc.length,
-            .alignment = roc_alloc.alignment,
+            .size = length,
+            .alignment = alignment,
         }) catch {
             self.allocator.free(ptr);
             debugPrint("Failed to track test allocation\n", .{});
             unreachable;
         };
 
-        roc_alloc.answer = result;
+        return result;
     }
 
-    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestEnv = @ptrCast(@alignCast(env));
+    fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        _ = alignment;
+        const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
-        if (self.allocation_map.fetchRemove(roc_dealloc.ptr)) |entry| {
-            const bytes: [*]u8 = @ptrCast(@alignCast(roc_dealloc.ptr));
+        if (self.allocation_map.fetchRemove(ptr)) |entry| {
+            const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
             const slice = bytes[0..entry.value.size];
             // For aligned allocations, we need to free them properly
             switch (entry.value.alignment) {
@@ -214,21 +209,22 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestEnv = @ptrCast(@alignCast(env));
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        _ = alignment;
+        const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Look up the old allocation
-        if (self.allocation_map.fetchRemove(roc_realloc.answer.?)) |entry| {
-            const old_bytes: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer.?));
+        if (self.allocation_map.fetchRemove(ptr)) |entry| {
+            const old_bytes: [*]u8 = @ptrCast(@alignCast(ptr));
             const old_slice = old_bytes[0..entry.value.size];
 
             // Reallocate with the same alignment
             const new_ptr = switch (entry.value.alignment) {
-                1 => self.allocator.realloc(old_slice, roc_realloc.new_length),
-                2 => self.allocator.realloc(@as([]align(2) u8, @alignCast(old_slice)), roc_realloc.new_length),
-                4 => self.allocator.realloc(@as([]align(4) u8, @alignCast(old_slice)), roc_realloc.new_length),
-                8 => self.allocator.realloc(@as([]align(8) u8, @alignCast(old_slice)), roc_realloc.new_length),
-                16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                1 => self.allocator.realloc(old_slice, new_length),
+                2 => self.allocator.realloc(@as([]align(2) u8, @alignCast(old_slice)), new_length),
+                4 => self.allocator.realloc(@as([]align(4) u8, @alignCast(old_slice)), new_length),
+                8 => self.allocator.realloc(@as([]align(8) u8, @alignCast(old_slice)), new_length),
+                16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), new_length),
                 else => {
                     debugPrint("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
                     unreachable;
@@ -242,7 +238,7 @@ pub const TestEnv = struct {
 
             // Update the allocation map with the new pointer and size
             self.allocation_map.put(result, AllocationInfo{
-                .size = roc_realloc.new_length,
+                .size = new_length,
                 .alignment = entry.value.alignment,
             }) catch {
                 self.allocator.free(new_ptr);
@@ -250,19 +246,19 @@ pub const TestEnv = struct {
                 unreachable;
             };
 
-            roc_realloc.answer = result;
+            return result;
         } else {
             debugPrint("Test realloc: pointer not found in allocation map\n", .{});
             unreachable;
         }
     }
 
-    fn rocDbgFn(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
+    fn rocDbgFn(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
 
-    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+    fn rocExpectFailedFn(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-        const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
+    fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const message = bytes[0..len];
         debugPrint("Roc crashed: {s}\n", .{message});
         unreachable;
     }
@@ -588,13 +584,8 @@ inline fn free_ptr_to_refcount(
     // Use the same alignment calculation as allocateWithRefcount
     const allocation_alignment = @max(ptr_width, element_alignment);
 
-    var roc_dealloc_args = RocDealloc{
-        .alignment = allocation_alignment,
-        .ptr = allocation_ptr,
-    };
-
     // NOTE: we don't even check whether the refcount is "infinity" here!
-    roc_ops.roc_dealloc(&roc_dealloc_args, roc_ops.env);
+    roc_ops.roc_dealloc(roc_ops, allocation_ptr, allocation_alignment);
 }
 
 inline fn decref_ptr_to_refcount(
@@ -819,15 +810,7 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
-    var roc_alloc_args = RocAlloc{
-        .alignment = alignment,
-        .length = length,
-        .answer = undefined,
-    };
-
-    roc_ops.roc_alloc(&roc_alloc_args, roc_ops.env);
-
-    const new_bytes = @as([*]u8, @ptrCast(roc_alloc_args.answer));
+    const new_bytes = @as([*]u8, @ptrCast(roc_ops.roc_alloc(roc_ops, length, alignment)));
 
     const data_ptr = new_bytes + extra_bytes;
 
@@ -875,15 +858,9 @@ pub fn unsafeReallocate(
     // Use the same alignment calculation as allocateWithRefcount
     const allocation_alignment = @max(ptr_width, element_alignment);
 
-    var roc_realloc_args = RocRealloc{
-        .alignment = allocation_alignment,
-        .new_length = new_width,
-        .answer = old_allocation,
-    };
+    const reallocated = roc_ops.roc_realloc(roc_ops, old_allocation, new_width, allocation_alignment);
 
-    roc_ops.roc_realloc(&roc_realloc_args, roc_ops.env);
-
-    const new_source = @as([*]u8, @ptrCast(roc_realloc_args.answer)) + extra_bytes;
+    const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
     if (comptime builtin.os.tag != .freestanding) {
         const old_rc_addr = @intFromPtr(source_ptr - @sizeOf(usize));
         const new_rc_addr = @intFromPtr(new_source - @sizeOf(usize));
@@ -1162,22 +1139,11 @@ test "TestEnv allocation tracking" {
     const ops = test_env.getOps();
 
     // Test allocation
-    var alloc_request = @import("host_abi.zig").RocAlloc{
-        .alignment = 8,
-        .length = 32,
-        .answer = undefined,
-    };
-
-    ops.roc_alloc(&alloc_request, ops.env);
+    const allocated = ops.roc_alloc(ops, 32, 8);
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
 
     // Test deallocation
-    var dealloc_request = @import("host_abi.zig").RocDealloc{
-        .alignment = 8,
-        .ptr = alloc_request.answer.?,
-    };
-
-    ops.roc_dealloc(&dealloc_request, ops.env);
+    ops.roc_dealloc(ops, allocated.?, 8);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 

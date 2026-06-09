@@ -11,12 +11,6 @@ const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
@@ -255,19 +249,19 @@ fn appendEvent(
     };
 }
 
-fn rocDbgFn(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
-    self.appendEvent(.dbg, dbg_args.utf8_bytes[0..dbg_args.len]);
+fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
+    self.appendEvent(.dbg, bytes[0..len]);
 }
 
-fn rocExpectFailedFn(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
-    self.appendEvent(.expect_failed, expect_args.utf8_bytes[0..expect_args.len]);
+fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
+    self.appendEvent(.expect_failed, bytes[0..len]);
 }
 
-fn rocCrashedFn(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
-    self.appendEvent(.crashed, crashed_args.utf8_bytes[0..crashed_args.len]);
+fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
+    self.appendEvent(.crashed, bytes[0..len]);
     self.termination = .crashed;
 
     if (self.longjmp_on_crash) {
@@ -278,56 +272,58 @@ fn rocCrashedFn(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) v
     }
 }
 
-fn rocAllocFn(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
+fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
-    const alloc_ptr = allocateTrackedBytes(self.allocator, alloc_args.length, alloc_args.alignment);
-    alloc_args.answer = @ptrCast(alloc_ptr);
+    const alloc_ptr = allocateTrackedBytes(self.allocator, length, alignment);
     self.allocation_tracker.put(@intFromPtr(alloc_ptr), .{
-        .size = alloc_args.length,
-        .alignment = alloc_args.alignment,
+        .size = length,
+        .alignment = alignment,
     }) catch {
         std.debug.panic("RuntimeHostEnv: failed to track allocation", .{});
     };
+    return @ptrCast(alloc_ptr);
 }
 
-fn rocDeallocFn(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
-    const alloc_ptr = @intFromPtr(dealloc_args.ptr);
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    _ = alignment;
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
+    const alloc_ptr = @intFromPtr(ptr);
     const alloc_info = self.allocation_tracker.fetchRemove(alloc_ptr) orelse {
         std.debug.panic("RuntimeHostEnv: double-free or untracked free at ptr=0x{x}", .{alloc_ptr});
     };
 
     if (alloc_info.value.size >= @sizeOf(isize)) {
-        const refcount_ptr: *isize = @ptrCast(@alignCast(dealloc_args.ptr));
+        const refcount_ptr: *isize = @ptrCast(@alignCast(ptr));
         refcount_ptr.* = POISON_VALUE;
     }
 
-    freeTrackedBytes(self.allocator, dealloc_args.ptr, alloc_info.value);
+    freeTrackedBytes(self.allocator, ptr, alloc_info.value);
 }
 
-fn rocReallocFn(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const self: *RuntimeHostEnv = @ptrCast(@alignCast(env));
+fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
-    const old_alloc_ptr = @intFromPtr(realloc_args.answer);
+    const old_alloc_ptr = @intFromPtr(ptr);
     const old_info = self.allocation_tracker.fetchRemove(old_alloc_ptr) orelse {
         std.debug.panic("RuntimeHostEnv: realloc of untracked memory at ptr=0x{x}", .{old_alloc_ptr});
     };
 
-    const new_base_ptr = allocateTrackedBytes(undefined, realloc_args.new_length, realloc_args.alignment);
-    const old_bytes: [*]u8 = @ptrCast(@alignCast(realloc_args.answer));
-    const copy_size = @min(old_info.value.size, realloc_args.new_length);
+    const new_base_ptr = allocateTrackedBytes(undefined, new_length, alignment);
+    const old_bytes: [*]u8 = @ptrCast(@alignCast(ptr));
+    const copy_size = @min(old_info.value.size, new_length);
     @memcpy(new_base_ptr[0..copy_size], old_bytes[0..copy_size]);
 
-    freeTrackedBytes(undefined, realloc_args.answer.?, old_info.value);
-    realloc_args.answer = @ptrCast(new_base_ptr);
+    freeTrackedBytes(undefined, ptr, old_info.value);
 
     self.allocation_tracker.put(@intFromPtr(new_base_ptr), .{
-        .size = realloc_args.new_length,
-        .alignment = realloc_args.alignment,
+        .size = new_length,
+        .alignment = alignment,
     }) catch {
         std.debug.panic("RuntimeHostEnv: failed to track reallocation", .{});
     };
+
+    return @ptrCast(new_base_ptr);
 }
 
 // Use a non-tracing allocator for Roc runtime bytes. On Windows the
@@ -386,8 +382,8 @@ test "RuntimeHostEnv records raw dbg and expect payloads exactly" {
 
     const dbg_msg = "\"hello\"";
     const expect_msg = "expect failed";
-    ops.roc_dbg(&.{ .utf8_bytes = @constCast(dbg_msg.ptr), .len = dbg_msg.len }, ops.env);
-    ops.roc_expect_failed(&.{ .utf8_bytes = @constCast(expect_msg.ptr), .len = expect_msg.len }, ops.env);
+    ops.roc_dbg(ops, dbg_msg.ptr, dbg_msg.len);
+    ops.roc_expect_failed(ops, expect_msg.ptr, expect_msg.len);
 
     try std.testing.expectEqual(@as(usize, 2), env.events.items.len);
     try std.testing.expectEqualStrings(dbg_msg, env.events.items[0].bytes());
@@ -401,7 +397,7 @@ test "RuntimeHostEnv records crash payload and termination without a jump buffer
 
     const ops = env.get_ops();
     const crash_msg = "boom";
-    ops.roc_crashed(&.{ .utf8_bytes = @constCast(crash_msg.ptr), .len = crash_msg.len }, ops.env);
+    ops.roc_crashed(ops, crash_msg.ptr, crash_msg.len);
 
     try std.testing.expectEqual(@as(usize, 1), env.events.items.len);
     try std.testing.expectEqualStrings(crash_msg, env.events.items[0].bytes());

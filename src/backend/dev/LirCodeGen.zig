@@ -13689,28 +13689,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            try self.emitLeaStack(tmp, msg_slot);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot, tmp);
-            }
+            _ = args_slot;
 
+            // New RocOps callback ABI: callback(ops: *RocOps, bytes: [*]const u8, len: usize).
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emitLoadImm(tmp, msg_len_val);
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot + 8);
-            } else {
-                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
-                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot + 8, tmp);
-            }
+            try self.codegen.emitLoadImm(tmp, msg_len_val);
 
             const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
             try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, args_slot);
-            try builder.addMemArg(roc_ops_reg, 0);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.addLeaArg(base_reg, msg_slot);
+            try builder.addRegArg(tmp);
             try builder.callReg(fn_ptr_reg);
         }
 
@@ -14218,55 +14209,55 @@ const TestRocOps = struct {
         return @max(alignment, @alignOf(usize));
     }
 
-    fn rocAlloc(args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestRocOps = @ptrCast(@alignCast(env));
-        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
-        const meta = metaBytes(args.alignment);
-        const total = args.length + meta;
+    fn rocAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
+        const align_enum = std.mem.Alignment.fromByteUnits(alignment);
+        const meta = metaBytes(alignment);
+        const total = length + meta;
         const alloc_base = self.allocator.rawAlloc(total, align_enum, @returnAddress()) orelse
             @panic("TestRocOps alloc failed");
         const size_ptr: *usize = @ptrFromInt(@intFromPtr(alloc_base) + meta - @sizeOf(usize));
         size_ptr.* = total;
-        args.answer = @ptrFromInt(@intFromPtr(alloc_base) + meta);
+        return @ptrFromInt(@intFromPtr(alloc_base) + meta);
     }
 
-    fn rocDealloc(args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestRocOps = @ptrCast(@alignCast(env));
-        const meta = metaBytes(args.alignment);
-        const total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.ptr) - @sizeOf(usize));
+    fn rocDealloc(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
+        const meta = metaBytes(alignment);
+        const total_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
         const total = total_ptr.*;
-        const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(args.ptr) - meta);
-        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - meta);
+        const align_enum = std.mem.Alignment.fromByteUnits(alignment);
         self.allocator.rawFree(alloc_base[0..total], align_enum, @returnAddress());
     }
 
-    fn rocRealloc(args: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestRocOps = @ptrCast(@alignCast(env));
-        const meta = metaBytes(args.alignment);
-        const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.answer) - @sizeOf(usize));
+    fn rocRealloc(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
+        const meta = metaBytes(alignment);
+        const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
         const old_total = old_total_ptr.*;
-        const old_base: [*]u8 = @ptrFromInt(@intFromPtr(args.answer) - meta);
-        const new_total = args.new_length + meta;
-        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        const old_base: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - meta);
+        const new_total = new_length + meta;
+        const align_enum = std.mem.Alignment.fromByteUnits(alignment);
         const new_base = self.allocator.rawAlloc(new_total, align_enum, @returnAddress()) orelse
             @panic("TestRocOps realloc failed");
         @memcpy(new_base[0..@min(old_total, new_total)], old_base[0..@min(old_total, new_total)]);
         self.allocator.rawFree(old_base[0..old_total], align_enum, @returnAddress());
         const new_total_ptr: *usize = @ptrFromInt(@intFromPtr(new_base) + meta - @sizeOf(usize));
         new_total_ptr.* = new_total;
-        args.answer = @ptrFromInt(@intFromPtr(new_base) + meta);
+        return @ptrFromInt(@intFromPtr(new_base) + meta);
     }
 
-    fn rocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+    fn rocDbg(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {
         @panic("unexpected dbg in TestRocOps");
     }
 
-    fn rocExpectFailed(_: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
+    fn rocExpectFailed(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {
         @panic("unexpected expect failure in TestRocOps");
     }
 
-    fn rocCrashed(args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
-        std.debug.panic("roc crashed: {s}", .{args.utf8_bytes[0..args.len]});
+    fn rocCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        std.debug.panic("roc crashed: {s}", .{bytes[0..len]});
     }
 };
 

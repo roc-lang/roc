@@ -72,12 +72,6 @@ const dev_wrappers = builtins.dev_wrappers;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const UpdateMode = builtins.utils.UpdateMode;
 const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
@@ -148,17 +142,13 @@ const InterpreterRocEnv = struct {
 
     fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
         const caller_roc_ops = self.currentRocOps();
-        const roc_crashed = RocCrashed{
-            .utf8_bytes = @constCast(msg.ptr),
-            .len = msg.len,
-        };
-        caller_roc_ops.roc_crashed(&roc_crashed, caller_roc_ops.env);
+        caller_roc_ops.roc_crashed(caller_roc_ops, msg.ptr, msg.len);
         self.recordCrash(msg);
     }
 
-    /// The host allocators signal OOM by writing a null `answer` (see
-    /// `host_abi.RocAlloc`). Turn that into a Roc crash that unwinds to the eval
-    /// boundary via the active jump buffer, instead of letting it abort.
+    /// The host allocators signal OOM by returning a null pointer (see
+    /// `host_abi.RocOps.roc_alloc`). Turn that into a Roc crash that unwinds to
+    /// the eval boundary via the active jump buffer, instead of letting it abort.
     fn crashAllocationFailed(self: *InterpreterRocEnv) noreturn {
         self.reportCrash("ran out of memory");
         const active_jmp_buf = self.active_jmp_buf orelse {
@@ -176,49 +166,49 @@ const InterpreterRocEnv = struct {
         longjmp(active_jmp_buf, 1);
     }
 
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_alloc(roc_alloc, caller_roc_ops.env);
-        const ptr = roc_alloc.answer orelse self.crashAllocationFailed();
-        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), roc_alloc.length, roc_alloc.alignment });
+        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment) orelse self.crashAllocationFailed();
+        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), length, alignment });
+        return ptr;
     }
 
-    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
+    fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(ptr), alignment });
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_dealloc(roc_dealloc, caller_roc_ops.env);
+        caller_roc_ops.roc_dealloc(caller_roc_ops, ptr, alignment);
     }
 
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        const old_ptr = roc_realloc.answer.?;
-        caller_roc_ops.roc_realloc(roc_realloc, caller_roc_ops.env);
-        const new_ptr = roc_realloc.answer orelse self.crashAllocationFailed();
-        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), roc_realloc.new_length });
+        const old_ptr = ptr;
+        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment) orelse self.crashAllocationFailed();
+        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), new_length });
+        return new_ptr;
     }
 
-    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_dbg(roc_dbg, caller_roc_ops.env);
+        caller_roc_ops.roc_dbg(caller_roc_ops, bytes, len);
     }
 
-    fn rocExpectFailedFn(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_expect_failed(expect_args, caller_roc_ops.env);
-        const source = expect_args.utf8_bytes[0..expect_args.len];
+        caller_roc_ops.roc_expect_failed(caller_roc_ops, bytes, len);
+        const source = bytes[0..len];
         if (self.expect_message == null) {
             self.expect_message = self.allocator.dupe(u8, source) catch null;
         }
     }
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+    fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        const msg = bytes[0..len];
         self.reportCrash(msg);
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
