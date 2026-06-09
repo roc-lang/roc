@@ -2093,54 +2093,9 @@ const OpenSyntaxStack = struct {
     type_fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
 
     fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
-        self.expr_kinds.deinit(allocator);
-        self.pattern_kinds.deinit(allocator);
-        self.type_kinds.deinit(allocator);
-        self.where_kinds.deinit(allocator);
-        self.statement_kinds.deinit(allocator);
-        self.associated_kinds.deinit(allocator);
-        self.expr_after_unary.deinit(allocator);
-        self.expr_arrow_after_inner.deinit(allocator);
-        self.expr_string.deinit(allocator);
-        self.expr_record_ext.deinit(allocator);
-        self.expr_record_field.deinit(allocator);
-        self.expr_after_expr.deinit(allocator);
-        self.expr_if_after_then.deinit(allocator);
-        self.expr_if_after_else.deinit(allocator);
-        self.expr_match_after_pattern.deinit(allocator);
-        self.expr_match_after_guard.deinit(allocator);
-        self.expr_match_after_body.deinit(allocator);
-        self.expr_for_after_list.deinit(allocator);
-        self.expr_for_after_body.deinit(allocator);
-        self.expr_lambda_args.deinit(allocator);
-        self.statement_token.deinit(allocator);
-        self.statement_decl_body.deinit(allocator);
-        self.statement_var_body.deinit(allocator);
-        self.statement_for_expr.deinit(allocator);
-        self.statement_for_body.deinit(allocator);
-        self.statement_while_body.deinit(allocator);
-        self.statement_type_anno.deinit(allocator);
-        self.statement_type_decl_anno.deinit(allocator);
-        self.statement_type_decl_associated.deinit(allocator);
-        self.statement_type_associated_statement.deinit(allocator);
-        self.where_statement_type_anno.deinit(allocator);
-        self.where_statement_type_decl.deinit(allocator);
-        self.where_clause_type.deinit(allocator);
-        self.pattern_string.deinit(allocator);
-        self.pattern_tag_args.deinit(allocator);
-        self.pattern_list.deinit(allocator);
-        self.pattern_tuple.deinit(allocator);
-        self.pattern_record_field.deinit(allocator);
-        self.type_apply.deinit(allocator);
-        self.type_paren_item.deinit(allocator);
-        self.type_paren_fn_ret.deinit(allocator);
-        self.type_zero_arg_fn_ret.deinit(allocator);
-        self.type_record_ext.deinit(allocator);
-        self.type_record_field.deinit(allocator);
-        self.type_tag_union_ext.deinit(allocator);
-        self.type_tag_union_item.deinit(allocator);
-        self.type_fn_arg.deinit(allocator);
-        self.type_fn_ret.deinit(allocator);
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            @field(self, field.name).deinit(allocator);
+        }
     }
 
     inline fn payloadStack(self: *OpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
@@ -2306,105 +2261,16 @@ const OpenSyntaxStack = struct {
     }
 
     fn clearRetainingCapacity(self: *OpenSyntaxStack) void {
-        self.expr_kinds.clearRetainingCapacity();
-        self.pattern_kinds.clearRetainingCapacity();
-        self.type_kinds.clearRetainingCapacity();
-        self.where_kinds.clearRetainingCapacity();
-        self.statement_kinds.clearRetainingCapacity();
-        self.associated_kinds.clearRetainingCapacity();
-        self.expr_after_unary.clearRetainingCapacity();
-        self.expr_arrow_after_inner.clearRetainingCapacity();
-        self.expr_string.clearRetainingCapacity();
-        self.expr_record_ext.clearRetainingCapacity();
-        self.expr_record_field.clearRetainingCapacity();
-        self.expr_after_expr.clearRetainingCapacity();
-        self.expr_if_after_then.clearRetainingCapacity();
-        self.expr_if_after_else.clearRetainingCapacity();
-        self.expr_match_after_pattern.clearRetainingCapacity();
-        self.expr_match_after_guard.clearRetainingCapacity();
-        self.expr_match_after_body.clearRetainingCapacity();
-        self.expr_for_after_list.clearRetainingCapacity();
-        self.expr_for_after_body.clearRetainingCapacity();
-        self.expr_lambda_args.clearRetainingCapacity();
-        self.statement_token.clearRetainingCapacity();
-        self.statement_decl_body.clearRetainingCapacity();
-        self.statement_var_body.clearRetainingCapacity();
-        self.statement_for_expr.clearRetainingCapacity();
-        self.statement_for_body.clearRetainingCapacity();
-        self.statement_while_body.clearRetainingCapacity();
-        self.statement_type_anno.clearRetainingCapacity();
-        self.statement_type_decl_anno.clearRetainingCapacity();
-        self.statement_type_decl_associated.clearRetainingCapacity();
-        self.statement_type_associated_statement.clearRetainingCapacity();
-        self.where_statement_type_anno.clearRetainingCapacity();
-        self.where_statement_type_decl.clearRetainingCapacity();
-        self.where_clause_type.clearRetainingCapacity();
-        self.pattern_string.clearRetainingCapacity();
-        self.pattern_tag_args.clearRetainingCapacity();
-        self.pattern_list.clearRetainingCapacity();
-        self.pattern_tuple.clearRetainingCapacity();
-        self.pattern_record_field.clearRetainingCapacity();
-        self.type_apply.clearRetainingCapacity();
-        self.type_paren_item.clearRetainingCapacity();
-        self.type_paren_fn_ret.clearRetainingCapacity();
-        self.type_zero_arg_fn_ret.clearRetainingCapacity();
-        self.type_record_ext.clearRetainingCapacity();
-        self.type_record_field.clearRetainingCapacity();
-        self.type_tag_union_ext.clearRetainingCapacity();
-        self.type_tag_union_item.clearRetainingCapacity();
-        self.type_fn_arg.clearRetainingCapacity();
-        self.type_fn_ret.clearRetainingCapacity();
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            @field(self, field.name).clearRetainingCapacity();
+        }
     }
 
     fn isEmpty(self: *const OpenSyntaxStack) bool {
-        return self.expr_kinds.items.len == 0 and
-            self.pattern_kinds.items.len == 0 and
-            self.type_kinds.items.len == 0 and
-            self.where_kinds.items.len == 0 and
-            self.statement_kinds.items.len == 0 and
-            self.associated_kinds.items.len == 0 and
-            self.expr_after_unary.items.len == 0 and
-            self.expr_arrow_after_inner.items.len == 0 and
-            self.expr_string.items.len == 0 and
-            self.expr_record_ext.items.len == 0 and
-            self.expr_record_field.items.len == 0 and
-            self.expr_after_expr.items.len == 0 and
-            self.expr_if_after_then.items.len == 0 and
-            self.expr_if_after_else.items.len == 0 and
-            self.expr_match_after_pattern.items.len == 0 and
-            self.expr_match_after_guard.items.len == 0 and
-            self.expr_match_after_body.items.len == 0 and
-            self.expr_for_after_list.items.len == 0 and
-            self.expr_for_after_body.items.len == 0 and
-            self.expr_lambda_args.items.len == 0 and
-            self.statement_token.items.len == 0 and
-            self.statement_decl_body.items.len == 0 and
-            self.statement_var_body.items.len == 0 and
-            self.statement_for_expr.items.len == 0 and
-            self.statement_for_body.items.len == 0 and
-            self.statement_while_body.items.len == 0 and
-            self.statement_type_anno.items.len == 0 and
-            self.statement_type_decl_anno.items.len == 0 and
-            self.statement_type_decl_associated.items.len == 0 and
-            self.statement_type_associated_statement.items.len == 0 and
-            self.where_statement_type_anno.items.len == 0 and
-            self.where_statement_type_decl.items.len == 0 and
-            self.where_clause_type.items.len == 0 and
-            self.pattern_string.items.len == 0 and
-            self.pattern_tag_args.items.len == 0 and
-            self.pattern_list.items.len == 0 and
-            self.pattern_tuple.items.len == 0 and
-            self.pattern_record_field.items.len == 0 and
-            self.type_apply.items.len == 0 and
-            self.type_paren_item.items.len == 0 and
-            self.type_paren_fn_ret.items.len == 0 and
-            self.type_zero_arg_fn_ret.items.len == 0 and
-            self.type_record_ext.items.len == 0 and
-            self.type_record_field.items.len == 0 and
-            self.type_tag_union_ext.items.len == 0 and
-            self.type_tag_union_item.items.len == 0 and
-            self.type_fn_arg.items.len == 0 and
-            self.type_fn_ret.items.len == 0;
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            if (@field(self, field.name).items.len != 0) return false;
+        }
+        return true;
     }
 };
 
