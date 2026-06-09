@@ -4,14 +4,14 @@ on: [pull_request]
 
 jobs:
   debug:
-    runs-on: windows-2025
+    runs-on: windows-11-arm
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.0-dev.813+2153f8143
           use-cache: false
 
       - name: Zig version
