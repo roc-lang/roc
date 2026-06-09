@@ -2913,7 +2913,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
 
     // Parse the MONO output as a headerless type module
-    const validation_ast = parse.parse(allocator, &validation_env.common) catch |err| {
+    const validation_ast = parse.file(allocator, &validation_env.common) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
         return false;
     };
@@ -3095,7 +3095,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) anyerror![]const u8
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Check for parse errors - if there are any, we can't format
@@ -4390,7 +4390,9 @@ const SnapshotReplParsedLine = struct {
     }
 };
 
-fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplParsedLine {
+const SnapshotReplParseError = parse.Parser.Error || error{TooNested};
+
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplParsedLine {
     const module_env = try allocator.create(ModuleEnv);
     errdefer allocator.destroy(module_env);
     module_env.* = try ModuleEnv.init(allocator, line);
@@ -4428,20 +4430,20 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) parse.Par
     };
 }
 
-fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) parse.Parser.Error!?AST.Statement {
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) SnapshotReplParseError!?AST.Statement {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = try parse.parseStatement(allocator, &env.common);
+    const ast = try parse.statement(allocator, &env.common);
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
     return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
 }
 
-fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplInputKind {
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplInputKind {
     var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
     const statement = if (maybe_file_parse) |*parsed| blk: {
         defer parsed.deinit();
@@ -4480,7 +4482,7 @@ fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) parse.Pa
     };
 }
 
-fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) parse.Parser.Error!?SnapshotReplDefinitionIdentity {
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplDefinitionIdentity {
     var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
     defer parsed.deinit();
 

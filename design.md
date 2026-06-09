@@ -109,6 +109,146 @@ data, ARC data, LirImage data, and test reporting. If code uses a sentinel
 as a placeholder for data that must be produced, stop and redesign the producer
 ownership and presence model.
 
+## Parser Boundary
+
+Parsing is a token-first stage. Tokenization produces the only cursor input for
+the parser, and the parser walks that token buffer directly. The parser does not
+use recursive grammar functions, and it does not keep source substrings as an
+implicit parsing cursor. Source text may be consulted only through token
+metadata, for diagnostics, literal decoding, and identifier interning.
+
+The parser is a direct token-dispatch machine. Hot parser code is organized as
+grammar kernels that walk the token buffer with local token dispatch and ordinary
+lexical control flow. The hot path must not route grammar progress through a
+central parser-state interpreter loop, even when the cases contain token
+switches, because optimized code can lower that transition pattern to a central
+indirect branch.
+
+This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
+simdjson's stage-2 parser walks a precomputed structural stream with concrete
+JSON grammar labels such as object-begin, object-continue, array-value, and
+scope-end. Its depth stack stores only open JSON scope fields (`is_array`,
+tape index, element count); it does not store "run this parser state next"
+instructions. Roc parser kernels must follow the same split:
+tokenization performs linear input discovery, parser kernels inspect the
+current token directly, and parser-owned syntax state describes currently open
+Roc syntax rather than queued control flow.
+
+Zig has no arbitrary sibling `goto`, so Roc cannot literally copy simdjson's C++
+label layout. The Zig equivalent is lexical grammar loops with local token
+switches, explicit syntax-depth state for nested constructs, and direct
+fallthrough/`continue`/`break` transitions inside the kernel. Where a grammar
+transition cannot be expressed lexically without a generic context switch, the
+hot alternatives are to duplicate a small token-dispatch block or to split out a
+specialized grammar kernel whose body remains stack-safe and assembly-audited.
+Using a wide parser-context switch is not accepted for hot expression, pattern,
+statement, or type parsing unless ReleaseFast assembly proves that exact slice
+has no central indirect branch and is faster than the lexical-kernel shape.
+
+Parser chunks are not considered structurally done until ReleaseFast assembly
+has been checked for this shape: no recursive parser calls for the converted
+grammar, no instruction-driver loop, no broad parser-context dispatch ladder,
+and no unexpected indirect branch in the hot transition path. The expression
+prefix/suffix/binary-operator kernel is the first required audit target because
+it is the parse-heavy hot path.
+
+Parser conversion proceeds by grammar slices that can be assembly-audited.
+Before expanding a slice, build a tiny Zig proof of the intended dispatch shape
+and compare it with the analogous simdjson stage-2 parser shape: local token
+tests, direct branches between parser states, and explicit syntax state only
+where nested syntax requires it. After converting the real Roc slice, build the
+ReleaseFast compiler with symbols and disassemble the converted parser symbol
+directly, for example:
+
+```sh
+zig build roc -Doptimize=ReleaseFast -Dstrip=false
+xcrun llvm-objdump --macho --disassemble --dis-symname _Parser.parseExposedCollectionTokens zig-out/bin/roc
+```
+
+The audit result must be recorded before moving to the next slice. If the
+assembly shows a dense jump table, generic context dispatch loop, indirect
+branch in the hot parser transition path, or revived recursive grammar call,
+the slice is not accepted and must be reshaped before more grammar is converted.
+
+Current parser audit result:
+
+```text
+commit: 27165e02fd Fix pattern root parser instantiation
+binary: zig-out/bin/roc
+version: release-fast-27165e02
+build: zig build roc -Doptimize=ReleaseFast -Dstrip=false --summary all --color off
+```
+
+The parser entry wrappers for expression, statement, pattern, type annotation,
+and associated statement blocks all enter `runExprStatementKernel` with an
+explicit root mode. They are API wrappers, not separate recursive grammar
+kernels. Static source and symbol checks must not find `OpenSyntaxKind`,
+`ParserContext`, `TypeOpenSyntaxStack`, `runTypeAnnoDirect`,
+`parseWhereClauseTokens`, or `parseWhereConstraintTokens`.
+
+The current ReleaseFast audit disassembled these parser kernel instantiations:
+
+```text
+_Parser.runExprStatementKernel__anon_169991
+_Parser.runExprStatementKernel__anon_175153
+_Parser.runExprStatementKernel__anon_175404
+```
+
+Searching those disassemblies for indirect branch-table dispatch found no
+`br xN` instructions. Remaining indirect instructions were `blr x8` allocator
+calls in growth/copy paths, not parser-state transitions. This is the accepted
+assembly shape for the current unified parser slice.
+
+Nested Roc syntax uses explicit open-syntax state, like simdjson's open
+container depth. This state records concrete syntax currently being parsed:
+open lists, records, strings, blocks, matches, type applications, and similar
+constructs. It is not a parser instruction stream and must not store "execute
+this parser operation next" entries. When a syntactic construct closes, the
+parser inspects the parent open syntax and branches directly to that parent's
+lexical continuation inside the current grammar kernel, or returns a completed
+result to the caller when the kernel's root syntax closes.
+
+Open-syntax state is stored compactly. The hot state records syntax kind and
+indexes into syntax-specific side storage when payload is unavoidable. The
+parser must not store wide tagged unions as call records for grammar work, and
+must not push generic parser instructions just to decide what token to inspect
+next. Leaf token cases that do not open nested syntax must not push state.
+
+The parser owns a small set of result registers. Expression, pattern, type,
+statement, associated-item, header, collection, and token-span results are
+written to registers as syntax closes. The parent open syntax documents which
+register it consumes. Closing nested syntax means jumping to the parent's token
+branch, not returning through a Zig call stack and not interpreting a queued
+parser action. Leaf helpers may exist for non-grammar work such as token
+inspection, literal decoding, declaration indexing, scratch-span construction,
+and diagnostic output, but they must not parse nested Roc grammar by calling
+another grammar entrypoint.
+
+`NodeStore` is the parser's output builder. The parser may accumulate children
+in parser-owned scratch spans while a syntactic collection is open, then commit
+the final AST node when its closing token is consumed or when parser recovery
+emits a malformed node. Declaration indexing is updated from committed
+statements and headers as part of this same iterative walk, so later compiler
+stages consume explicit parser output rather than inspecting source syntax.
+
+Error recovery is part of parsing and error reporting. Recovery states are also
+iterative token states: they advance to a known delimiter, line boundary, or
+collection close token and then jump to the next documented open-syntax branch.
+Recovery may use parser-local heuristics because parsing and error reporting are
+the only compiler stages allowed to do so. Recovery must still output explicit
+malformed AST nodes and diagnostics; later stages must not recover missing
+syntax on their own.
+
+The parser implementation must not keep the old recursive-descent or
+per-subgrammar instruction-interpreter architecture. Old expression, pattern,
+statement, block, and type-annotation parser entrypoints are forbidden
+implementation details. Public package functions may continue to expose parsing
+capabilities such as parsing a whole file, header, expression, or statement, but
+inside the parser they must enter direct token dispatch with an explicit goal
+context. Static verification for this invariant is part of parser work:
+searches for the old architecture names and recursive parser entrypoint names
+must come back empty before Zig is run.
+
 Post-check names should be short and precise. Do not encode whole explanations
 into long compound type or function names. Prefer a small local vocabulary such
 as `FnSet`, `FnVariant`, `FnTemplate`, and `CaptureSlot`, then define the exact

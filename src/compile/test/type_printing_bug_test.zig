@@ -34,7 +34,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     defer env.deinit();
 
     // Parse
-    const parse_ast = try parse.parse(gpa, &env.common);
+    const parse_ast = try parse.file(gpa, &env.common);
     defer parse_ast.deinit();
 
     // Load builtin modules

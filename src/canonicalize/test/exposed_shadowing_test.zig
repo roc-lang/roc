@@ -31,7 +31,7 @@ test "exposed but not implemented - values" {
 
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -74,7 +74,7 @@ test "exposed but not implemented - types" {
 
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -116,7 +116,7 @@ test "redundant exposed entries" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -163,7 +163,7 @@ test "shadowing with exposed items" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -200,7 +200,7 @@ test "shadowing non-exposed items" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -244,7 +244,7 @@ test "exposed items correctly tracked across shadowing" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -304,7 +304,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -360,7 +360,7 @@ test "exposed_items is populated correctly" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -397,7 +397,7 @@ test "exposed_items persists after canonicalization" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -431,7 +431,7 @@ test "exposed_items never has entries removed" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -468,7 +468,7 @@ test "exposed_items handles identifiers with different attributes" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -504,7 +504,7 @@ test "platform provides entries are extracted" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -538,7 +538,7 @@ test "platform provides entries with multiple entries" {
     try env.initCIRFields("Test");
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
-    const ast = try parse.parse(allocator, &env.common);
+    const ast = try parse.file(allocator, &env.common);
     defer ast.deinit();
 
     var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());

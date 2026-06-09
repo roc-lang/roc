@@ -29,11 +29,20 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(malformed-header (tag "expected_provides_open_curly"))
+	(platform (name "")
+		(requires)
+		(exposes)
+		(packages)
+		(provides))
 	(statements))
 ~~~
 # FORMATTED
 ~~~roc
+platform ""
+	requires {}
+	exposes []
+	packages {}
+	provides {}
 ~~~
 # CANONICALIZE
 ~~~clojure
