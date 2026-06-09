@@ -183,137 +183,16 @@ fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {
 
 fn invoke(ctl: *const Call) void {
     switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be => rocCallTrampolineAarch64(ctl),
-        .x86_64 => rocCallTrampolineX86_64(ctl),
+        .aarch64, .aarch64_be, .x86_64 => rocCallTrampoline(ctl),
         else => unreachable,
     }
 }
 
-// The fixed trampolines. Each saves the control pointer in a callee-saved register, copies
-// any stack arguments, loads every argument register from the images, calls the target, and
-// captures the result registers. They never generate code — they are compiled into this
-// binary's .text ahead of time. Struct field byte offsets are fixed by `Call`'s extern
-// layout (8 bytes per field): target@0 gp@8 sse@16 stack@24 stack_size@32 sret@40 res_gp@48
-// res_sse@56.
-
-extern fn rocCallTrampolineAarch64(ctl: *const Call) callconv(.c) void;
-extern fn rocCallTrampolineX86_64(ctl: *const Call) callconv(.c) void;
-
-comptime {
-    if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be) {
-        asm (
-            \\.global _rocCallTrampolineAarch64
-            \\.global rocCallTrampolineAarch64
-            \\_rocCallTrampolineAarch64:
-            \\rocCallTrampolineAarch64:
-            \\  stp x29, x30, [sp, #-32]!
-            \\  stp x19, x20, [sp, #16]
-            \\  mov x29, sp
-            \\  mov x19, x0              // x19 = control block (survives the call)
-            \\  // copy stack arguments below sp (stack_size is 16-aligned)
-            \\  ldr x20, [x19, #32]      // stack_size
-            \\  cbz x20, 2f
-            \\  sub sp, sp, x20
-            \\  ldr x9, [x19, #24]       // stack ptr
-            \\  mov x10, #0
-            \\1:
-            \\  ldr x11, [x9, x10]
-            \\  str x11, [sp, x10]
-            \\  add x10, x10, #8
-            \\  cmp x10, x20
-            \\  b.lo 1b
-            \\2:
-            \\  // load SSE argument registers from the image (16 bytes each)
-            \\  ldr x9, [x19, #16]
-            \\  ldp q0, q1, [x9, #0]
-            \\  ldp q2, q3, [x9, #32]
-            \\  ldp q4, q5, [x9, #64]
-            \\  ldp q6, q7, [x9, #96]
-            \\  // indirect-result register
-            \\  ldr x8, [x19, #40]
-            \\  // load integer argument registers from the image
-            \\  ldr x9, [x19, #8]
-            \\  ldp x0, x1, [x9, #0]
-            \\  ldp x2, x3, [x9, #16]
-            \\  ldp x4, x5, [x9, #32]
-            \\  ldp x6, x7, [x9, #48]
-            \\  // call the target
-            \\  ldr x9, [x19, #0]
-            \\  blr x9
-            \\  // capture result registers
-            \\  ldr x9, [x19, #48]
-            \\  stp x0, x1, [x9]
-            \\  ldr x9, [x19, #56]
-            \\  stp q0, q1, [x9]
-            \\  mov sp, x29
-            \\  ldp x19, x20, [sp, #16]
-            \\  ldp x29, x30, [sp], #32
-            \\  ret
-        );
-    } else if (builtin.cpu.arch == .x86_64) {
-        asm (
-            \\.global _rocCallTrampolineX86_64
-            \\.global rocCallTrampolineX86_64
-            \\_rocCallTrampolineX86_64:
-            \\rocCallTrampolineX86_64:
-            \\  push %rbp
-            \\  mov %rsp, %rbp
-            \\  push %rbx
-            \\  push %r12
-            \\  mov %rdi, %rbx           // rbx = control block
-            \\  // copy stack arguments (stack_size is 16-aligned, keeps rsp 16-aligned)
-            \\  mov 32(%rbx), %r12       // stack_size
-            \\  test %r12, %r12
-            \\  jz 2f
-            \\  sub %r12, %rsp
-            \\  mov 24(%rbx), %rsi       // stack ptr
-            \\  xor %rcx, %rcx
-            \\1:
-            \\  mov (%rsi,%rcx,1), %rax
-            \\  mov %rax, (%rsp,%rcx,1)
-            \\  add $8, %rcx
-            \\  cmp %r12, %rcx
-            \\  jb 1b
-            \\2:
-            \\  // load SSE argument registers (low 16 bytes of each image slot)
-            \\  mov 16(%rbx), %rax
-            \\  movups 0(%rax), %xmm0
-            \\  movups 16(%rax), %xmm1
-            \\  movups 32(%rax), %xmm2
-            \\  movups 48(%rax), %xmm3
-            \\  movups 64(%rax), %xmm4
-            \\  movups 80(%rax), %xmm5
-            \\  movups 96(%rax), %xmm6
-            \\  movups 112(%rax), %xmm7
-            \\  // load integer argument registers
-            \\  mov 8(%rbx), %rax
-            \\  mov 0(%rax), %rdi
-            \\  mov 8(%rax), %rsi
-            \\  mov 16(%rax), %rdx
-            \\  mov 24(%rax), %rcx
-            \\  mov 32(%rax), %r8
-            \\  mov 40(%rax), %r9
-            \\  // %al = number of vector registers used (varargs ABI requirement); pass max.
-            \\  // Set last so the gp-image load above doesn't clobber it; upper rax bytes are
-            \\  // caller-saved scratch and irrelevant to a fixed-prototype callee.
-            \\  mov $8, %al
-            \\  // call target
-            \\  call *0(%rbx)
-            \\  // capture result registers
-            \\  mov 48(%rbx), %rcx
-            \\  mov %rax, 0(%rcx)
-            \\  mov %rdx, 8(%rcx)
-            \\  mov 56(%rbx), %rcx
-            \\  movups %xmm0, 0(%rcx)
-            \\  movups %xmm1, 16(%rcx)
-            \\  lea -16(%rbp), %rsp
-            \\  pop %r12
-            \\  pop %rbx
-            \\  pop %rbp
-            \\  ret
-        );
-    }
-}
+// The fixed trampoline, defined in `host_trampoline.S`. It saves the control pointer in a
+// callee-saved register, copies any stack arguments, loads every argument register from the
+// images, calls the target, and captures the result registers. It never generates code — it
+// is assembled into this binary's .text ahead of time.
+extern fn rocCallTrampoline(ctl: *const Call) callconv(.c) void;
 
 test "host_trampoline available on supported arches" {
     if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64) {

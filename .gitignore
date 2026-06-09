@@ -35,6 +35,8 @@ zig-pkg
 *.o
 *.a
 *.s
+# Hand-written assembly source (the interpreter's hosted-call trampoline), not a build artifact.
+!src/eval/host_trampoline.S
 *.so
 *.so.*
 *.obj
