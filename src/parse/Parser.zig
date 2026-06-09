@@ -1411,6 +1411,145 @@ pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
     }
 }
 
+fn parseTargetFileList(self: *Parser) (Error || error{ExpectedNotFound})!AST.TargetFile.Span {
+    self.expect(.OpenSquare) catch {
+        return error.ExpectedNotFound;
+    };
+
+    const files_top = self.store.scratchTargetFileTop();
+    self.parseCollectionSpan(AST.TargetFile.Idx, .CloseSquare, NodeStore.addScratchTargetFile, Parser.parseTargetFile) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchTargetFilesFrom(files_top);
+                return error.ExpectedNotFound;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    return try self.store.targetFileSpanFrom(files_top);
+}
+
+/// Parses a target config value.
+pub fn parseTargetConfigValue(self: *Parser) Error!AST.TargetConfigValue.Idx {
+    const start = self.pos;
+    switch (self.peek()) {
+        .Int => {
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .int_literal = start });
+        },
+        .StringStart => {
+            self.advance();
+            var content_tok = start;
+            if (self.peek() == .StringPart) {
+                content_tok = self.pos;
+                self.advance();
+            }
+            while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            if (self.peek() == .EndOfFile) {
+                return try self.store.addTargetConfigValue(.{ .malformed = .{
+                    .reason = .expected_target_file_string_end,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .string_literal = content_tok });
+        },
+        .UpperIdent => {
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .tag_literal = start });
+        },
+        .LowerIdent => {
+            self.advance();
+            return try self.store.addTargetConfigValue(.{ .ident = start });
+        },
+        .OpenSquare => {
+            self.advance();
+            const values_top = self.store.scratchTargetConfigValueTop();
+            self.parseCollectionSpan(AST.TargetConfigValue.Idx, .CloseSquare, NodeStore.addScratchTargetConfigValue, Parser.parseTargetConfigValue) catch |err| {
+                switch (err) {
+                    error.ExpectedNotFound => {
+                        self.store.clearScratchTargetConfigValuesFrom(values_top);
+                        return try self.store.addTargetConfigValue(.{ .malformed = .{
+                            .reason = .expected_target_files_close_square,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    },
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.TooNested => return error.TooNested,
+                }
+            };
+            const values_span = try self.store.targetConfigValueSpanFrom(values_top);
+            return try self.store.addTargetConfigValue(.{ .list = values_span });
+        },
+        else => {
+            return try self.store.addTargetConfigValue(.{ .malformed = .{
+                .reason = .expected_target_file,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        },
+    }
+}
+
+/// Parses a field in a target configuration record.
+pub fn parseTargetConfigEntry(self: *Parser) Error!AST.TargetConfigEntry.Idx {
+    const start = self.pos;
+    if (self.peek() != .LowerIdent) {
+        return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_name, start);
+    }
+    const name = self.pos;
+    self.advance();
+
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_colon, start);
+    };
+
+    const value = if (std.mem.eql(u8, self.tokenText(name), "files")) blk: {
+        const files_span = self.parseTargetFileList() catch |err| switch (err) {
+            error.ExpectedNotFound => {
+                return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_target_files_open_square, start);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        };
+        break :blk try self.store.addTargetConfigValue(.{ .files = files_span });
+    } else try self.parseTargetConfigValue();
+
+    return try self.store.addTargetConfigEntry(.{
+        .name = name,
+        .value = value,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+/// Parses a target configuration record.
+pub fn parseTargetConfig(self: *Parser) Error!AST.TargetConfig.Idx {
+    const start = self.pos;
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetConfig.Idx, .expected_targets_open_curly, start);
+    };
+
+    const entries_top = self.store.scratchTargetConfigEntryTop();
+    self.parseCollectionSpan(AST.TargetConfigEntry.Idx, .CloseCurly, NodeStore.addScratchTargetConfigEntry, Parser.parseTargetConfigEntry) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchTargetConfigEntriesFrom(entries_top);
+                return try self.pushMalformed(AST.TargetConfig.Idx, .expected_targets_close_curly, start);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    const entries_span = try self.store.targetConfigEntrySpanFrom(entries_top);
+
+    return try self.store.addTargetConfig(.{
+        .entries = entries_span,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
 /// Parses a single target entry: x64musl: ["crt1.o", "host.o", app]
 pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
     const trace = tracy.trace(@src());
@@ -1430,28 +1569,26 @@ pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
         return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
     };
 
-    // Expect open square bracket
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start);
-    };
-
-    // Parse file list
-    const files_top = self.store.scratchTargetFileTop();
-    self.parseCollectionSpan(AST.TargetFile.Idx, .CloseSquare, NodeStore.addScratchTargetFile, Parser.parseTargetFile) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchTargetFilesFrom(files_top);
-                return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TooNested => return error.TooNested,
-        }
-    };
-    const files_span = try self.store.targetFileSpanFrom(files_top);
+    var files_span: AST.TargetFile.Span = .{ .span = .{ .start = 0, .len = 0 } };
+    var config: ?AST.TargetConfig.Idx = null;
+    switch (self.peek()) {
+        .OpenSquare => {
+            files_span = self.parseTargetFileList() catch |err| switch (err) {
+                error.ExpectedNotFound => return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start),
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TooNested => return error.TooNested,
+            };
+        },
+        .OpenCurly => {
+            config = try self.parseTargetConfig();
+        },
+        else => return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start),
+    }
 
     return try self.store.addTargetEntry(.{
         .target = target_name,
         .files = files_span,
+        .config = config,
         .region = .{ .start = start, .end = self.pos },
     });
 }

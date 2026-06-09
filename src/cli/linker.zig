@@ -77,9 +77,21 @@ pub const LinkConfig = struct {
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
     wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
 
+    /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
+    wasm_maximum_memory: ?usize = null,
+
     /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
     /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
     wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
+
+    /// Whether the final WASM module imports `env.memory` instead of defining memory.
+    wasm_import_memory: bool = false,
+
+    /// Optional data/global base for freestanding WASM links.
+    wasm_global_base: ?u32 = null,
+
+    /// Function exports derived from explicit platform host object exports.
+    wasm_exports: []const []const u8 = &.{},
 
     /// Platform files directory (absolute path). Used to find platform-bundled sysroots.
     /// For example, if this is "/path/to/platform/targets", the linker will look for
@@ -280,6 +292,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Suppress LLD warnings
             try args.append("-w");
+            try args.append("-dead_strip");
 
             // Add architecture flag
             try args.append("-arch");
@@ -428,6 +441,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Add subsystem flag (console by default)
             try args.append("/subsystem:console");
+            try args.append("/opt:ref");
 
             // Add machine type based on target architecture
             switch (target_arch) {
@@ -486,26 +500,42 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Don't look for _start or _main entry point - we export specific functions
             try args.append("--no-entry");
 
-            // Export all symbols (the Roc app exports its entrypoints)
-            try args.append("--export-all");
-
-            // Disable garbage collection to preserve host-defined exports (init, handleEvent, update)
-            // Without this, wasm-ld removes symbols that aren't referenced by the Roc app
-            try args.append("--no-gc-sections");
+            // Remove unused sections. The compiler passes explicit host-object
+            // exports below so they remain live roots.
+            try args.append("--gc-sections");
 
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
+
+            if (config.wasm_import_memory) {
+                try args.append("--import-memory");
+            }
 
             // Set initial memory size (configurable, default 64MB)
             // Must be a multiple of 64KB (WASM page size)
             const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
             try args.append(initial_memory_str);
 
+            if (config.wasm_maximum_memory) |maximum_memory| {
+                const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                try args.append(maximum_memory_str);
+            }
+
+            if (config.wasm_global_base) |global_base| {
+                const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
+                try args.append(global_base_str);
+            }
+
             // Set stack size (configurable, default 8MB)
             // Must be a multiple of 16 (stack alignment)
             const stack_size_str = std.fmt.allocPrint(ctx.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
             try args.append("-z");
             try args.append(stack_size_str);
+
+            for (config.wasm_exports) |export_name| {
+                const export_arg = std.fmt.allocPrint(ctx.arena, "--export={s}", .{export_name}) catch return LinkError.OutOfMemory;
+                try args.append(export_arg);
+            }
         },
         else => {
             // Generic ELF linker
@@ -517,6 +547,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Suppress LLD warnings
             try args.append("-w");
+            try args.append("--gc-sections");
         },
     }
 

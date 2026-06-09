@@ -2035,6 +2035,12 @@ const Formatter = struct {
 
         // Format target name (e.g., x64linux)
         try fmt.pushTokenText(entry.target);
+        if (entry.config) |config_idx| {
+            try fmt.pushAll(": ");
+            try fmt.formatTargetConfig(config_idx);
+            return;
+        }
+
         try fmt.pushAll(": [");
 
         // Format file list
@@ -2046,6 +2052,70 @@ const Formatter = struct {
         }
 
         try fmt.push(']');
+    }
+
+    fn formatTargetConfig(fmt: *Formatter, config_idx: AST.TargetConfig.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const config = fmt.ast.store.getTargetConfig(config_idx);
+        const entries = fmt.ast.store.targetConfigEntrySlice(config.entries);
+        const base_indent = fmt.curr_indent;
+
+        try fmt.push('{');
+        for (entries, 0..) |entry_idx, i| {
+            const entry = fmt.ast.store.getTargetConfigEntry(entry_idx);
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushTokenText(entry.name);
+            try fmt.pushAll(": ");
+            try fmt.formatTargetConfigValue(entry.value);
+            if (i < entries.len - 1 or entries.len > 0) {
+                try fmt.push(',');
+            }
+        }
+
+        if (entries.len > 0) {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
+    fn formatTargetConfigValue(fmt: *Formatter, value_idx: AST.TargetConfigValue.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const value = fmt.ast.store.getTargetConfigValue(value_idx);
+        switch (value) {
+            .int_literal, .tag_literal, .ident => |token| {
+                try fmt.pushTokenText(token);
+            },
+            .string_literal => |token| {
+                try fmt.push('"');
+                try fmt.pushTokenText(token);
+                try fmt.push('"');
+            },
+            .list => |span| {
+                const values = fmt.ast.store.targetConfigValueSlice(span);
+                try fmt.push('[');
+                for (values, 0..) |child_idx, i| {
+                    try fmt.formatTargetConfigValue(child_idx);
+                    if (i < values.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+            },
+            .files => |span| {
+                const files = fmt.ast.store.targetFileSlice(span);
+                try fmt.push('[');
+                for (files, 0..) |file_idx, i| {
+                    try fmt.formatTargetFile(file_idx);
+                    if (i < files.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+            },
+            .malformed => {},
+        }
     }
 
     /// Format a single target file entry

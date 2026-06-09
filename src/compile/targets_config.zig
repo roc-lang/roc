@@ -28,12 +28,30 @@ pub const LinkItem = union(enum) {
     win_gui,
 };
 
+pub const WasmTargetConfig = struct {
+    import_memory: bool = false,
+    minimum_memory: ?usize = null,
+    maximum_memory: ?usize = null,
+    initial_stack_size: ?usize = null,
+    global_base: ?u32 = null,
+    has_unresolved_values: bool = false,
+};
+
 /// Link specification for a single target.
 /// Contains the ordered list of items to link for this target.
 pub const TargetLinkSpec = struct {
     target: RocTarget,
     items: []const LinkItem,
+    wasm: ?WasmTargetConfig = null,
 };
+
+fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
+    for (spec.items) |item| switch (item) {
+        .file_path => |fp| allocator.free(fp),
+        else => {},
+    };
+    allocator.free(spec.items);
+}
 
 /// Type of output binary.
 pub const LinkType = enum {
@@ -64,29 +82,11 @@ pub const TargetsConfig = struct {
     /// Do NOT call this on TargetsConfig values created with comptime/static data.
     pub fn deinit(self: TargetsConfig, allocator: Allocator) void {
         if (self.files_dir) |fd| allocator.free(fd);
-        for (self.exe) |spec| {
-            for (spec.items) |item| switch (item) {
-                .file_path => |fp| allocator.free(fp),
-                else => {},
-            };
-            allocator.free(spec.items);
-        }
+        for (self.exe) |spec| freeLinkSpec(allocator, spec);
         allocator.free(self.exe);
-        for (self.static_lib) |spec| {
-            for (spec.items) |item| switch (item) {
-                .file_path => |fp| allocator.free(fp),
-                else => {},
-            };
-            allocator.free(spec.items);
-        }
+        for (self.static_lib) |spec| freeLinkSpec(allocator, spec);
         allocator.free(self.static_lib);
-        for (self.shared_lib) |spec| {
-            for (spec.items) |item| switch (item) {
-                .file_path => |fp| allocator.free(fp),
-                else => {},
-            };
-            allocator.free(spec.items);
-        }
+        for (self.shared_lib) |spec| freeLinkSpec(allocator, spec);
         allocator.free(self.shared_lib);
     }
 
@@ -231,6 +231,163 @@ pub const TargetsConfig = struct {
         };
     }
 
+    fn appendTargetFiles(
+        allocator: Allocator,
+        store: *const parse.NodeStore,
+        ast: anytype,
+        files: parse.AST.TargetFile.Span,
+        link_items: *std.array_list.Managed(LinkItem),
+    ) Allocator.Error!void {
+        const file_indices = store.targetFileSlice(files);
+        for (file_indices) |file_idx| {
+            const target_file = store.getTargetFile(file_idx);
+
+            switch (target_file) {
+                .string_literal => |tok| {
+                    const path = ast.resolve(tok);
+                    try link_items.append(.{ .file_path = try allocator.dupe(u8, path) });
+                },
+                .special_ident => |tok| {
+                    const ident = ast.resolve(tok);
+                    if (std.mem.eql(u8, ident, "app")) {
+                        try link_items.append(.app);
+                    } else if (std.mem.eql(u8, ident, "win_gui")) {
+                        try link_items.append(.win_gui);
+                    }
+                },
+                .malformed => continue,
+            }
+        }
+    }
+
+    fn clearTargetFiles(allocator: Allocator, link_items: *std.array_list.Managed(LinkItem)) void {
+        for (link_items.items) |item| switch (item) {
+            .file_path => |fp| allocator.free(fp),
+            else => {},
+        };
+        link_items.clearRetainingCapacity();
+    }
+
+    fn parseUnsignedToken(allocator: Allocator, ast: anytype, tok: parse.tokenize.Token.Idx) Allocator.Error!?usize {
+        const raw = ast.resolve(tok);
+        var compact = try std.array_list.Managed(u8).initCapacity(allocator, raw.len);
+        defer compact.deinit();
+        for (raw) |byte| {
+            if (byte != '_') compact.appendAssumeCapacity(byte);
+        }
+        return std.fmt.parseInt(usize, compact.items, 0) catch null;
+    }
+
+    fn parseUnsignedValue(
+        allocator: Allocator,
+        store: *const parse.NodeStore,
+        ast: anytype,
+        value_idx: parse.AST.TargetConfigValue.Idx,
+    ) Allocator.Error!?usize {
+        return switch (store.getTargetConfigValue(value_idx)) {
+            .int_literal => |tok| try parseUnsignedToken(allocator, ast, tok),
+            else => null,
+        };
+    }
+
+    fn parseBoolValue(
+        store: *const parse.NodeStore,
+        ast: anytype,
+        value_idx: parse.AST.TargetConfigValue.Idx,
+    ) ?bool {
+        return switch (store.getTargetConfigValue(value_idx)) {
+            .tag_literal => |tok| blk: {
+                const tag = ast.resolve(tok);
+                if (std.mem.eql(u8, tag, "True")) break :blk true;
+                if (std.mem.eql(u8, tag, "False")) break :blk false;
+                break :blk null;
+            },
+            .string_literal => |tok| blk: {
+                const value = ast.resolve(tok);
+                if (std.mem.eql(u8, value, "env.memory")) break :blk true;
+                break :blk null;
+            },
+            else => null,
+        };
+    }
+
+    fn parseWasmConfig(
+        allocator: Allocator,
+        store: *const parse.NodeStore,
+        ast: anytype,
+        config_idx: parse.AST.TargetConfig.Idx,
+        link_items: *std.array_list.Managed(LinkItem),
+    ) Allocator.Error!?WasmTargetConfig {
+        const config = store.getTargetConfig(config_idx);
+        const entries = store.targetConfigEntrySlice(config.entries);
+        var wasm = WasmTargetConfig{};
+        var has_wasm_config = false;
+
+        for (entries) |entry_idx| {
+            const entry = store.getTargetConfigEntry(entry_idx);
+            const name = ast.resolve(entry.name);
+            const value = store.getTargetConfigValue(entry.value);
+            const unresolved_ident = switch (value) {
+                .ident => true,
+                else => false,
+            };
+
+            if (std.mem.eql(u8, name, "files")) {
+                switch (value) {
+                    .files => |files| {
+                        clearTargetFiles(allocator, link_items);
+                        try appendTargetFiles(allocator, store, ast, files, link_items);
+                    },
+                    else => {},
+                }
+            } else if (std.mem.eql(u8, name, "import_memory")) {
+                if (parseBoolValue(store, ast, entry.value)) |import_memory| {
+                    wasm.import_memory = import_memory;
+                    has_wasm_config = true;
+                } else if (unresolved_ident) {
+                    wasm.has_unresolved_values = true;
+                    has_wasm_config = true;
+                }
+            } else if (std.mem.eql(u8, name, "minimum_memory") or std.mem.eql(u8, name, "initial_memory")) {
+                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
+                    wasm.minimum_memory = bytes;
+                    has_wasm_config = true;
+                } else if (unresolved_ident) {
+                    wasm.has_unresolved_values = true;
+                    has_wasm_config = true;
+                }
+            } else if (std.mem.eql(u8, name, "maximum_memory") or std.mem.eql(u8, name, "max_memory")) {
+                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
+                    wasm.maximum_memory = bytes;
+                    has_wasm_config = true;
+                } else if (unresolved_ident) {
+                    wasm.has_unresolved_values = true;
+                    has_wasm_config = true;
+                }
+            } else if (std.mem.eql(u8, name, "initial_stack_size") or std.mem.eql(u8, name, "stack_size")) {
+                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
+                    wasm.initial_stack_size = bytes;
+                    has_wasm_config = true;
+                } else if (unresolved_ident) {
+                    wasm.has_unresolved_values = true;
+                    has_wasm_config = true;
+                }
+            } else if (std.mem.eql(u8, name, "global_base")) {
+                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
+                    if (std.math.cast(u32, bytes)) |global_base| {
+                        wasm.global_base = global_base;
+                        has_wasm_config = true;
+                    }
+                } else if (unresolved_ident) {
+                    wasm.has_unresolved_values = true;
+                    has_wasm_config = true;
+                }
+            }
+        }
+
+        return if (has_wasm_config) wasm else null;
+    }
+
     /// Parse link specs for a single link type (exe, static_lib, shared_lib).
     fn parseLinkTypeSpecs(
         allocator: Allocator,
@@ -245,13 +402,7 @@ pub const TargetsConfig = struct {
 
         var specs = std.array_list.Managed(TargetLinkSpec).init(allocator);
         errdefer {
-            for (specs.items) |spec| {
-                for (spec.items) |item| switch (item) {
-                    .file_path => |fp| allocator.free(fp),
-                    else => {},
-                };
-                allocator.free(spec.items);
-            }
+            for (specs.items) |spec| freeLinkSpec(allocator, spec);
             specs.deinit();
         }
 
@@ -262,7 +413,6 @@ pub const TargetsConfig = struct {
             const target_name = ast.resolve(entry.target);
             const target = RocTarget.fromString(target_name) orelse continue; // Skip unknown targets
 
-            // Convert files
             var link_items = std.array_list.Managed(LinkItem).init(allocator);
             errdefer {
                 for (link_items.items) |item| switch (item) {
@@ -272,31 +422,17 @@ pub const TargetsConfig = struct {
                 link_items.deinit();
             }
 
-            const file_indices = store.targetFileSlice(entry.files);
-            for (file_indices) |file_idx| {
-                const target_file = store.getTargetFile(file_idx);
+            try appendTargetFiles(allocator, store, ast, entry.files, &link_items);
 
-                switch (target_file) {
-                    .string_literal => |tok| {
-                        const path = ast.resolve(tok);
-                        try link_items.append(.{ .file_path = try allocator.dupe(u8, path) });
-                    },
-                    .special_ident => |tok| {
-                        const ident = ast.resolve(tok);
-                        if (std.mem.eql(u8, ident, "app")) {
-                            try link_items.append(.app);
-                        } else if (std.mem.eql(u8, ident, "win_gui")) {
-                            try link_items.append(.win_gui);
-                        }
-                        // Skip unknown special identifiers
-                    },
-                    .malformed => continue, // Skip malformed entries
-                }
-            }
+            const wasm_config = if (entry.config) |config_idx|
+                try parseWasmConfig(allocator, store, ast, config_idx, &link_items)
+            else
+                null;
 
             try specs.append(.{
                 .target = target,
                 .items = try link_items.toOwnedSlice(),
+                .wasm = wasm_config,
             });
         }
 
@@ -305,13 +441,7 @@ pub const TargetsConfig = struct {
 
     /// Free link type specs allocated by parseLinkTypeSpecs.
     fn freeLinkTypeSpecs(allocator: Allocator, specs: []const TargetLinkSpec) void {
-        for (specs) |spec| {
-            for (spec.items) |item| switch (item) {
-                .file_path => |fp| allocator.free(fp),
-                else => {},
-            };
-            allocator.free(spec.items);
-        }
+        for (specs) |spec| freeLinkSpec(allocator, spec);
         allocator.free(specs);
     }
 };
