@@ -6623,17 +6623,24 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
-fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
-    const abs_path = if (std.fs.path.isAbsolute(filepath))
-        try std.fs.path.resolve(gpa, &.{filepath})
-    else
-        try std.fs.path.resolve(gpa, &.{ cwd, filepath });
-    defer gpa.free(abs_path);
+/// Returns true when `filepath` is the compiler-owned builtin module (`Builtin.roc`).
+///
+/// We deliberately do NOT compare against the absolute path of the builtin source
+/// on the *build* machine: a distributed binary would then only recognize the
+/// builtin when run from the exact checkout directory it was built in. Instead we
+/// detect the builtin by its filename plus two markers that only
+/// the compiler-owned builtin source contains: the `ProvidedByCompiler` tag and
+/// the `Str ::` declaration. This heuristic is host-independent and reliable in
+/// practice.
+fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, io: std.Io, filepath: []const u8) bool {
+    if (!std.mem.eql(u8, std.fs.path.basename(filepath), "Builtin.roc")) return false;
 
-    const compiler_builtin_path = try std.fs.path.resolve(gpa, &.{build_options.compiler_builtin_roc_path});
-    defer gpa.free(compiler_builtin_path);
+    const max_source_size = 256 * 1024 * 1024; // 256 MB
+    const source = std.Io.Dir.cwd().readFileAlloc(io, filepath, gpa, .limited(max_source_size)) catch return false;
+    defer gpa.free(source);
 
-    return std.mem.eql(u8, abs_path, compiler_builtin_path);
+    return std.mem.find(u8, source, "ProvidedByCompiler") != null and
+        std.mem.find(u8, source, "Str ::") != null;
 }
 
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
@@ -6655,7 +6662,7 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
-    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+    if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
 
@@ -6821,7 +6828,7 @@ fn checkFileWithBuildEnv(
     // When checking the Builtin module itself, mark it as such so the
     // canonicalizer skips loading the pre-compiled builtin types into its
     // scope (which would cause shadowing errors for every type it defines).
-    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+    if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
 
@@ -7475,23 +7482,40 @@ test "appendWindowsQuotedArg" {
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
 }
 
-test "user project src/build/roc/Builtin.roc is not compiler-owned builtin" {
+test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content markers" {
     const testing = std.testing;
     const allocator = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const user_project_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
-    defer allocator.free(user_project_root);
+    const tmp_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
+    defer allocator.free(tmp_root);
 
-    const classified_as_compiler_builtin = try isCompilerOwnedBuiltinSourcePath(
-        allocator,
-        user_project_root,
-        "src/build/roc/Builtin.roc",
-    );
+    const markers = "module []\n\nStr :: [ProvidedByCompiler].{\n}\n";
 
-    try testing.expect(!classified_as_compiler_builtin);
+    const expectClassified = struct {
+        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) anyerror!void {
+            try dir.writeFile(t_io, .{ .sub_path = name, .data = data });
+            const path = try std.fs.path.join(gpa, &.{ root, name });
+            defer gpa.free(path);
+            try testing.expectEqual(expected, isCompilerOwnedBuiltinSourcePath(gpa, t_io, path));
+        }
+    }.check;
+
+    // The real builtin: correct filename plus both content markers.
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", markers, true);
+    // Correct filename but missing the markers (a user file that happens to be
+    // named Builtin.roc) must not be classified as compiler-owned.
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "module []\n\nfoo = 1\n", false);
+    // The markers in a file that isn't named Builtin.roc must not match.
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "NotBuiltin.roc", markers, false);
+
+    // A non-existent path is not the builtin (read failure → false, not a crash).
+    const missing = try std.fs.path.join(allocator, &.{ tmp_root, "Missing.roc" });
+    defer allocator.free(missing);
+    try testing.expect(!isCompilerOwnedBuiltinSourcePath(allocator, io, missing));
 }
 
 test "classifyNativeRunTermination preserves warning exit code" {
