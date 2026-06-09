@@ -116,7 +116,7 @@ pub const TargetMachine = opaque {
 
     pub const EmitOptions = extern struct {
         is_debug: bool,
-        is_small: bool,
+        ir_opt_level: IrOptimizationLevel,
         time_report_out: ?*[*:0]u8,
         tsan: bool,
         sancov: bool,
@@ -209,6 +209,19 @@ pub const CodeGenOptLevel = enum(c_int) {
     Less,
     Default,
     Aggressive,
+};
+
+/// IR optimization level for LLVM passes before code generation.
+pub const IrOptimizationLevel = enum(c_int) {
+    Oz = 0,
+    O3 = 1,
+
+    pub fn toCodeGenOptLevel(self: IrOptimizationLevel) CodeGenOptLevel {
+        return switch (self) {
+            .Oz => .Default,
+            .O3 => .Aggressive,
+        };
+    }
 };
 
 /// Relocation model controlling how symbols are addressed.
@@ -453,6 +466,7 @@ pub fn compileBitcodeToObject(
     cpu: ?[*:0]const u8,
     features: ?[*:0]const u8,
     output_path: [*:0]const u8,
+    ir_opt_level: IrOptimizationLevel,
     is_debug: bool,
 ) ?[*:0]const u8 {
     // Initialize all targets
@@ -491,7 +505,7 @@ pub fn compileBitcodeToObject(
         target_triple,
         cpu,
         features,
-        if (is_debug) .None else .Default,
+        ir_opt_level.toCodeGenOptLevel(),
         .Default,
         .Default,
         true, // function_sections
@@ -525,13 +539,13 @@ pub fn compileBitcodeToObject(
 
     const emit_options = TargetMachine.EmitOptions{
         .is_debug = is_debug,
-        .is_small = false,
+        .ir_opt_level = ir_opt_level,
         .time_report_out = null,
         .tsan = false,
         .sancov = false,
         .lto = .None,
-        .allow_fast_isel = is_debug,
-        .allow_machine_outliner = !is_debug,
+        .allow_fast_isel = false,
+        .allow_machine_outliner = true,
         .asm_filename = null,
         .bin_filename = output_path,
         .llvm_ir_filename = null,

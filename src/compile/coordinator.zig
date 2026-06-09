@@ -2276,6 +2276,7 @@ pub const Coordinator = struct {
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
+                .source_dir = mod.canonicalSourceDir(),
                 .module_role = mod.module_role,
                 .depth = mod.depth,
             },
@@ -2549,6 +2550,27 @@ pub const Coordinator = struct {
         );
     }
 
+    fn resolvedDirectImportsHaveCheckedOutput(
+        env: *const ModuleEnv,
+        checked_imports: []const check.CheckedArtifact.PublishImportArtifact,
+    ) bool {
+        for (env.imports.imports.items.items, 0..) |_, i| {
+            const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+            const resolved_module_idx = env.imports.getResolvedModule(import_idx) orelse continue;
+
+            var found = false;
+            for (checked_imports) |checked_import| {
+                if (checked_import.module_idx == resolved_module_idx) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+
+        return true;
+    }
+
     fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
@@ -2586,6 +2608,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
+        if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
         const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts) catch return false;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
@@ -3674,7 +3697,7 @@ pub const Coordinator = struct {
             discovered_local_imports.deinit(worker_alloc);
         }
         const local_import_names = try module_discovery.extractImportsFromDeclIndex(parse_ast, task_allocs.scratch);
-        const module_dir = std.fs.path.dirname(task.path) orelse "";
+        const module_dir = task.source_dir;
         for (local_import_names) |module_name| {
             const path = try self.resolveModulePathWithAllocator(module_dir, module_name, worker_alloc);
             errdefer worker_alloc.free(path);
@@ -3999,6 +4022,29 @@ fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, conten
     return overwritten;
 }
 
+test "Coordinator checked cache key requires checked direct imports" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "import Host\n");
+    defer env.deinit();
+    try env.initCIRFields("W4");
+
+    const import_idx = try env.imports.getOrPut(allocator, &env.common.strings, "Host");
+    env.imports.setResolvedModule(import_idx, 1);
+
+    try std.testing.expect(!Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
+
+    const checked_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = .{},
+        .view = undefined,
+    }};
+    try std.testing.expect(Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &checked_imports));
+
+    env.imports.clearResolvedModules();
+    try std.testing.expect(Coordinator.resolvedDirectImportsHaveCheckedOutput(&env, &.{}));
+}
+
 test "Coordinator checked module cache hits on second compile" {
     const allocator = std.testing.allocator;
 
@@ -4143,6 +4189,7 @@ test "Coordinator task queue" {
             .module_id = 0,
             .module_name = "Main",
             .path = "/test/app/Main.roc",
+            .source_dir = "/test/app",
             .depth = 0,
             .module_role = .user,
         },
@@ -4187,6 +4234,7 @@ test "Coordinator isComplete logic" {
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4230,6 +4278,7 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .module_id = 0,
             .module_name = "Test",
             .path = "/test.roc",
+            .source_dir = "/",
             .depth = 0,
             .module_role = .user,
         },
@@ -4269,6 +4318,7 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },
@@ -4319,6 +4369,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .module_id = @intCast(i),
                 .module_name = "Mod",
                 .path = "/mod.roc",
+                .source_dir = "/",
                 .depth = 0,
                 .module_role = .user,
             },

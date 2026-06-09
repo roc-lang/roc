@@ -1779,14 +1779,12 @@ fn llvmCompileOptions(opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
         .size => .{
             .function_sections = false,
             .use_module_target_triple = true,
-            .opt_level = llvm_compile.bindings.CodeGenOptLevel.Default,
-            .is_small = true,
+            .optimization = llvm_compile.bindings.IrOptimizationLevel.Oz,
         },
         .speed => .{
             .function_sections = false,
             .use_module_target_triple = true,
-            .opt_level = llvm_compile.bindings.CodeGenOptLevel.Aggressive,
-            .is_small = false,
+            .optimization = llvm_compile.bindings.IrOptimizationLevel.O3,
         },
     };
 }
@@ -2026,14 +2024,13 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
 
-    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", &.{
-        .{
-            .symbol_name = "roc_eval_test_main",
-            .proc = lowered.mainProc(),
-            .arg_layouts = arg_layouts,
-            .ret_layout = proc.ret_layout,
-        },
-    });
+    const llvm_entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
+        .symbol_name = "roc_eval_test_main",
+        .proc = lowered.mainProc(),
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+    }};
+    const bitcode = try codegen.generateEntrypointModule("roc_eval_test_module", llvm_entrypoints[0..]);
     defer {
         var owned = bitcode;
         owned.deinit();

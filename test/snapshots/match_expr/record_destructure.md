@@ -12,35 +12,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-REDUNDANT PATTERN - record_destructure.md:1:1:5:2
-REDUNDANT PATTERN - record_destructure.md:1:1:5:2
+NIL
 # PROBLEMS
-**REDUNDANT PATTERN**
-The second branch of this `match` is redundant:
-**record_destructure.md:1:1:5:2:**
-```roc
-match ... {
-    { name, age } => "${name} is ${age.to_str()} years old"
-    { name, address: { city } } => "${city} is the city of ${name}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
-**REDUNDANT PATTERN**
-The third branch of this `match` is redundant:
-**record_destructure.md:1:1:5:2:**
-```roc
-match ... {
-    { name, age } => "${name} is ${age.to_str()} years old"
-    { name, address: { city } } => "${city} is the city of ${name}"
-    {} => "empty"
-}
-```
-
-This pattern can never match because earlier patterns already cover all the values it would match.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

@@ -322,7 +322,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
 
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
-    var opt: OptLevel = .dev;
+    var opt: OptLevel = .speed;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var no_link: bool = false;
@@ -348,7 +348,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
+            \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
@@ -1163,12 +1163,13 @@ test "roc build" {
         const result = try parse(gpa, testing.io, &[_][]const u8{"build"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.build.path);
-        try testing.expectEqual(.dev, result.build.opt);
+        try testing.expectEqual(.speed, result.build.opt);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.build.path);
+        try testing.expectEqual(.speed, result.build.opt);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--opt=size" });
@@ -1181,6 +1182,12 @@ test "roc build" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("main.roc", result.build.path);
         try testing.expectEqual(OptLevel.dev, result.build.opt);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--opt=interpreter" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.build.path);
+        try testing.expectEqual(OptLevel.interpreter, result.build.opt);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--opt" });

@@ -39,6 +39,7 @@
 #include <llvm/Object/COFFModuleDefinition.h>
 #include <llvm/PassRegistry.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Process.h>
 #include <llvm/Support/TimeProfiler.h>
@@ -74,6 +75,17 @@ static const bool assertions_on = true;
 #else
 static const bool assertions_on = false;
 #endif
+
+static OptimizationLevel toLLVMOptimizationLevel(ZigLLVMIROptimizationLevel level) {
+    switch (level) {
+        case ZigLLVMIROptimizationLevel_Oz:
+            return OptimizationLevel::Oz;
+        case ZigLLVMIROptimizationLevel_O3:
+            return OptimizationLevel::O3;
+    }
+
+    llvm_unreachable("invalid LLVM IR optimization level");
+}
 
 LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
@@ -272,12 +284,13 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     Module &llvm_module = *unwrap(module_ref);
 
     // Pipeline configurations
+    const OptimizationLevel opt_level = toLLVMOptimizationLevel(options->ir_opt_level);
     PipelineTuningOptions pipeline_opts;
-    pipeline_opts.LoopUnrolling = !options->is_debug;
-    pipeline_opts.SLPVectorization = !options->is_debug;
-    pipeline_opts.LoopVectorization = !options->is_debug;
-    pipeline_opts.LoopInterleaving = !options->is_debug;
-    pipeline_opts.MergeFunctions = !options->is_debug;
+    pipeline_opts.LoopUnrolling = true;
+    pipeline_opts.SLPVectorization = true;
+    pipeline_opts.LoopVectorization = true;
+    pipeline_opts.LoopInterleaving = true;
+    pipeline_opts.MergeFunctions = true;
 
     // Instrumentations
     PassInstrumentationCallbacks instr_callbacks;
@@ -315,9 +328,7 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
             module_pm.addPass(VerifierPass());
         }
 
-        if (!options->is_debug) {
-            module_pm.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
-        }
+        module_pm.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
     });
 
     const bool early_san = options->is_debug;
@@ -358,15 +369,6 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     });
 
     ModulePassManager module_pm;
-    OptimizationLevel opt_level;
-    // Setting up the optimization level
-    if (options->is_debug)
-      opt_level = OptimizationLevel::O0;
-    else if (options->is_small)
-      opt_level = OptimizationLevel::Oz;
-    else
-      opt_level = OptimizationLevel::O3;
-
     // Initialize the PassManager
     if (opt_level == OptimizationLevel::O0) {
       module_pm = pass_builder.buildO0DefaultPipeline(opt_level, static_cast<ThinOrFullLTOPhase>(options->lto));
