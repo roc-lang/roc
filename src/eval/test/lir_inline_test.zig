@@ -139,6 +139,7 @@ const ProcShape = struct {
     self_call_count: usize = 0,
     switch_count: usize = 0,
     join_count: usize = 0,
+    max_join_param_count: usize = 0,
     jump_count: usize = 0,
     struct_assign_count: usize = 0,
     tag_assign_count: usize = 0,
@@ -206,6 +207,10 @@ fn collectProcShape(
             },
             .join => |stmt| {
                 shape.join_count += 1;
+                shape.max_join_param_count = @max(
+                    shape.max_join_param_count,
+                    lowered.lir_result.store.getLocalSpan(stmt.params).len,
+                );
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
             },
@@ -322,16 +327,16 @@ fn whileRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 1 and
         shape.self_call_count == 0 and
         shape.join_count >= 1 and
-        shape.jump_count >= 2 and
-        shape.struct_assign_count == 0;
+        shape.max_join_param_count == 2 and
+        shape.jump_count >= 2;
 }
 
 fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 1 and
         shape.self_call_count == 0 and
         shape.join_count >= 1 and
-        shape.jump_count >= 2 and
-        shape.struct_assign_count >= 1;
+        shape.max_join_param_count == 1 and
+        shape.jump_count >= 2;
 }
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {

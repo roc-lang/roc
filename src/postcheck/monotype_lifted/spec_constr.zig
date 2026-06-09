@@ -56,10 +56,6 @@
 //! - the loop uses `n` and `acc` directly instead of reading record fields;
 //! - later compiler stages have simple values to keep in registers.
 //!
-//! This pass does not turn tail-recursive helpers into loops. If an earlier pass
-//! has already produced this kind of `while` loop, the loop-state part of this
-//! rewrite applies to it too.
-//!
 //! This is Roc's version of the optimization described in
 //! "Call-pattern Specialisation for Haskell Programs" by Simon Peyton Jones:
 //!
