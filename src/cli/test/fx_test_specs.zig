@@ -432,6 +432,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro: applicative record builder and direct map2 agree on the same parsed record",
     },
     .{
+        .roc_file = "test/fx/record_builder_imported_map2_repro.roc",
+        .io_spec = "1>direct=localhost:8080|1>builder=localhost:8080",
+        .description = "Regression test: record builder suffix resolves map2 on imported type modules (issue #9581)",
+    },
+    .{
         .roc_file = "test/fx/issue9049.roc",
         .io_spec = "1>Direct: False|1>Via pure/run: False",
         .description = "Regression test: Bool.False inspected via opaque type extraction shows correct value (issue #9049)",
