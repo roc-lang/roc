@@ -1,7 +1,0 @@
-@0-5 UnaryOp(
-    @1-5 Var {
-        module_name: "",
-        ident: "blah",
-    },
-    @0-1 Not,
-)

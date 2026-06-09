@@ -40,7 +40,7 @@ pub fn sortByDependency(
     module_names: []const []const u8,
     extractor: ImportExtractor,
     extractor_ctx: *anyopaque,
-) ![][]const u8 {
+) anyerror![][]const u8 {
     const n = module_names.len;
 
     // Early return for trivial cases
@@ -140,7 +140,7 @@ pub fn sortByPrecomputedDependency(
     gpa: Allocator,
     module_names: []const []const u8,
     module_imports: []const []const []const u8,
-) ![][]const u8 {
+) (Allocator.Error || error{CyclicDependency})![][]const u8 {
     std.debug.assert(module_names.len == module_imports.len);
 
     const n = module_names.len;

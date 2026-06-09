@@ -17,6 +17,563 @@ const testing = std.testing;
 const Ident = base.Ident;
 const Statement = CIR.Statement;
 
+fn canonicalizeModuleAndCheck(source: []const u8, check: anytype) anyerror!void {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.parse(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    try check(&env, diagnostics);
+}
+
+fn countRedeclarationDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .type_redeclared,
+            .type_alias_redeclared,
+            .nominal_type_redeclared,
+            => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countMutualAliasDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .mutually_recursive_type_aliases => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countUndeclaredTypeDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .undeclared_type => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countIdentNotInScopeDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .ident_not_in_scope => |d| {
+                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countLocalReferenceBeforeDefinitionDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .local_reference_before_definition => |d| {
+                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics: []const CIR.Diagnostic) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .mutually_recursive_local_definitions => count += 1,
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn countAssociatedLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, name: []const u8) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .qualified_ident_does_not_exist => |d| {
+                if (std.mem.eql(u8, env.getIdent(d.ident), name)) count += 1;
+            },
+            .nested_value_not_found => |d| {
+                const parent = env.getIdent(d.parent_name);
+                const nested = env.getIdent(d.nested_name);
+                if (std.mem.eql(u8, name, parent) or std.mem.eql(u8, name, nested)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn isQualifiedName(name: []const u8, parent_name: []const u8, child_name: []const u8) bool {
+    const suffix_len = parent_name.len + 1 + child_name.len;
+    if (name.len < suffix_len) return false;
+
+    const suffix_start = name.len - suffix_len;
+    if (suffix_start != 0 and name[suffix_start - 1] != '.') return false;
+
+    const suffix = name[suffix_start..];
+    if (!std.mem.eql(u8, suffix[0..parent_name.len], parent_name)) return false;
+    if (suffix[parent_name.len] != '.') return false;
+    return std.mem.eql(u8, suffix[parent_name.len + 1 ..], child_name);
+}
+
+fn isNameOrQualifiedSuffix(name: []const u8, bare_name: []const u8) bool {
+    if (std.mem.eql(u8, name, bare_name)) return true;
+    if (name.len <= bare_name.len) return false;
+    const suffix_start = name.len - bare_name.len;
+    return name[suffix_start - 1] == '.' and std.mem.eql(u8, name[suffix_start..], bare_name);
+}
+
+fn countValueLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic, parent_name: []const u8, child_name: []const u8) usize {
+    var count: usize = 0;
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .ident_not_in_scope => |d| {
+                const ident = env.getIdent(d.ident);
+                if (isNameOrQualifiedSuffix(ident, parent_name) or isQualifiedName(ident, parent_name, child_name)) count += 1;
+            },
+            .qualified_ident_does_not_exist => |d| {
+                if (isQualifiedName(env.getIdent(d.ident), parent_name, child_name)) count += 1;
+            },
+            .nested_value_not_found => |d| {
+                const parent = env.getIdent(d.parent_name);
+                const nested = env.getIdent(d.nested_name);
+                if (std.mem.eql(u8, parent, parent_name) and std.mem.eql(u8, nested, child_name)) count += 1;
+            },
+            else => {},
+        }
+    }
+    return count;
+}
+
+fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) error{TestUnexpectedResult}!void {
+    if (std.mem.find(u8, source, needle)) |_| {
+        std.debug.print("Source still contains forbidden canonicalization structure: {s}\n", .{needle});
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) error{ TestUnexpectedResult, MissingCanonicalizeBlock, MissingCanonicalizeBlockWalk }!void {
+    const block_start = std.mem.find(u8, can_source, "fn canonicalizeBlock(") orelse return error.MissingCanonicalizeBlock;
+    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "var last_expr") orelse return error.MissingCanonicalizeBlockWalk;
+    const block_setup = can_source[block_start .. block_start + walk_start_rel];
+
+    try expectSourceDoesNotContain(block_setup, "while (");
+    try expectSourceDoesNotContain(block_setup, "for (");
+    try expectSourceDoesNotContain(block_setup, "getStatement(");
+}
+
+test "canonicalization records explicit type declaration tables" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const source =
+        \\module []
+        \\
+        \\A : B
+        \\B : U64
+        \\C := [C]
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.parse(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    try testing.expectEqual(@as(u32, 3), env.type_decls.span.len);
+    try testing.expectEqual(@as(u32, 1), env.forward_type_decls.span.len);
+
+    const forward_stmt = env.store.statementAt(env.forward_type_decls, 0);
+    const header = switch (env.store.getStatement(forward_stmt)) {
+        .s_alias_decl => |alias| env.store.getTypeHeader(alias.header),
+        else => return error.ExpectedForwardAlias,
+    };
+    try testing.expectEqualStrings("B", env.getIdent(header.relative_name));
+}
+
+test "nested type redeclarations are detected after previous associated scope exits" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const source =
+        \\module []
+        \\
+        \\T := [A].{
+        \\    L2 := [B].{
+        \\        L3 := [C]
+        \\    }
+        \\
+        \\    L2 := [D].{
+        \\        L3 := [E]
+        \\    }
+        \\}
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.parse(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+
+    var saw_l2_redeclared = false;
+    var saw_l3_redeclared = false;
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .type_redeclared => |data| {
+                const name = env.getIdent(data.name);
+                if (std.mem.eql(u8, name, "Test.T.L2")) saw_l2_redeclared = true;
+                if (std.mem.eql(u8, name, "Test.T.L2.L3")) saw_l3_redeclared = true;
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(saw_l2_redeclared);
+    try testing.expect(saw_l3_redeclared);
+}
+
+test "block-local type paths with the same text do not redeclare each other" {
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    T := [First].{
+        \\        Inner := [FirstInner]
+        \\    }
+        \\    1
+        \\}
+        \\
+        \\second = {
+        \\    T := [Second].{
+        \\        Inner := [SecondInner]
+        \\    }
+        \\    2
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "block-local associated value lookup resolves through the visible local owner" {
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    T := [First].{
+        \\        marker = 1
+        \\    }
+        \\    T.marker
+        \\}
+        \\
+        \\second = {
+        \\    T := [Second].{
+        \\        marker = 2
+        \\    }
+        \\    T.marker
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "same-named aliases in separate block scopes are not mutually recursive" {
+    const source =
+        \\module []
+        \\
+        \\first = {
+        \\    A : B
+        \\    B : U64
+        \\    1
+        \\}
+        \\
+        \\second = {
+        \\    B : A
+        \\    A : U64
+        \\    2
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 0), countMutualAliasDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "module-qualified type lookup ignores same-named block-local type roots" {
+    const source =
+        \\module []
+        \\
+        \\T := [ModuleT].{
+        \\    marker = 1
+        \\}
+        \\
+        \\value = {
+        \\    T := [LocalT].{
+        \\        marker = 2
+        \\    }
+        \\    Test.T.marker
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "block-local type use before declaration does not forward resolve" {
+    const source =
+        \\module []
+        \\
+        \\value = {
+        \\    x : T
+        \\    x = 1
+        \\    T := [LocalT]
+        \\    x
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 1), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "block-local lambda use before declaration does not forward resolve" {
+    const source =
+        \\module []
+        \\
+        \\value = {
+        \\    before = later(1)
+        \\    later = |n| n
+        \\    before
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 1), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
+        }
+    }.check);
+}
+
+test "block-local lambdas cannot be mutually recursive through forward declaration" {
+    const source =
+        \\module []
+        \\
+        \\value = {
+        \\    first = |n| second(n)
+        \\    second = |n| first(n)
+        \\    first(0)
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 1), countMutuallyRecursiveLocalDefinitionDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "block-local lambda declaration does not capture earlier use of same-named outer lambda" {
+    const source =
+        \\module []
+        \\
+        \\later = |n| n + 10
+        \\
+        \\value = {
+        \\    before = later(1)
+        \\    later = |n| n + 100
+        \\    before
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 0), countIdentNotInScopeDiagnostics(env, diagnostics, "later"));
+            try testing.expectEqual(@as(usize, 0), countLocalReferenceBeforeDefinitionDiagnostics(env, diagnostics, "later"));
+        }
+    }.check);
+}
+
+test "malformed associated type header does not suppress later associated value" {
+    const source =
+        \\module [use]
+        \\
+        \\Outer := [Outer].{
+        \\    Broken(a := [Broken]
+        \\    ok = 1
+        \\}
+        \\
+        \\use = Outer.ok
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            const qualified_outer_ok = env.common.findIdent("Test.Outer.ok") orelse return error.MissingQualifiedOuterOkIdent;
+            try testing.expect(env.getExposedNodeIndexById(qualified_outer_ok) != null);
+            try testing.expectEqual(@as(usize, 0), countAssociatedLookupDiagnostics(env, diagnostics, "Outer.ok"));
+        }
+    }.check);
+}
+
+test "block-local associated value does not leak after owner scope exits" {
+    const source =
+        \\Test := [].{
+        \\    first = {
+        \\        T := [First].{
+        \\            marker = 1
+        \\        }
+        \\        1
+        \\    }
+        \\
+        \\    leaked = T.marker
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 1), countValueLookupDiagnostics(env, diagnostics, "T", "marker"));
+
+            if (env.common.findIdent("T.marker")) |ident| {
+                try testing.expect(env.getExposedNodeIndexById(ident) == null);
+            }
+            if (env.common.findIdent("Test.T.marker")) |ident| {
+                try testing.expect(env.getExposedNodeIndexById(ident) == null);
+            }
+        }
+    }.check);
+}
+
+test "canonicalization has no separate nested associated item alias traversal" {
+    const can_source = @embedFile("../Can.zig");
+
+    try expectSourceDoesNotContain(can_source, "fn introduceNestedItemAliases");
+    try expectSourceDoesNotContain(can_source, "statementSlice(assoc_statements)");
+}
+
+test "canonicalization block setup does not pre-scan block statements" {
+    const can_source = @embedFile("../Can.zig");
+
+    try expectBlockSetupDoesNotScanStatements(can_source);
+}
+
+test "package header auto imports consume parser inventory instead of scanning statements" {
+    const can_source = @embedFile("../Can.zig");
+
+    try expectSourceDoesNotContain(can_source, "fn collectPackageHeaderAutoImports");
+    try expectSourceDoesNotContain(can_source, "collectPackageHeaderAutoImports(header.package.exposes, file.statements");
+}
+
+test "block-local recursive nominal type can reference itself in its declaration" {
+    const source =
+        \\Test := [].{
+        \\    value = {
+        \\        Tree := [Leaf, Node(Tree)]
+        \\        1
+        \\    }
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "local type alias redeclaration diagnostic renders" {
+    const source =
+        \\Test := [].{
+        \\    value = {
+        \\        T : U64
+        \\        T : U8
+        \\        1
+        \\    }
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) anyerror!void {
+            var count: usize = 0;
+            for (diagnostics) |diagnostic| {
+                switch (diagnostic) {
+                    .type_alias_redeclared => {
+                        count += 1;
+                        var report = try env.diagnosticToReport(diagnostic, testing.allocator, env.module_name);
+                        defer report.deinit();
+                        try testing.expect(report.title.len > 0);
+                    },
+                    else => {},
+                }
+            }
+            try testing.expectEqual(@as(usize, 1), count);
+        }
+    }.check);
+}
+
 test "local type alias is parsed and canonicalized" {
     const source =
         \\|_| {
@@ -289,7 +846,7 @@ test "scopeLookupTypeDecl API is accessible" {
 
     // Look up a type that doesn't exist - should return null
     const my_type_ident = try env.insertIdent(Ident.for_text("MyType"));
-    const type_lookup = can.scopeLookupTypeDecl(my_type_ident);
+    const type_lookup = try can.scopeLookupTypeDecl(my_type_ident);
 
     try testing.expect(type_lookup == null);
 }
@@ -338,7 +895,7 @@ test "introduceType API is accessible" {
     try can.introduceType(type_name, stmt_idx, base.Region.zero());
 
     // Verify the type is now in scope
-    const type_lookup = can.scopeLookupTypeDecl(type_name);
+    const type_lookup = try can.scopeLookupTypeDecl(type_name);
     try testing.expect(type_lookup != null);
     try testing.expect(type_lookup.? == stmt_idx);
 }
@@ -412,13 +969,13 @@ test "local type scoping - not visible after exiting block" {
     try can.introduceType(type_name, stmt_idx, base.Region.zero());
 
     // Type should be visible in inner scope
-    const lookup_in_inner = can.scopeLookupTypeDecl(type_name);
+    const lookup_in_inner = try can.scopeLookupTypeDecl(type_name);
     try testing.expect(lookup_in_inner != null);
 
     // Exit inner scope
     try can.scopeExit(gpa);
 
     // Type should NOT be visible in outer scope anymore
-    const lookup_in_outer = can.scopeLookupTypeDecl(type_name);
+    const lookup_in_outer = try can.scopeLookupTypeDecl(type_name);
     try testing.expect(lookup_in_outer == null);
 }

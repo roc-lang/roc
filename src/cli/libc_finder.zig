@@ -7,7 +7,9 @@
 //! on different systems.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const collections = @import("collections");
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -53,7 +55,7 @@ fn getDynamicLinkerName(arch: []const u8) []const u8 {
 
 /// finds libc and dynamic linker
 /// Solely allocates into the arena
-pub fn findLibc(ctx: *CliCtx) !LibcInfo {
+pub fn findLibc(ctx: *CliCtx) anyerror!LibcInfo {
     const std_io = ctx.io.std_io;
     // Try compiler-based detection first (most reliable)
     if (try findViaCompiler(ctx.arena, std_io)) |info|
@@ -64,7 +66,7 @@ pub fn findLibc(ctx: *CliCtx) !LibcInfo {
 }
 
 /// Find libc using compiler queries (gcc/clang)
-fn findViaCompiler(arena: std.mem.Allocator, std_io: std.Io) !?LibcInfo {
+fn findViaCompiler(arena: std.mem.Allocator, std_io: std.Io) anyerror!?LibcInfo {
     const compilers = [_][]const u8{ "gcc", "clang", "cc" };
 
     // Get architecture first
@@ -119,7 +121,7 @@ fn findViaCompiler(arena: std.mem.Allocator, std_io: std.Io) !?LibcInfo {
 }
 
 /// Find libc by searching the filesystem
-fn findViaFilesystem(arena: std.mem.Allocator, std_io: std.Io) !LibcInfo {
+fn findViaFilesystem(arena: std.mem.Allocator, std_io: std.Io) anyerror!LibcInfo {
     const arch = try getArchitecture(arena, std_io);
     const search_paths = try getSearchPaths(arena, std_io, arch);
 
@@ -166,7 +168,7 @@ fn findViaFilesystem(arena: std.mem.Allocator, std_io: std.Io) !LibcInfo {
 }
 
 /// Find the dynamic linker for the given architecture
-fn findDynamicLinker(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8, lib_dir: []const u8) !?[]const u8 {
+fn findDynamicLinker(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8, lib_dir: []const u8) Allocator.Error!?[]const u8 {
     // Map architecture to dynamic linker names (including musl)
     const ld_names = if (std.mem.eql(u8, arch, "x86_64"))
         &[_][]const u8{ "ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1", "ld-linux.so.2" }
@@ -214,7 +216,7 @@ fn findDynamicLinker(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8,
 }
 
 /// Get system architecture using uname
-fn getArchitecture(arena: std.mem.Allocator, std_io: std.Io) ![]const u8 {
+fn getArchitecture(arena: std.mem.Allocator, std_io: std.Io) anyerror![]const u8 {
     const result = try process.run(arena, std_io, .{
         .argv = &[_][]const u8{ "uname", "-m" },
     });
@@ -223,7 +225,7 @@ fn getArchitecture(arena: std.mem.Allocator, std_io: std.Io) ![]const u8 {
 }
 
 /// Get library search paths for the given architecture
-fn getSearchPaths(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) ![]const []const u8 {
+fn getSearchPaths(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) anyerror![]const []const u8 {
     const triplet = getMultiarchTriplet(arena, std_io, arch) catch |err| blk: {
         switch (err) {
             error.UnrecognisedArch => break :blk arch,
@@ -279,7 +281,7 @@ fn getSearchPaths(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) ![
 }
 
 /// Get multiarch triplet (e.g., x86_64-linux-gnu)
-fn getMultiarchTriplet(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) ![]const u8 {
+fn getMultiarchTriplet(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8) anyerror![]const u8 {
     // Try to get from gcc first
     const result = process.run(arena, std_io, .{
         .argv = &[_][]const u8{ "gcc", "-dumpmachine" },
@@ -306,7 +308,7 @@ test "libc detection integration test" {
     // This test is not relevant on Windows (`uname` not available)
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     var io = Io.create(std.testing.io);

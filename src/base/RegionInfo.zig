@@ -30,7 +30,7 @@ pub fn lineIdx(line_starts: []const u32, pos: u32) u32 {
 }
 
 /// Gets the column index for a position on a given line
-pub fn columnIdx(line_starts: []const u32, line: u32, pos: u32) !u32 {
+pub fn columnIdx(line_starts: []const u32, line: u32, pos: u32) error{InvalidPosition}!u32 {
     const line_start: u32 = @intCast(line_starts[line]);
     if (pos < line_start) {
         return error.InvalidPosition;
@@ -57,7 +57,7 @@ pub fn getLineText(source: []const u8, line_starts: []const u32, start_line_idx:
 }
 
 /// Record the offsets for the start of each line in the source code
-pub fn findLineStarts(gpa: Allocator, source: []const u8) !collections.SafeList(u32) {
+pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collections.SafeList(u32) {
     var line_starts = try collections.SafeList(u32).initCapacity(gpa, 256);
 
     // if the source is empty, return an empty list of line starts
@@ -96,7 +96,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !collections.SafeList(
 }
 
 /// Returns position info for a given start and end index offset
-pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u32) !RegionInfo {
+pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u32) error{ OutOfOrder, BeginTooLarge, EndTooLarge, NoLineStarts, InvalidPosition }!RegionInfo {
     if (begin > end) {
         return error.OutOfOrder;
     }

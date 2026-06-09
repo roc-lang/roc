@@ -52,7 +52,7 @@ pub const BuiltinModules = struct {
     }
 
     /// Initialize all builtin modules by deserializing from the compiled Builtin.bin file
-    pub fn init(allocator: Allocator) !BuiltinModules {
+    pub fn init(allocator: Allocator) anyerror!BuiltinModules {
         // Load the builtin indices
         const indices = try builtin_loading.deserializeBuiltinIndices(allocator, compiled_builtins.builtin_indices_bin);
 

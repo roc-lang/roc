@@ -35,7 +35,7 @@ pub const DocCommentExtract = struct {
 ///
 /// Module doc comments are consecutive `##` lines at the very beginning of the
 /// file, before any non-comment content. Returns null if none found.
-pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?DocCommentExtract {
+pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) Allocator.Error!?DocCommentExtract {
     var lines = std.ArrayList([]const u8).empty;
     defer lines.deinit(gpa);
 
@@ -99,7 +99,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) !?DocCommentE
 ///
 /// Scans backwards from `def_start_offset` to find consecutive `##` lines.
 /// Returns null if no doc comment is found.
-pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) !?DocCommentExtract {
+pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) Allocator.Error!?DocCommentExtract {
     if (def_start_offset == 0 or def_start_offset > source.len) return null;
 
     var lines = std.ArrayList([]const u8).empty;
@@ -199,7 +199,7 @@ pub fn extractModuleDocs(
     module_env: *const ModuleEnv,
     package_name: []const u8,
     source_path: ?[]const u8,
-) !DocModel.ModuleDocs {
+) Allocator.Error!DocModel.ModuleDocs {
     const source = module_env.getSourceAll();
 
     // Extract module-level doc comment
@@ -413,7 +413,7 @@ fn filterTypeModuleEntries(
     gpa: Allocator,
     entries_list: *std.ArrayList(DocModel.DocEntry),
     module_name: []const u8,
-) !void {
+) Allocator.Error!void {
     var idx: usize = 0;
     while (idx < entries_list.items.len) {
         const entry = &entries_list.items[idx];
@@ -434,7 +434,7 @@ fn filterTypeModuleEntries(
     }
 }
 
-fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel.DocEntry)) !void {
+fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel.DocEntry)) Allocator.Error!void {
     // Find the Builtin opaque entry
     var builtin_idx: ?usize = null;
     for (entries_list.items, 0..) |*entry, idx| {
@@ -529,7 +529,7 @@ fn reparentDottedChild(
     gpa: Allocator,
     entries_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
-) !void {
+) Allocator.Error!void {
     const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         try entries_list.append(gpa, child);
         return;
@@ -587,7 +587,7 @@ fn reparentDottedChildInto(
     gpa: Allocator,
     children_list: *std.ArrayList(DocModel.DocEntry),
     child: DocModel.DocEntry,
-) !void {
+) Allocator.Error!void {
     const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
         try children_list.append(gpa, child);
         return;
@@ -647,7 +647,7 @@ fn extractDefEntry(
     module_env: *const ModuleEnv,
     def_idx: CIR.Def.Idx,
     source: []const u8,
-) !?DocModel.DocEntry {
+) Allocator.Error!?DocModel.DocEntry {
     const def = module_env.store.getDef(def_idx);
     const pattern = module_env.store.getPattern(def.pattern);
 
@@ -674,12 +674,12 @@ fn extractDefEntry(
 
                 const def_var = ModuleEnv.varFrom(def_idx);
                 if (@intFromEnum(def_var) >= module_env.types.len()) break :blk null;
-                break :blk extractDocType(
+                break :blk try extractDocType(
                     gpa,
                     &module_env.types,
                     module_env.getIdentStoreConst(),
                     def_var,
-                ) catch break :blk null;
+                );
             };
             errdefer if (type_sig) |s| {
                 s.deinit(gpa);
@@ -766,7 +766,7 @@ fn extractNominalChildren(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     def: CIR.Def,
-) ![]DocModel.DocEntry {
+) Allocator.Error![]DocModel.DocEntry {
     const expr = module_env.store.getExpr(def.expr);
     switch (expr) {
         .e_nominal => |nom| {
@@ -787,7 +787,7 @@ fn extractRecordChildren(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     fields: CIR.RecordField.Span,
-) ![]DocModel.DocEntry {
+) Allocator.Error![]DocModel.DocEntry {
     const fields_slice = module_env.store.sliceRecordFields(fields);
     var children = std.ArrayList(DocModel.DocEntry).empty;
     errdefer {
@@ -822,7 +822,7 @@ fn extractDeclTypeSig(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     anno_idx: CIR.TypeAnno.Idx,
-) !?*const DocType {
+) Allocator.Error!?*const DocType {
     // Extract the backing type from the CIR annotation. The inferred type for a
     // nominal resolves to the nominal itself, so we use the annotation instead.
     // DocEntry.writeToSExpr generates the declaration prefix from kind + name.
@@ -833,7 +833,7 @@ fn extractAnnotationAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     annotation: CIR.Annotation,
-) !?*const DocType {
+) Allocator.Error!?*const DocType {
     const base_type = try extractTypeAnnoAsDocType(gpa, module_env, annotation.anno) orelse return null;
     var base_type_moved = false;
     errdefer if (!base_type_moved) {
@@ -899,7 +899,7 @@ fn extractWhereMethodConstraint(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
-) !DocType.Constraint {
+) Allocator.Error!DocType.Constraint {
     const type_var = try extractWhereTypeVarName(gpa, module_env, method.var_);
     errdefer gpa.free(type_var);
 
@@ -923,7 +923,7 @@ fn extractWhereMethodSignature(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
-) !*const DocType {
+) Allocator.Error!*const DocType {
     const args_slice = module_env.store.sliceTypeAnnos(method.args);
     const args = try gpa.alloc(*const DocType, args_slice.len);
     var args_len: usize = 0;
@@ -964,7 +964,7 @@ fn extractWhereTypeVarName(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     var_idx: CIR.TypeAnno.Idx,
-) ![]const u8 {
+) Allocator.Error![]const u8 {
     var current = var_idx;
     while (true) {
         switch (module_env.store.getTypeAnno(current)) {
@@ -1016,7 +1016,7 @@ fn extractTypeAnnoAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     type_anno_idx: CIR.TypeAnno.Idx,
-) !?*const DocType {
+) Allocator.Error!?*const DocType {
     const BuildFrame = union(enum) {
         visit: CIR.TypeAnno.Idx,
         malformed_tag,
@@ -2207,10 +2207,10 @@ fn getDisplayName(origin_text: []const u8, ident_text: []const u8) []const u8 {
 
 /// Get the module path from the origin text.
 /// The origin_module text is the raw module path from the compiler.
-/// Returns empty string for "Builtin" since it's an implementation detail.
+/// Returns empty string for compiler-owned builtin types since Builtin is an implementation detail.
 fn getModulePath(origin_text: []const u8) []const u8 {
-    if (std.mem.eql(u8, origin_text, "Builtin")) {
-        return ""; // Don't expose "Builtin" module as it's an implementation detail
+    if (std.mem.eql(u8, origin_text, "Builtin") or CIR.Import.isCompilerBuiltinImportName(origin_text)) {
+        return "";
     }
     return origin_text;
 }
@@ -2239,7 +2239,7 @@ fn findEntryByName(entries: []const DocModel.DocEntry, name: []const u8) bool {
     return false;
 }
 
-fn joinLines(gpa: Allocator, lines: []const []const u8) ![]u8 {
+fn joinLines(gpa: Allocator, lines: []const []const u8) Allocator.Error![]u8 {
     // Calculate total length
     var total_len: usize = 0;
     for (lines, 0..) |line, i| {
@@ -2263,7 +2263,7 @@ fn joinLines(gpa: Allocator, lines: []const []const u8) ![]u8 {
 /// Append a child entry to a parent's children slice, reallocating in place.
 /// This replaces the repeated pattern of: create ArrayList, copy all old children,
 /// append new child, free old slice, toOwnedSlice.
-fn appendChildEntry(gpa: Allocator, parent: *DocModel.DocEntry, child: DocModel.DocEntry) !void {
+fn appendChildEntry(gpa: Allocator, parent: *DocModel.DocEntry, child: DocModel.DocEntry) Allocator.Error!void {
     const old = parent.children;
     const new_children = try gpa.alloc(DocModel.DocEntry, old.len + 1);
     @memcpy(new_children[0..old.len], old);
@@ -2276,7 +2276,7 @@ fn moveEntryForReparenting(
     gpa: Allocator,
     entry: *DocModel.DocEntry,
     short_name: []const u8,
-) !DocModel.DocEntry {
+) Allocator.Error!DocModel.DocEntry {
     const new_name = try gpa.dupe(u8, short_name);
     errdefer gpa.free(new_name);
 

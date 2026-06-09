@@ -2,6 +2,8 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
+const base = @import("base");
+const can = @import("can");
 const TestEnv = @import("./TestEnv.zig");
 const canonical = @import("../canonical_names.zig");
 const checked_ids = @import("../checked_ids.zig");
@@ -9,6 +11,8 @@ const static_dispatch = @import("../static_dispatch_registry.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const types = @import("types");
 
+const Ident = base.Ident;
+const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
 
 const MethodRegistryTestCheckedTypes = struct {
@@ -17,6 +21,22 @@ const MethodRegistryTestCheckedTypes = struct {
         _: TypedCIR.Module,
         _: types.Var,
     ) ?checked_ids.CheckedTypeId {
+        unreachable;
+    }
+};
+
+const MethodRegistryTestCheckedBodies = struct {
+    pub fn patternBinderForSource(
+        _: *const @This(),
+        _: can.CIR.Pattern.Idx,
+    ) ?checked_ids.PatternBinderId {
+        unreachable;
+    }
+
+    pub fn exprIdForSource(
+        _: *const @This(),
+        _: can.CIR.Expr.Idx,
+    ) ?checked_ids.CheckedExprId {
         unreachable;
     }
 };
@@ -1359,15 +1379,12 @@ test "checked artifact method registry skips nominal associated values" {
     defer modules.deinit();
     const module = modules.module(0);
 
-    const by_def = try testing.allocator.alloc(?canonical.ProcedureTemplateRef, module.nodeCount());
-    defer testing.allocator.free(by_def);
-    @memset(by_def, null);
-
     const template_lookup = static_dispatch.ProcedureTemplateLookup{
         .module_idx = module.moduleIndex(),
-        .by_def = by_def,
+        .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
+    const checked_bodies = MethodRegistryTestCheckedBodies{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -1378,10 +1395,41 @@ test "checked artifact method registry skips nominal associated values" {
         &names,
         &template_lookup,
         &checked_types,
+        &checked_bodies,
     );
     defer registry.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 0), registry.entries.len);
+}
+
+test "typed method definition entries expose finalized owner-method keys" {
+    const gpa = testing.allocator;
+
+    var env = try ModuleEnv.init(gpa, "module []\n");
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    try env.common.calcLineStarts(gpa);
+
+    const method_ident = try env.insertIdent(Ident.for_text("get"));
+    const other_method_ident = try env.insertIdent(Ident.for_text("set"));
+    const owner: can.CIR.Statement.Idx = @enumFromInt(1);
+
+    try env.registerMethodDefForOwner(owner, method_ident, .{
+        .type_node_idx = @enumFromInt(1),
+        .def_idx = @enumFromInt(1),
+    });
+    try env.registerMethodDefForOwner(owner, other_method_ident, .{
+        .type_node_idx = @enumFromInt(2),
+        .def_idx = @enumFromInt(2),
+    });
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = &env },
+    };
+    var modules = try TypedCIR.Modules.init(gpa, &source_modules);
+    defer modules.deinit();
+
+    try testing.expectEqual(@as(usize, 2), modules.module(0).methodDefEntries().len);
 }
 
 test "check type - nominal with tag arg" {
@@ -1753,8 +1801,8 @@ test "check type - tuple access on non-tuple does not cascade" {
 }
 
 test "check type - if else - annotated branch mismatch reports error" {
-    // Exercises the expected-return-type path in checkIfElseExpr (the
-    // isCompatibleWithExpected probe). The else branch (a number) does not
+    // Exercises the expected-return-type path in checkIfElseExpr
+    // (checkBranchBodyAgainstExpected). The else branch (a number) does not
     // match the annotated Str return type, which must be reported.
     const source =
         \\f : Bool -> Str
@@ -1764,13 +1812,12 @@ test "check type - if else - annotated branch mismatch reports error" {
 }
 
 test "check type - match branch conflicting with rigid return type reports error" {
-    // Load-bearing case for isCompatibleWithExpected: the `Ok(_) => ""` branch
-    // body (Str) conflicts with the function's rigid annotated return type `e`.
-    // The caller's incompatible path (markErroneousBranchWithExpected) emits no
-    // diagnostic of its own, so the mismatch recorded by the
-    // isCompatibleWithExpected probe is the ONLY error reported. If that probe
-    // were switched to a throwaway problem store, this error would silently
-    // disappear.
+    // Load-bearing case for checkBranchBodyAgainstExpected: the `Ok(_) => ""`
+    // branch body (Str) conflicts with the function's rigid annotated return
+    // type `e`. The compatibility probe is non-recording; the diagnostic is
+    // emitted by checkBranchBodyAgainstExpected itself (recordBranchTypeMismatch)
+    // on the incompatible path, so the error is reported with the branch body as
+    // the actual type.
     const source =
         \\get_err : [Ok(a), Err(e)] -> e
         \\get_err = |result| match result {
@@ -3871,7 +3918,7 @@ fn checkTypesModule(
     comptime source_expr: []const u8,
     comptime expectation: ModuleExpectation,
     comptime expected: []const u8,
-) !void {
+) anyerror!void {
     var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
@@ -3906,7 +3953,7 @@ const DefAndExpectation = struct {
 fn checkTypesModuleDefs(
     comptime source_expr: []const u8,
     comptime expectations: []const DefAndExpectation,
-) !void {
+) anyerror!void {
     var test_env = try TestEnv.init("Test", source_expr);
     defer test_env.deinit();
 
@@ -3932,7 +3979,7 @@ fn checkTypesExpr(
     comptime source_expr: []const u8,
     comptime expectation: ExprExpectation,
     comptime expected: []const u8,
-) !void {
+) anyerror!void {
     var test_env = try TestEnv.initExpr("Test", source_expr);
     defer test_env.deinit();
 

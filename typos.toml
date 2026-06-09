@@ -2,10 +2,8 @@
 extend-exclude = [
     ".git/",
     "src/snapshots/fuzz_crash",
-    "crates/vendor/",
     "vendor/",
     "authors",
-    "crates",
     "examples/static-site-gen/input/",
     "src/build/zig_llvm.h",
     "test/snapshots/",

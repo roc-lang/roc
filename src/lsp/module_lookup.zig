@@ -10,6 +10,7 @@
 //! - Extracting statement parts
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const can = @import("can");
 const compile = @import("compile");
 const base = @import("base");
@@ -191,7 +192,7 @@ pub fn findDefinitionsWithPrefix(
     module_env: *ModuleEnv,
     prefix: []const u8,
     allocator: std.mem.Allocator,
-) !std.ArrayList(DefinitionInfo) {
+) Allocator.Error!std.ArrayList(DefinitionInfo) {
     var results = std.ArrayList(DefinitionInfo).empty;
 
     // Search through all_defs

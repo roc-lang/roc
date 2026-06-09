@@ -1,17 +1,12 @@
-//! Build-system helpers for MiniCI command phases and reporting.
+//! Build-system helpers for CI check steps.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
 const Step = std.Build.Step;
 
-/// Callback type for MiniCI phases implemented as in-process build checks.
-pub const CheckStepFn = *const fn (*Step) anyerror!void;
-
 const non_tty_test_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
 const default_non_tty_test_progress_ms = "30000";
-const mini_ci_heartbeat_env = "ROC_MINICI_HEARTBEAT_INTERVAL_MS";
-const default_non_tty_heartbeat_ms: u64 = 60_000;
 
 const PhasePosition = struct {
     index: usize,
@@ -29,7 +24,6 @@ const PhaseAction = union(enum) {
     argv: []const []const u8,
     zig_run: []const u8,
     zig_build: []const []const u8,
-    callback: CheckStepFn,
 };
 
 const Phase = struct {
@@ -77,151 +71,6 @@ pub const SemanticAuditStep = struct {
             .{ .progress_node = options.progress_node },
             false,
         );
-    }
-};
-
-/// Custom build step that runs the MiniCI phase sequence with progress output.
-pub const MiniCiStep = struct {
-    step: Step,
-    check_fx_platform_test_coverage: CheckStepFn,
-
-    pub fn create(b: *std.Build, check_fx_platform_test_coverage: CheckStepFn) *MiniCiStep {
-        const self = b.allocator.create(MiniCiStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "minici-inner",
-                .owner = b,
-                .makeFn = make,
-            }),
-            .check_fx_platform_test_coverage = check_fx_platform_test_coverage,
-        };
-        return self;
-    }
-
-    const StepTiming = struct {
-        name: []const u8,
-        ns: u64,
-    };
-
-    fn make(step: *Step, options: Step.MakeOptions) !void {
-        const self: *MiniCiStep = @fieldParentPtr("step", step);
-        const b = step.owner;
-        const io = b.graph.io;
-        const run_phases = [_]Phase{
-            .{ .label = "zig build fmt", .action = .{ .zig_build = &.{"fmt"} } },
-            .{
-                .label = "zig lints",
-                .action = .{ .zig_run = "ci/zig_lints.zig" },
-                .failure_message = "Zig lints failed. Run 'zig run ci/zig_lints.zig' to see details.",
-                .abnormal_message = "zig run ci/zig_lints.zig terminated abnormally",
-            },
-            .{
-                .label = "tidy checks",
-                .action = .{ .zig_run = "ci/tidy.zig" },
-                .failure_message = "Tidy checks failed. Run 'zig run ci/tidy.zig' to see details.",
-                .abnormal_message = "zig run ci/tidy.zig terminated abnormally",
-            },
-            checkedDataAuditPhase(),
-            .{
-                .label = "post-check architecture",
-                .action = .{ .argv = &.{ "perl", "ci/check_postcheck_architecture.pl" } },
-                .failure_message = "Post-check architecture check failed. Run 'perl ci/check_postcheck_architecture.pl' to see details.",
-                .abnormal_message = "ci/check_postcheck_architecture.pl terminated abnormally",
-                .skip_windows_message = "Skipping post-check architecture check on Windows (perl not available)",
-            },
-            .{
-                .label = "test wiring",
-                .action = .{ .zig_run = "ci/check_test_wiring.zig" },
-                .failure_message = "Test wiring check failed. Run 'zig run ci/check_test_wiring.zig' to see details.",
-                .abnormal_message = "zig run ci/check_test_wiring.zig terminated abnormally",
-            },
-            .{ .label = "zig build", .action = .{ .zig_build = &.{} } },
-            .{
-                .label = "Builtin.roc formatting",
-                .action = .{ .argv = &.{ "./zig-out/bin/roc", "fmt", "--check", "src/build/roc/Builtin.roc" } },
-                .failure_message = "src/build/roc/Builtin.roc is not formatted. Run 'zig build run -- fmt src/build/roc/Builtin.roc' to format it.",
-                .abnormal_message = "roc fmt --check terminated abnormally",
-            },
-            .{ .label = "zig build snapshot", .action = .{ .zig_build = &.{"snapshot"} } },
-            .{
-                .label = "snapshot changes",
-                .action = .{ .argv = &.{ "git", "diff", "--exit-code", "test/snapshots" } },
-                .failure_message = "Snapshots in 'test/snapshots' have changed. Run 'zig build snapshot' locally, review the updates, and commit the changes.",
-                .abnormal_message = "git diff terminated abnormally",
-                .requires_git_worktree = true,
-            },
-            .{ .label = "fx platform test coverage", .action = .{ .callback = self.check_fx_platform_test_coverage } },
-            .{ .label = "zig build test", .action = .{ .zig_build = &.{"test"} } },
-            .{ .label = "zig build -Doptimize=ReleaseFast test-playground", .action = .{ .zig_build = &.{ "-Doptimize=ReleaseFast", "test-playground" } } },
-            .{ .label = "zig build test-serialization-sizes", .action = .{ .zig_build = &.{"test-serialization-sizes"} } },
-            .{ .label = "zig build test-cli", .action = .{ .zig_build = &.{"test-cli"} } },
-            .{ .label = "zig build coverage", .action = .{ .zig_build = &.{"coverage"} } },
-        };
-        var timings = std.ArrayList(StepTiming).empty;
-        defer timings.deinit(b.allocator);
-        var wall_timer = std.Io.Timestamp.now(io, .awake);
-
-        options.progress_node.setEstimatedTotalItems(run_phases.len);
-        const heartbeat_interval_ms = try miniCiHeartbeatIntervalMs(step);
-
-        for (run_phases, 0..) |phase, phase_idx| {
-            const phase_number = phase_idx + 1;
-            const phase_node = options.progress_node.start(phase.label, 0);
-            defer phase_node.end();
-
-            std.debug.print("minici [{d}/{d}] start: {s}\n", .{ phase_number, run_phases.len, phase.label });
-
-            const phase_started = std.Io.Timestamp.now(io, .awake);
-            const ctx = RunContext{
-                .progress_node = phase_node,
-                .heartbeat_interval_ms = heartbeat_interval_ms,
-                .aggregate_label = "minici",
-                .phase_position = .{ .index = phase_number, .total = run_phases.len },
-            };
-
-            runPhaseAction(step, phase, ctx, true) catch |err| {
-                const elapsed_ns = @as(u64, @intCast(phase_started.untilNow(io, .awake).nanoseconds));
-                std.debug.print("minici [{d}/{d}] failed: {s} ({d:.1}s)\n", .{
-                    phase_number,
-                    run_phases.len,
-                    phase.label,
-                    seconds(elapsed_ns),
-                });
-                return err;
-            };
-
-            try appendTiming(b.allocator, io, &timings, phase.label, phase_started);
-            const elapsed_ns = timings.items[timings.items.len - 1].ns;
-            std.debug.print("minici [{d}/{d}] done: {s} ({d:.1}s)\n", .{
-                phase_number,
-                run_phases.len,
-                phase.label,
-                seconds(elapsed_ns),
-            });
-        }
-
-        printTimingSummary(timings.items, @as(u64, @intCast(wall_timer.untilNow(io, .awake).nanoseconds)));
-    }
-
-    fn appendTiming(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        timings: *std.ArrayList(StepTiming),
-        name: []const u8,
-        started: std.Io.Timestamp,
-    ) !void {
-        try timings.append(allocator, .{ .name = name, .ns = @as(u64, @intCast(started.untilNow(io, .awake).nanoseconds)) });
-    }
-
-    fn printTimingSummary(timings: []const StepTiming, wall_ns: u64) void {
-        std.debug.print("\n==== minici timing summary ====\n", .{});
-        for (timings) |t| {
-            std.debug.print("  {s:<48} {d:7.2}s\n", .{ t.name, seconds(t.ns) });
-        }
-        std.debug.print("  {s:<48} {s:->8}\n", .{ "", "" });
-        std.debug.print("  {s:<48} {d:7.2}s\n", .{ "TOTAL", seconds(wall_ns) });
-        std.debug.print("===============================\n", .{});
     }
 };
 
@@ -290,27 +139,22 @@ const Heartbeat = struct {
 fn runPhaseAction(step: *Step, phase: Phase, ctx: RunContext, inject_test_progress: bool) !void {
     if (try shouldSkipPhase(step, phase)) return;
 
-    switch (phase.action) {
-        .callback => |check| try check(step),
-        else => {
-            const b = step.owner;
-            var child_argv = std.ArrayList([]const u8).empty;
-            defer child_argv.deinit(b.allocator);
+    const b = step.owner;
+    var child_argv = std.ArrayList([]const u8).empty;
+    defer child_argv.deinit(b.allocator);
 
-            try appendPhaseArgv(b, &child_argv, phase.action);
+    try appendPhaseArgv(b, &child_argv, phase.action);
 
-            const abnormal_message = phase.abnormal_message orelse b.fmt("`{s}` terminated abnormally", .{phase.label});
-            try spawnAndWait(
-                step,
-                child_argv.items,
-                ctx,
-                phase.label,
-                phase.failure_message,
-                abnormal_message,
-                inject_test_progress,
-            );
-        },
-    }
+    const abnormal_message = phase.abnormal_message orelse b.fmt("`{s}` terminated abnormally", .{phase.label});
+    try spawnAndWait(
+        step,
+        child_argv.items,
+        ctx,
+        phase.label,
+        phase.failure_message,
+        abnormal_message,
+        inject_test_progress,
+    );
 }
 
 fn shouldSkipPhase(step: *Step, phase: Phase) !bool {
@@ -355,7 +199,6 @@ fn appendPhaseArgv(
             try appendZigCacheArgs(b, child_argv);
             try appendArgs(b, child_argv, args);
         },
-        .callback => unreachable,
     }
 }
 
@@ -421,19 +264,6 @@ fn addCiChildEnv(env_map: *std.process.Environ.Map) !void {
     if (!env_map.contains(non_tty_test_progress_env)) {
         try env_map.put(non_tty_test_progress_env, default_non_tty_test_progress_ms);
     }
-}
-
-fn miniCiHeartbeatIntervalMs(step: *Step) !u64 {
-    const b = step.owner;
-    if (b.graph.environ_map.get(mini_ci_heartbeat_env)) |raw| {
-        return std.fmt.parseInt(u64, raw, 10) catch |err| {
-            return step.fail("Invalid {s} value '{s}': {s}", .{ mini_ci_heartbeat_env, raw, @errorName(err) });
-        };
-    }
-
-    const stderr = std.Io.File.stderr();
-    const is_tty = stderr.isTty(b.graph.io) catch false;
-    return if (is_tty) 0 else default_non_tty_heartbeat_ms;
 }
 
 fn appendZigCacheArgs(b: *std.Build, child_argv: *std.ArrayList([]const u8)) !void {

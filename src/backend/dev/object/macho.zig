@@ -249,7 +249,7 @@ pub const MachOWriter = struct {
         is_extern: bool,
     };
 
-    pub fn init(allocator: Allocator, arch: Architecture) !Self {
+    pub fn init(allocator: Allocator, arch: Architecture) Allocator.Error!Self {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
@@ -278,20 +278,20 @@ pub const MachOWriter = struct {
     }
 
     /// Set code section contents
-    pub fn setCode(self: *Self, code: []const u8) !void {
+    pub fn setCode(self: *Self, code: []const u8) Allocator.Error!void {
         self.text.clearRetainingCapacity();
         try self.text.appendSlice(self.allocator, code);
     }
 
     /// Set read-only data section contents.
-    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+    pub fn setRodata(self: *Self, rodata: []const u8) Allocator.Error!void {
         self.rodata.clearRetainingCapacity();
         try self.rodata.appendSlice(self.allocator, rodata);
     }
 
     /// Allocate space in the rodata section for a constant value.
     /// Returns the offset within rodata and a pointer to write the value.
-    pub fn allocateRodata(self: *Self, size: usize, alignment: usize) !struct { offset: usize, ptr: [*]u8 } {
+    pub fn allocateRodata(self: *Self, size: usize, alignment: usize) Allocator.Error!struct { offset: usize, ptr: [*]u8 } {
         // Align current position
         const current_len = self.rodata.items.len;
         const aligned_offset = std.mem.alignForward(usize, current_len, alignment);
@@ -307,14 +307,14 @@ pub const MachOWriter = struct {
     }
 
     /// Add a symbol
-    pub fn addSymbol(self: *Self, symbol: Symbol) !u32 {
+    pub fn addSymbol(self: *Self, symbol: Symbol) Allocator.Error!u32 {
         const idx: u32 = @intCast(self.symbols.items.len);
         try self.symbols.append(self.allocator, symbol);
         return idx;
     }
 
     /// Add an external (undefined) symbol
-    pub fn addExternalSymbol(self: *Self, name: []const u8) !u32 {
+    pub fn addExternalSymbol(self: *Self, name: []const u8) Allocator.Error!u32 {
         return self.addSymbol(.{
             .name = name,
             .section = 0, // NO_SECT
@@ -324,7 +324,7 @@ pub const MachOWriter = struct {
     }
 
     /// Add a text relocation
-    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool) !void {
+    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool) Allocator.Error!void {
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
@@ -336,7 +336,7 @@ pub const MachOWriter = struct {
     }
 
     /// Add a data-symbol relocation in the text section.
-    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) !void {
+    pub fn addTextDataRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: DataRelocationKind) Allocator.Error!void {
         const reloc: TextDataReloc = switch (kind) {
             .abs64 => .{
                 .pcrel = false,
@@ -382,7 +382,7 @@ pub const MachOWriter = struct {
     }
 
     /// Add an absolute pointer relocation in the read-only data section.
-    pub fn addRodataRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool, addend: i64) !void {
+    pub fn addRodataRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool, addend: i64) Allocator.Error!void {
         if (offset + 8 > self.rodata.items.len) unreachable;
         std.mem.writeInt(i64, self.rodata.items[offset..][0..8], addend, .little);
         try self.rodata_relocs.append(self.allocator, .{
@@ -393,7 +393,7 @@ pub const MachOWriter = struct {
     }
 
     /// Add string to string table
-    fn addString(self: *Self, str: []const u8) !u32 {
+    fn addString(self: *Self, str: []const u8) Allocator.Error!u32 {
         const offset: u32 = @intCast(self.strtab.items.len);
         try self.strtab.appendSlice(self.allocator, str);
         try self.strtab.append(self.allocator, 0);
@@ -401,7 +401,7 @@ pub const MachOWriter = struct {
     }
 
     /// Write the Mach-O object file
-    pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
+    pub fn write(self: *Self, output: *std.ArrayList(u8)) Allocator.Error!void {
         // Calculate sizes
         const header_size: u32 = @sizeOf(MachHeader64);
         const section_count: u32 = 2;

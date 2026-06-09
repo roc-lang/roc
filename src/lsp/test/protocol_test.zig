@@ -1,7 +1,7 @@
 //! Tests for LSP protocol types including JSON-RPC identifiers and initialization parameters.
 
 const std = @import("std");
-const protocol = @import("../protocol.zig");
+const protocol = @import("lsp").protocol;
 
 test "JsonId round-trips" {
     const allocator = std.testing.allocator;

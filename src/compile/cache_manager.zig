@@ -42,13 +42,13 @@ pub const CacheManager = struct {
         };
     }
 
-    pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) ![]u8 {
+    pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const entries_dir = try self.config.getCheckedArtifactCacheDir(self.allocator);
         defer self.allocator.free(entries_dir);
         return self.computeCacheFilePath(cache_key, entries_dir);
     }
 
-    pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ![]u8 {
+    pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
@@ -63,7 +63,7 @@ pub const CacheManager = struct {
         return std.fs.path.join(self.allocator, &.{ cache_subdir, filename });
     }
 
-    pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) !void {
+    pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) (Allocator.Error || error{ AccessDenied, IoError })!void {
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];

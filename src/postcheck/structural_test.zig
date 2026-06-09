@@ -39,7 +39,7 @@ fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []
     return after_start[0..end_index];
 }
 
-fn expectContains(haystack: []const u8, needle: []const u8) !void {
+fn expectContains(haystack: []const u8, needle: []const u8) anyerror!void {
     try std.testing.expect(std.mem.find(u8, haystack, needle) != null);
 }
 
@@ -114,14 +114,18 @@ test "Monotype lookup lowering uses explicit resolved use types" {
     try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty)");
 }
 
-test "Lifted functions own captures and expression lambdas are gone" {
+test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Lifted.Fn, "captures"));
+    try std.testing.expect(Lifted.ExprId == Mono.ExprId);
+    try std.testing.expect(Lifted.PatId == Mono.PatId);
+    try std.testing.expect(Lifted.StmtId == Mono.StmtId);
+    try std.testing.expect(Lifted.ExprData == Mono.ExprData);
     try std.testing.expect(@hasField(Lifted.ExprData, "fn_ref"));
     try std.testing.expect(@hasField(Lifted.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Lifted.ExprData, "call_value"));
+    try std.testing.expect(@hasField(Mono.ProcCallee, "template"));
+    try std.testing.expect(@hasField(Mono.ProcCallee, "lifted"));
 
-    try std.testing.expect(!@hasField(Lifted.ExprData, "lambda"));
-    try std.testing.expect(!@hasField(Lifted.ExprData, "fn_def"));
     try std.testing.expect(!@hasField(Lifted.ExprData, "dispatch_call"));
     try std.testing.expect(!@hasField(Lifted.ExprData, "anno_only"));
 }
@@ -205,15 +209,14 @@ test "post-check stage products do not store expression cache state" {
     }
 }
 
-test "stage-local expression maps are scoped to one function" {
+test "Monotype lifting mutates only callable expression nodes in place" {
     const lifted_source = @embedFile("monotype_lifted/lift.zig");
-    const lower_nested_def = sourceSliceBetween(lifted_source, "fn lowerNestedDef", "fn pushFunctionMaps");
-    try expectContains(lower_nested_def, "const saved_maps = self.pushFunctionMaps();");
-    try expectContains(lower_nested_def, "defer self.popFunctionMaps(saved_maps);");
+    const rewrite_expr = sourceSliceBetween(lifted_source, "fn rewriteExpr", "fn liftLambda");
+    try expectContains(rewrite_expr, "expr.data = .{ .fn_ref");
+    try expectContains(rewrite_expr, "expr.data = .{ .call_proc");
 
     const lift_lambda = sourceSliceBetween(lifted_source, "fn liftLambda", "fn reserveFnTemplate");
-    try expectContains(lift_lambda, "const saved_maps = self.pushFunctionMaps();");
-    try expectContains(lift_lambda, "defer self.popFunctionMaps(saved_maps);");
+    try expectContains(lift_lambda, "self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = fn_id };");
 
     const lambda_mono_source = @embedFile("lambda_mono/lower.zig");
     const lower_fn = sourceSliceBetween(lambda_mono_source, "fn lowerFnSpec", "fn ensureOwnFnSpec");

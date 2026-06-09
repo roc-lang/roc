@@ -13,13 +13,13 @@
 //!   zig build -Dfuzz
 //!
 //! To build just the repro executable (no AFL++ required):
-//!   zig build repro-canonicalize
+//!   zig build build-repro-canonicalize
 //!
 //! ## Running
 //!
 //! To run the fuzzer:
 //!  1. zig build -Dfuzz
-//!  2. zig build snapshot -- --fuzz-corpus /tmp/corpus  # Optional: generate corpus from snapshots
+//!  2. zig build run-snapshot-tool -- --fuzz-corpus /tmp/corpus  # Optional: generate corpus from snapshots
 //!  3. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/canonicalize -o /tmp/canonicalize-out/ zig-out/bin/fuzz-canonicalize
 //!
 //! To reproduce a crash:
