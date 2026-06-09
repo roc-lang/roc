@@ -30,7 +30,7 @@ minimum_exponent: comptime_int,
 
 // Round-to-even only happens for negative values of q
 // when q ≥ −4 in the 64-bit case and when q ≥ −17 in
-// the 32-bitcase.
+// the 32-bit case.
 //
 // When q ≥ 0,we have that 5^q ≤ 2m+1. In the 64-bit case,we
 // have 5^q ≤ 2m+1 ≤ 2^54 or q ≤ 23. In the 32-bit case,we have
@@ -40,7 +40,7 @@ minimum_exponent: comptime_int,
 // so (2m+1)×5^−q < 2^64. We have that 2m+1 > 2^53 (64-bit case)
 // or 2m+1 > 2^24 (32-bit case). Hence,we must have 2^53×5^−q < 2^64
 // (64-bit) and 2^24×5^−q < 2^64 (32-bit). Hence we have 5^−q < 2^11
-// or q ≥ −4 (64-bit case) and 5^−q < 2^40 or q ≥ −17 (32-bitcase).
+// or q ≥ −4 (64-bit case) and 5^−q < 2^40 or q ≥ −17 (32-bit case).
 //
 // Thus we have that we only need to round ties to even when
 // we have that q ∈ [−4,23](in the 64-bit case) or q∈[−17,10]
