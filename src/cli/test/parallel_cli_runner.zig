@@ -1547,12 +1547,12 @@ fn customListBuiltinInlined(
         \\    targets: {
         \\        files: "targets/",
         \\        exe: {
-        \\            arm64mac: ["libhost.a", app],
-        \\            x64mac: ["libhost.a", app],
-        \\            arm64musl: ["libhost.a", app],
-        \\            x64musl: ["libhost.a", app],
-        \\            arm64glibc: ["libhost.a", app],
-        \\            x64glibc: ["libhost.a", app],
+        \\            arm64mac: { files: ["libhost.a", app] },
+        \\            x64mac: { files: ["libhost.a", app] },
+        \\            arm64musl: { files: ["libhost.a", app] },
+        \\            x64musl: { files: ["libhost.a", app] },
+        \\            arm64glibc: { files: ["libhost.a", app] },
+        \\            x64glibc: { files: ["libhost.a", app] },
         \\        }
         \\    }
         \\
