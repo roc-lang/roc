@@ -1168,7 +1168,7 @@ const Cloner = struct {
     fn initForRewrite(pass: *Pass) Cloner {
         return .{
             .pass = pass,
-            .source_fn = @enumFromInt(0),
+            .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
             .binder_subst = std.AutoHashMap(check.CheckedModule.PatternBinderId, Value).init(pass.allocator),
