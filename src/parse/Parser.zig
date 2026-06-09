@@ -1364,11 +1364,7 @@ fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
             self.advance();
             return try self.store.addTargetFile(.{ .string_literal = content_tok });
         },
-        .LowerIdent => {
-            self.advance();
-            return try self.store.addTargetFile(.{ .special_ident = start });
-        },
-        .KwApp => {
+        .LowerIdent, .KwApp => {
             self.advance();
             return try self.store.addTargetFile(.{ .special_ident = start });
         },
