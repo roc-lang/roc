@@ -9696,31 +9696,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_size = self.getLayoutSize(ret_layout);
             const ret_slot = self.codegen.allocStackSlot(if (ret_size == 0) 8 else ret_size);
 
+            const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+            defer self.allocator.free(arg_offsets);
             var total_args_size: u32 = 0;
-            for (arg_layouts) |arg_layout| {
+            for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
                 total_args_size = std.mem.alignForward(u32, total_args_size, @intCast(@max(size_align.alignment.toByteUnits(), 1)));
+                arg_offset.* = total_args_size;
                 total_args_size += size_align.size;
             }
 
-            const args_slot = self.codegen.allocStackSlot(if (total_args_size == 0) 8 else total_args_size);
+            // Pad by 8 bytes so register pieces loaded as full 64-bit words from the tail
+            // argument never read past the slot.
+            const args_slot = self.codegen.allocStackSlot(total_args_size + 8);
 
             const hosted_target_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
             const hosted_table_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
 
-            var offset: u32 = 0;
-            for (args, arg_layouts) |arg_loc_raw, arg_layout| {
+            for (args, arg_layouts, arg_offsets) |arg_loc_raw, arg_layout, arg_offset| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
-                const arg_size = size_align.size;
-                const arg_align: u32 = @intCast(size_align.alignment.toByteUnits());
-
-                offset = std.mem.alignForward(u32, offset, arg_align);
-                if (arg_size > 0) {
-                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(offset)), arg_loc_raw, arg_size);
+                if (size_align.size > 0) {
+                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(arg_offset)), arg_loc_raw, size_align.size);
                 }
-                offset += arg_size;
             }
 
             const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
@@ -9748,17 +9747,108 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
             try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
 
+            // Lower the call to the platform C ABI (shared classifier, same as the LLVM
+            // backend and interpreter trampoline).
+            const abi_target: layout.abi.Target = if (comptime target.toCpuArch() == .aarch64)
+                .aarch64
+            else if (comptime roc_target.isWindows())
+                .x86_64_windows
+            else
+                .x86_64_sysv;
+            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena_state.deinit();
+            const needs_ops = layout.abi.needsRocOps(self.layout_store, arg_layouts, ret_layout);
+            const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, needs_ops) catch return error.OutOfMemory;
+
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addRegArg(roc_ops_reg);
-            try builder.addLeaArg(frame_ptr, ret_slot);
-            try builder.addLeaArg(frame_ptr, args_slot);
+
+            // sret: on x86 the indirect-result pointer is the first integer argument; on
+            // aarch64 it is the dedicated x8 register, set just before the call.
+            const aarch64_sret = lowered.ret == .indirect and comptime target.toCpuArch() == .aarch64;
+            if (lowered.ret == .indirect and comptime target.toCpuArch() != .aarch64) {
+                try builder.setReturnByPointer(ret_slot);
+            }
+
+            if (lowered.leading_ops) try builder.addRegArg(roc_ops_reg);
+
+            for (lowered.args, arg_offsets) |placement, arg_offset| {
+                const slot_off = args_slot + @as(i32, @intCast(arg_offset));
+                switch (placement) {
+                    .none => {},
+                    // Memory-class: pass a pointer to the argument's bytes (AAPCS64/Win64
+                    // by-reference convention).
+                    .indirect => try builder.addLeaArg(frame_ptr, slot_off),
+                    .registers => |pieces| {
+                        for (pieces) |piece| {
+                            const piece_off = slot_off + @as(i32, @intCast(piece.offset));
+                            switch (piece.class) {
+                                .integer => try builder.addMemArg(frame_ptr, piece_off),
+                                .float => try builder.addFloatMemArg(frame_ptr, piece_off, piece.size == 8),
+                            }
+                        }
+                    },
+                }
+            }
+
+            if (aarch64_sret) {
+                // AAPCS64 passes the indirect-result pointer in x8 (named XR here).
+                try self.emitLeaStack(.XR, ret_slot);
+            }
+
             try builder.callReg(hosted_target_reg);
+
+            // Register-class return: store each result register into the return slot.
+            const hosted_ret_reg_0: GeneralReg = if (arch == .x86_64) .RAX else .X0;
+            const hosted_ret_reg_1: GeneralReg = if (arch == .x86_64) .RDX else .X1;
+            switch (lowered.ret) {
+                .none, .indirect => {},
+                .registers => |pieces| {
+                    var gp_i: usize = 0;
+                    var sse_i: usize = 0;
+                    for (pieces) |piece| {
+                        const dst_off = ret_slot + @as(i32, @intCast(piece.offset));
+                        switch (piece.class) {
+                            .integer => {
+                                const reg = if (gp_i == 0) hosted_ret_reg_0 else hosted_ret_reg_1;
+                                if (piece.size <= 4) {
+                                    try self.emitStore(.w32, frame_ptr, dst_off, reg);
+                                } else {
+                                    try self.emitStore(.w64, frame_ptr, dst_off, reg);
+                                }
+                                gp_i += 1;
+                            },
+                            .float => {
+                                try self.emitHostedFloatResultStore(dst_off, sse_i, piece.size == 8);
+                                sse_i += 1;
+                            },
+                        }
+                    }
+                },
+            }
 
             if (ret_size == 0) {
                 return .{ .immediate_i64 = 0 };
             }
 
             return self.stackLocationForLayout(ret_layout, ret_slot);
+        }
+
+        /// Store hosted-call float result register `index` (0 or 1) into the return slot.
+        fn emitHostedFloatResultStore(self: *Self, dst_off: i32, index: usize, is_f64: bool) Allocator.Error!void {
+            const freg0: FloatReg = if (arch == .x86_64) .XMM0 else .V0;
+            const freg1: FloatReg = if (arch == .x86_64) .XMM1 else .V1;
+            const freg = if (index == 0) freg0 else freg1;
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (is_f64) {
+                    try self.codegen.emit.fstrRegMemUoff(.double, freg, frame_ptr, @intCast(dst_off));
+                } else {
+                    try self.codegen.emit.fstrRegMemUoff(.single, freg, frame_ptr, @intCast(dst_off));
+                }
+            } else if (is_f64) {
+                try self.codegen.emit.movsdMemReg(frame_ptr, dst_off, freg);
+            } else {
+                try self.codegen.emit.movssMemReg(frame_ptr, dst_off, freg);
+            }
         }
 
         /// Copy a value location to a stack slot.

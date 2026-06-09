@@ -16,6 +16,7 @@ const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
 const lir_value = @import("value.zig");
+const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
@@ -2899,26 +2900,28 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
     ) Error!Value {
+        // Pack arguments into a buffer in Roc layout order, recording each argument's offset
+        // so the C-ABI trampoline can scatter them into registers.
         var total_args_size: usize = 0;
         var args_alignment: layout_mod.RocAlignment = .@"1";
-        for (arg_layouts) |arg_layout| {
+        const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        defer self.allocator.free(arg_offsets);
+        for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
             args_alignment = maxRocAlignment(args_alignment, sa.alignment);
             total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
+            arg_offset.* = @intCast(total_args_size);
             total_args_size += sa.size;
         }
 
         const args_buf_size = @max(total_args_size, 8);
         const args_buf = try self.allocAlignedByteSlice(args_buf_size, args_alignment);
 
-        var offset: usize = 0;
-        for (args, arg_layouts) |arg, arg_layout| {
+        for (args, arg_layouts, arg_offsets) |arg, arg_layout, arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
-            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
             if (sa.size > 0 and !arg.isZst()) {
-                @memcpy(args_buf[offset .. offset + sa.size], arg.readBytes(sa.size));
+                @memcpy(args_buf[arg_offset .. arg_offset + sa.size], arg.readBytes(sa.size));
             }
-            offset += sa.size;
         }
 
         const ret_sa = self.helper.sizeAlignOf(ret_layout);
@@ -2938,7 +2941,25 @@ pub const Interpreter = struct {
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
         const ops_for_host = self.currentRocOps();
-        hosted_fn(@ptrCast(ops_for_host), @ptrCast(ret_buf.ptr), @ptrCast(args_buf.ptr));
+
+        // Call the hosted function with the platform C ABI via the fixed register-image
+        // trampoline (no runtime code generation).
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        host_trampoline.call(
+            self.layout_store,
+            arena_state.allocator(),
+            @ptrCast(hosted_fn),
+            ops_for_host,
+            arg_layouts,
+            ret_layout,
+            args_buf.ptr,
+            arg_offsets,
+            ret_buf.ptr,
+        ) catch |err| return self.invariantFailedError(
+            "hosted call C-ABI lowering failed for proc {d}: {s}",
+            .{ @intFromEnum(proc_id), @errorName(err) },
+        );
 
         if (self.roc_env.crashed) return error.Crash;
         if (ret_sa.size == 0) return Value.zst;
