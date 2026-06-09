@@ -190,8 +190,9 @@ const RocOps = builtins.host_abi.RocOps;
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const message = args.str.asSlice();
+fn hostedStderrLine(ops: *RocOps, str: RocStr) callconv(.c) void {
+    _ = ops;
+    const message = str.asSlice();
     std.debug.print("{s}", .{message});
     std.debug.print("{s}", .{"\n"});
 }
@@ -199,20 +200,18 @@ fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { s
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns Str and takes {} as argument
-fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
+fn hostedStdinLine(ops: *RocOps) callconv(.c) RocStr {
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
     const bytes_read = std.Io.File.stdin().readStreaming(host.std_io, &.{&buffer}) catch {
         // Return empty string on error
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     };
 
     // Handle EOF (no bytes read)
     if (bytes_read == 0) {
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     }
 
     // Find newline and trim it (handle both \n and \r\n)
@@ -230,16 +229,15 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
     // Create RocStr from the read line and return it
     // RocStr.fromSlice handles allocation internally (either inline for small strings
     // or via roc_alloc for big strings with proper refcount tracking)
-    result.* = RocStr.fromSlice(line, ops);
+    return RocStr.fromSlice(line, ops);
 }
 
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(ops_ptr: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const ops: *RocOps = @ptrCast(@alignCast(ops_ptr));
+fn hostedStdoutLine(ops: *RocOps, str: RocStr) callconv(.c) void {
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const message = args.str.asSlice();
+    const message = str.asSlice();
     std.Io.File.stdout().writeStreamingAll(host.std_io, message) catch {};
     std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
