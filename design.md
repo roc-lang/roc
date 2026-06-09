@@ -1868,27 +1868,31 @@ before solving and never weakened:
 ### Interprocedural Solving
 
 The proc call graph is derived from `assign_call` statements over
-`LirStore.getProcSpecs()`. Inference computes SCCs and solves bottom-up:
+`LirStore.getProcSpecs()`. Signatures solve in two phases:
 
-1. Procs in an SCC start from the bottom of the signature lattice (params
-   borrowed, returns borrowed with empty lender joins), except pinned
-   signatures.
-2. Each proc in the SCC is solved with the current signatures of its callees.
-3. Solving repeats over the SCC until no `RcSig` changes. Signatures only
-   move up finite lattices, so this terminates.
+1. Parameter modes iterate globally to a fixpoint with returns treated as
+   owned: non-pinned refcounted parameter positions start borrowed and flip
+   to owned when any occurrence demands a unit under the current signatures.
+   The borrowed set only shrinks, so iteration terminates.
+2. With parameter modes final, a return becomes borrowed when every `ret`
+   in the proc returns a borrow anchored on a borrowed parameter of that
+   proc, with the parameter positions recorded as the return's lenders. A
+   final binding solve then lets callers borrow such results: a call result
+   whose lender mask names exactly one refcounted argument is borrow-capable
+   in the caller, anchored on that argument.
 
-Calls into an already-solved SCC use final signatures directly. Lifetime
-variables in callee signatures are instantiated per call site, and joins of
-lifetime variables in return positions are evaluated against the caller's
-argument lifetimes.
+Borrowed parameters anchor borrow groups of their own: they are live for the
+whole call by ABI, so payload reads from them borrow without any caller-side
+lifetime obligation inside the callee.
 
 Tail calls need one rule so that borrow inference never blocks backend
 tail-call lowering. LIR has no tail-call statement; a call is in tail
-position when its target's only later use on that path is the `ret` of the
-same value. For a tail-position call to a proc in the same SCC, argument
-occurrences are treated as escaping during approximate-lifetime solving.
-That forbids emission from placing any statement after the call on that
-path, while still permitting borrows whose lenders live outside the SCC.
+position when the next statement returns the call result. Call-graph SCCs
+(computed once, iteratively) feed exactly this rule: a tail-position call to
+a proc in the same SCC demands ownership of its refcounted arguments, so
+emission never places a release after the call on that path. Calls that
+leave the SCC keep borrowed positions, since the caller's drops precede the
+tail call there only when the values genuinely die earlier.
 
 ### RC Statement Emission
 
@@ -1934,20 +1938,23 @@ deleted, and an owned use of a borrowed return pays an `incref`. Mode
 specialization removes that adaptation cost by emitting one proc variant per
 demanded mode vector.
 
-A demand vector assigns each refcounted param and return position a mode at
-or above the solved signature (pointwise more owned). Specialization is a
-worklist keyed by `(proc, demand vector)`:
+A demand vector assigns each refcounted param position a mode at or above
+the solved signature (pointwise more owned). Return positions are never
+demanded: a borrowed return that the caller needs owned pays one retain, and
+that retain costs the same whether it is emitted in the caller or inside an
+owned-returning variant, so no variant exists to save it. Specialization is
+a worklist keyed by `(proc, demand vector)`:
 
-1. Seed the worklist with root procs at their pinned vectors.
-2. While emitting a proc variant, each `assign_call` site computes its
-   demand vector for the callee from the caller's solved occurrence modes:
-   an argument whose occurrence is a final owned occurrence demands an owned
-   param; a result that must be owned demands an owned return. Every other
-   position demands the solved signature's mode.
-3. The call site targets the `(callee, vector)` variant, creating it if new.
-4. Variants whose solved occurrence modes and precise lifetimes are
-   identical are one variant; the variant table is keyed by vector content,
-   so this is deterministic and independent of discovery order.
+1. Every proc is emitted once at its solved signature (the base variant).
+2. While emitting any proc, each `assign_call` site upgrades a borrowed
+   position to an owned demand exactly when the argument is an owned final
+   occurrence there: the upgrade turns a borrow-plus-later-drop into a move.
+3. The call site targets the `(callee, vector)` variant, creating it if new
+   and re-emitting it from the callee's ownership-neutral body under the
+   demanded vector. Inside the variant, demanded positions override the
+   solved borrowed binding to owned, and everything else solves identically.
+4. The variant table is keyed by vector content, so identical demands share
+   one variant deterministically, independent of discovery order.
 
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
@@ -1992,8 +1999,11 @@ against the borrow typing rules:
   every path, and never used after its move or drop
 - every borrowed occurrence's lender is provably live at that point: the
   borrow's lifetime is contained in the lender's
-- all predecessors of a join agree on which resources have been moved, and
-  switch branches reconverge with consistent ownership
+- all jumps to a join agree on the entry state of the names the join body
+  relies on, compared as a meet: a name carrying ownership on one path and
+  unbound on another weakens to unbound and the body is re-certified under
+  the weaker assumption, while live-on-both-sides names must match exactly
+  in units, alias partition, and borrow anchors
 - every call site satisfies the callee variant's signature, and every pinned
   signature holds
 

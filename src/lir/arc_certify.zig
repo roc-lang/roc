@@ -1096,7 +1096,6 @@ const Certifier = struct {
                 if (state.balanceOf(value) > 0) continue;
                 const anchor = self.liveAnchorValue(state, value);
                 if (anchor == no_value) continue;
-                if (self.values.items[anchor].always_live) continue;
                 // Find a carrier local for the anchor value.
                 var carrier: u32 = no_dense;
                 for (self.proc_locals.items) |candidate| {
@@ -2084,8 +2083,10 @@ test "certify flags branches that disagree at a join" {
     const cond_assign = try f.assignI64(cond, join_stmt);
     const body = try f.assignStr(value, cond_assign);
     _ = try f.addProc(&.{}, body, .i64);
+    // The disagreement weakens the join's entry assumption to unbound, and
+    // re-certifying the body flags the release of the unbound name.
     try testing.expectError(error.Certification, f.certify());
-    try testing.expect(std.mem.find(u8, f.diag.message(), "disagree") != null);
+    try testing.expect(std.mem.find(u8, f.diag.message(), "unbound") != null);
 }
 
 test "certify accepts agreeing jumps through a join" {

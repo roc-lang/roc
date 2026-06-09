@@ -217,7 +217,10 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     errdefer lowered.deinit();
 
-    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
+        .roots = lowered.lir_result.root_procs.items,
+        .specialize = target.inline_mode != .none,
+    });
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");

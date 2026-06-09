@@ -19,8 +19,19 @@ const LirStore = core.LirStore;
 
 pub const ResourceError = std.mem.Allocator.Error;
 
+/// Options for ARC insertion.
+pub const InsertOptions = struct {
+    /// Root procs whose ownership signature is pinned all-owned by ABI.
+    roots: []const LIR.LirProcSpecId = &.{},
+    /// Emit mode-specialized proc variants for call sites that demand more
+    /// ownership than a callee's solved signature provides. Optimized builds
+    /// enable this; dev builds and compile-time evaluation use the solved
+    /// single variant per proc.
+    specialize: bool = false,
+};
+
 /// Public `insert` function.
-pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
+pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
     var inserter = Inserter{
         .store = store,
         .layouts = layouts,
@@ -32,7 +43,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
     }
     inserter.local_contains_refcounted = local_contains_refcounted;
 
-    var solution = try arc_solve.solve(store.allocator, store, local_contains_refcounted);
+    var solution = try arc_solve.solve(store.allocator, store, local_contains_refcounted, options.roots);
     defer solution.deinit();
     inserter.solution = &solution;
 
@@ -40,8 +51,74 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
     defer scan_needles.deinit();
     inserter.scan_needles = &scan_needles;
 
-    for (store.proc_specs.items) |*proc| {
-        const body = proc.body orelse continue;
+    // Original (ownership-neutral) bodies stay valid after each proc's base
+    // emission because rewriting clones statements; specialized variants
+    // re-emit from these.
+    const base_proc_count = store.proc_specs.items.len;
+    var original_bodies = try store.allocator.alloc(?LIR.CFStmtId, base_proc_count);
+    defer store.allocator.free(original_bodies);
+    for (store.proc_specs.items, 0..) |proc, proc_index| {
+        original_bodies[proc_index] = proc.body;
+    }
+
+    var variants = VariantTable{
+        .map = std.AutoHashMap(VariantSelector, LIR.LirProcSpecId).init(store.allocator),
+        .sigs = .empty,
+        .queue = .empty,
+        .enabled = options.specialize,
+        .original_bodies = original_bodies,
+    };
+    defer {
+        variants.map.deinit();
+        variants.sigs.deinit(store.allocator);
+        variants.queue.deinit(store.allocator);
+    }
+    inserter.variants = &variants;
+
+    var owned_param_override = try OwnedSet.init(store.allocator, store.locals.items.len);
+    defer owned_param_override.deinit();
+    inserter.owned_param_override = &owned_param_override;
+
+    var emit_index: usize = 0;
+    while (true) {
+        var emit_proc: LIR.LirProcSpecId = undefined;
+        var source_proc: LIR.LirProcSpecId = undefined;
+        var emit_sig: arc_sig.RcSig = undefined;
+        if (emit_index < base_proc_count) {
+            emit_proc = @enumFromInt(@as(u32, @intCast(emit_index)));
+            source_proc = emit_proc;
+            emit_sig = solution.sigOf(emit_proc);
+            emit_index += 1;
+        } else if (variants.queue.items.len > 0) {
+            const queued = variants.queue.pop().?;
+            emit_proc = queued.variant;
+            source_proc = queued.source;
+            emit_sig = queued.sig;
+        } else {
+            break;
+        }
+
+        const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
+        const proc = store.getProcSpecPtr(emit_proc);
+        inserter.current_sig = emit_sig;
+
+        // Variant parameter positions demanded owned override the solved
+        // borrowed binding for this emission only.
+        const solved_sig = solution.sigOf(source_proc);
+        var override_locals_buffer: [64]LIR.LocalId = undefined;
+        var override_count: usize = 0;
+        for (store.getLocalSpan(proc.args), 0..) |param, position| {
+            if (position >= 64) break;
+            if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
+                owned_param_override.set(param);
+                override_locals_buffer[override_count] = param;
+                override_count += 1;
+            }
+        }
+        defer for (override_locals_buffer[0..override_count]) |param| {
+            owned_param_override.unset(param);
+        };
+
         var join_bodies = JoinBodyMap.init(store.allocator);
         defer join_bodies.deinit();
         var join_visit = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
@@ -59,17 +136,50 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!
         defer inserter.rewritten_joins = null;
         var owned = try OwnedSet.init(store.allocator, store.locals.items.len);
         defer owned.deinit();
-        for (store.getLocalSpan(proc.args)) |param| {
-            inserter.addOwnedIfRc(&owned, param);
+        for (store.getLocalSpan(proc.args), 0..) |param, position| {
+            if (emit_sig.paramMode(position) == .owned) {
+                if (inserter.localContainsRefcounted(param)) owned.set(param);
+            }
         }
         proc.body = try inserter.rewritePath(body, &owned, .{});
         try inserter.writeProcJoinPoints(proc);
     }
 
     if (builtin.mode == .Debug) {
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, arc_sig.SigTable.all_owned);
+        const all_sigs = try store.allocator.alloc(arc_sig.RcSig, store.proc_specs.items.len);
+        defer store.allocator.free(all_sigs);
+        for (all_sigs, 0..) |*sig, proc_index| {
+            sig.* = if (proc_index < solution.sigs.len)
+                solution.sigs[proc_index]
+            else
+                variants.sigs.items[proc_index - solution.sigs.len];
+        }
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{ .sigs = all_sigs });
     }
 }
+
+const VariantSelector = struct {
+    source: LIR.LirProcSpecId,
+    borrowed_params: u64,
+    ret_mode: arc_sig.Mode,
+};
+
+const QueuedVariant = struct {
+    variant: LIR.LirProcSpecId,
+    source: LIR.LirProcSpecId,
+    sig: arc_sig.RcSig,
+};
+
+/// Mode-specialized proc variants keyed by demanded ownership vector.
+const VariantTable = struct {
+    map: std.AutoHashMap(VariantSelector, LIR.LirProcSpecId),
+    /// Signature per variant, indexed by (variant id - base proc count).
+    sigs: std.ArrayList(arc_sig.RcSig),
+    queue: std.ArrayList(QueuedVariant),
+    enabled: bool,
+    /// Ownership-neutral bodies of the base procs, for variant re-emission.
+    original_bodies: []const ?LIR.CFStmtId,
+};
 
 const RewriteOptions = struct {
     boundaries: []const RewriteBoundary = &.{},
@@ -150,6 +260,12 @@ const LinearRewriteFrame = struct {
     /// Skip the low-level retain_result incref: the result binding is
     /// borrowed and emits no RC statements.
     skip_result_retain: bool = false,
+    /// Retain the call result right after the call: the callee returns a
+    /// borrow of its arguments but this binding needs its own unit.
+    retain_call_result: bool = false,
+    /// Mode-specialized variant this call site targets instead of the
+    /// original callee.
+    call_target_override: ?LIR.LirProcSpecId = null,
     /// Locals whose lifetime ends at this statement; released right after it.
     /// Owned by the frame and freed when the frame is patched or destroyed.
     post_release: []const LIR.LocalId = &.{},
@@ -160,6 +276,13 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
     solution: *const arc_solve.Solution = undefined,
+    /// Mode-specialized variant table (shared across the emission worklist).
+    variants: *VariantTable = undefined,
+    /// Parameter locals whose borrowed solved binding is overridden to owned
+    /// for the variant currently being emitted.
+    owned_param_override: *OwnedSet = undefined,
+    /// Ownership signature of the proc currently being rewritten.
+    current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     /// Scratch needle set reused by liveness-group scans.
     scan_needles: *OwnedSet = undefined,
     join_bodies: ?*const JoinBodyMap = null,
@@ -168,6 +291,9 @@ const Inserter = struct {
     const CallArgOwnership = struct {
         retain_args: std.ArrayList(LIR.LocalId) = .empty,
         transfer_args: std.ArrayList(LIR.LocalId) = .empty,
+        /// Ownership vector the call site demands; differs from the callee's
+        /// solved signature only when borrowed positions upgrade to moves.
+        demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
 
         fn deinit(self: *CallArgOwnership, allocator: std.mem.Allocator) void {
             self.retain_args.deinit(allocator);
@@ -322,7 +448,7 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     var retain_assign_ref_target = true;
-                    const target_borrowed = self.solution.isBorrowed(assign.target);
+                    const target_borrowed = self.isBindingBorrowed(assign.target);
                     if (target_borrowed) {
                         // Borrowed bindings carry no ownership unit and emit
                         // no RC statements; the lender's liveness group keeps
@@ -374,14 +500,21 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    const callee_sig = self.solution.sigOf(assign.proc);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, callee_sig, assign.args, assign.next, assign.target, path.options.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
+                    const call_target = try self.variantForCall(assign.proc, arg_ownership.demanded);
                     if (!self.spanUsesLocal(assign.args, assign.target)) {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     }
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
+                    // A borrowed-return result that must be owned here pays
+                    // one retain right after the call.
+                    const retain_call_result = callee_sig.ret_mode == .borrowed and
+                        self.localContainsRefcounted(assign.target) and
+                        !self.isBindingBorrowed(assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
                     const singles = [_]LIR.LocalId{assign.target};
@@ -389,12 +522,14 @@ const Inserter = struct {
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
+                        .retain_call_result = retain_call_result,
+                        .call_target_override = call_target,
                         .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, assign.args, assign.next, assign.target, path.options.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     if (!self.spanUsesLocal(assign.args, assign.target) and assign.closure != assign.target) {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
@@ -471,7 +606,7 @@ const Inserter = struct {
                         .stmt = path.cursor,
                         .head = current_start,
                         .transfer_mask = transfer_mask,
-                        .skip_result_retain = self.solution.isBorrowed(assign.target),
+                        .skip_result_retain = self.isBindingBorrowed(assign.target),
                         .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
@@ -634,7 +769,11 @@ const Inserter = struct {
                 },
                 .ret => |ret_stmt| {
                     var tail = path.cursor;
-                    if (path.owned.contains(ret_stmt.value)) {
+                    if (self.current_sig.ret_mode == .borrowed) {
+                        // The caller borrows the result from its own
+                        // arguments; no unit transfers.
+                        tail = try self.releaseAll(&path.owned, tail);
+                    } else if (path.owned.contains(ret_stmt.value)) {
                         // Move on return: the binding's own unit transfers to
                         // the caller; no retain/release pair is needed.
                         path.owned.unset(ret_stmt.value);
@@ -709,9 +848,12 @@ const Inserter = struct {
                 } });
             },
             .assign_call => |assign| {
+                if (frame.retain_call_result) {
+                    next = try self.retainLocalIfRc(assign.target, next);
+                }
                 cloned = try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
-                    .proc = assign.proc,
+                    .proc = frame.call_target_override orelse assign.proc,
                     .args = assign.args,
                     .next = next,
                 } });
@@ -1188,7 +1330,7 @@ const Inserter = struct {
             const stmt = self.store.getCFStmt(path.cursor);
             switch (stmt) {
                 .assign_ref => |assign| {
-                    if (!self.solution.isBorrowed(assign.target)) {
+                    if (!self.isBindingBorrowed(assign.target)) {
                         switch (assign.op) {
                             .local => |source| {
                                 if (assign.target != source) {
@@ -1211,7 +1353,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, self.solution.sigOf(assign.proc), assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
@@ -1220,7 +1362,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, assign.args, assign.next, assign.target, path.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
@@ -1448,9 +1590,14 @@ const Inserter = struct {
         self.store.allocator.destroy(resume_task);
     }
 
+    fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {
+        if (!self.solution.isBorrowed(local)) return false;
+        return !self.owned_param_override.contains(local);
+    }
+
     fn addOwnedIfRc(self: *Inserter, owned: *OwnedSet, local: LIR.LocalId) void {
         if (!self.localContainsRefcounted(local)) return;
-        if (self.solution.isBorrowed(local)) return;
+        if (self.isBindingBorrowed(local)) return;
         owned.set(local);
     }
 
@@ -1574,6 +1721,9 @@ const Inserter = struct {
         // the leader dies when no group member has a later use.
         const owner = self.solution.leaderOf(local);
         if (!owned.contains(owner)) return;
+        // Join parameters carry their unit into the join body, whose release
+        // statements are not visible to use scans.
+        if (self.solution.isJoinParam(owner)) return;
         if (try self.groupUsedInPath(next, owner, loop_keep)) return;
         owned.unset(owner);
         if (collected) |list| {
@@ -1654,6 +1804,7 @@ const Inserter = struct {
     fn callArgOwnership(
         self: *Inserter,
         owned: *const OwnedSet,
+        callee_sig: arc_sig.RcSig,
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
@@ -1664,9 +1815,25 @@ const Inserter = struct {
         var transferred = try OwnedSet.init(self.store.allocator, owned.len());
         defer transferred.deinit();
 
+        result.demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
-        for (locals) |local| {
+        for (locals, 0..) |local, position| {
             if (!self.localContainsRefcounted(local)) continue;
+            if (callee_sig.paramMode(position) == .borrowed) {
+                // Borrowed positions keep the caller's ownership untouched.
+                // With specialization enabled, an argument whose lifetime
+                // ends here moves into an owned-demanding variant instead of
+                // paying a post-call release.
+                if (!self.variants.enabled) continue;
+                if (position >= 64) continue;
+                const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
+                const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
+                if (!can_transfer) continue;
+                result.demanded.borrowed_params &= ~(@as(u64, 1) << @as(u6, @intCast(position)));
+                try result.transfer_args.append(self.store.allocator, local);
+                transferred.set(local);
+                continue;
+            }
 
             const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
             const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
@@ -1680,6 +1847,44 @@ const Inserter = struct {
         }
 
         return result;
+    }
+
+    /// Resolves the proc a call site targets: the original callee when the
+    /// demanded vector matches its solved signature, or a mode-specialized
+    /// variant emitted for the demanded vector.
+    fn variantForCall(
+        self: *Inserter,
+        callee: LIR.LirProcSpecId,
+        demanded: arc_sig.RcSig,
+    ) ResourceError!?LIR.LirProcSpecId {
+        const solved = self.solution.sigOf(callee);
+        if (demanded.borrowed_params == solved.borrowed_params) return null;
+        const selector = VariantSelector{
+            .source = callee,
+            .borrowed_params = demanded.borrowed_params,
+            .ret_mode = demanded.ret_mode,
+        };
+        const entry = try self.variants.map.getOrPut(selector);
+        if (entry.found_existing) return entry.value_ptr.*;
+
+        const source_spec = self.store.getProcSpec(callee);
+        const variant = try self.store.addProcSpec(.{
+            .name = self.store.freshSyntheticSymbol(),
+            .args = source_spec.args,
+            .frame_locals = source_spec.frame_locals,
+            .body = self.variants.original_bodies[@intFromEnum(callee)],
+            .ret_layout = source_spec.ret_layout,
+            .abi = source_spec.abi,
+            .hosted = source_spec.hosted,
+        });
+        entry.value_ptr.* = variant;
+        try self.variants.sigs.append(self.store.allocator, demanded);
+        try self.variants.queue.append(self.store.allocator, .{
+            .variant = variant,
+            .source = callee,
+            .sig = demanded,
+        });
+        return variant;
     }
 
     fn maskedArgsContainLocal(self: *Inserter, span: LIR.LocalSpan, mask: u64, needle: LIR.LocalId) bool {
@@ -2543,7 +2748,7 @@ const ArcTest = struct {
     }
 
     fn run(self: *ArcTest) Allocator.Error!void {
-        try insert(&self.store, &self.layouts);
+        try insert(&self.store, &self.layouts, .{});
     }
 
     fn procBody(self: *const ArcTest) LIR.CFStmtId {
@@ -2717,8 +2922,10 @@ test "RC: string binding used twice gets incref" {
     const body = try f.assignStr(value, "shared", struct_stmt);
     _ = try f.addProc(&.{}, body, f.pair_str);
     try f.run();
-    try f.expectRc(value, 2, 1, 0);
-    try f.expectRc(pair, 1, 1, 0);
+    // One struct slot moves the binding's unit; the second pays the only
+    // retain. The pair moves out on return.
+    try f.expectRc(value, 1, 0, 0);
+    try f.expectRc(pair, 0, 0, 0);
 }
 
 test "RC: unused string binding gets decref" {
@@ -2749,8 +2956,9 @@ test "RC borrowed string expression releases original temporary binding" {
     const body = try f.assignStr(original, "borrow-name-kept-for-audit", alias_stmt);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
-    try testing.expect(f.countRc(original, .decref) >= 1);
-    try testing.expect(f.countRc(alias, .decref) >= 1);
+    // The alias borrows the original and the original moves out on return.
+    try f.expectRc(original, 0, 0, 0);
+    try f.expectRc(alias, 0, 0, 0);
 }
 
 test "RC explicit retained list element keeps outer binding cleanup" {
@@ -2783,7 +2991,9 @@ test "RC if result matched later tail-cleans matched binding" {
     const body = try f.assignI64(cond, 1, branch_assign);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
-    try testing.expect(f.countRc(result, .decref) >= 1);
+    // Each branch moves its value into the result, and the result moves out
+    // on return.
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
 test "RC identity call result matched later tail-cleans matched binding" {
@@ -2796,7 +3006,8 @@ test "RC identity call result matched later tail-cleans matched binding" {
     const body = try f.assignStr(input, "identity", call);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
-    try testing.expect(f.countRc(result, .decref) >= 1);
+    // The input moves into the call and the result moves out on return.
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
 test "RC repeated identity call tail-cleans the unused second result" {
@@ -2841,8 +3052,10 @@ test "RC branch-aware: symbol used twice in one branch — incref in that branch
 test "RC branch-aware: symbol used outside and inside branches" {
     var scenario = try setupSwitchUse(true, true, false, true);
     defer scenario.fixture.deinit();
+    // Each branch retains the value for its call; the value then moves out
+    // on return.
     try testing.expect(scenario.fixture.countRc(scenario.value, .incref) >= 1);
-    try testing.expect(scenario.fixture.countRc(scenario.value, .decref) >= 1);
+    try testing.expectEqual(@as(usize, 0), scenario.fixture.countRc(scenario.value, .decref));
 }
 
 test "RC proc body: returning refcounted param does not tail-decref it" {
@@ -2852,7 +3065,9 @@ test "RC proc body: returning refcounted param does not tail-decref it" {
     const ret = try f.ret(param);
     _ = try f.addProc(&.{param}, ret, .str);
     try f.run();
-    try f.expectRc(param, 1, 1, 0);
+    // The parameter solves borrowed and the return borrows it: no RC
+    // statements at all.
+    try f.expectRc(param, 0, 0, 0);
 }
 
 test "RC proc body: returning list param does not tail-decref it" {
@@ -2862,7 +3077,9 @@ test "RC proc body: returning list param does not tail-decref it" {
     const ret = try f.ret(param);
     _ = try f.addProc(&.{param}, ret, f.list_str);
     try f.run();
-    try f.expectRc(param, 1, 1, 0);
+    // The parameter solves borrowed and the return borrows it: no RC
+    // statements at all.
+    try f.expectRc(param, 0, 0, 0);
 }
 
 test "RC shared neutral proc body is rewritten separately for each proc" {
@@ -2981,7 +3198,8 @@ test "RC match guard+body: symbol used in both guard and body gets proper RC ops
     const body = try f.assignStr(value, "guard-body", guard_use);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
-    try testing.expect(f.countRc(value, .decref) >= 1);
+    // Retained once for the call while still live, then moved on return.
+    try f.expectRc(value, 1, 0, 0);
 }
 
 test "RC if_then_else: symbol used in both branches — no extra incref" {
@@ -3043,7 +3261,9 @@ test "RC nested continuation preserves outer stop when inner branch breaks outwa
     const body = try f.assignList(acc, &.{}, outer_switch);
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
-    try testing.expectEqual(@as(usize, 1), f.countRc(acc, .incref));
+    // Returning paths move the accumulator out; the impossible path
+    // releases it.
+    try testing.expectEqual(@as(usize, 0), f.countRc(acc, .incref));
     try testing.expect(f.countRc(acc, .decref) >= 1);
 }
 
@@ -3057,7 +3277,9 @@ test "RC match rest prelude tail-cleans outer scrutinee binding" {
     const body = try f.assignList(scrutinee, &.{}, rest_ref);
     _ = try f.addProc(&.{}, body, f.list_str);
     try f.run();
-    try testing.expect(f.countRc(scrutinee, .decref) >= 1);
+    // The rest alias borrows the scrutinee, which then moves out on return.
+    try f.expectRc(scrutinee, 0, 0, 0);
+    try f.expectRc(rest, 0, 0, 0);
 }
 
 test "RC nested list-pattern match tail-cleans rest binding" {
@@ -3151,7 +3373,8 @@ test "RC early_return emits correct number of decrefs for multi-use symbol" {
     const body = try f.assignStr(value, "early", use_twice);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
-    try f.expectRc(value, 3, 1, 0);
+    // Two retains for the doubly-consuming call, then moved on return.
+    try f.expectRc(value, 2, 0, 0);
 }
 
 test "RC early_return inside branch accounts for branch-level increfs" {
@@ -3170,7 +3393,10 @@ test "RC early_return nested in call arguments gets cleanup decrefs" {
     const body = try f.assignStr(value, "nested", use_once);
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
-    try f.expectReachableRcBefore(f.procBody(), .decref, value, .crash);
+    // The value's unit moves into the op result at its final use; the result
+    // is released before the crash.
+    try f.expectRc(value, 0, 0, 0);
+    try f.expectReachableRcBefore(f.procBody(), .decref, result, .crash);
 }
 
 test "RC join param move excludes old source from loop body ownership" {
@@ -3269,7 +3495,13 @@ test "RC join loop jump releases body-only list but keeps carried state" {
 
     const body_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const set_next_state = try f.setLocal(state, next_state, .initialize_join_param, body_jump);
-    const next_state_assign = try f.assignList(next_state, &.{}, set_next_state);
+    const next_state_assign = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = next_state,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{state}),
+        .next = set_next_state,
+    } });
     const body = try f.assignList(scratch, &.{}, next_state_assign);
 
     const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
@@ -3285,6 +3517,7 @@ test "RC join loop jump releases body-only list but keeps carried state" {
     _ = try f.addProc(&.{}, join, .i64);
     try f.run();
     try f.expectRc(scratch, 0, 1, 0);
+    // The old state is consumed by the op that produces the next state.
     try f.expectRc(state, 0, 0, 0);
 }
 
@@ -3312,29 +3545,35 @@ test "RC join loop exit releases body-only list and preserves returned state" {
     _ = try f.addProc(&.{}, join, f.list_i64);
     try f.run();
     try f.expectRc(scratch, 0, 1, 0);
-    try testing.expect(f.countRc(state, .incref) >= 1);
-    try testing.expect(f.countRc(state, .decref) >= 1);
+    // The carried state moves out on return.
+    try f.expectRc(state, 0, 0, 0);
 }
 
 test "RC iterator join borrowed element used twice gets increfs and no decref" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    const pair = try f.local(f.pair_str);
     const elem = try f.local(.str);
     const result = try f.local(.i64);
     const join_id = f.freshJoinPointId();
 
     const ret = try f.ret(result);
     const body = try f.assignCall(result, &.{ elem, elem }, ret);
+    const elem_read = try f.assignRefField(elem, pair, 0, body);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const join = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = elem_read,
         .remainder = jump,
     } });
 
-    _ = try f.addProc(&.{}, join, .i64);
+    _ = try f.addProc(&.{pair}, join, .i64);
     try f.run();
+    // The pair parameter stays borrowed; the consumed element pays one
+    // retain at the read and one for the second call slot, and never needs
+    // a release.
+    try f.expectRc(pair, 0, 0, 0);
     try f.expectRc(elem, 2, 0, 0);
 }
 
@@ -3414,13 +3653,16 @@ test "dev lowering: mutable loop append decrefs mutable result binding once" {
     _ = try f.addProc(&.{}, body, f.list_i64);
     try f.run();
     try f.expectRc(acc, 0, 0, 0);
-    try testing.expect(f.countRc(appended, .decref) >= 1);
+    // The appended result moves out on return.
+    try f.expectRc(appended, 0, 0, 0);
 }
 
-test "dev lowering: mutable list reassignment keeps both decrefs on the reassigned symbol" {
+test "dev lowering: mutable list reassignment releases only the replaced value" {
     var scenario = try setupMutation(true);
     defer scenario.fixture.deinit();
-    try testing.expect(scenario.fixture.countRc(scenario.target, .decref) >= 2);
+    // The replaced value is released at the write; the new value moves out
+    // on return.
+    try testing.expectEqual(@as(usize, 1), scenario.fixture.countRc(scenario.target, .decref));
 }
 
 fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.LocalId, comptime stop_tag: std.meta.Tag(LIR.CFStmt)) !void {
@@ -3634,4 +3876,177 @@ test "RC borrow: list element read via low-level borrows the list" {
     try f.run();
     try f.expectRc(elem, 0, 0, 0);
     try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC specialization: owned final argument moves into a variant" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee reads its parameter and returns an integer; its parameter
+    // solves borrowed.
+    const param = try f.local(.str);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const callee_result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const callee_body = try f.expectStmt(param, callee_result_assign);
+    const callee = try f.addProc(&.{param}, callee_body, .i64);
+
+    // Caller passes an owned value whose lifetime ends at the call.
+    const value = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{value}),
+        .next = ret,
+    } });
+    const body = try f.assignStr(value, "arg", call);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    const base_proc_count = f.store.proc_specs.items.len;
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // One owned-demanding variant exists, the caller moves the argument
+    // (no RC statements on it in the caller), and the variant releases the
+    // parameter after its last use.
+    try testing.expectEqual(base_proc_count + 1, f.store.proc_specs.items.len);
+    try f.expectRc(value, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 1), f.countRc(param, .decref));
+}
+
+test "RC without specialization: owned final argument drops after the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const param = try f.local(.str);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const callee_result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const callee_body = try f.expectStmt(param, callee_result_assign);
+    const callee = try f.addProc(&.{param}, callee_body, .i64);
+
+    const value = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{value}),
+        .next = ret,
+    } });
+    const body = try f.assignStr(value, "arg", call);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    const base_proc_count = f.store.proc_specs.items.len;
+    try f.run();
+
+    // The single-variant build keeps the borrowed signature: the caller
+    // retains ownership across the call and releases right after it.
+    try testing.expectEqual(base_proc_count, f.store.proc_specs.items.len);
+    try f.expectRc(value, 0, 1, 0);
+    try f.expectRc(param, 0, 0, 0);
+}
+
+test "RC specialization: identical demand vectors share one variant" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const param = try f.local(.str);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const callee_result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const callee_body = try f.expectStmt(param, callee_result_assign);
+    const callee = try f.addProc(&.{param}, callee_body, .i64);
+
+    const value_a = try f.local(.str);
+    const value_b = try f.local(.str);
+    const result_a = try f.local(.i64);
+    const result_b = try f.local(.i64);
+    const ret = try f.ret(result_b);
+    const call_b = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result_b,
+        .proc = callee,
+        .args = try f.span(&.{value_b}),
+        .next = ret,
+    } });
+    const assign_b = try f.assignStr(value_b, "b", call_b);
+    const call_a = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result_a,
+        .proc = callee,
+        .args = try f.span(&.{value_a}),
+        .next = assign_b,
+    } });
+    const body = try f.assignStr(value_a, "a", call_a);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    const base_proc_count = f.store.proc_specs.items.len;
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.proc_specs.items.len);
+    try f.expectRc(value_a, 0, 0, 0);
+    try f.expectRc(value_b, 0, 0, 0);
+}
+
+test "RC interprocedural: borrowed parameter passed through emits no RC statements" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Inner callee reads its parameter.
+    const inner_param = try f.local(.str);
+    const inner_result = try f.local(.i64);
+    const inner_ret = try f.ret(inner_result);
+    const inner_result_assign = try f.assignI64(inner_result, 1, inner_ret);
+    const inner_body = try f.expectStmt(inner_param, inner_result_assign);
+    const inner = try f.addProc(&.{inner_param}, inner_body, .i64);
+
+    // Outer callee forwards its parameter to the inner one.
+    const outer_param = try f.local(.str);
+    const outer_result = try f.local(.i64);
+    const outer_ret = try f.ret(outer_result);
+    const outer_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = outer_result,
+        .proc = inner,
+        .args = try f.span(&.{outer_param}),
+        .next = outer_ret,
+    } });
+    _ = try f.addProc(&.{outer_param}, outer_call, .i64);
+
+    try f.run();
+    // Both parameters solve borrowed: the chain of reads emits nothing.
+    try f.expectRc(inner_param, 0, 0, 0);
+    try f.expectRc(outer_param, 0, 0, 0);
+}
+
+test "RC interprocedural: borrowed return borrows the argument in the caller" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Identity proc: borrowed parameter, borrowed return.
+    const id_param = try f.local(.str);
+    const id_ret = try f.ret(id_param);
+    const identity = try f.addProc(&.{id_param}, id_ret, .str);
+
+    // Caller uses the identity result read-only.
+    const value = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_alias = try f.expectStmt(alias, result_assign);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = alias,
+        .proc = identity,
+        .args = try f.span(&.{value}),
+        .next = use_alias,
+    } });
+    const body = try f.assignStr(value, "borrowed-through", call);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // The identity proc emits nothing; the caller borrows the result and
+    // releases the original after the borrow's last use.
+    try f.expectRc(id_param, 0, 0, 0);
+    try f.expectRc(alias, 0, 0, 0);
+    try f.expectRc(value, 0, 1, 0);
 }
