@@ -5,6 +5,7 @@ const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
+const postcheck = @import("postcheck");
 const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
@@ -16,6 +17,16 @@ const LoweredSource = struct {
 
     fn deinit(self: *LoweredSource, allocator: Allocator) void {
         self.lowered.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
+const LiftedSource = struct {
+    resources: helpers.ParsedResources,
+    lifted: postcheck.MonotypeLifted.Ast.Program,
+
+    fn deinit(self: *LiftedSource, allocator: Allocator) void {
+        self.lifted.deinit();
         helpers.cleanupParseAndCanonical(allocator, self.resources);
     }
 };
@@ -59,6 +70,51 @@ fn lowerModule(
     return .{
         .resources = resources,
         .lowered = lowered,
+    };
+}
+
+fn liftModuleAfterSpecConstr(
+    allocator: Allocator,
+    source: []const u8,
+) anyerror!LiftedSource {
+    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.runtime_requests },
+    );
+    var mono_owned = true;
+    errdefer if (mono_owned) mono.deinit();
+
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    mono_owned = false;
+    mono = undefined;
+    errdefer lifted.deinit();
+
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+
+    return .{
+        .resources = resources,
+        .lifted = lifted,
     };
 }
 
@@ -239,7 +295,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
         .specialized => shape.arg_count == 3 and
             shape.direct_call_count >= 10 and
             shape.switch_count >= 10 and
-            shape.join_count >= 20 and
+            shape.join_count >= 16 and
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
             shape.direct_call_count == 3 and
@@ -309,6 +365,123 @@ fn reachableProcShape(
     comptime matches: fn (ProcShape) bool,
 ) anyerror!bool {
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
+}
+
+fn markReachableLiftedExpr(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    expr_id: postcheck.MonotypeLifted.Ast.ExprId,
+    reachable: []bool,
+) void {
+    const index = @intFromEnum(expr_id);
+    if (reachable[index]) return;
+    reachable[index] = true;
+
+    switch (program.exprs.items[index].data) {
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .fn_ref,
+        .crash,
+        => {},
+        .list,
+        .tuple,
+        => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),
+        .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
+        .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
+        .nominal,
+        .return_,
+        .dbg,
+        .expect,
+        => |child| markReachableLiftedExpr(program, child, reachable),
+        .let_ => |let_| {
+            markReachableLiftedExpr(program, let_.value, reachable);
+            markReachableLiftedExpr(program, let_.rest, reachable);
+        },
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => {},
+        .call_value => |call| {
+            markReachableLiftedExpr(program, call.callee, reachable);
+            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
+        },
+        .call_proc => |call| {
+            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
+        },
+        .low_level => |call| for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable),
+        .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
+        .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
+        .structural_eq => |eq| {
+            markReachableLiftedExpr(program, eq.lhs, reachable);
+            markReachableLiftedExpr(program, eq.rhs, reachable);
+        },
+        .match_ => |match| {
+            markReachableLiftedExpr(program, match.scrutinee, reachable);
+            for (program.branchSpan(match.branches)) |branch| {
+                if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
+                markReachableLiftedExpr(program, branch.body, reachable);
+            }
+        },
+        .if_ => |if_| {
+            for (program.ifBranchSpan(if_.branches)) |branch| {
+                markReachableLiftedExpr(program, branch.cond, reachable);
+                markReachableLiftedExpr(program, branch.body, reachable);
+            }
+            markReachableLiftedExpr(program, if_.final_else, reachable);
+        },
+        .block => |block| {
+            for (program.stmtSpan(block.statements)) |stmt| markReachableLiftedStmt(program, stmt, reachable);
+            markReachableLiftedExpr(program, block.final_expr, reachable);
+        },
+        .loop_ => |loop| {
+            for (program.exprSpan(loop.initial_values)) |initial| markReachableLiftedExpr(program, initial, reachable);
+            markReachableLiftedExpr(program, loop.body, reachable);
+        },
+        .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
+        .continue_ => |continue_| for (program.exprSpan(continue_.values)) |value| markReachableLiftedExpr(program, value, reachable),
+    }
+}
+
+fn markReachableLiftedStmt(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
+    reachable: []bool,
+) void {
+    switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
+        .expr,
+        .expect,
+        .dbg,
+        .return_,
+        => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .crash => {},
+    }
+}
+
+fn countUnreachableLiftedDirectCalls(
+    allocator: Allocator,
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+) anyerror!usize {
+    const reachable = try allocator.alloc(bool, program.exprs.items.len);
+    defer allocator.free(reachable);
+    @memset(reachable, false);
+
+    for (program.fns.items) |fn_| {
+        switch (fn_.body) {
+            .roc => |body| markReachableLiftedExpr(program, body, reachable),
+            .hosted => {},
+        }
+    }
+
+    var count: usize = 0;
+    for (program.exprs.items, reachable) |expr, is_reachable| {
+        if (!is_reachable and expr.data == .call_proc) count += 1;
+    }
+    return count;
 }
 
 fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
@@ -386,6 +559,18 @@ fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 3 and
         shape.self_call_count == 2 and
         shape.struct_assign_count >= 2;
+}
+
+fn opaqueLetCallWorkerDoesNotDuplicateCall(shape: ProcShape) bool {
+    return shape.arg_count == 1 and
+        shape.direct_call_count == 2 and
+        shape.struct_assign_count == 0;
+}
+
+fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
+    return shape.arg_count == 1 and
+        shape.direct_call_count > 2 and
+        shape.struct_assign_count == 0;
 }
 
 fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
@@ -606,6 +791,63 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\        Iter.map(0.I64.to(15), |i| random_plant(i * 12)),
         \\    )
     );
+}
+
+test "spec constr does not duplicate opaque let-bound direct calls" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\
+        \\tick : I64 -> I64
+        \\tick = |n| n + 1
+        \\
+        \\read_twice : State -> I64
+        \\read_twice = |state| {
+        \\    x = tick(state.n)
+        \\    x + x
+        \\}
+        \\
+        \\main : I64
+        \\main = read_twice({ n: 1 })
+    ;
+
+    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+}
+
+test "spec constr writes dynamically discovered workers once" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Step : [Start(I64), Loop(I64)]
+        \\
+        \\go : Step -> I64
+        \\go = |step|
+        \\    match step {
+        \\        Start(n) => {
+        \\            next = Loop(n)
+        \\            go(next)
+        \\        }
+        \\        Loop(n) => tick(n)
+        \\    }
+        \\
+        \\tick : I64 -> I64
+        \\tick = |n| n + 1
+        \\
+        \\main : I64
+        \\main = go(Start(1))
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try countUnreachableLiftedDirectCalls(allocator, &lifted.lifted));
 }
 
 test "spec constr specializes recursive record state" {

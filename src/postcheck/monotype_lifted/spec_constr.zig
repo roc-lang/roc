@@ -310,6 +310,7 @@ const CallPattern = struct {
 const Spec = struct {
     pattern: CallPattern,
     fn_id: ?Ast.FnId = null,
+    written: bool = false,
 };
 
 const FnPlan = struct {
@@ -439,11 +440,19 @@ const Pass = struct {
     }
 
     fn createSpecializations(self: *Pass, original_fn_count: usize) Common.LowerError!void {
-        for (0..original_fn_count) |index| {
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            var spec_index: usize = 0;
-            while (spec_index < self.plans[index].specs.items.len) : (spec_index += 1) {
-                try self.writeSpecialization(fn_id, spec_index);
+        var wrote_spec = true;
+        while (wrote_spec) {
+            wrote_spec = false;
+            for (0..original_fn_count) |index| {
+                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+                var spec_index: usize = 0;
+                while (spec_index < self.plans[index].specs.items.len) : (spec_index += 1) {
+                    if (self.plans[index].specs.items[spec_index].written) continue;
+
+                    self.plans[index].specs.items[spec_index].written = true;
+                    try self.writeSpecialization(fn_id, spec_index);
+                    wrote_spec = true;
+                }
             }
         }
     }
@@ -682,7 +691,7 @@ const Pass = struct {
 
         const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(spec.pattern, pattern)) return;
+            if (patternEql(self.program, spec.pattern, pattern)) return;
         }
 
         try self.plans[raw].specs.append(self.allocator, .{
@@ -713,7 +722,7 @@ const Pass = struct {
 
         const pattern: CallPattern = .{ .args = shapes };
         for (self.plans[raw].specs.items) |spec| {
-            if (patternEql(spec.pattern, pattern)) return;
+            if (patternEql(self.program, spec.pattern, pattern)) return;
         }
 
         const source_fn = self.program.fns.items[raw];
@@ -730,7 +739,6 @@ const Pass = struct {
             .body = .hosted,
             .ret = source_fn.ret,
         });
-        try self.writeSpecialization(fn_id, self.plans[raw].specs.items.len - 1);
     }
 
     fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Common.LowerError!void {
@@ -1420,6 +1428,58 @@ const Cloner = struct {
         };
     }
 
+    fn valueCanSubstitute(self: *Cloner, value: Value) bool {
+        return switch (value) {
+            .expr => |expr| self.exprCanSubstitute(expr),
+            .tag => |tag| blk: {
+                for (tag.payloads) |payload| {
+                    if (!self.valueCanSubstitute(payload)) break :blk false;
+                }
+                break :blk true;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (!self.valueCanSubstitute(field.value)) break :blk false;
+                }
+                break :blk true;
+            },
+            .tuple => |tuple| blk: {
+                for (tuple.items) |item| {
+                    if (!self.valueCanSubstitute(item)) break :blk false;
+                }
+                break :blk true;
+            },
+            .nominal => |nominal| self.valueCanSubstitute(nominal.backing.*),
+            .callable => |callable| blk: {
+                for (callable.captures) |capture| {
+                    if (!self.valueCanSubstitute(capture)) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
+
+    fn exprCanSubstitute(self: *Cloner, expr_id: Ast.ExprId) bool {
+        return switch (self.pass.program.exprs.items[@intFromEnum(expr_id)].data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .fn_ref,
+            => true,
+            .field_access => |field| self.exprCanSubstitute(field.receiver),
+            .tuple_access => |access| self.exprCanSubstitute(access.tuple),
+            else => false,
+        };
+    }
+
+    fn canInlineSubst(self: *Cloner, local: Ast.LocalId, value: Value, body: Ast.ExprId) bool {
+        return self.valueCanSubstitute(value) or localUseCountInExpr(self.pass.program, local, body) == 1;
+    }
+
     fn callableValue(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Common.LowerError!Value {
         const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
         const source_captures = self.pass.program.typedLocalSpan(fn_.captures);
@@ -1502,7 +1562,7 @@ const Cloner = struct {
         const value = try self.cloneExprValue(let_.value);
         const value_expr = try self.materialize(value);
         const change_start = self.changes.items.len;
-        const bound = try self.bindPatToValue(let_.bind, value);
+        const bound = try self.bindPatToReusableValue(let_.bind, value);
         if (bound) {
             const rest = try self.cloneExprValue(let_.rest);
             self.restore(change_start);
@@ -1520,7 +1580,7 @@ const Cloner = struct {
         const value = try self.cloneExprValue(let_.value);
         const value_expr = try self.materialize(value);
         const change_start = self.changes.items.len;
-        const bound = try self.bindPatToValue(let_.bind, value);
+        const bound = try self.bindPatToReusableValue(let_.bind, value);
         const rest = if (bound) blk: {
             const cloned = try self.cloneExpr(let_.rest);
             self.restore(change_start);
@@ -1582,7 +1642,7 @@ const Cloner = struct {
 
                 const final_value = try self.cloneExprValue(block.final_expr);
                 const rest_ty = self.pass.program.exprs.items[@intFromEnum(let_.rest)].ty;
-                if (!try self.bindPatToValue(let_.bind, final_value)) {
+                if (!try self.bindPatToReusableValue(let_.bind, final_value)) {
                     if (try self.cloneDivergentAtType(block.final_expr, rest_ty)) |divergent| {
                         self.restore(change_start);
                         return try self.addExpr(.{ .ty = rest_ty, .data = .{ .block = .{
@@ -1605,7 +1665,7 @@ const Cloner = struct {
             else => {
                 const branch_value = try self.cloneExprValue(branch_body);
                 const change_start = self.changes.items.len;
-                if (!try self.bindPatToValue(let_.bind, branch_value)) {
+                if (!try self.bindPatToReusableValue(let_.bind, branch_value)) {
                     self.restore(change_start);
                     return null;
                 }
@@ -2033,10 +2093,33 @@ const Cloner = struct {
         defer self.pass.allocator.free(args);
         if (source_args.len != args.len) Common.invariant("callable call arity differed from lifted function arity");
 
+        const arg_values = try self.pass.allocator.alloc(Value, args.len);
+        defer self.pass.allocator.free(arg_values);
+        for (args, 0..) |arg_expr, index| {
+            arg_values[index] = try self.cloneExprValue(arg_expr);
+        }
+
         const source_captures = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
         defer self.pass.allocator.free(source_captures);
         if (source_captures.len != callable.captures.len) {
             Common.invariant("callable value capture count differed from lifted function capture count");
+        }
+
+        for (source_captures, callable.captures) |source_capture, capture_value| {
+            if (!self.canInlineSubst(source_capture.local, capture_value, body)) {
+                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                    .callee = try self.materialize(.{ .callable = callable }),
+                    .args = try self.valuesToExprSpan(arg_values),
+                } } }) };
+            }
+        }
+        for (source_args, arg_values) |source_arg, arg_value| {
+            if (!self.canInlineSubst(source_arg.local, arg_value, body)) {
+                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                    .callee = try self.materialize(.{ .callable = callable }),
+                    .args = try self.valuesToExprSpan(arg_values),
+                } } }) };
+            }
         }
 
         try self.inline_stack.append(self.pass.allocator, callable.fn_id);
@@ -2051,8 +2134,8 @@ const Cloner = struct {
         for (source_captures, callable.captures) |source_capture, capture_value| {
             try self.putSubst(source_capture.local, capture_value);
         }
-        for (source_args, args) |source_arg, arg_expr| {
-            try self.putSubst(source_arg.local, try self.cloneExprValue(arg_expr));
+        for (source_args, arg_values) |source_arg, arg_value| {
+            try self.putSubst(source_arg.local, arg_value);
         }
 
         return try self.cloneExprValue(body);
@@ -2079,6 +2162,21 @@ const Cloner = struct {
         defer self.pass.allocator.free(args);
         if (source_args.len != args.len) Common.invariant("direct call arity differed from lifted function arity");
 
+        const arg_values = try self.pass.allocator.alloc(Value, args.len);
+        defer self.pass.allocator.free(arg_values);
+        for (args, 0..) |arg_expr, index| {
+            arg_values[index] = try self.cloneExprValue(arg_expr);
+        }
+
+        for (source_args, arg_values) |source_arg, arg_value| {
+            if (!self.canInlineSubst(source_arg.local, arg_value, body)) {
+                return .{ .expr = try self.addExpr(.{ .ty = self.pass.program.exprs.items[@intFromEnum(original_expr)].ty, .data = .{ .call_proc = .{
+                    .callee = .{ .lifted = callee },
+                    .args = try self.valuesToExprSpan(arg_values),
+                } } }) };
+            }
+        }
+
         try self.inline_stack.append(self.pass.allocator, callee);
         defer {
             const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
@@ -2092,11 +2190,17 @@ const Cloner = struct {
         defer self.pass.allocator.free(captures);
         for (captures) |capture| {
             if (self.subst.get(capture.local)) |value| {
+                if (!self.canInlineSubst(capture.local, value, body)) {
+                    return .{ .expr = try self.addExpr(.{ .ty = self.pass.program.exprs.items[@intFromEnum(original_expr)].ty, .data = .{ .call_proc = .{
+                        .callee = .{ .lifted = callee },
+                        .args = try self.valuesToExprSpan(arg_values),
+                    } } }) };
+                }
                 try self.putSubst(capture.local, value);
             }
         }
-        for (source_args, args) |source_arg, arg_expr| {
-            try self.putSubst(source_arg.local, try self.cloneExprValue(arg_expr));
+        for (source_args, arg_values) |source_arg, arg_value| {
+            try self.putSubst(source_arg.local, arg_value);
         }
 
         return try self.cloneExprValue(body);
@@ -2159,6 +2263,11 @@ const Cloner = struct {
         }
     }
 
+    fn bindPatToReusableValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
+        if (!self.valueCanSubstitute(value)) return false;
+        return try self.bindPatToValue(pat_id, value);
+    }
+
     fn clonePat(self: *Cloner, pat_id: Ast.PatId) Allocator.Error!Ast.PatId {
         const pat = self.pass.program.pats.items[@intFromEnum(pat_id)];
         const data: Ast.PatData = switch (pat.data) {
@@ -2190,7 +2299,7 @@ const Cloner = struct {
             .let_ => |let_| blk: {
                 const value = try self.cloneExprValue(let_.value);
                 const value_expr = try self.materialize(value);
-                _ = try self.bindPatToValue(let_.pat, value);
+                _ = try self.bindPatToReusableValue(let_.pat, value);
                 break :blk .{ .let_ = .{
                     .pat = try self.clonePat(let_.pat),
                     .value = value_expr,
@@ -2580,6 +2689,90 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
     };
 }
 
+fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) usize {
+    return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
+        .local => |seen| if (seen == local) 1 else 0,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .fn_ref,
+        .crash,
+        => 0,
+        .list,
+        .tuple,
+        => |items| localUseCountInExprSpan(program, local, items),
+        .record => |fields| blk: {
+            var count: usize = 0;
+            for (program.fieldExprSpan(fields)) |field| count += localUseCountInExpr(program, local, field.value);
+            break :blk count;
+        },
+        .tag => |tag| localUseCountInExprSpan(program, local, tag.payloads),
+        .nominal,
+        .return_,
+        .dbg,
+        .expect,
+        => |child| localUseCountInExpr(program, local, child),
+        .let_ => |let_| localUseCountInExpr(program, local, let_.value) + localUseCountInExpr(program, local, let_.rest),
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => 0,
+        .call_value => |call| localUseCountInExpr(program, local, call.callee) + localUseCountInExprSpan(program, local, call.args),
+        .call_proc => |call| localUseCountInExprSpan(program, local, call.args),
+        .low_level => |call| localUseCountInExprSpan(program, local, call.args),
+        .field_access => |field| localUseCountInExpr(program, local, field.receiver),
+        .tuple_access => |access| localUseCountInExpr(program, local, access.tuple),
+        .structural_eq => |eq| localUseCountInExpr(program, local, eq.lhs) + localUseCountInExpr(program, local, eq.rhs),
+        .match_ => |match| blk: {
+            var count = localUseCountInExpr(program, local, match.scrutinee);
+            for (program.branchSpan(match.branches)) |branch| {
+                if (branch.guard) |guard| count += localUseCountInExpr(program, local, guard);
+                count += localUseCountInExpr(program, local, branch.body);
+            }
+            break :blk count;
+        },
+        .if_ => |if_| blk: {
+            var count: usize = 0;
+            for (program.ifBranchSpan(if_.branches)) |branch| {
+                count += localUseCountInExpr(program, local, branch.cond);
+                count += localUseCountInExpr(program, local, branch.body);
+            }
+            count += localUseCountInExpr(program, local, if_.final_else);
+            break :blk count;
+        },
+        .block => |block| blk: {
+            var count: usize = 0;
+            for (program.stmtSpan(block.statements)) |stmt| count += localUseCountInStmt(program, local, stmt);
+            count += localUseCountInExpr(program, local, block.final_expr);
+            break :blk count;
+        },
+        .loop_ => |loop| localUseCountInExprSpan(program, local, loop.initial_values) + localUseCountInExpr(program, local, loop.body),
+        .break_ => |maybe| if (maybe) |value| localUseCountInExpr(program, local, value) else 0,
+        .continue_ => |continue_| localUseCountInExprSpan(program, local, continue_.values),
+    };
+}
+
+fn localUseCountInExprSpan(program: *const Ast.Program, local: Ast.LocalId, span: Ast.Span(Ast.ExprId)) usize {
+    var count: usize = 0;
+    for (program.exprSpan(span)) |expr| count += localUseCountInExpr(program, local, expr);
+    return count;
+}
+
+fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId) usize {
+    return switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .let_ => |let_| localUseCountInExpr(program, local, let_.value),
+        .expr,
+        .expect,
+        .dbg,
+        .return_,
+        => |expr| localUseCountInExpr(program, local, expr),
+        .crash => 0,
+    };
+}
+
 fn canReadFieldsFromExpr(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     return switch (program.exprs.items[@intFromEnum(expr_id)].data) {
         .local,
@@ -2612,15 +2805,15 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     };
 }
 
-fn patternEql(lhs: CallPattern, rhs: CallPattern) bool {
+fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
-        if (!shapeEql(lhs_arg, rhs_arg)) return false;
+        if (!shapeEql(program, lhs_arg, rhs_arg)) return false;
     }
     return true;
 }
 
-fn shapeEql(lhs: Shape, rhs: Shape) bool {
+fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
         .any => |lhs_ty| lhs_ty == rhs.any,
@@ -2628,7 +2821,7 @@ fn shapeEql(lhs: Shape, rhs: Shape) bool {
             const rhs_tag = rhs.tag;
             if (lhs_tag.ty != rhs_tag.ty or lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk false;
             for (lhs_tag.payloads, rhs_tag.payloads) |lhs_payload, rhs_payload| {
-                if (!shapeEql(lhs_payload, rhs_payload)) break :blk false;
+                if (!shapeEql(program, lhs_payload, rhs_payload)) break :blk false;
             }
             break :blk true;
         },
@@ -2636,7 +2829,7 @@ fn shapeEql(lhs: Shape, rhs: Shape) bool {
             const rhs_record = rhs.record;
             if (lhs_record.ty != rhs_record.ty or lhs_record.fields.len != rhs_record.fields.len) break :blk false;
             for (lhs_record.fields, rhs_record.fields) |lhs_field, rhs_field| {
-                if (lhs_field.name != rhs_field.name or !shapeEql(lhs_field.shape, rhs_field.shape)) break :blk false;
+                if (lhs_field.name != rhs_field.name or !shapeEql(program, lhs_field.shape, rhs_field.shape)) break :blk false;
             }
             break :blk true;
         },
@@ -2644,24 +2837,24 @@ fn shapeEql(lhs: Shape, rhs: Shape) bool {
             const rhs_tuple = rhs.tuple;
             if (lhs_tuple.ty != rhs_tuple.ty or lhs_tuple.items.len != rhs_tuple.items.len) break :blk false;
             for (lhs_tuple.items, rhs_tuple.items) |lhs_item, rhs_item| {
-                if (!shapeEql(lhs_item, rhs_item)) break :blk false;
+                if (!shapeEql(program, lhs_item, rhs_item)) break :blk false;
             }
             break :blk true;
         },
         .nominal => |lhs_nominal| {
             const rhs_nominal = rhs.nominal;
-            return lhs_nominal.ty == rhs_nominal.ty and shapeEql(lhs_nominal.backing.*, rhs_nominal.backing.*);
+            return lhs_nominal.ty == rhs_nominal.ty and shapeEql(program, lhs_nominal.backing.*, rhs_nominal.backing.*);
         },
         .callable => |lhs_callable| blk: {
             const rhs_callable = rhs.callable;
             if (lhs_callable.ty != rhs_callable.ty or
-                lhs_callable.fn_id != rhs_callable.fn_id or
+                !callableTargetMatches(program, lhs_callable.fn_id, rhs_callable.fn_id) or
                 lhs_callable.captures.len != rhs_callable.captures.len)
             {
                 break :blk false;
             }
             for (lhs_callable.captures, rhs_callable.captures) |lhs_capture, rhs_capture| {
-                if (!shapeEql(lhs_capture, rhs_capture)) break :blk false;
+                if (!shapeEql(program, lhs_capture, rhs_capture)) break :blk false;
             }
             break :blk true;
         },
