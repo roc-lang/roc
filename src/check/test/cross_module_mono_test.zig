@@ -134,7 +134,7 @@ const MonoTestEnv = struct {
     const Self = @This();
 
     /// Initialize a single module test environment
-    pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || error{TooNested})!Self {
+    pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -220,7 +220,7 @@ const MonoTestEnv = struct {
     }
 
     /// Initialize with an imported module
-    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) (Allocator.Error || error{TooNested})!Self {
+    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -336,7 +336,7 @@ const MonoTestEnv = struct {
     const ImportedModule = struct { name: []const u8, env: *const MonoTestEnv };
 
     /// Initialize with multiple imported modules
-    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) (Allocator.Error || error{TooNested})!Self {
+    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 

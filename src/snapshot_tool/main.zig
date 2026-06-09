@@ -1108,22 +1108,7 @@ fn processSnapshotContent(
                 },
                 .statement => {
                     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-                    const ast_stmt_idxs = [_]AST.Statement.Idx{ast_stmt_idx};
-                    const can_stmt_result = try czer.canonicalizeBlockStatement(
-                        czer.parse_ir.store.getStatement(ast_stmt_idx),
-                        &ast_stmt_idxs,
-                        0,
-                        .{
-                            .captures_top = czer.scratch_captures.top(),
-                            .bound_vars_top = czer.scratch_bound_vars.top(),
-                        },
-                    );
-                    if (can_stmt_result.canonicalized_stmt) |can_stmt| {
-                        // Manually track scratch statements because we aren't using the file entrypoint
-                        const scratch_statements_start = can_ir.store.scratch.?.statements.top();
-                        try can_ir.store.addScratchStatement(can_stmt.idx);
-                        can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
-                    }
+                    try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
                 else => unreachable,
             }
@@ -4390,9 +4375,7 @@ const SnapshotReplParsedLine = struct {
     }
 };
 
-const SnapshotReplParseError = parse.Parser.Error || error{TooNested};
-
-fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplParsedLine {
+fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplParsedLine {
     const module_env = try allocator.create(ModuleEnv);
     errdefer allocator.destroy(module_env);
     module_env.* = try ModuleEnv.init(allocator, line);
@@ -4430,7 +4413,7 @@ fn parseSnapshotReplLineAsFile(allocator: Allocator, line: []const u8) SnapshotR
     };
 }
 
-fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) SnapshotReplParseError!?AST.Statement {
+fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allocator.Error!?AST.Statement {
     var env = try ModuleEnv.init(allocator, line);
     defer env.deinit();
     env.common.source = line;
@@ -4443,7 +4426,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Snap
     return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
 }
 
-fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplInputKind {
+fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplInputKind {
     var maybe_file_parse = try parseSnapshotReplLineAsFile(allocator, line);
     const statement = if (maybe_file_parse) |*parsed| blk: {
         defer parsed.deinit();
@@ -4482,7 +4465,7 @@ fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Snapshot
     };
 }
 
-fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) SnapshotReplParseError!?SnapshotReplDefinitionIdentity {
+fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplDefinitionIdentity {
     var parsed = (try parseSnapshotReplLineAsFile(allocator, line)) orelse return null;
     defer parsed.deinit();
 

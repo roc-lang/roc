@@ -349,7 +349,7 @@ fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: r
     };
 }
 
-fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{ TooNested, WriteFailed })![]u8 {
+fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;

@@ -24,7 +24,7 @@ fn parseAndCanonicalizeSource(
     allocator: std.mem.Allocator,
     source: []const u8,
     module_envs: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
-) (Allocator.Error || error{TooNested})!struct {
+) Allocator.Error!struct {
     parse_env: *ModuleEnv,
     ast: *parse.AST,
     can: *Can,

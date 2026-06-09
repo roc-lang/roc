@@ -19,7 +19,7 @@ builtin_ctx: BuiltinTestContext,
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 pub const TestEnv = @This();
 
-pub fn init(source: []const u8) (Allocator.Error || error{TooNested})!TestEnv {
+pub fn init(source: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);

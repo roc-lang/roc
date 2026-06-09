@@ -285,7 +285,7 @@ pub fn extractSemanticTokensWithImports(
     var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
     defer module_env.deinit();
 
-    // Parse the source
+    // Parse the source. Syntax errors are reported through the AST diagnostics.
     const parse_ast = try parse.file(allocator, &module_env.common);
     defer parse_ast.deinit();
 

@@ -12,6 +12,7 @@ pub const tokenize = @import("tokenize.zig");
 const Allocator = std.mem.Allocator;
 const CommonEnv = base.CommonEnv;
 const Diagnostic = AST.Diagnostic;
+const ParseTestError = Allocator.Error || error{TestExpectedEqual};
 
 /// **AST.Parser**
 pub const Parser = @import("Parser.zig");
@@ -190,7 +191,7 @@ test "parse error triggers errdefer cleanup" {
     try std.testing.checkAllAllocationFailures(gpa, vmExprAllocationFailureImpl, .{output.tokens});
 }
 
-fn expectStatementParsesWithoutDiagnostics(source: []const u8) (Allocator.Error || error{TestExpectedEqual})!void {
+fn expectStatementParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
     const gpa = std.testing.allocator;
 
     var env = try CommonEnv.init(gpa, source);
@@ -203,7 +204,7 @@ fn expectStatementParsesWithoutDiagnostics(source: []const u8) (Allocator.Error 
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
-fn expectFileParsesWithoutDiagnostics(source: []const u8) (Allocator.Error || error{TestExpectedEqual})!void {
+fn expectFileParsesWithoutDiagnostics(source: []const u8) ParseTestError!void {
     const gpa = std.testing.allocator;
 
     var env = try CommonEnv.init(gpa, source);

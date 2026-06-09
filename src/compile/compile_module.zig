@@ -76,7 +76,7 @@ pub fn parseSingleModule(
     module_env: *ModuleEnv,
     mode: ParseMode,
     options: CompileOptions,
-) (Allocator.Error || error{TooNested})!*AST {
+) Allocator.Error!*AST {
     // Calculate line starts for source location tracking (idempotent if already done)
     try module_env.common.calcLineStarts(gpa);
 

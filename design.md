@@ -313,6 +313,162 @@ The word `obligation` is banned in new post-check docs and code. Use the exact
 owner instead: checked dispatch plan, erased callable requirement,
 specialization queue entry, or debug assertion.
 
+## Canonicalization Stack Safety
+
+Canonicalization is allowed to be referenced by name here because it is the
+existing pre-check phase that produces CIR. This section is about the
+implementation of that phase only; it does not change the boundary that
+post-check compiler stages must consume Checked Modules rather than CIR.
+
+Canonicalization must be fully stack-safe. Traversal code in `src/canonicalize`
+must not use direct recursion, indirect recursion, or mutual recursion to walk
+source syntax. Deep source nesting must consume explicit work storage allocated
+with `std.heap.stackFallback` and then the general allocator, not the process
+call stack. Nesting limits such as maximum parenthesis depth must not be used
+to protect the implementation from recursion; the traversal shape must be
+iterative.
+
+The main expression, block, and associated-item path should be implemented as a
+direct labeled-switch kernel rather than as a generic frame pop loop. The
+public entry points can remain small wrappers such as `canonicalizeExpr` and
+`canonicalizeExprOrMalformed`, but the internal worker should look like a state
+machine:
+
+```zig
+const CanLabel = enum {
+    expr_start,
+    expr_complete,
+    seq_next,
+    block_next,
+    block_finish,
+    associated_next,
+    associated_finish,
+};
+
+fn runExprKernel(self: *Self, root: AST.Expr.Idx) Allocator.Error!?CanExprResult {
+    var fallback_state = std.heap.stackFallback(16 * 1024, self.env.gpa);
+    const scratch_allocator = fallback_state.get();
+
+    var scratch = CanKernelScratch{};
+    defer scratch.deinit(scratch_allocator);
+    errdefer scratch.cleanupActive(self);
+
+    var expr_state = ExprState{ .ast = root };
+    var last_expr: ?CanExprResult = null;
+
+    can_kernel: switch (CanLabel.expr_start) {
+        .expr_start => {
+            // Inspect expr_state, schedule child work, and jump directly.
+            continue :can_kernel .expr_complete;
+        },
+        .expr_complete => {
+            // Use last_expr as the completed child result.
+            return last_expr;
+        },
+        else => unreachable,
+    }
+}
+```
+
+Completed child results should be carried through typed return registers such
+as `last_expr`, `last_pattern`, and `last_type_anno`. Avoid a generic result
+stack for every child expression. The kernel should keep hot state in locals
+and jump directly between labels with `continue :can_kernel .label`, following
+the same performance model as the stack-safe parser.
+
+Do not replace recursion with one large tagged union that stores every possible
+continuation payload. That tends to copy the largest payload on every push and
+pop. Instead, use typed continuation stacks with compact parent-kind enums. For
+example, expression continuations can have a small parent-kind stack plus
+specialized payload stacks for the cases that need extra data:
+
+```zig
+const ExprParentKind = enum(u16) {
+    unary,
+    bin_lhs,
+    bin_rhs,
+    list_item,
+    tuple_item,
+    apply_arg,
+    method_receiver,
+    method_arg,
+    lambda_body,
+    if_condition,
+    if_then,
+    if_else,
+    match_cond,
+    match_guard,
+    match_body,
+    while_cond,
+    while_body,
+    for_list,
+    for_body,
+    block_expr_stmt,
+    block_final_expr,
+    block_decl_body,
+    block_var_body,
+    block_reassign_body,
+    block_expect_body,
+    block_return_body,
+    associated_decl_body,
+};
+```
+
+Each payload type should live in the stack that matches its shape. Hot nested
+constructs such as blocks, sequences, and associated-item groups should use a
+current-plus-spill layout: keep the active item in a local or `current` field,
+and move the previous active item to a spill stack only when entering another
+item of the same kind. This avoids repeatedly copying large block state while
+still supporting arbitrary nesting.
+
+Blocks should have an explicit `BlockState` managed by a current-plus-spill
+stack. A block state owns the statement slice, next statement index, saved
+scratch tops, saved scope flags, pending result indexes, and any block-specific
+bookkeeping needed to restore canonicalization state at block exit. Child
+continuations must not carry copies of the whole block state. When a statement
+schedules child expression work, it should push only the statement-specific
+continuation data needed to resume the current block. The `block_next` label
+advances statements one at a time, and `block_finish` performs local
+forward-reference classification, constructs the block expression, exits
+scopes, and restores saved state.
+
+Lists, tuples, calls, method calls, tags, match branches, and other repeated
+child forms should use sequence state instead of nested calls. A sequence state
+tracks the source items, the next item index, output scratch ranges, and the
+continuation to run when all items are complete. Each child result is appended
+to the sequence output as it arrives in `last_expr` or the appropriate typed
+return register.
+
+Associated items need explicit ownership boundaries. The current
+`enterAssociatedBlockState` and `exitAssociatedBlockState` responsibilities
+should remain, but the expression kernel should model associated work as active
+state rather than as cleanup hidden in pending generic frames.
+`CanKernelScratch.cleanupActive(self)` must unwind every active block scope,
+associated scope, type-variable scope, and owned alias sink on errors. Correct
+cleanup must not depend on eventually popping a particular continuation frame.
+
+Pattern and type-annotation canonicalization should use the same design. Keep
+their public entry points, but implement each traversal as a direct
+labeled-switch kernel with its own typed return register and typed continuation
+stacks. The expression kernel may call those kernels for lambda arguments, loop
+patterns, and type annotations because each call is itself nonrecursive and
+stack-safe.
+
+The recommended migration order is:
+
+1. Add the expression kernel scratch state, typed stacks, current-plus-spill
+   helpers, and active cleanup path.
+2. Port expression leaves and small one-child or two-child forms.
+3. Port sequence forms such as lists, tuples, calls, method calls, and tags.
+4. Port block handling and remove copies of whole block state from continuation
+   payloads.
+5. Port associated-item integration and verify error cleanup.
+6. Port pattern and type-annotation canonicalization kernels.
+7. Audit `src/canonicalize` for direct, indirect, and mutual recursive
+   traversal calls.
+8. Verify with focused canonicalization tests, `zig build minici`, and
+   parser/canonicalization benchmarks.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
