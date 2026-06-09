@@ -1210,9 +1210,9 @@ fn parseAppHeaderTokens(self: *Parser) Error!AST.Header.Idx {
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
         }
-        self.expect(.Comma) catch {
+        if (!self.consumeComma()) {
             break;
-        };
+        }
     }
     if (self.peek() != .CloseCurly) {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
