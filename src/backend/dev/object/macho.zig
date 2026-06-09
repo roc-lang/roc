@@ -26,9 +26,6 @@ const MachO = struct {
     const CPU_SUBTYPE_X86_64_ALL = 0x3;
     const CPU_SUBTYPE_ARM64_ALL = 0x0;
 
-    // File flags
-    const MH_SUBSECTIONS_VIA_SYMBOLS = 0x2000;
-
     // Load command types
     const LC_SEGMENT_64 = 0x19;
     const LC_SYMTAB = 0x2;
