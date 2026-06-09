@@ -149,7 +149,6 @@ const Solver = struct {
     join_param: std.bit_set.DynamicBitSetUnmanaged,
     visited: std.AutoHashMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
-
 };
 
 /// Solves binding modes and proc signatures for every local in the store.
@@ -482,8 +481,6 @@ fn retLenders(
     if (lenders == 0) return null;
     return lenders;
 }
-
-
 
 const RetTreatment = enum {
     returns_owned,
