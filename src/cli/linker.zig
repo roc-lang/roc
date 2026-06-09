@@ -67,6 +67,9 @@ pub const LinkConfig = struct {
     /// Additional linker flags
     extra_args: []const []const u8 = &.{},
 
+    /// Symbols that must remain live even under section garbage collection.
+    force_undefined_symbols: []const []const u8 = &.{},
+
     /// Whether to allow LLD to exit early on errors
     can_exit_early: bool = false,
 
@@ -105,6 +108,29 @@ pub const LinkConfig = struct {
     /// containing the running `roc` executable.
     scratch_dir: ?[]const u8 = null,
 };
+
+fn appendForceUndefinedSymbol(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    symbol: []const u8,
+) LinkError!void {
+    switch (target_os) {
+        .macos => {
+            try args.append("-u");
+            const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(prefixed);
+        },
+        .windows => {
+            const include_arg = std.fmt.allocPrint(ctx.arena, "/include:{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(include_arg);
+        },
+        else => {
+            const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(undefined_arg);
+        },
+    }
+}
 
 /// Errors that can occur during linking
 pub const LinkError = error{
@@ -551,6 +577,10 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
         },
     }
 
+    for (config.force_undefined_symbols) |symbol| {
+        try appendForceUndefinedSymbol(ctx, &args, target_os, symbol);
+    }
+
     // For WASM targets, wrap platform files in --whole-archive to include all symbols
     // This ensures host exports (init, handleEvent, update) aren't stripped even when
     // not referenced by other code
@@ -776,6 +806,41 @@ test "target format detection" {
     switch (detected) {
         .elf, .coff, .macho, .wasm => {},
     }
+}
+
+test "force undefined symbols use target linker spelling" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const mac_config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .force_undefined_symbols = &.{"roc__answer"},
+    };
+    const mac_args = try buildLinkArgs(&ctx, mac_config);
+    const mac_u_idx = findArg(mac_args.items, "-u") orelse return error.MissingForceUndefined;
+    try std.testing.expect(mac_u_idx + 1 < mac_args.items.len);
+    try std.testing.expectEqualStrings("_roc__answer", mac_args.items[mac_u_idx + 1]);
+
+    const linux_config = LinkConfig{
+        .target_format = .elf,
+        .target_abi = .musl,
+        .target_os = .linux,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .force_undefined_symbols = &.{"roc__answer"},
+    };
+    const linux_args = try buildLinkArgs(&ctx, linux_config);
+    _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
 }
 
 test "macOS platform archives use scoped force_load" {

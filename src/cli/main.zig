@@ -4088,6 +4088,18 @@ const LlvmObjectPaths = struct {
     object_path: []const u8,
 };
 
+fn staticDataLinkRootSymbols(
+    ctx: *CliCtx,
+    static_data_exports: []const backend.StaticDataExport,
+) Allocator.Error![]const []const u8 {
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, static_data_exports.len);
+    for (static_data_exports) |data_export| {
+        if (!data_export.is_global) continue;
+        try symbols.append(data_export.symbol_name);
+    }
+    return symbols.items;
+}
+
 fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     return switch (opt) {
         .size => .size,
@@ -4641,6 +4653,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         }
         try object_files.append(builtins_path);
 
+        const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
             .target_abi = linker.TargetAbi.fromRocTarget(target),
@@ -4651,6 +4665,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = &.{},
+            .force_undefined_symbols = force_undefined_symbols,
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -4957,6 +4972,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
 
+    const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+
     const link_config = linker.LinkConfig{
         .target_format = linker.TargetFormat.detectFromOs(target_os),
         .target_abi = linker.TargetAbi.fromRocTarget(target),
@@ -4967,6 +4984,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .platform_files_pre = link_inputs.platform_files_pre,
         .platform_files_post = link_inputs.platform_files_post,
         .extra_args = &.{},
+        .force_undefined_symbols = force_undefined_symbols,
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = link_inputs.platform_files_dir,
