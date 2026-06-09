@@ -57,6 +57,9 @@ pub const TupleInfo = @import("layout.zig").TupleInfo;
 pub const TagUnionInfo = @import("layout.zig").TagUnionInfo;
 pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 
+// Per-target C-ABI parameter/return classification.
+pub const abi = @import("abi/mod.zig");
+
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
 pub const Graph = @import("graph.zig").Graph;
@@ -117,4 +120,6 @@ test "layout tests" {
     std.testing.refAllDecls(@import("graph.zig"));
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("store.zig"));
+    std.testing.refAllDecls(@import("abi/mod.zig"));
+    std.testing.refAllDecls(@import("abi/aarch64.zig"));
 }
