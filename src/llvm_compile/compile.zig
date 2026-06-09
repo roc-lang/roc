@@ -108,6 +108,10 @@ pub const CompileOptions = struct {
     reloc_mode: bindings.RelocMode = .Default,
     /// Whether to use the module's native target triple instead of LLVM's default.
     use_module_target_triple: bool = false,
+    /// LLVM CPU name for target-machine code generation. Empty means LLVM's target default.
+    cpu: [:0]const u8 = "",
+    /// LLVM feature string for target-machine code generation. Empty means LLVM's target default.
+    features: [:0]const u8 = "",
 };
 
 fn emitMergedBitcodeToObjectFile(
@@ -170,19 +174,12 @@ fn emitMergedBitcodeToObjectFile(
         return Error.CompilationFailed;
     }
 
-    // Use a baseline CPU that has the required features for each architecture.
-    const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
-        .x86_64 => "x86-64",
-        .x86 => "pentium4",
-        else => "generic",
-    };
-
     // Create target machine
     const target_machine = bindings.TargetMachine.create(
         target,
         triple,
-        cpu,
-        "", // No specific features
+        if (options.cpu.len == 0) null else options.cpu.ptr,
+        if (options.features.len == 0) null else options.features.ptr,
         options.optimization.toCodeGenOptLevel(),
         options.reloc_mode,
         .Default, // code model

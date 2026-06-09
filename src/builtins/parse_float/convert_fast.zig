@@ -15,7 +15,6 @@ const math = std.math;
 const common = @import("common.zig");
 const FloatInfo = @import("FloatInfo.zig");
 const Number = common.Number;
-const floatFromU64 = common.floatFromU64;
 
 fn isFastPath(comptime T: type, n: Number(T)) bool {
     const info = FloatInfo.from(T);

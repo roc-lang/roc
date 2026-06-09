@@ -5,7 +5,6 @@ const math = std.math;
 const common = @import("common.zig");
 const FloatInfo = @import("FloatInfo.zig");
 const BiasedFp = common.BiasedFp;
-const Number = common.Number;
 
 /// Compute a float using an extended-precision representation.
 ///

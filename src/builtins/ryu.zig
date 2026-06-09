@@ -199,62 +199,6 @@ fn multipleOfPowerOf2(value: anytype, p: u32) bool {
     return (value & ((@as(T, 1) << @as(std.math.Log2Int(T), @intCast(p))) - 1)) == 0;
 }
 
-fn mulShift128(m: u128, mul: *const [4]u64, j: u32) u128 {
-    std.debug.assert(j > 128);
-    const a: [2]u64 = .{ @truncate(m), @truncate(m >> 64) };
-    const r = mul_128_256_shift(&a, mul, j, 0);
-    return (@as(u128, r[1]) << 64) | r[0];
-}
-
-fn mul_128_256_shift(a: *const [2]u64, b: *const [4]u64, shift: u32, corr: u32) [4]u64 {
-    std.debug.assert(shift > 0);
-    std.debug.assert(shift < 256);
-
-    const b00 = @as(u128, a[0]) * b[0];
-    const b01 = @as(u128, a[0]) * b[1];
-    const b02 = @as(u128, a[0]) * b[2];
-    const b03 = @as(u128, a[0]) * b[3];
-    const b10 = @as(u128, a[1]) * b[0];
-    const b11 = @as(u128, a[1]) * b[1];
-    const b12 = @as(u128, a[1]) * b[2];
-    const b13 = @as(u128, a[1]) * b[3];
-
-    const s0 = b00;
-    const s1 = b01 +% b10;
-    const c1: u128 = @intFromBool(s1 < b01);
-    const s2 = b02 +% b11;
-    const c2: u128 = @intFromBool(s2 < b02);
-    const s3 = b03 +% b12;
-    const c3: u128 = @intFromBool(s3 < b03);
-
-    const p0 = s0 +% (s1 << 64);
-    const d0: u128 = @intFromBool(p0 < b00);
-    const q1 = s2 +% (s1 >> 64) +% (s3 << 64);
-    const d1: u128 = @intFromBool(q1 < s2);
-    const p1 = q1 +% (c1 << 64) +% d0;
-    const d2: u128 = @intFromBool(p1 < q1);
-    const p2 = b13 +% (s3 >> 64) +% c2 +% (c3 << 64) +% d1 +% d2;
-
-    var r0: u128 = undefined;
-    var r1: u128 = undefined;
-    if (shift < 128) {
-        const cshift: u7 = @intCast(shift);
-        const sshift: u7 = @intCast(128 - shift);
-        r0 = corr +% ((p0 >> cshift) | (p1 << sshift));
-        r1 = ((p1 >> cshift) | (p2 << sshift)) +% @intFromBool(r0 < corr);
-    } else if (shift == 128) {
-        r0 = corr +% p1;
-        r1 = p2 +% @intFromBool(r0 < corr);
-    } else {
-        const ashift: u7 = @intCast(shift - 128);
-        const sshift: u7 = @intCast(256 - shift);
-        r0 = corr +% ((p1 >> ashift) | (p2 << sshift));
-        r1 = (p2 >> ashift) +% @intFromBool(r0 < corr);
-    }
-
-    return .{ @truncate(r0), @truncate(r0 >> 64), @truncate(r1), @truncate(r1 >> 64) };
-}
-
 fn mulShift64(m: u64, mul: *const [2]u64, j: u32) u64 {
     std.debug.assert(j > 64);
     const b0 = @as(u128, m) * mul[0];

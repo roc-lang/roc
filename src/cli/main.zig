@@ -896,15 +896,13 @@ fn generatePlatformHostShim(
     const std_zig_llvm = @import("std").zig.llvm;
     const Builder = std_zig_llvm.Builder;
 
-    // Create std.Target for the target RocTarget
-    // This is needed so the LLVM Builder generates correct pointer sizes
-    const query = std.Target.Query{
-        .cpu_arch = target.toCpuArch(),
-        .os_tag = target.toOsTag(),
-    };
-    const std_target = std.zig.system.resolveTargetQuery(ctx.io.std_io, query) catch |err| {
+    // Create std.Target for the target RocTarget.
+    // This is needed so the LLVM Builder generates correct pointer sizes.
+    const std_target = stdTargetForLlvmBuild(ctx, target) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
+    const llvm_cpu = llvmCpuNameForTarget(std_target);
+    const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
     // Create LLVM Builder with the correct target
     var llvm_builder = Builder.init(.{
@@ -945,6 +943,9 @@ fn generatePlatformHostShim(
     }
     hash.update(target.toTriple());
     hash.update(if (debug) "debug" else "nodebug");
+    hash.update(llvm_cpu);
+    hash.update(&[_]u8{0});
+    hash.update(llvm_features);
     const content_hash = hash.final();
 
     const bitcode_filename = std.fmt.allocPrint(ctx.arena, "platform_shim_{x}.bc", .{content_hash}) catch |err| {
@@ -990,6 +991,8 @@ fn generatePlatformHostShim(
         .output_path = object_path,
         .optimization = .speed,
         .target = target,
+        .cpu = llvm_cpu,
+        .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
     };
 
@@ -3947,6 +3950,35 @@ fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 }
 
+fn llvmCpuNameForTarget(std_target: std.Target) []const u8 {
+    return std_target.cpu.model.llvm_name orelse "";
+}
+
+fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allocator.Error![]const u8 {
+    const all_features = std_target.cpu.arch.allFeaturesList();
+    var model_features = std_target.cpu.model.features;
+    model_features.populateDependencies(all_features);
+
+    var features = std.ArrayList(u8).empty;
+    errdefer features.deinit(allocator);
+
+    for (all_features) |feature| {
+        const llvm_name = feature.llvm_name orelse continue;
+        const enabled = std_target.cpu.features.isEnabled(feature.index);
+        const model_enabled = model_features.isEnabled(feature.index);
+        if (enabled == model_enabled) continue;
+
+        if (features.items.len > 0) {
+            try features.append(allocator, ',');
+        }
+        try features.append(allocator, if (enabled) '+' else '-');
+        try features.appendSlice(allocator, llvm_name);
+    }
+
+    if (features.items.len == 0) return "";
+    return features.toOwnedSlice(allocator);
+}
+
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -3956,6 +3988,8 @@ fn compileLlvmAppObject(
     entrypoints: []const backend.Entrypoint,
 ) anyerror!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
+    const llvm_cpu = llvmCpuNameForTarget(std_target);
+    const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
@@ -3980,8 +4014,13 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}.bc", .{ target_name, opt_name });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}.o", .{ target_name, opt_name });
+    var tuning_hash = std.hash.Crc32.init();
+    tuning_hash.update(llvm_cpu);
+    tuning_hash.update(&[_]u8{0});
+    tuning_hash.update(llvm_features);
+    const tuning_hash_value = tuning_hash.final();
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}.bc", .{ target_name, opt_name, tuning_hash_value });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}.o", .{ target_name, opt_name, tuning_hash_value });
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
     const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
 
@@ -3995,6 +4034,8 @@ fn compileLlvmAppObject(
         .output_path = object_path,
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
+        .cpu = llvm_cpu,
+        .features = llvm_features,
         .debug = args.debug,
     };
 
