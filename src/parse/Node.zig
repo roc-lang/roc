@@ -531,10 +531,9 @@ pub const Tag = enum {
     /// * rhs - length of entries span
     target_link_type,
 
-    /// A single target entry: x64musl: ["crt1.o", "host.o", app]
+    /// A single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
     /// * main_token - target name identifier token
-    /// * lhs - start of files span
-    /// * rhs - extra data pointer to length of files span and optional target config
+    /// * lhs - TargetConfig index
     target_entry,
 
     /// A string literal file in a target list: "crt1.o"

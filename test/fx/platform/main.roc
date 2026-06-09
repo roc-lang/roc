@@ -8,12 +8,12 @@ platform ""
     targets: {
         files: "targets/",
         exe: {
-            x64mac: ["libhost.a", app],
-            arm64mac: ["libhost.a", app],
-            x64musl: ["crt1.o", "libhost.a", app, "libc.a"],
-            arm64musl: ["crt1.o", "libhost.a", app, "libc.a"],
-            x64win: ["host.lib", app],
-            arm64win: ["host.lib", app],
+            x64mac: { files: ["libhost.a", app] },
+            arm64mac: { files: ["libhost.a", app] },
+            x64musl: { files: ["crt1.o", "libhost.a", app, "libc.a"] },
+            arm64musl: { files: ["crt1.o", "libhost.a", app, "libc.a"] },
+            x64win: { files: ["host.lib", app] },
+            arm64win: { files: ["host.lib", app] },
         }
     }
 

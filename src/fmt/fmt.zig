@@ -2028,30 +2028,14 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    /// Format a single target entry: x64linux: ["host.o", app]
+    /// Format a single target entry: x64linux: { files: ["host.o", app] }
     fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
         const entry = fmt.ast.store.getTargetEntry(entry_idx);
-        const files = fmt.ast.store.targetFileSlice(entry.files);
 
         // Format target name (e.g., x64linux)
         try fmt.pushTokenText(entry.target);
-        if (entry.config) |config_idx| {
-            try fmt.pushAll(": ");
-            try fmt.formatTargetConfig(config_idx);
-            return;
-        }
-
-        try fmt.pushAll(": [");
-
-        // Format file list
-        for (files, 0..) |file_idx, i| {
-            try fmt.formatTargetFile(file_idx);
-            if (i < files.len - 1) {
-                try fmt.pushAll(", ");
-            }
-        }
-
-        try fmt.push(']');
+        try fmt.pushAll(": ");
+        try fmt.formatTargetConfig(entry.config);
     }
 
     fn formatTargetConfig(fmt: *Formatter, config_idx: AST.TargetConfig.Idx) (Allocator.Error || error{WriteFailed})!void {
@@ -2059,15 +2043,21 @@ const Formatter = struct {
         const entries = fmt.ast.store.targetConfigEntrySlice(config.entries);
         const base_indent = fmt.curr_indent;
 
+        if (entries.len == 1) {
+            const entry = fmt.ast.store.getTargetConfigEntry(entries[0]);
+            try fmt.pushAll("{ ");
+            try fmt.formatTargetConfigEntry(entry);
+            try fmt.pushAll(" }");
+            return;
+        }
+
         try fmt.push('{');
         for (entries, 0..) |entry_idx, i| {
             const entry = fmt.ast.store.getTargetConfigEntry(entry_idx);
             try fmt.ensureNewline();
             fmt.curr_indent = base_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushTokenText(entry.name);
-            try fmt.pushAll(": ");
-            try fmt.formatTargetConfigValue(entry.value);
+            try fmt.formatTargetConfigEntry(entry);
             if (i < entries.len - 1 or entries.len > 0) {
                 try fmt.push(',');
             }
@@ -2079,6 +2069,20 @@ const Formatter = struct {
             try fmt.pushIndent();
         }
         try fmt.push('}');
+    }
+
+    fn formatTargetConfigEntry(fmt: *Formatter, entry: AST.TargetConfigEntry) (Allocator.Error || error{WriteFailed})!void {
+        try fmt.pushTokenText(entry.name);
+        if (fmt.targetConfigEntryIsPunned(entry)) return;
+        try fmt.pushAll(": ");
+        try fmt.formatTargetConfigValue(entry.value);
+    }
+
+    fn targetConfigEntryIsPunned(fmt: *Formatter, entry: AST.TargetConfigEntry) bool {
+        return switch (fmt.ast.store.getTargetConfigValue(entry.value)) {
+            .ident => |token| token == entry.name,
+            else => false,
+        };
     }
 
     fn formatTargetConfigValue(fmt: *Formatter, value_idx: AST.TargetConfigValue.Idx) (Allocator.Error || error{WriteFailed})!void {
@@ -3374,8 +3378,8 @@ test "issue 8989: platform header targets section is preserved" {
         \\    targets: {
         \\        files: "build/",
         \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: ["host.o", app],
+        \\            x64linux: { files: ["host.o", app] },
+        \\            arm64linux: { files: ["host.o", app] },
         \\        },
         \\    }
     ;

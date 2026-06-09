@@ -3248,12 +3248,6 @@ fn collectPlatformLinkInputs(
             .target = target_name,
         } });
     };
-    if (link_spec.wasm) |wasm| {
-        if (wasm.has_unresolved_values) {
-            ctx.io.stderr().writeAll("Error: identifier-backed wasm target configuration requires checked constant evaluation, which is not wired up yet.\n") catch {};
-            return error.CliError;
-        }
-    }
     const files_dir = targets_config.files_dir orelse "targets";
     var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
     var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
@@ -4196,6 +4190,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -4256,7 +4256,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             final_output_path,
             build_cache_dir,
             platform_dir,
-            targets_config,
+            resolved_targets_config,
             &lowered,
             entrypoints,
             static_data_exports,
@@ -4289,7 +4289,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             return;
         }
 
-        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
         const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
@@ -4472,6 +4472,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -4515,7 +4521,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             final_output_path,
             build_cache_dir,
             platform_dir,
-            targets_config,
+            resolved_targets_config,
             &lowered,
             entrypoints,
         );
@@ -4601,7 +4607,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         return;
     }
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
@@ -4770,6 +4776,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -4816,7 +4828,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         unreachable;
     }
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const shim_filename = try interpreterShimCacheFilename(ctx, target);
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });

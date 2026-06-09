@@ -2783,16 +2783,12 @@ pub fn addTargetLinkType(store: *NodeStore, link_type: AST.TargetLinkType) std.m
 
 /// Adds a TargetEntry node and returns its index.
 pub fn addTargetEntry(store: *NodeStore, entry: AST.TargetEntry) std.mem.Allocator.Error!AST.TargetEntry.Idx {
-    const extra_token = try store.reserveExtraDataToken(2);
-    store.extra_data.appendAssumeCapacity(entry.files.span.len);
-    store.extra_data.appendAssumeCapacity(try packOptionalIndex(entry.config));
-
     const node = Node{
         .tag = .target_entry,
         .main_token = entry.target,
         .data = .{
-            .lhs = entry.files.span.start,
-            .rhs = extra_token,
+            .lhs = @intFromEnum(entry.config),
+            .rhs = 0,
         },
         .region = entry.region,
     };
@@ -3074,12 +3070,10 @@ pub fn getTargetLinkType(store: *const NodeStore, idx: AST.TargetLinkType.Idx) A
 pub fn getTargetEntry(store: *const NodeStore, idx: AST.TargetEntry.Idx) AST.TargetEntry {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     std.debug.assert(node.tag == .target_entry);
-    const extra_start = extraDataStart(node.data.rhs);
 
     return .{
         .target = node.main_token,
-        .files = .{ .span = .{ .start = node.data.lhs, .len = store.extra_data.items[extra_start] } },
-        .config = unpackOptionalIndex(AST.TargetConfig.Idx, store.extra_data.items[extra_start + 1]),
+        .config = @enumFromInt(node.data.lhs),
         .region = node.region,
     };
 }

@@ -2170,11 +2170,10 @@ pub const TargetLinkType = struct {
     pub const Idx = enum(u32) { _ };
 };
 
-/// Single target entry: x64musl: ["crt1.o", "host.o", app]
+/// Single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
 pub const TargetEntry = struct {
     target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
-    files: TargetFile.Span,
-    config: ?TargetConfig.Idx,
+    config: TargetConfig.Idx,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };

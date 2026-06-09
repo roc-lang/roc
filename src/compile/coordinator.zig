@@ -311,6 +311,8 @@ pub const ModuleState = struct {
     source_dir_override: ?[]const u8 = null,
     /// Compiler role assigned by the scheduler for this module.
     module_role: ModuleEnv.ModuleRole = .user,
+    /// Top-level names that package metadata requires as compile-time roots.
+    explicit_root_ident_names: []const []const u8 = &.{},
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -481,6 +483,8 @@ pub const ModuleState = struct {
                 if (source.len > 0) env_alloc.free(@constCast(source));
             }
         }
+        for (self.explicit_root_ident_names) |name| gpa.free(name);
+        gpa.free(self.explicit_root_ident_names);
 
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: freeing imports\n", .{self.name});
@@ -2015,8 +2019,11 @@ pub const Coordinator = struct {
         defer self.gpa.free(imported_artifacts);
         const available_artifacts = try self.collectTypecheckAvailableArtifactViews(self.gpa, imported_artifacts);
         defer self.gpa.free(available_artifacts);
+        const explicit_roots = try self.buildExplicitRootRequests(mod, self.gpa);
+        defer self.gpa.free(explicit_roots);
 
         var publication_with_availability = publication;
+        publication_with_availability.explicit_roots = explicit_roots;
         var relation_available_artifacts: []CheckedArtifact.ImportedModuleView = &.{};
         var relation_available_artifacts_owned = false;
         defer if (relation_available_artifacts_owned) self.gpa.free(relation_available_artifacts);
@@ -2519,6 +2526,7 @@ pub const Coordinator = struct {
         env: *ModuleEnv,
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var imported_source_count: usize = 0;
         for (imported_envs) |imported_env| {
@@ -2546,7 +2554,10 @@ pub const Coordinator = struct {
             self.gpa,
             &typed_modules,
             module_idx,
-            .{ .imports = imported_artifacts },
+            .{
+                .imports = imported_artifacts,
+                .explicit_roots = explicit_roots,
+            },
         );
     }
 
@@ -2603,13 +2614,14 @@ pub const Coordinator = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts) catch return false;
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, explicit_roots) catch return false;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
             manager.stats.recordMiss();
@@ -2667,7 +2679,10 @@ pub const Coordinator = struct {
             } },
             imported_envs,
             imported_artifacts,
-            .{ .available_artifacts = available_artifacts },
+            .{
+                .available_artifacts = available_artifacts,
+                .explicit_roots = explicit_roots,
+            },
         ) catch {
             manager.stats.recordInvalidation();
             return false;
@@ -2962,13 +2977,16 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_artifacts);
         const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
+        const explicit_roots = try self.buildExplicitRootRequests(mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(explicit_roots);
 
         if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, available_artifacts))
+            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, available_artifacts, explicit_roots))
         {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
             task_payload_alloc.free(available_artifacts);
+            task_payload_alloc.free(explicit_roots);
             try self.finishCachedModule(pkg, mod);
             return;
         }
@@ -2985,8 +3003,53 @@ pub const Coordinator = struct {
                 .imported_envs = imported_envs,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
+                .explicit_roots = explicit_roots,
             },
         });
+    }
+
+    fn buildExplicitRootRequests(
+        self: *Coordinator,
+        mod: *ModuleState,
+        allocator: Allocator,
+    ) Allocator.Error![]const check.CheckedArtifact.ExplicitRootRequestInput {
+        const env = mod.moduleEnv() orelse return &.{};
+        if (mod.explicit_root_ident_names.len == 0) return &.{};
+
+        var roots = std.ArrayList(check.CheckedArtifact.ExplicitRootRequestInput).empty;
+        errdefer roots.deinit(allocator);
+
+        for (mod.explicit_root_ident_names) |ident_name| {
+            const def_idx = topLevelDefForIdentName(env, ident_name) orelse continue;
+            try roots.append(allocator, .{
+                .kind = .compile_time_constant,
+                .source = .{ .def = def_idx },
+                .abi = .compile_time,
+                .exposure = .private,
+            });
+        }
+
+        _ = self;
+        return try roots.toOwnedSlice(allocator);
+    }
+
+    fn topLevelDefForIdentName(env: *const ModuleEnv, ident_name: []const u8) ?CIR.Def.Idx {
+        const ident = env.common.findIdent(ident_name) orelse return null;
+        for (env.store.sliceDefs(env.global_value_defs)) |def_idx| {
+            const def = env.store.getDef(def_idx);
+            if (defPatternIdent(&env.store, def.pattern)) |pattern_ident| {
+                if (pattern_ident.eql(ident)) return def_idx;
+            }
+        }
+        return null;
+    }
+
+    fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?base.Ident.Idx {
+        return switch (store.getPattern(pattern_idx)) {
+            .assign => |assign| assign.ident,
+            .as => |as_pattern| as_pattern.ident,
+            else => null,
+        };
     }
 
     /// Handle a successful type-check result
@@ -3844,6 +3907,7 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
+        defer task_allocs.result.free(task.explicit_roots);
 
         const result_alloc = task_allocs.result;
         // The checked artifact can retain memory owned by the checker output.
@@ -3858,6 +3922,7 @@ pub const Coordinator = struct {
             task.imported_envs,
             task.imported_artifacts,
             task.available_artifacts,
+            task.explicit_roots,
         );
         defer typecheck_output.deinit();
 

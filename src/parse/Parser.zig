@@ -1502,20 +1502,26 @@ pub fn parseTargetConfigEntry(self: *Parser) Error!AST.TargetConfigEntry.Idx {
     const name = self.pos;
     self.advance();
 
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_colon, start);
-    };
-
-    const value = if (std.mem.eql(u8, self.tokenText(name), "files")) blk: {
-        const files_span = self.parseTargetFileList() catch |err| switch (err) {
-            error.ExpectedNotFound => {
-                return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_target_files_open_square, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TooNested => return error.TooNested,
+    const value = if (self.peek() == .Comma or self.peek() == .CloseCurly) blk: {
+        break :blk try self.store.addTargetConfigValue(.{ .ident = name });
+    } else blk: {
+        self.expect(.OpColon) catch {
+            return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_colon, start);
         };
-        break :blk try self.store.addTargetConfigValue(.{ .files = files_span });
-    } else try self.parseTargetConfigValue();
+
+        if (std.mem.eql(u8, self.tokenText(name), "files")) {
+            const files_span = self.parseTargetFileList() catch |err| switch (err) {
+                error.ExpectedNotFound => {
+                    return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_target_files_open_square, start);
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TooNested => return error.TooNested,
+            };
+            break :blk try self.store.addTargetConfigValue(.{ .files = files_span });
+        } else {
+            break :blk try self.parseTargetConfigValue();
+        }
+    };
 
     return try self.store.addTargetConfigEntry(.{
         .name = name,
@@ -1550,7 +1556,7 @@ pub fn parseTargetConfig(self: *Parser) Error!AST.TargetConfig.Idx {
     });
 }
 
-/// Parses a single target entry: x64musl: ["crt1.o", "host.o", app]
+/// Parses a single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
 pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1569,31 +1575,19 @@ pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
         return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
     };
 
-    var files_span: AST.TargetFile.Span = .{ .span = .{ .start = 0, .len = 0 } };
-    var config: ?AST.TargetConfig.Idx = null;
-    switch (self.peek()) {
-        .OpenSquare => {
-            files_span = self.parseTargetFileList() catch |err| switch (err) {
-                error.ExpectedNotFound => return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start),
-                error.OutOfMemory => return error.OutOfMemory,
-                error.TooNested => return error.TooNested,
-            };
-        },
-        .OpenCurly => {
-            config = try self.parseTargetConfig();
-        },
-        else => return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start),
+    if (self.peek() != .OpenCurly) {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_targets_open_curly, start);
     }
+    const config = try self.parseTargetConfig();
 
     return try self.store.addTargetEntry(.{
         .target = target_name,
-        .files = files_span,
         .config = config,
         .region = .{ .start = start, .end = self.pos },
     });
 }
 
-/// Parses a target link type section: exe: { x64musl: [...], ... }
+/// Parses a target link type section: exe: { x64musl: { files: [...] }, ... }
 pub fn parseTargetLinkType(self: *Parser) Error!AST.TargetLinkType.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
