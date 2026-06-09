@@ -5139,11 +5139,12 @@ fn runExprStatementKernel(
                         break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
                     };
 
-                    if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
+                    const decl_op = self.peek();
+                    if (decl_op != .OpColon and decl_op != .OpColonEqual and decl_op != .OpDoubleColon) {
                         last_statement = try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                         continue :expr_kernel .statement_complete;
                     }
-                    const kind: AST.TypeDeclKind = switch (self.peek()) {
+                    const kind: AST.TypeDeclKind = switch (decl_op) {
                         .OpColonEqual => .nominal,
                         .OpDoubleColon => .@"opaque",
                         else => .alias,
