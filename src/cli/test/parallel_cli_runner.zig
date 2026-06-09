@@ -194,6 +194,7 @@ const CustomCase = enum {
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
+    glue_zig_compiles,
     glue_c_tests,
 };
 
@@ -448,6 +449,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
+    .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
 
@@ -1368,6 +1370,7 @@ fn runCustomCase(
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
 
@@ -2093,6 +2096,46 @@ fn customGlueCHeaderCompiles(io: std.Io, allocator: Allocator, env: *const CaseE
         test_c_path,
         "-o",
         test_o_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/ZigGlue.roc", output_dir)) |failure| return failure;
+
+    // Reference the key generated ABI types so they are semantically analyzed (the
+    // natural-signature PlatformHostedFns, the register-style RocOps, RocStr, and the
+    // HostedFunctions table). Importing the file also runs its comptime size/alignment
+    // assertions. Then compile to an object to confirm the generated Zig is well-formed.
+    const test_zig_content =
+        \\const abi = @import("roc_platform_abi.zig");
+        \\export fn _roc_glue_abi_check() void {
+        \\    var ops: abi.RocOps = undefined;
+        \\    var str: abi.RocStr = undefined;
+        \\    var funcs: abi.HostedFunctions = undefined;
+        \\    var hosted: abi.PlatformHostedFns = undefined;
+        \\    _ = &ops;
+        \\    _ = &str;
+        \\    _ = &funcs;
+        \\    _ = &hosted;
+        \\}
+    ;
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+    const emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate emit flag: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        test_zig_path,
+        emit_flag,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
