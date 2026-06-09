@@ -183,7 +183,7 @@ fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) !void {
 }
 
 fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) !void {
-    const expr_driver_start = std.mem.find(u8, can_source, "fn canonicalizeExprStackSafe(") orelse return error.MissingCanonicalizeBlock;
+    const expr_driver_start = std.mem.find(u8, can_source, "fn runExprKernel(") orelse return error.MissingCanonicalizeBlock;
     const block_start_rel = std.mem.find(u8, can_source[expr_driver_start..], ".block => |e| {") orelse return error.MissingCanonicalizeBlock;
     const block_start = expr_driver_start + block_start_rel;
     const walk_start_rel = std.mem.find(u8, can_source[block_start..], ".block_next = .{") orelse return error.MissingCanonicalizeBlockWalk;
@@ -192,6 +192,51 @@ fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) !void {
     try expectSourceDoesNotContain(block_setup, "while (");
     try expectSourceDoesNotContain(block_setup, "for (");
     try expectSourceDoesNotContain(block_setup, "getStatement(");
+}
+
+fn expectSourceSliceBetweenDoesNotContain(
+    source: []const u8,
+    start_marker: []const u8,
+    end_marker: []const u8,
+    needle: []const u8,
+) !void {
+    const start = std.mem.find(u8, source, start_marker) orelse return error.MissingCanonicalizationSourceStart;
+    const end_rel = std.mem.find(u8, source[start..], end_marker) orelse return error.MissingCanonicalizationSourceEnd;
+    const source_slice = source[start .. start + end_rel];
+    try expectSourceDoesNotContain(source_slice, needle);
+}
+
+fn expectOldCanonicalizationTraversalDeleted(can_source: []const u8) !void {
+    try expectSourceDoesNotContain(can_source, "canonicalizeExpr" ++ "StackSafe");
+    try expectSourceDoesNotContain(can_source, "Expr" ++ "Frame");
+    try expectSourceDoesNotContain(can_source, "Block" ++ "Work");
+    try expectSourceDoesNotContain(can_source, "Pattern" ++ "Frame");
+    try expectSourceDoesNotContain(can_source, "TypeAnno" ++ "Frame");
+    try expectSourceDoesNotContain(can_source, "Expr" ++ "KernelStep");
+    try expectSourceDoesNotContain(can_source, "Pattern" ++ "KernelStep");
+    try expectSourceDoesNotContain(can_source, "TypeAnno" ++ "KernelStep");
+    try expectSourceDoesNotContain(can_source, "Associated" ++ "Step");
+    try expectSourceDoesNotContain(can_source, "Associated" ++ "Frame");
+    try expectSourceDoesNotContain(can_source, "while (frames.pop())");
+    try expectSourceDoesNotContain(can_source, "ArrayList(Expr" ++ "KernelResult)");
+    try expectSourceDoesNotContain(can_source, "const Expr" ++ "KernelResult");
+    try expectSourceDoesNotContain(can_source, "Expr" ++ "ResultSlots");
+    try expectSourceDoesNotContain(can_source, "ArrayList(?CanonicalizedExpr)");
+    try expectSourceDoesNotContain(can_source, "const Block" ++ "State = struct");
+    try expectSourceDoesNotContain(can_source, "Block" ++ "Work");
+    try expectSourceDoesNotContain(can_source, "Associated" ++ "BlockWork");
+    try expectSourceDoesNotContain(can_source, "Kernel" ++ "Step");
+}
+
+fn expectCanonicalizationKernelsDoNotCallRecursiveWrappers(can_source: []const u8) !void {
+    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExpr(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExprOrMalformed(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeStatement");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "processAssociatedBlock(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn enterFunction", "self.canonicalizePattern(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn enterFunction", "canonicalizePatternOrMalformed(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "canonicalizeTypeAnno(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "self.runTypeAnnoKernel(");
 }
 
 test "canonicalization records explicit type declaration tables" {
@@ -519,7 +564,9 @@ test "canonicalization has no separate nested associated item alias traversal" {
 test "canonicalization block setup does not pre-scan block statements" {
     const can_source = @embedFile("../Can.zig");
 
+    try expectOldCanonicalizationTraversalDeleted(can_source);
     try expectBlockSetupDoesNotScanStatements(can_source);
+    try expectCanonicalizationKernelsDoNotCallRecursiveWrappers(can_source);
 }
 
 test "package header auto imports consume parser inventory instead of scanning statements" {
