@@ -228,7 +228,7 @@ test "import validation - type module associated values are importable via expos
         foobar_env.deinit();
         allocator.destroy(foobar_env);
     }
-    const foobar_ast = try parse.parse(allocator, &foobar_env.common);
+    const foobar_ast = try parse.file(allocator, &foobar_env.common);
     defer foobar_ast.deinit();
     try foobar_env.initCIRFields("FooBar");
 
@@ -253,7 +253,7 @@ test "import validation - type module associated values are importable via expos
         importer_env.deinit();
         allocator.destroy(importer_env);
     }
-    const importer_ast = try parse.parse(allocator, &importer_env.common);
+    const importer_ast = try parse.file(allocator, &importer_env.common);
     defer importer_ast.deinit();
     try importer_env.initCIRFields("Importer");
 
