@@ -2709,25 +2709,30 @@ fn readQualificationChain(self: *Parser) Error!QualificationResult {
     var final_token = self.pos; // Capture position of the identifier
     var is_upper = true;
 
-    // Check if there's a qualification chain by looking ahead
     const saved_pos = self.pos;
     self.advance();
 
-    if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-        // There is a qualification chain, continue parsing
-        while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-            // Add the current token as a qualifier before moving to the next
-            try self.store.addScratchToken(final_token);
-
-            // Capture position of the dot-prefixed token
-            final_token = self.pos;
-            is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
-
-            // Move past this token
-            self.advance();
+    var saw_qualifier = false;
+    while (true) {
+        switch (self.peek()) {
+            .NoSpaceDotUpperIdent => {
+                saw_qualifier = true;
+                try self.store.addScratchToken(final_token);
+                final_token = self.pos;
+                is_upper = true;
+                self.advance();
+            },
+            .NoSpaceDotLowerIdent => {
+                saw_qualifier = true;
+                try self.store.addScratchToken(final_token);
+                final_token = self.pos;
+                is_upper = false;
+                self.advance();
+            },
+            else => break,
         }
-    } else {
-        // No qualification chain, restore position
+    }
+    if (!saw_qualifier) {
         self.pos = saved_pos;
     }
 
