@@ -5315,9 +5315,10 @@ fn runExprStatementKernel(
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
             {
                 const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
+                const next_tok = self.peek();
+                if (next_tok == .CloseCurly or next_tok == .EndOfFile) {
                     const stmt = self.store.getStatement(completed);
-                    if (stmt == .expr and self.peek() == .CloseCurly) {
+                    if (stmt == .expr and next_tok == .CloseCurly) {
                         try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
                             .start = state.statement_pos,
                             .end = self.pos,
