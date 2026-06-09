@@ -899,8 +899,9 @@ fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
         qualifier = self.pos;
         self.advance();
     }
-    if (!((qualifier == null and self.peek() == .UpperIdent) or
-        (qualifier != null and (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent))))
+    const module_start_tok = self.peek();
+    if (!((qualifier == null and module_start_tok == .UpperIdent) or
+        (qualifier != null and (module_start_tok == .NoSpaceDotUpperIdent or module_start_tok == .DotUpperIdent))))
     {
         return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
     }
@@ -911,12 +912,17 @@ fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
     const module_name_tok = self.pos;
     self.advance();
 
-    while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+    while (true) {
+        const segment_tok = self.peek();
+        if (segment_tok != .NoSpaceDotUpperIdent and segment_tok != .DotUpperIdent) {
+            break;
+        }
         last_upper_tok = self.pos;
         self.advance();
     }
 
-    const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
+    const clause_tok = self.peek();
+    const has_explicit_clause = clause_tok == .KwAs or clause_tok == .KwExposing;
     const has_multiple_segments = last_upper_tok != module_name_tok;
     if (has_multiple_segments and !has_explicit_clause) {
         nested_import = true;
@@ -929,7 +935,7 @@ fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
         try self.store.addScratchExposedItem(exposed_item);
         exposes = try self.store.exposedItemSpanFrom(scratch_top);
     } else {
-        if (self.peek() == .KwAs) {
+        if (clause_tok == .KwAs) {
             self.advance();
             alias_tok = self.pos;
             self.expect(.UpperIdent) catch {
