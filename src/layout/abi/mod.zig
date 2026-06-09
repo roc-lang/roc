@@ -10,9 +10,11 @@ const std = @import("std");
 
 pub const aarch64 = @import("aarch64.zig");
 pub const x86_64 = @import("x86_64.zig");
+pub const wasm = @import("wasm.zig");
 
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(aarch64);
     std.testing.refAllDecls(x86_64);
+    std.testing.refAllDecls(wasm);
 }

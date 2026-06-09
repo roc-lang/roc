@@ -123,4 +123,5 @@ test "layout tests" {
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));
     std.testing.refAllDecls(@import("abi/x86_64.zig"));
+    std.testing.refAllDecls(@import("abi/wasm.zig"));
 }
