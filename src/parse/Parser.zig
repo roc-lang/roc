@@ -5769,6 +5769,20 @@ const TypeDependencyWalkItem = struct {
     mode: TypeDependencyWalkMode,
 };
 
+inline fn appendTypeDependencyAnnoSlice(
+    pending_allocator: std.mem.Allocator,
+    pending: *std.ArrayList(TypeDependencyWalkItem),
+    annos: []const AST.TypeAnno.Idx,
+    first: usize,
+    mode: TypeDependencyWalkMode,
+) Error!void {
+    var i = annos.len;
+    while (i > first) {
+        i -= 1;
+        try pending.append(pending_allocator, .{ .anno = annos[i], .mode = mode });
+    }
+}
+
 fn recordTypeDependenciesFromAnnoWorklist(
     self: *Parser,
     root: AST.TypeAnno.Idx,
@@ -5787,12 +5801,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
             .tag_payloads_only => switch (anno) {
                 .apply => |apply| {
                     const args = self.store.typeAnnoSlice(apply.args);
-                    if (args.len == 0) continue;
-                    var i = args.len;
-                    while (i > 1) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = args[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 1, .all);
                 },
                 else => {},
             },
@@ -5805,30 +5814,18 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 },
                 .apply => |apply| {
                     const args = self.store.typeAnnoSlice(apply.args);
-                    var i = args.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = args[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext == .named) {
                         try pending.append(pending_allocator, .{ .anno = tag_union.ext.named.anno, .mode = .all });
                     }
                     const tags = self.store.typeAnnoSlice(tag_union.tags);
-                    var i = tags.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = tags[i], .mode = .tag_payloads_only });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, tags, 0, .tag_payloads_only);
                 },
                 .tuple => |tuple| {
                     const elems = self.store.typeAnnoSlice(tuple.annos);
-                    var i = elems.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = elems[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, elems, 0, .all);
                 },
                 .record => |record| {
                     if (record.ext == .named) {
@@ -5845,11 +5842,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 .@"fn" => |func| {
                     try pending.append(pending_allocator, .{ .anno = func.ret, .mode = .all });
                     const args = self.store.typeAnnoSlice(func.args);
-                    var i = args.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = args[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
                 },
                 .parens => |parens| {
                     try pending.append(pending_allocator, .{ .anno = parens.anno, .mode = .all });
