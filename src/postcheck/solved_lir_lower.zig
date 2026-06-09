@@ -14,6 +14,7 @@ const layout = @import("layout");
 const Common = @import("common.zig");
 const Mono = @import("monotype/ast.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
+const SolvedInline = @import("solved_inline.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const LambdaMono = @import("lambda_mono/ast.zig");
@@ -103,16 +104,22 @@ pub const Output = struct {
     }
 };
 
+/// Options used by solved-to-LIR lowering.
+pub const Options = struct {
+    inline_plan: SolvedInline.Plan = .{},
+};
+
 /// Lower Lambda Solved directly into LIR.
 pub fn run(
     allocator: std.mem.Allocator,
     target_usize: base.target.TargetUsize,
     solved: Solved.Program,
+    options: Options,
 ) Common.LowerError!Output {
     var owned = solved;
     errdefer owned.deinit();
 
-    var lowerer = try Lowerer.init(allocator, target_usize, &owned);
+    var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
     errdefer lowerer.deinit();
 
     try lowerer.lower();
@@ -235,6 +242,7 @@ const Lowerer = struct {
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
+    inline_plan: SolvedInline.Plan,
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
@@ -265,6 +273,7 @@ const Lowerer = struct {
         allocator: std.mem.Allocator,
         target_usize: base.target.TargetUsize,
         solved: *const Solved.Program,
+        options: Options,
     ) Common.LowerError!Lowerer {
         const local_map = try allocator.alloc(?LIR.LocalId, solved.lifted.locals.items.len);
         errdefer allocator.free(local_map);
@@ -281,6 +290,7 @@ const Lowerer = struct {
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
+            .inline_plan = options.inline_plan,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
@@ -534,7 +544,6 @@ const Lowerer = struct {
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
         try self.fn_entries.append(self.allocator, undefined);
-
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(source)];
         const symbol = self.symbols.fresh();
         const func = switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
@@ -1919,6 +1928,15 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const lowered = try self.lowerExprsToTemps(args);
         defer self.allocator.free(lowered.ids);
+
+        if (capture_arg == null) {
+            if (try self.inlineBodyForKnownCall(callee)) |body_expr| {
+                var current = try self.lowerInlineKnownCallInto(target, callee, lowered.ids, body_expr, next);
+                current = try self.prependExprs(lowered, current);
+                return current;
+            }
+        }
+
         const call_args = if (capture_arg) |capture_local| blk: {
             const values = try self.allocator.alloc(LIR.LocalId, lowered.ids.len + 1);
             errdefer self.allocator.free(values);
@@ -1935,6 +1953,55 @@ const Lowerer = struct {
         } });
         current = try self.prependExprs(lowered, current);
         return current;
+    }
+
+    fn inlineBodyForKnownCall(self: *Lowerer, callee: Type.FnId) Common.LowerError!?Lifted.ExprId {
+        const spec = self.fn_specs.items[@intFromEnum(callee)];
+        const body_expr = self.inline_plan.bodyForFn(spec.source) orelse return null;
+
+        if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
+        if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
+
+        return body_expr;
+    }
+
+    fn lowerInlineKnownCallInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        callee: Type.FnId,
+        arg_locals: []const LIR.LocalId,
+        body_expr: Lifted.ExprId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const spec = self.fn_specs.items[@intFromEnum(callee)];
+        if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
+        if (spec.capture_ty != null) Common.invariant("attempted to inline a capturing function spec");
+
+        const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
+        const func = switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
+            .func => |func| func,
+            else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
+        };
+        const solved_args = self.solved.types.span(func.args);
+        const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
+        if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
+        if (arg_locals.len != lifted_args.len) Common.invariant("inline call argument count differed from function arity");
+
+        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len);
+        defer self.allocator.free(saved);
+        for (lifted_args, 0..) |arg, i| {
+            saved[i] = self.local_map[@intFromEnum(arg.local)];
+        }
+        for (lifted_args, 0..) |arg, i| {
+            self.local_map[@intFromEnum(arg.local)] = arg_locals[i];
+        }
+        defer {
+            for (lifted_args, 0..) |arg, i| {
+                self.local_map[@intFromEnum(arg.local)] = saved[i];
+            }
+        }
+
+        return try self.lowerExprInto(target, body_expr, next);
     }
 
     fn lowerValueCallInto(

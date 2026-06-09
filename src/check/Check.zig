@@ -170,6 +170,13 @@ defer_generalize: bool = false,
 /// This prevents rank pollution where inner lambda generalization pulls outer
 /// scope vars to rank 0 via Rank.min in merge.
 checking_call_arg: bool = false,
+/// True when checking the right-hand side of an immutable binding (a top-level
+/// def or a block-local `s_decl`). Used to generalize a binding whose RHS is a
+/// bare reference to an already-generalized scheme (e.g. `shorthand = Foo.bar`).
+/// Such a reference is non-expansive, so generalizing it is the value-restriction
+/// treatment of a variable binding. Deliberately NOT set for mutable `var`
+/// bindings, which must never generalize.
+checking_binding_rhs: bool = false,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
 /// before generalization can process it, but BEFORE eql constraint resolution
@@ -3153,6 +3160,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     };
 
     // Infer types for the body, checking against the instantiated annotation
+    self.checking_binding_rhs = true;
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
@@ -5109,12 +5117,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
+    // Consume the binding-RHS flag: it applies only to this immediate checkExpr
+    // call and must not propagate into subexpressions.
+    const is_binding_rhs = self.checking_binding_rhs;
+    self.checking_binding_rhs = false;
+
     // Value restriction: only generalize at the inner lambda level, not the
     // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
     // Direct call-argument lambdas are consumed immediately, so they must not
     // generalize independently. Doing so lets their generalized vars escape
     // into the enclosing value via unification.
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg;
+    //
+    // We also generalize a binding whose RHS is a bare reference to an already-
+    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
+    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
+    // raises none of the duplicate-work or duplicate-effect concerns that motivate
+    // restricting generalization to syntactic functions. In practice the only
+    // generalized schemes are functions (numeric literals use the separate
+    // defaulting path), so this never re-generalizes numbers or tag unions. We
+    // restrict this to binding-RHS position so that bare lookups appearing as
+    // arbitrary subexpressions don't pay generalization cost or get generalized
+    // out from under their surrounding context.
+    const is_value_alias = is_binding_rhs and
+        (expr == .e_lookup_local or expr == .e_lookup_external);
+    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -7262,6 +7288,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     });
                 }
 
+                self.checking_binding_rhs = true;
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});

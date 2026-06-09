@@ -6,11 +6,11 @@ platform ""
     targets: {
         files: "../../fx/platform/targets/",
         exe: {
-            arm64mac: ["libhost.a", app],
-            arm64musl: ["libhost.a", app],
-            x64musl: ["libhost.a", app],
-            arm64win: ["host.lib", app],
-            x64win: ["host.lib", app],
+            arm64mac: { files: ["libhost.a", app] },
+            arm64musl: { files: ["libhost.a", app] },
+            x64musl: { files: ["libhost.a", app] },
+            arm64win: { files: ["host.lib", app] },
+            x64win: { files: ["host.lib", app] },
         }
     }
 

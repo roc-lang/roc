@@ -73,7 +73,7 @@ pub fn parseAppHeader(
     defer env.deinit();
     env.common.source = source;
 
-    const ast = parse.parse(gpa, &env.common) catch return error.OutOfMemory;
+    const ast = parse.file(gpa, &env.common) catch return error.OutOfMemory;
     defer ast.deinit();
 
     const file_node = ast.store.getFile();

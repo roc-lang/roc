@@ -134,7 +134,7 @@ const MonoTestEnv = struct {
     const Self = @This();
 
     /// Initialize a single module test environment
-    pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || error{TooNested})!Self {
+    pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -159,7 +159,7 @@ const MonoTestEnv = struct {
         module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
-        const parse_ast = try parse.parse(gpa, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
@@ -220,7 +220,7 @@ const MonoTestEnv = struct {
     }
 
     /// Initialize with an imported module
-    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) (Allocator.Error || error{TooNested})!Self {
+    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -265,7 +265,7 @@ const MonoTestEnv = struct {
             .qualified_type_ident = other_qualified_ident,
         });
 
-        const parse_ast = try parse.parse(gpa, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
@@ -336,7 +336,7 @@ const MonoTestEnv = struct {
     const ImportedModule = struct { name: []const u8, env: *const MonoTestEnv };
 
     /// Initialize with multiple imported modules
-    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) (Allocator.Error || error{TooNested})!Self {
+    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) Allocator.Error!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -383,7 +383,7 @@ const MonoTestEnv = struct {
             });
         }
 
-        const parse_ast = try parse.parse(gpa, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
@@ -711,7 +711,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 

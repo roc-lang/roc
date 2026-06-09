@@ -89,21 +89,22 @@ pub fn generateObjectFile(
 
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols) |sym| {
+                const is_macho_external = sym.is_global or sym.is_external or symbolIsRelocationTarget(sym.name, relocations, rodata_relocations);
                 const sym_idx = try macho.addSymbol(.{
                     .name = sym.name,
                     .section = if (sym.is_external) 0 else machoSectionNumber(sym.section),
                     .offset = sym.offset,
-                    .is_external = sym.is_global or sym.is_external,
+                    .is_external = is_macho_external,
                 });
 
                 // Add relocations for this symbol
                 for (relocations) |rel| {
                     switch (rel) {
                         .linked_function => |f| if (std.mem.eql(u8, f.name, sym.name)) {
-                            try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
+                            try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, is_macho_external);
                         },
                         .linked_data => |d| if (std.mem.eql(u8, d.name, sym.name)) {
-                            try macho.addTextDataRelocation(@intCast(rel.getOffset()), sym_idx, d.kind);
+                            try macho.addTextDataRelocation(@intCast(rel.getOffset()), sym_idx, is_macho_external, d.kind);
                         },
                         else => {},
                     }
@@ -111,7 +112,7 @@ pub fn generateObjectFile(
 
                 for (rodata_relocations) |rel| {
                     if (std.mem.eql(u8, rel.target_symbol_name, sym.name)) {
-                        try macho.addRodataRelocation(@intCast(rel.offset), sym_idx, true, rel.addend);
+                        try macho.addRodataRelocation(@intCast(rel.offset), sym_idx, is_macho_external, rel.addend);
                     }
                 }
             }
@@ -240,6 +241,24 @@ fn coffSection(section: Section) object.coff.Section {
         .rodata => .rdata,
         .undef => .undef,
     };
+}
+
+fn symbolIsRelocationTarget(
+    name: []const u8,
+    relocations: []const Relocation,
+    rodata_relocations: []const DataRelocation,
+) bool {
+    for (relocations) |rel| {
+        switch (rel) {
+            .linked_function => |function| if (std.mem.eql(u8, function.name, name)) return true,
+            .linked_data => |data| if (std.mem.eql(u8, data.name, name)) return true,
+            else => {},
+        }
+    }
+    for (rodata_relocations) |rel| {
+        if (std.mem.eql(u8, rel.target_symbol_name, name)) return true;
+    }
+    return false;
 }
 
 // Tests

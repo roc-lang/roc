@@ -1745,14 +1745,10 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
     env.common.source = source;
     env.module_name = module_name;
 
-    const ast = parse.parse(ctx.gpa, &env.common) catch |err| switch (err) {
+    const ast = parse.file(ctx.gpa, &env.common) catch |err| switch (err) {
         error.OutOfMemory => {
             ctx.gpa.free(source);
             return error.OutOfMemory;
-        },
-        error.TooNested => {
-            ctx.gpa.free(source);
-            return null;
         },
     };
     defer ast.deinit();
@@ -2565,7 +2561,7 @@ fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) (Allocato
     };
 
     // Parse the source
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
+    const ast = parse.file(ctx.gpa, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,
@@ -3480,6 +3476,7 @@ const PlatformLinkInputs = struct {
     platform_files_dir: []const u8,
     platform_files_pre: []const []const u8,
     platform_files_post: []const []const u8,
+    wasm: ?roc_target.WasmTargetConfig,
 };
 
 fn selectBuildPlatformTarget(
@@ -3627,6 +3624,7 @@ fn collectPlatformLinkInputs(
         .platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }),
         .platform_files_pre = platform_files_pre.items,
         .platform_files_post = platform_files_post.items,
+        .wasm = link_spec.wasm,
     };
 }
 
@@ -3658,6 +3656,48 @@ fn preloadWasmObject(
         }
         return err;
     };
+}
+
+fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+    if (args.wasm_stack_size) |bytes| return bytes;
+    if (wasm) |config| {
+        if (config.initial_stack_size) |bytes| return bytes;
+    }
+    return linker.DEFAULT_WASM_STACK_SIZE;
+}
+
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+    if (args.wasm_memory) |bytes| return bytes;
+    if (wasm) |config| {
+        if (config.minimum_memory) |bytes| return bytes;
+    }
+    return linker.DEFAULT_WASM_INITIAL_MEMORY;
+}
+
+fn configuredWasmMemory(
+    args: cli_args.BuildArgs,
+    wasm: ?roc_target.WasmTargetConfig,
+) backend.wasm.WasmModule.FinalMemoryConfig {
+    const stack_bytes = configuredWasmStackBytes(args, wasm);
+    return .{
+        .stack_bytes = @intCast(stack_bytes),
+        .import_memory = if (wasm) |config| config.import_memory else false,
+        .minimum_memory = configuredWasmMinimumMemory(args, wasm),
+        .maximum_memory = if (wasm) |config| config.maximum_memory else null,
+        .export_memory = if (wasm) |config| !config.import_memory else true,
+    };
+}
+
+fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.WasmTargetConfig) void {
+    if (wasm) |config| {
+        if (config.global_base) |global_base| {
+            module.setDataBase(global_base);
+        }
+    }
+}
+
+fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) anyerror!void {
+    try module.exportGlobalSymbols();
 }
 
 fn addWasmObject(
@@ -3723,6 +3763,166 @@ fn addWasmInput(
     }
 }
 
+fn appendUniqueWasmExportName(exports: *std.array_list.Managed([]const u8), name: []const u8) Allocator.Error!void {
+    for (exports.items) |existing| {
+        if (std.mem.eql(u8, existing, name)) return;
+    }
+    try exports.append(name);
+}
+
+fn appendWasmObjectExportNames(
+    ctx: *CliCtx,
+    exports: *std.array_list.Managed([]const u8),
+    path: []const u8,
+    member_name: ?[]const u8,
+    bytes: []const u8,
+) anyerror!void {
+    var module = try preloadWasmObject(ctx, path, member_name, bytes);
+    defer module.deinit();
+
+    try module.exportGlobalSymbols();
+    for (module.exports.items) |exp| {
+        if (exp.kind == .func) {
+            try appendUniqueWasmExportName(exports, exp.name);
+        }
+    }
+}
+
+fn appendWasmInputExportNames(
+    ctx: *CliCtx,
+    exports: *std.array_list.Managed([]const u8),
+    owned_inputs: *std.ArrayList([]u8),
+    path: []const u8,
+) anyerror!void {
+    const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
+
+    if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
+        try appendWasmObjectExportNames(ctx, exports, path, null, bytes);
+        return;
+    }
+
+    if (!backend.wasm.ObjectArchive.isArchive(bytes)) {
+        std.log.err("Failed to preload wasm input {s}: {}", .{ path, error.InvalidMagic });
+        return error.InvalidMagic;
+    }
+
+    var member_count: usize = 0;
+    var iter = backend.wasm.ObjectArchive.Iterator.init(bytes) catch |err| {
+        std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
+        return err;
+    };
+
+    while (true) {
+        const maybe_member = iter.next() catch |err| {
+            std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
+            return err;
+        };
+        const member = maybe_member orelse break;
+        member_count += 1;
+        try appendWasmObjectExportNames(ctx, exports, path, member.name, member.bytes);
+    }
+
+    if (member_count == 0) {
+        std.log.err("Wasm archive {s} does not contain object members", .{path});
+        return error.EmptyArchive;
+    }
+}
+
+fn collectWasmPlatformExports(
+    ctx: *CliCtx,
+    link_inputs: PlatformLinkInputs,
+    owned_inputs: *std.ArrayList([]u8),
+) anyerror![]const []const u8 {
+    var exports = std.array_list.Managed([]const u8).init(ctx.arena);
+
+    for (link_inputs.platform_files_pre) |path| {
+        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path);
+    }
+    for (link_inputs.platform_files_post) |path| {
+        try appendWasmInputExportNames(ctx, &exports, owned_inputs, path);
+    }
+
+    return exports.items;
+}
+
+fn writeDevWasmObject(
+    ctx: *CliCtx,
+    build_cache_dir: []const u8,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    entrypoints: []const backend.Entrypoint,
+) anyerror![]const u8 {
+    if (entrypoints.len == 0) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("wasm object invariant violated: no exported platform entrypoints", .{});
+        }
+        unreachable;
+    }
+
+    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+    errdefer wasm_module.deinit();
+    wasm_module.addMemoryImport();
+    const table_symbol = try wasm_module.addTableImportWithSymbol();
+    const stack_pointer_symbol = try wasm_module.addStackPointerImportWithSymbol();
+
+    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
+    if (builtins_bytes.len > 0) {
+        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
+            std.log.err("Failed to preload wasm builtins: {}", .{err});
+            return err;
+        };
+        defer builtins_module.deinit();
+
+        var merge_result = try wasm_module.mergeModuleForObject(&builtins_module);
+        merge_result.deinit();
+    }
+
+    const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
+        std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
+        return err;
+    };
+
+    var codegen = backend.wasm.WasmCodeGen.initWithModule(
+        ctx.gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        wasm_module,
+    );
+    defer codegen.deinit();
+    codegen.configureBuiltinRelocs(builtin_symbols);
+    codegen.configureStackPointerReloc(stack_pointer_symbol);
+    codegen.configureTableReloc(table_symbol);
+    codegen.configureRelocatableObject();
+
+    try codegen.registerIndirectCallTypes();
+    try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+
+    for (entrypoints) |entry| {
+        _ = try codegen.generateEntrypointWrapper(
+            entry.symbol_name,
+            entry.proc,
+            entry.arg_layouts,
+            entry.ret_layout,
+        );
+    }
+
+    try codegen.flushPendingBodies();
+    for (entrypoints) |entry| {
+        _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
+    }
+    try codegen.module.verifyNoLinkObjectContract();
+
+    const wasm_bytes = try codegen.module.encodeRelocatable(ctx.gpa);
+    defer ctx.gpa.free(wasm_bytes);
+
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, "roc_app_wasm32.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
+        std.log.err("Failed to write wasm object output: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+
+    return obj_path;
+}
+
 fn rocBuildWasmSurgical(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -3736,74 +3936,7 @@ fn rocBuildWasmSurgical(
     entrypoints: []const backend.Entrypoint,
 ) anyerror!void {
     if (args.no_link) {
-        if (entrypoints.len == 0) {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("wasm no-link invariant violated: no exported platform entrypoints", .{});
-            }
-            unreachable;
-        }
-
-        var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
-        errdefer wasm_module.deinit();
-        wasm_module.addMemoryImport();
-        const table_symbol = try wasm_module.addTableImportWithSymbol();
-        const stack_pointer_symbol = try wasm_module.addStackPointerImportWithSymbol();
-
-        const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
-        if (builtins_bytes.len > 0) {
-            var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-                std.log.err("Failed to preload wasm builtins: {}", .{err});
-                return err;
-            };
-            defer builtins_module.deinit();
-
-            var merge_result = try wasm_module.mergeModuleForObject(&builtins_module);
-            merge_result.deinit();
-        }
-
-        const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
-            std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
-            return err;
-        };
-
-        var codegen = backend.wasm.WasmCodeGen.initWithModule(
-            ctx.gpa,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            wasm_module,
-        );
-        defer codegen.deinit();
-        codegen.configureBuiltinRelocs(builtin_symbols);
-        codegen.configureStackPointerReloc(stack_pointer_symbol);
-        codegen.configureTableReloc(table_symbol);
-        codegen.configureRelocatableObject();
-
-        try codegen.registerIndirectCallTypes();
-        try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
-
-        for (entrypoints) |entry| {
-            _ = try codegen.generateEntrypointWrapper(
-                entry.symbol_name,
-                entry.proc,
-                entry.arg_layouts,
-                entry.ret_layout,
-            );
-        }
-
-        try codegen.flushPendingBodies();
-        for (entrypoints) |entry| {
-            _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
-        }
-        try codegen.module.verifyNoLinkObjectContract();
-
-        const wasm_bytes = try codegen.module.encodeRelocatable(ctx.gpa);
-        defer ctx.gpa.free(wasm_bytes);
-
-        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, "roc_app_wasm32.o" });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
-            std.log.err("Failed to write wasm object output: {}", .{err});
-            return error.WasmOutputWriteFailed;
-        };
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
 
         if (!args.suppress_build_status) {
             try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
@@ -3827,8 +3960,50 @@ fn rocBuildWasmSurgical(
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
-    var loaded_module = false;
-    var wasm_module: backend.wasm.WasmModule = undefined;
+    if (link_inputs.wasm != null) {
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
+        const object_files = try ctx.arena.alloc([]const u8, 1);
+        object_files[0] = obj_path;
+        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+
+        const link_config = linker.LinkConfig{
+            .target_format = .wasm,
+            .target_abi = null,
+            .target_os = .freestanding,
+            .target_arch = .wasm32,
+            .output_path = final_output_path,
+            .object_files = object_files,
+            .platform_files_pre = link_inputs.platform_files_pre,
+            .platform_files_post = link_inputs.platform_files_post,
+            .extra_args = &.{},
+            .can_exit_early = false,
+            .disable_output = false,
+            .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+            .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+            .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+            .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+            .wasm_exports = wasm_exports,
+            .platform_files_dir = link_inputs.platform_files_dir,
+            .scratch_dir = build_cache_dir,
+        };
+
+        if (args.z_dump_linker) {
+            try dumpLinkerInputs(ctx, link_config);
+        }
+
+        linker.link(ctx, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = link_inputs.target_name,
+            } });
+        };
+        return;
+    }
+
+    var loaded_module = true;
+    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+    configureWasmDataBase(&wasm_module, link_inputs.wasm);
     errdefer if (loaded_module) wasm_module.deinit();
 
     for (link_inputs.platform_files_pre) |path| {
@@ -3838,7 +4013,7 @@ fn rocBuildWasmSurgical(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try wasm_module.exportGlobalSymbols();
+    try exportConfiguredWasmEntrypoints(&wasm_module);
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
@@ -3891,9 +4066,8 @@ fn rocBuildWasmSurgical(
     try codegen.flushPendingBodies();
     try codegen.module.linkHostToAppCalls(host_to_app_map.items);
 
-    const stack_bytes = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE;
-    try codegen.module.finalizeMemoryAndTable(@intCast(stack_bytes));
-    codegen.module.ensureMemoryMinBytes(args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY);
+    const memory_config = configuredWasmMemory(args, link_inputs.wasm);
+    try codegen.module.finalizeMemoryAndTableWithConfig(memory_config);
     try codegen.module.resolveRelocations();
 
     const called_fns = try ctx.gpa.alloc(bool, codegen.module.liveFunctionCount());
@@ -3916,6 +4090,18 @@ const LlvmObjectPaths = struct {
     bitcode_path: []const u8,
     object_path: []const u8,
 };
+
+fn staticDataLinkRootSymbols(
+    ctx: *CliCtx,
+    static_data_exports: []const backend.StaticDataExport,
+) Allocator.Error![]const []const u8 {
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, static_data_exports.len);
+    for (static_data_exports) |data_export| {
+        if (!data_export.is_global) continue;
+        try symbols.append(data_export.symbol_name);
+    }
+    return symbols.items;
+}
 
 fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     return switch (opt) {
@@ -4084,6 +4270,42 @@ fn mergeLlvmStaticDataWasmModule(
     merge_result.deinit();
 }
 
+fn writeCombinedLlvmWasmObject(
+    ctx: *CliCtx,
+    build_cache_dir: []const u8,
+    app_object_path: []const u8,
+    static_data_exports: []const backend.StaticDataExport,
+    opt: cli_args.OptLevel,
+    owned_inputs: *std.ArrayList([]u8),
+) anyerror![]const u8 {
+    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+    defer wasm_module.deinit();
+    wasm_module.addMemoryImport();
+    _ = try wasm_module.addTableImportWithSymbol();
+    _ = try wasm_module.addStackPointerImportWithSymbol();
+
+    const app_bytes = try appendOwnedWasmInput(ctx, owned_inputs, app_object_path);
+    var app_module = try preloadWasmObject(ctx, app_object_path, null, app_bytes);
+    defer app_module.deinit();
+    var app_merge = try wasm_module.mergeModuleForObject(&app_module);
+    app_merge.deinit();
+
+    try mergeLlvmStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
+    try wasm_module.verifyNoLinkObjectContract();
+
+    const wasm_bytes = try wasm_module.encodeRelocatable(ctx.gpa);
+    defer ctx.gpa.free(wasm_bytes);
+
+    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
+        std.log.err("Failed to write wasm object output: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+
+    return obj_path;
+}
+
 fn rocBuildWasmLlvm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -4109,30 +4331,7 @@ fn rocBuildWasmLlvm(
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
     if (args.no_link) {
-        var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
-        defer wasm_module.deinit();
-        wasm_module.addMemoryImport();
-        _ = try wasm_module.addTableImportWithSymbol();
-        _ = try wasm_module.addStackPointerImportWithSymbol();
-
-        const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
-        var app_module = try preloadWasmObject(ctx, app_object.object_path, null, app_bytes);
-        defer app_module.deinit();
-        var app_merge = try wasm_module.mergeModuleForObject(&app_module);
-        app_merge.deinit();
-
-        try mergeLlvmStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
-        try wasm_module.verifyNoLinkObjectContract();
-
-        const wasm_bytes = try wasm_module.encodeRelocatable(ctx.gpa);
-        defer ctx.gpa.free(wasm_bytes);
-
-        const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(args.opt)});
-        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
-            std.log.err("Failed to write wasm object output: {}", .{err});
-            return error.WasmOutputWriteFailed;
-        };
+        const obj_path = try writeCombinedLlvmWasmObject(ctx, build_cache_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
 
         if (!args.suppress_build_status) {
             try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
@@ -4146,8 +4345,50 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    var loaded_module = false;
-    var wasm_module: backend.wasm.WasmModule = undefined;
+    if (link_inputs.wasm != null) {
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, build_cache_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
+        const object_files = try ctx.arena.alloc([]const u8, 1);
+        object_files[0] = combined_obj;
+        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+
+        const link_config = linker.LinkConfig{
+            .target_format = .wasm,
+            .target_abi = null,
+            .target_os = .freestanding,
+            .target_arch = .wasm32,
+            .output_path = final_output_path,
+            .object_files = object_files,
+            .platform_files_pre = link_inputs.platform_files_pre,
+            .platform_files_post = link_inputs.platform_files_post,
+            .extra_args = &.{},
+            .can_exit_early = false,
+            .disable_output = false,
+            .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+            .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+            .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+            .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+            .wasm_exports = wasm_exports,
+            .platform_files_dir = link_inputs.platform_files_dir,
+            .scratch_dir = build_cache_dir,
+        };
+
+        if (args.z_dump_linker) {
+            try dumpLinkerInputs(ctx, link_config);
+        }
+
+        linker.link(ctx, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = link_inputs.target_name,
+            } });
+        };
+        return;
+    }
+
+    var loaded_module = true;
+    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+    configureWasmDataBase(&wasm_module, link_inputs.wasm);
     errdefer if (loaded_module) wasm_module.deinit();
 
     for (link_inputs.platform_files_pre) |path| {
@@ -4157,7 +4398,7 @@ fn rocBuildWasmLlvm(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try wasm_module.exportGlobalSymbols();
+    try exportConfiguredWasmEntrypoints(&wasm_module);
     wasm_module.removeMemoryAndTableImports();
 
     const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
@@ -4182,9 +4423,8 @@ fn rocBuildWasmLlvm(
 
     try wasm_module.linkHostToAppCalls(host_to_app_map.items);
 
-    const stack_bytes = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE;
-    try wasm_module.finalizeMemoryAndTable(@intCast(stack_bytes));
-    wasm_module.ensureMemoryMinBytes(args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY);
+    const memory_config = configuredWasmMemory(args, link_inputs.wasm);
+    try wasm_module.finalizeMemoryAndTableWithConfig(memory_config);
     try wasm_module.resolveRelocations();
 
     const called_fns = try ctx.gpa.alloc(bool, wasm_module.liveFunctionCount());
@@ -4318,6 +4558,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -4378,7 +4624,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             final_output_path,
             build_cache_dir,
             platform_dir,
-            targets_config,
+            resolved_targets_config,
             &lowered,
             entrypoints,
             static_data_exports,
@@ -4411,13 +4657,15 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             return;
         }
 
-        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
         var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
         try object_files.append(app_object.object_path);
         if (static_data_obj_path) |path| {
             try object_files.append(path);
         }
+
+        const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -4429,6 +4677,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = &.{},
+            .force_undefined_symbols = force_undefined_symbols,
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -4588,6 +4837,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -4615,6 +4870,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .inline_mode = postCheckInlineModeForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -4631,7 +4887,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             final_output_path,
             build_cache_dir,
             platform_dir,
-            targets_config,
+            resolved_targets_config,
             &lowered,
             entrypoints,
         );
@@ -4717,7 +4973,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         return;
     }
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
@@ -4727,6 +4983,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+
+    const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
 
     const link_config = linker.LinkConfig{
         .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -4738,6 +4996,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .platform_files_pre = link_inputs.platform_files_pre,
         .platform_files_post = link_inputs.platform_files_post,
         .extra_args = &.{},
+        .force_undefined_symbols = force_undefined_symbols,
         .can_exit_early = false,
         .disable_output = false,
         .platform_files_dir = link_inputs.platform_files_dir,
@@ -4886,6 +5145,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (args.allow_errors) return;
         return error.CompilationFailed;
     }
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -4932,7 +5197,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         unreachable;
     }
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const shim_filename = try interpreterShimCacheFilename(ctx, target);
     const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
@@ -4975,8 +5240,11 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .extra_args = extra_args.items,
         .can_exit_early = false,
         .disable_output = false,
-        .wasm_initial_memory = args.wasm_memory orelse linker.DEFAULT_WASM_INITIAL_MEMORY,
-        .wasm_stack_size = args.wasm_stack_size orelse linker.DEFAULT_WASM_STACK_SIZE,
+        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
         .platform_files_dir = link_inputs.platform_files_dir,
         .scratch_dir = build_cache_dir,
     };
@@ -5434,6 +5702,13 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
     };
 }
 
+fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
+    return switch (opt) {
+        .size, .speed => .direct_call_wrappers,
+        .dev, .interpreter => .none,
+    };
+}
+
 const CliTestRootRun = struct {
     root: check.CheckedArtifact.RootRequest,
     root_proc: lir.LirProcSpecId,
@@ -5743,6 +6018,7 @@ fn runCheckedArtifactTests(
         .{ .requests = test_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .inline_mode = postCheckInlineModeForOpt(opt),
         },
     );
     defer lowered.deinit();
@@ -6290,7 +6566,6 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) anyer
         error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
         error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
         error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
-        error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors
@@ -6360,17 +6635,24 @@ const CheckResultWithBuildEnv = struct {
     }
 };
 
-fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, cwd: []const u8, filepath: []const u8) Allocator.Error!bool {
-    const abs_path = if (std.fs.path.isAbsolute(filepath))
-        try std.fs.path.resolve(gpa, &.{filepath})
-    else
-        try std.fs.path.resolve(gpa, &.{ cwd, filepath });
-    defer gpa.free(abs_path);
+/// Returns true when `filepath` is the compiler-owned builtin module (`Builtin.roc`).
+///
+/// We deliberately do NOT compare against the absolute path of the builtin source
+/// on the *build* machine: a distributed binary would then only recognize the
+/// builtin when run from the exact checkout directory it was built in. Instead we
+/// detect the builtin by its filename plus two markers that only
+/// the compiler-owned builtin source contains: the `ProvidedByCompiler` tag and
+/// the `Str ::` declaration. This heuristic is host-independent and reliable in
+/// practice.
+fn isCompilerOwnedBuiltinSourcePath(gpa: Allocator, io: std.Io, filepath: []const u8) bool {
+    if (!std.mem.eql(u8, std.fs.path.basename(filepath), "Builtin.roc")) return false;
 
-    const compiler_builtin_path = try std.fs.path.resolve(gpa, &.{build_options.compiler_builtin_roc_path});
-    defer gpa.free(compiler_builtin_path);
+    const max_source_size = 256 * 1024 * 1024; // 256 MB
+    const source = std.Io.Dir.cwd().readFileAlloc(io, filepath, gpa, .limited(max_source_size)) catch return false;
+    defer gpa.free(source);
 
-    return std.mem.eql(u8, abs_path, compiler_builtin_path);
+    return std.mem.find(u8, source, "ProvidedByCompiler") != null and
+        std.mem.find(u8, source, "Str ::") != null;
 }
 
 /// Check a Roc file using BuildEnv and preserve the BuildEnv for further processing
@@ -6392,7 +6674,7 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
-    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+    if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
 
@@ -6558,7 +6840,7 @@ fn checkFileWithBuildEnv(
     // When checking the Builtin module itself, mark it as such so the
     // canonicalizer skips loading the pre-compiled builtin types into its
     // scope (which would cause shadowing errors for every type it defines).
-    if (try isCompilerOwnedBuiltinSourcePath(ctx.gpa, cwd, filepath)) {
+    if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
 
@@ -7212,23 +7494,40 @@ test "appendWindowsQuotedArg" {
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
 }
 
-test "user project src/build/roc/Builtin.roc is not compiler-owned builtin" {
+test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content markers" {
     const testing = std.testing;
     const allocator = testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const user_project_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
-    defer allocator.free(user_project_root);
+    const tmp_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
+    defer allocator.free(tmp_root);
 
-    const classified_as_compiler_builtin = try isCompilerOwnedBuiltinSourcePath(
-        allocator,
-        user_project_root,
-        "src/build/roc/Builtin.roc",
-    );
+    const markers = "module []\n\nStr :: [ProvidedByCompiler].{\n}\n";
 
-    try testing.expect(!classified_as_compiler_builtin);
+    const expectClassified = struct {
+        fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) anyerror!void {
+            try dir.writeFile(t_io, .{ .sub_path = name, .data = data });
+            const path = try std.fs.path.join(gpa, &.{ root, name });
+            defer gpa.free(path);
+            try testing.expectEqual(expected, isCompilerOwnedBuiltinSourcePath(gpa, t_io, path));
+        }
+    }.check;
+
+    // The real builtin: correct filename plus both content markers.
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", markers, true);
+    // Correct filename but missing the markers (a user file that happens to be
+    // named Builtin.roc) must not be classified as compiler-owned.
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "module []\n\nfoo = 1\n", false);
+    // The markers in a file that isn't named Builtin.roc must not match.
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "NotBuiltin.roc", markers, false);
+
+    // A non-existent path is not the builtin (read failure → false, not a crash).
+    const missing = try std.fs.path.join(allocator, &.{ tmp_root, "Missing.roc" });
+    defer allocator.free(missing);
+    try testing.expect(!isCompilerOwnedBuiltinSourcePath(allocator, io, missing));
 }
 
 test "classifyNativeRunTermination preserves warning exit code" {

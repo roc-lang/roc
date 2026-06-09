@@ -14,14 +14,14 @@ platform ""
     targets: {
         files: "targets/",
         exe: {
-            x64mac: [app],
-            arm64mac: [app],
-            x64musl: [app],
-            arm64musl: [app],
-            x64glibc: [app],
-            arm64glibc: [app],
-            x64win: [app],
-            arm64win: [app],
+            x64mac: { files: [app] },
+            arm64mac: { files: [app] },
+            x64musl: { files: [app] },
+            arm64musl: { files: [app] },
+            x64glibc: { files: [app] },
+            arm64glibc: { files: [app] },
+            x64win: { files: [app] },
+            arm64win: { files: [app] },
         }
     }
 
