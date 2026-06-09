@@ -1519,10 +1519,7 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     self.expect(.KwExposes) catch {
         return try self.pushMalformed(AST.Header.Idx, .expected_exposes, self.pos);
     };
-    if (self.peek() != .OpenSquare) {
-        return try self.pushMalformed(AST.Header.Idx, .expected_exposes_open_square, self.pos);
-    }
-    const exposes = switch (try self.parseExposedCollectionTokens(.expected_exposes_open_square, .expected_exposes_close_square, .expected_exposes_close_square)) {
+    const exposes = switch (try self.parseHeaderExposedCollectionTokens(.expected_exposes_open_square, .expected_exposes_close_square, .expected_exposes_close_square, self.pos)) {
         .ok => |ok| ok.collection,
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
