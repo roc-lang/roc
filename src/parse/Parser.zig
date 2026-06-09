@@ -949,9 +949,7 @@ fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
             const scratch_top = self.store.scratchExposedItemTop();
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else {
+                if (!self.consumeComma()) {
                     break;
                 }
             }
