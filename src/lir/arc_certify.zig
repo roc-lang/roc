@@ -105,28 +105,46 @@ pub fn certifyStoreOrPanic(
     certifyStore(allocator, store, layouts, sigs, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Certification => {
+            var context = FailureContext{};
             if (diag.context_proc) |proc_id| {
-                dumpFailureContext(store, proc_id, diag.context_local);
+                writeFailureContext(&context, store, proc_id, diag.context_local);
             }
-            std.debug.panic("ARC borrow certifier: {s}", .{diag.message()});
+            std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
     };
 }
 
-/// Prints every statement of the failing proc that mentions the implicated
-/// local, plus all join/jump structure, as panic context.
-fn dumpFailureContext(store: *const LirStore, proc_id: LIR.LirProcSpecId, local: ?LIR.LocalId) void {
+/// Bounded, allocation-free text buffer for panic context. Output past the
+/// capacity is truncated.
+const FailureContext = struct {
+    buffer: [8192]u8 = undefined,
+    len: usize = 0,
+
+    fn text(self: *const FailureContext) []const u8 {
+        return self.buffer[0..self.len];
+    }
+
+    fn append(self: *FailureContext, comptime fmt: []const u8, args: anytype) void {
+        const remaining = self.buffer[self.len..];
+        const written = std.fmt.bufPrint(remaining, fmt, args) catch return;
+        self.len += written.len;
+    }
+};
+
+/// Writes every statement of the failing proc that mentions the implicated
+/// local, plus all join/jump structure, into the panic context buffer.
+fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, local: ?LIR.LocalId) void {
     const proc = store.getProcSpec(proc_id);
-    std.debug.print("\nARC certifier failure context: proc={d}", .{@intFromEnum(proc_id)});
+    context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
     if (local) |l| {
-        std.debug.print(" local={d} layout={d}", .{
+        context.append(" local={d} layout={d}", .{
             @intFromEnum(l),
             @intFromEnum(store.getLocal(l).layout_idx),
         });
     }
-    std.debug.print("\n  args:", .{});
-    for (store.getLocalSpan(proc.args)) |arg| std.debug.print(" {d}", .{@intFromEnum(arg)});
-    std.debug.print("\n", .{});
+    context.append("\n  args:", .{});
+    for (store.getLocalSpan(proc.args)) |arg| context.append(" {d}", .{@intFromEnum(arg)});
+    context.append("\n", .{});
 
     var reachable = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
     defer reachable.deinit();
@@ -164,30 +182,30 @@ fn dumpFailureContext(store: *const LirStore, proc_id: LIR.LirProcSpecId, local:
             else => false,
         };
         if (!mentions and !structural) continue;
-        std.debug.print("  stmt {d}: {s}", .{ index, @tagName(stmt) });
+        context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
         switch (stmt) {
-            .join => |j| std.debug.print(" id={d} body={d} remainder={d}", .{
+            .join => |j| context.append(" id={d} body={d} remainder={d}", .{
                 @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
             }),
-            .jump => |j| std.debug.print(" target={d}", .{@intFromEnum(j.target)}),
-            .assign_ref => |a| std.debug.print(" target={d} op={s} next={d}", .{
+            .jump => |j| context.append(" target={d}", .{@intFromEnum(j.target)}),
+            .assign_ref => |a| context.append(" target={d} op={s} next={d}", .{
                 @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
             }),
-            .set_local => |a| std.debug.print(" target={d} value={d} mode={s} next={d}", .{
+            .set_local => |a| context.append(" target={d} value={d} mode={s} next={d}", .{
                 @intFromEnum(a.target), @intFromEnum(a.value), @tagName(a.mode), @intFromEnum(a.next),
             }),
-            .incref => |rc| std.debug.print(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
-            .decref => |rc| std.debug.print(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
-            .free => |rc| std.debug.print(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
-            .assign_call => |a| std.debug.print(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
-            .assign_low_level => |a| std.debug.print(" target={d} op={s} next={d}", .{
+            .incref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
+            .decref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
+            .free => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
+            .assign_call => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            .assign_low_level => |a| context.append(" target={d} op={s} next={d}", .{
                 @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
             }),
-            .ret => |r| std.debug.print(" value={d}", .{@intFromEnum(r.value)}),
-            inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| std.debug.print(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
+            inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             else => {},
         }
-        std.debug.print("\n", .{});
+        context.append("\n", .{});
     }
 }
 
