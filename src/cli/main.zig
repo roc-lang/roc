@@ -3697,8 +3697,7 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule, wasm: ?roc_target.WasmTargetConfig) anyerror!void {
-    _ = wasm;
+fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) anyerror!void {
     try module.exportGlobalSymbols();
 }
 
@@ -4015,7 +4014,7 @@ fn rocBuildWasmSurgical(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try exportConfiguredWasmEntrypoints(&wasm_module, link_inputs.wasm);
+    try exportConfiguredWasmEntrypoints(&wasm_module);
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
@@ -4361,7 +4360,7 @@ fn rocBuildWasmLlvm(
         try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
     }
 
-    try exportConfiguredWasmEntrypoints(&wasm_module, link_inputs.wasm);
+    try exportConfiguredWasmEntrypoints(&wasm_module);
     wasm_module.removeMemoryAndTableImports();
 
     const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);

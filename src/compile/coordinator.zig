@@ -2019,7 +2019,7 @@ pub const Coordinator = struct {
         defer self.gpa.free(imported_artifacts);
         const available_artifacts = try self.collectTypecheckAvailableArtifactViews(self.gpa, imported_artifacts);
         defer self.gpa.free(available_artifacts);
-        const explicit_roots = try self.buildExplicitRootRequests(mod, self.gpa);
+        const explicit_roots = try buildExplicitRootRequests(mod, self.gpa);
         defer self.gpa.free(explicit_roots);
 
         var publication_with_availability = publication;
@@ -2977,7 +2977,7 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(imported_artifacts);
         const available_artifacts = try self.collectTypecheckAvailableArtifactViews(task_payload_alloc, imported_artifacts);
         errdefer task_payload_alloc.free(available_artifacts);
-        const explicit_roots = try self.buildExplicitRootRequests(mod, task_payload_alloc);
+        const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
         if (mod.reports.items.len == 0 and
@@ -3009,7 +3009,6 @@ pub const Coordinator = struct {
     }
 
     fn buildExplicitRootRequests(
-        self: *Coordinator,
         mod: *ModuleState,
         allocator: Allocator,
     ) Allocator.Error![]const check.CheckedArtifact.ExplicitRootRequestInput {
@@ -3029,7 +3028,6 @@ pub const Coordinator = struct {
             });
         }
 
-        _ = self;
         return try roots.toOwnedSlice(allocator);
     }
 

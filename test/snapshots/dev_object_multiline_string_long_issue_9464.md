@@ -320,7 +320,7 @@ platform ""
     targets: {
         files: "targets/",
         exe: {
-            x64glibc: [app],
+            x64glibc: { files: [app] },
         }
     }
 
