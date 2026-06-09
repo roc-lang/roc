@@ -1416,9 +1416,7 @@ fn parseTargetLinkTypeTokens(self: *Parser) Error!AST.TargetLinkType.Idx {
     const entries_top = self.store.scratchTargetEntryTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         try self.store.addScratchTargetEntry(try self.parseTargetEntryTokens());
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
+        if (!self.consumeComma()) {
             break;
         }
     }
