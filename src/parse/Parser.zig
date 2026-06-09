@@ -5652,9 +5652,8 @@ fn runExprStatementKernel(
                         if (self.peek() == .Comma) {
                             self.advance();
                         }
-                        const lambda_end = self.peek();
-                        if (lambda_end == .OpBar or lambda_end == .EndOfFile) {
-                            if (lambda_end == .OpBar) {
+                        if (self.peek() == .OpBar or self.peek() == .EndOfFile) {
+                            if (self.peek() == .OpBar) {
                                 self.advance();
                             }
                             const args = try self.store.patternSpanFrom(state.scratch_top);
