@@ -2,6 +2,7 @@
 //! Contains both Slot & Descriptor stores
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
@@ -9,6 +10,26 @@ const types = @import("types.zig");
 const debug = @import("debug.zig");
 
 const Allocator = std.mem.Allocator;
+
+/// Compile-time switch selecting whether the savepoint trail can be
+/// cross-checked against a full copy of the store.
+///
+/// - `.savepoint_only` (production): rollback trusts the savepoint's undo trail
+///   alone. The copy, the cross-check assert, and the savepoint's copy field are
+///   all compiled away — zero code, zero state.
+/// - `.clone_crosscheck` (test builds): the full-copy cross-check is compiled
+///   in, and a test can opt an individual savepoint into it via
+///   `createSavepointVerifying`. Savepoints created the normal way still copy
+///   nothing, so the suite runs the same savepoint-only path production uses.
+const SavepointVerification = enum { savepoint_only, clone_crosscheck };
+const savepoint_verification: SavepointVerification =
+    if (builtin.is_test) .clone_crosscheck else .savepoint_only;
+
+/// One journaled in-place write to a pre-existing slot (for trail rollback).
+const SlotUndo = struct { idx: SlotStore.Idx, old: Slot };
+/// One journaled in-place write to a pre-existing descriptor.
+const DescUndo = struct { idx: DescStore.Idx, old: Desc };
+
 const Desc = types.Descriptor;
 const Var = types.Var;
 const Content = types.Content;
@@ -28,6 +49,7 @@ const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
+const SourceDecl = types.SourceDecl;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -53,7 +75,7 @@ pub const Slot = union(enum) {
     }
 
     /// Deserialize a Slot from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8) !Slot {
+    pub fn deserializeFrom(buffer: []const u8) Allocator.Error!Slot {
         if (buffer.len < @sizeOf(u8) + @sizeOf(u32)) return error.BufferTooSmall;
 
         const tag = buffer[0];
@@ -89,8 +111,21 @@ pub const Store = struct {
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
     /// Count of flex vars that currently have a from_numeral constraint.
-    /// Used to skip the finalization walk when no numeric defaults need resolving.
+    /// Used to skip the finalization walk when no numeral constraints need resolving.
     from_numeral_flex_count: u32,
+
+    /// Undo trail for speculative unification. While a probe is active
+    /// (`savepoint_active`), every in-place write to a slot or descriptor that
+    /// existed before the probe began (index < `spec_baseline_*`) is journaled
+    /// as (index, old value); rollback replays the journal in reverse. Entries
+    /// appended during the probe are undone by truncation, not journaled.
+    /// Probes never nest (they bracket leaf-level unification), so this is a
+    /// flag, not a depth.
+    savepoint_active: bool = false,
+    savepoint_baseline_slots: u32 = 0,
+    savepoint_baseline_descs: u32 = 0,
+    slot_trail: std.ArrayListUnmanaged(SlotUndo) = .empty,
+    desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
 
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
@@ -154,6 +189,10 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
+
+        // speculation undo trail
+        self.slot_trail.deinit(self.gpa);
+        self.desc_trail.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -175,74 +214,182 @@ pub const Store = struct {
         return self.slots.backing.len();
     }
 
-    /// Return true when checking left any type descriptor in the explicit error
-    /// state. Post-check artifacts are only valid for modules whose checked type
-    /// store contains no error descriptors.
+    /// Return true when checking left any live type variable in the explicit
+    /// error state. Descriptors not referenced by a current slot are rollback
+    /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.descs.backing.field(.content)) |content| {
-            if (content == .err) return true;
+        for (self.slots.backing.items.items) |slot| {
+            switch (slot) {
+                .root => |desc_idx| {
+                    if (self.descs.get(desc_idx).content == .err) return true;
+                },
+                .redirect => {},
+            }
         }
         return false;
     }
 
-    // snapshot/rollback for unification //
+    // savepoint (create/rollback) for unification //
+    //
+    // Probe whether two types could unify, then discard the result. The undo
+    // trail records each in-place write to a pre-existing slot/descriptor;
+    // rollback replays it in reverse and truncates everything appended during
+    // the probe. Cost is O(entries the probe mutated), not O(store size).
 
-    /// A snapshot of the type store state that can be used for rollback.
-    /// This is used during unification to restore the original state when
-    /// unification fails, allowing us to capture accurate error types.
-    pub const Snapshot = struct {
-        /// Cloned slots array
-        slots_clone: []Slot,
-        /// Cloned descs array
-        descs_clone: std.MultiArrayList(Desc),
-        /// Length of vars list at snapshot time
+    /// A handle returned by `createSavepoint`, passed back to
+    /// `rollbackToSavepoint`. Captures the rollback-only state: trail position
+    /// and the append-only list lengths to rewind to (and, under the
+    /// clone cross-check, a full store copy to compare against). The
+    /// slot/desc baselines are not here — they live on the store as
+    /// `savepoint_baseline_*` because they are also the per-write journaling
+    /// threshold.
+    pub const Savepoint = struct {
+        slot_trail_len: usize,
+        desc_trail_len: usize,
         vars_len: usize,
-        /// Length of record_fields list at snapshot time
         record_fields_len: usize,
-        /// Length of tags list at snapshot time
         tags_len: usize,
-        /// Length of static_dispatch_constraints list at snapshot time
         static_dispatch_constraints_len: usize,
+        from_numeral_flex_count: u32,
+        verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
+    };
 
-        /// Free the memory held by this snapshot
-        pub fn deinit(self: *Snapshot, gpa: Allocator) void {
-            gpa.free(self.slots_clone);
-            self.descs_clone.deinit(gpa);
+    /// Full store copy kept only under the clone cross-check, to assert that the
+    /// trail restored the slots/descs to exactly their pre-savepoint values.
+    const VerifyClone = struct {
+        slots: []Slot,
+        descs: std.MultiArrayList(Desc),
+        fn deinit(self: *VerifyClone, gpa: Allocator) void {
+            gpa.free(self.slots);
+            self.descs.deinit(gpa);
         }
     };
 
-    /// Create a snapshot of the current type store state.
-    /// The snapshot can be used to rollback if unification fails.
-    pub fn snapshot(self: *const Self) Allocator.Error!Snapshot {
-        return Snapshot{
-            .slots_clone = try self.gpa.dupe(Slot, self.slots.backing.items.items),
-            .descs_clone = try self.descs.backing.items.clone(self.gpa),
+    /// The `Savepoint.verify_clone` field type: a real optional when the clone
+    /// cross-check is compiled in, and a zero-sized `void` otherwise so
+    /// production savepoints carry no extra state.
+    const SavepointVerifyClone = if (savepoint_verification == .clone_crosscheck) ?VerifyClone else void;
+    const savepoint_verify_clone_init: SavepointVerifyClone = if (savepoint_verification == .clone_crosscheck) null else {};
+
+    /// Open a savepoint over the type store. Pair with `rollbackToSavepoint`.
+    /// Rollback relies solely on the undo trail; no store copy is taken, so this
+    /// is the path production and the bulk of the test suite run.
+    pub fn createSavepoint(self: *Self) Allocator.Error!Savepoint {
+        return self.createSavepointImpl(false);
+    }
+
+    /// Test-only variant of `createSavepoint` that additionally copies the whole
+    /// store, so the matching `rollbackToSavepoint` asserts the trail restored
+    /// every slot and descriptor byte-for-byte — i.e. that the savepoint trail is
+    /// semantically identical to fully copying the store and restoring the copy.
+    /// Only available when the clone cross-check is compiled in (test builds).
+    fn createSavepointVerifying(self: *Self) Allocator.Error!Savepoint {
+        comptime std.debug.assert(savepoint_verification == .clone_crosscheck);
+        return self.createSavepointImpl(true);
+    }
+
+    fn createSavepointImpl(self: *Self, comptime take_clone: bool) Allocator.Error!Savepoint {
+        const verify_clone: SavepointVerifyClone =
+            if (savepoint_verification == .clone_crosscheck and take_clone) vc: {
+                break :vc VerifyClone{
+                    .slots = try self.gpa.dupe(Slot, self.slots.backing.items.items),
+                    .descs = try self.descs.backing.items.clone(self.gpa),
+                };
+            } else savepoint_verify_clone_init;
+
+        const savepoint = Savepoint{
+            .slot_trail_len = self.slot_trail.items.len,
+            .desc_trail_len = self.desc_trail.items.len,
             .vars_len = self.vars.items.items.len,
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+            .from_numeral_flex_count = self.from_numeral_flex_count,
+            .verify_clone = verify_clone,
         };
+
+        // Probes never nest; catch it loudly if that invariant is ever broken.
+        std.debug.assert(!self.savepoint_active);
+        self.savepoint_active = true;
+        self.savepoint_baseline_slots = @intCast(self.slots.backing.len());
+        self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
+
+        return savepoint;
     }
 
-    /// Rollback the type store to a previous snapshot state.
-    /// This restores slots, descs, and truncates the append-only lists.
-    pub fn rollbackTo(self: *Self, snap: *Snapshot) void {
-        // Restore slots
-        @memcpy(self.slots.backing.items.items[0..snap.slots_clone.len], snap.slots_clone);
-        self.slots.backing.items.shrinkRetainingCapacity(snap.slots_clone.len);
+    /// Undo everything done since `savepoint` was created.
+    pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
+        // Replay journaled in-place writes in reverse so each pre-existing entry
+        // lands back on its original value.
+        var di = self.desc_trail.items.len;
+        while (di > savepoint.desc_trail_len) {
+            di -= 1;
+            const u = self.desc_trail.items[di];
+            self.descs.set(u.idx, u.old);
+        }
+        self.desc_trail.shrinkRetainingCapacity(savepoint.desc_trail_len);
 
-        // Restore descs - swap and deinit the current one
-        var old_descs = self.descs.backing.items;
-        self.descs.backing.items = snap.descs_clone;
-        old_descs.deinit(self.gpa);
-        // Clear the snapshot's descs since we took ownership
-        snap.descs_clone = .{};
+        var si = self.slot_trail.items.len;
+        while (si > savepoint.slot_trail_len) {
+            si -= 1;
+            const u = self.slot_trail.items[si];
+            self.slots.set(u.idx, u.old);
+        }
+        self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
 
-        // Truncate append-only lists
-        self.vars.items.shrinkRetainingCapacity(snap.vars_len);
-        self.record_fields.items.shrinkRetainingCapacity(snap.record_fields_len);
-        self.tags.items.shrinkRetainingCapacity(snap.tags_len);
-        self.static_dispatch_constraints.items.shrinkRetainingCapacity(snap.static_dispatch_constraints_len);
+        // Drop everything appended during the probe. The slot/desc baselines are
+        // the store fields (also the journaling threshold); the rest come from
+        // the savepoint.
+        self.slots.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
+        self.descs.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
+        self.vars.items.shrinkRetainingCapacity(savepoint.vars_len);
+        self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
+        self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
+        self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
+        self.from_numeral_flex_count = savepoint.from_numeral_flex_count;
+
+        // Back to not speculating; savepoint_baseline_* are dead until the next create.
+        self.savepoint_active = false;
+
+        if (savepoint_verification == .clone_crosscheck) {
+            if (savepoint.verify_clone) |*vclone| {
+                self.assertMatchesClone(vclone);
+                vclone.deinit(self.gpa);
+                savepoint.verify_clone = null;
+            }
+        }
+    }
+
+    /// Clone cross-check: assert the trail-restored store is byte-for-byte
+    /// identical to the full copy taken at `createSavepointVerifying`.
+    fn assertMatchesClone(self: *Self, vclone: *const VerifyClone) void {
+        const live_slots = self.slots.backing.items.items;
+        std.debug.assert(live_slots.len == vclone.slots.len);
+        for (live_slots, vclone.slots) |a, b| std.debug.assert(std.meta.eql(a, b));
+
+        std.debug.assert(self.descs.backing.items.len == vclone.descs.len);
+        var i: usize = 0;
+        while (i < vclone.descs.len) : (i += 1) {
+            std.debug.assert(std.meta.eql(self.descs.backing.items.get(i), vclone.descs.get(i)));
+        }
+    }
+
+    /// In-place slot write. While a probe is active, journals the slot's previous
+    /// value so rollback can restore it; a failed journal append is propagated
+    /// rather than risk a type store the trail can no longer faithfully undo.
+    fn setSlot(self: *Self, idx: SlotStore.Idx, val: Slot) Allocator.Error!void {
+        if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_slots) {
+            try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
+        }
+        self.slots.set(idx, val);
+    }
+
+    /// In-place descriptor write. See setSlot.
+    fn setDesc(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
+        if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_descs) {
+            try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
+        }
+        self.descs.set(idx, val);
     }
 
     // fresh variables //
@@ -302,11 +449,11 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
-    pub fn markFromNumeralOrigin(self: *Self, var_: Var) void {
+    pub fn markFromNumeralOrigin(self: *Self, var_: Var) Allocator.Error!void {
         const resolved = self.resolveVar(var_);
         var desc = self.descs.get(resolved.desc_idx);
         desc.from_numeral_origin = true;
-        self.descs.set(resolved.desc_idx, desc);
+        try self.setDesc(resolved.desc_idx, desc);
     }
 
     /// Create a new variable with the provided content assuming there is capacity
@@ -331,7 +478,7 @@ pub const Store = struct {
     pub fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
-        self.descs.set(resolved.desc_idx, desc);
+        try self.setDesc(resolved.desc_idx, desc);
     }
 
     /// Set a type variable to the provided content
@@ -340,7 +487,7 @@ pub const Store = struct {
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
-        self.descs.set(resolved.desc_idx, desc);
+        try self.setDesc(resolved.desc_idx, desc);
     }
 
     /// Set a type variable to redirect to the provided variables.
@@ -367,7 +514,7 @@ pub const Store = struct {
             }
         }
         const slot_idx = Self.varToSlotIdx(target_var);
-        self.slots.set(slot_idx, .{ .redirect = redirect_to });
+        try self.setSlot(slot_idx, .{ .redirect = redirect_to });
     }
 
     // make builtin types //
@@ -421,6 +568,37 @@ pub const Store = struct {
         args: []const Var,
         origin_module: base.Ident.Idx,
     ) std.mem.Allocator.Error!Content {
+        return self.mkAliasWithSourceDecl(ident, backing_var, args, origin_module, null);
+    }
+
+    pub fn mkAliasWithSourceDecl(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+    ) std.mem.Allocator.Error!Content {
+        return self.mkAliasWithSourceDeclAndBuiltinOrigin(
+            ident,
+            backing_var,
+            args,
+            origin_module,
+            source_decl,
+            false,
+        );
+    }
+
+    pub fn mkAliasWithSourceDeclAndBuiltinOrigin(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+        builtin_origin: bool,
+    ) std.mem.Allocator.Error!Content {
+        const packed_source_decl = try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin);
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -433,6 +611,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
+                .source_decl = packed_source_decl,
             },
         };
     }
@@ -447,6 +626,44 @@ pub const Store = struct {
         origin_module: base.Ident.Idx,
         is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
+        return self.mkNominalWithSourceDecl(ident, backing_var, args, origin_module, null, is_opaque);
+    }
+
+    pub fn mkNominalWithSourceDecl(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+        is_opaque: bool,
+    ) std.mem.Allocator.Error!Content {
+        return self.mkNominalWithSourceDeclAndBuiltinOrigin(
+            ident,
+            backing_var,
+            args,
+            origin_module,
+            source_decl,
+            is_opaque,
+            false,
+        );
+    }
+
+    pub fn mkNominalWithSourceDeclAndBuiltinOrigin(
+        self: *Self,
+        ident: TypeIdent,
+        backing_var: Var,
+        args: []const Var,
+        origin_module: base.Ident.Idx,
+        source_decl: ?u32,
+        is_opaque: bool,
+        builtin_origin: bool,
+    ) std.mem.Allocator.Error!Content {
+        const source = try NominalType.Source.initChecked(
+            try SourceDecl.fromOptionalWithBuiltinOriginChecked(source_decl, builtin_origin),
+            is_opaque,
+            builtin_origin,
+        );
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
 
@@ -459,7 +676,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
-                .is_opaque = is_opaque,
+                .source = source,
             },
         } };
     }
@@ -764,10 +981,10 @@ pub const Store = struct {
     // rank //
 
     /// Set the rank for a descriptor
-    pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) void {
+    pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
         var desc = self.descs.get(desc_idx);
         desc.rank = rank;
-        self.descs.set(desc_idx, desc);
+        try self.setDesc(desc_idx, desc);
     }
 
     // resolvers //
@@ -780,8 +997,11 @@ pub const Store = struct {
         const redirected = self.resolveVar(initial_var);
         const redirected_root_var = redirected.var_;
 
-        // then follow the chain again, but compressing each to the root
-        if (initial_var != redirected_root_var) {
+        // Compress the chain so future resolves are O(1). Skipped during a probe:
+        // compression is a pure optimization (it never changes what a var
+        // resolves to), so it would only be journaled and rolled back. Skipping
+        // also keeps this resolver infallible (no journaling, no allocation).
+        if (!self.savepoint_active and initial_var != redirected_root_var) {
             var compressed_slot_idx = Self.varToSlotIdx(initial_var);
             var compressed_slot: Slot = self.slots.get(compressed_slot_idx);
             var guard = debug.IterationGuard.init("resolveVarAndCompressPath");
@@ -789,6 +1009,7 @@ pub const Store = struct {
                 guard.tick();
                 switch (compressed_slot) {
                     .redirect => |next_redirect_var| {
+                        // Raw set: not speculating here, so nothing to journal.
                         self.slots.set(compressed_slot_idx, Slot{ .redirect = redirected_root_var });
                         compressed_slot_idx = Self.varToSlotIdx(next_redirect_var);
                         compressed_slot = self.slots.get(compressed_slot_idx);
@@ -862,20 +1083,26 @@ pub const Store = struct {
     ///
     /// The merge direction (a -> b) is load-bearing and must not be changed.
     /// Multiple parts of the unification algorithm depend on this specific order.
+    /// Callers therefore control which variable survives by choosing operand
+    /// order: a variable that must remain canonical (e.g. a shared expected-return
+    /// var reused across branches and embedded in a function's annotated type)
+    /// has to be passed as `b`. Passing it as `a` redirects it away and can tie a
+    /// recursive type parameter off to a duplicate rigid, producing a spurious
+    /// mismatch (see `Check.checkBranchBodyAgainstExpected`).
     /// Alias spelling is not preserved by choosing an alias representative; source
     /// alias views stay separate from the concrete solved backing variable.
     ///
     // NOTE: The elm & the roc compiler do this step differently
     // * The elm compiler sets b to redirect to a
     // * The roc compiler sets a to redirect to b
-    pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) void {
+    pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) Allocator.Error!void {
         const b_data = self.resolveVarAndCompressPath(b_var);
 
         // Update b to be the new desc
-        self.descs.set(b_data.desc_idx, new_desc);
+        try self.setDesc(b_data.desc_idx, new_desc);
 
         // Update a to point to b
-        self.slots.set(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
+        try self.setSlot(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
     }
 
     // test helpers //
@@ -898,13 +1125,13 @@ pub const Store = struct {
 
     /// Set a root var to be the specified content
     /// Used in tests
-    pub fn setRootVarContent(self: *Self, var_: Var, content: Content) error{VarNotRoot}!void {
+    pub fn setRootVarContent(self: *Self, var_: Var, content: Content) (error{VarNotRoot} || Allocator.Error)!void {
         const slot = self.slots.get(Self.varToSlotIdx(var_));
         switch (slot) {
             .root => |desc_idx| {
                 var desc = self.descs.get(desc_idx);
                 desc.content = content;
-                self.descs.set(desc_idx, desc);
+                try self.setDesc(desc_idx, desc);
             },
             .redirect => {
                 return error.VarNotRoot;
@@ -1058,7 +1285,7 @@ pub const Store = struct {
     }
 
     /// Deserialize a Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
+    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) Allocator.Error!Self {
         if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
 
         var offset: usize = 0;
@@ -1217,7 +1444,7 @@ const SlotStore = struct {
     }
 
     /// Deserialize a SlotStore from the provided buffer
-    fn deserializeFrom(buffer: []align(@alignOf(Slot)) const u8, allocator: Allocator) !Self {
+    fn deserializeFrom(buffer: []align(@alignOf(Slot)) const u8, allocator: Allocator) Allocator.Error!Self {
         return .{
             .backing = try collections.SafeList(Slot).deserializeFrom(buffer, allocator),
         };
@@ -1326,7 +1553,7 @@ const DescStore = struct {
     }
 
     /// Deserialize a DescStore from the provided buffer
-    pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) !Self {
+    pub fn deserializeFrom(buffer: []align(@alignOf(Desc)) const u8, allocator: Allocator) Allocator.Error!Self {
         const backing = try DescSafeMultiList.deserializeFrom(buffer, allocator);
         return Self{ .backing = backing };
     }
@@ -1359,6 +1586,92 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
+}
+
+test "savepoint clone cross-check is compiled in for test builds" {
+    try std.testing.expect(savepoint_verification == .clone_crosscheck);
+}
+
+test "savepoint trail is byte-for-byte identical to a full store copy+rollback" {
+    const gpa = std.testing.allocator;
+
+    // A few independent runs with different mutation mixes.
+    var run: usize = 0;
+    while (run < 4) : (run += 1) {
+        var store = try Store.init(gpa);
+        defer store.deinit();
+
+        // Pre-savepoint content: a handful of vars, some redirected/unioned.
+        const a = try store.fresh();
+        const b = try store.fresh();
+        _ = try store.freshRedirect(b);
+        try store.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+
+        // Independent oracle: keep our own copy of the pre-savepoint slots/descs
+        // to compare against after rollback, alongside the verifying savepoint's
+        // internal cross-check.
+        const before_slots = try gpa.dupe(Slot, store.slots.backing.items.items);
+        defer gpa.free(before_slots);
+        var before_descs = try store.descs.backing.items.clone(gpa);
+        defer before_descs.deinit(gpa);
+        const before_vars_len = store.vars.items.items.len;
+
+        // Verifying savepoint: copies the whole store up front; rollback asserts
+        // the trail restored it byte-for-byte (same semantics as restoring a copy).
+        var sp = try store.createSavepointVerifying();
+
+        // Mutations a probe might do, varied per run. These exercise: appends
+        // (fresh/register), in-place writes to pre-existing entries (union_,
+        // setVarContent, setDescRank), the same entry written twice (reverse
+        // replay), and the compression path (a no-op while a savepoint is open).
+        const fresh1 = try store.fresh();
+        const fresh2 = try store.register(.{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+        try store.union_(fresh1, fresh2, .{ .content = .err, .rank = Rank.outermost });
+        try store.setVarContent(a, .{ .flex = Flex.init() });
+        try store.setVarContent(a, .err);
+        if (run % 2 == 0) try store.setDescRank(store.resolveVar(b).desc_idx, Rank.outermost);
+        _ = store.resolveVarAndCompressPath(a);
+
+        store.rollbackToSavepoint(&sp);
+
+        // The store must be byte-identical to its pre-savepoint state.
+        try std.testing.expect(!store.savepoint_active);
+        try std.testing.expectEqual(before_slots.len, store.slots.backing.items.items.len);
+        for (before_slots, store.slots.backing.items.items) |x, y| {
+            try std.testing.expect(std.meta.eql(x, y));
+        }
+        try std.testing.expectEqual(before_descs.len, store.descs.backing.items.len);
+        var i: usize = 0;
+        while (i < before_descs.len) : (i += 1) {
+            try std.testing.expect(std.meta.eql(before_descs.get(i), store.descs.backing.items.get(i)));
+        }
+        try std.testing.expectEqual(before_vars_len, store.vars.items.items.len);
+    }
+}
+
+test "createSavepointVerifying cross-checks a probe-unify against a full copy" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    // A small typed environment a real probe would unify against.
+    const a = try store.fresh();
+    const b = try store.fresh();
+    try store.union_(a, b, .{ .content = .err, .rank = Rank.generalized });
+
+    // A probe brackets a trial unification it always discards. The verifying
+    // savepoint copies the store up front; on rollback its internal cross-check
+    // asserts the trail put the store back byte-for-byte — exactly as if we had
+    // restored the full copy.
+    var sp = try store.createSavepointVerifying();
+    const c = try store.fresh();
+    try store.union_(a, c, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    try store.setVarContent(b, .err);
+    _ = store.resolveVarAndCompressPath(a);
+    store.rollbackToSavepoint(&sp);
+
+    try std.testing.expect(!store.savepoint_active);
 }
 
 test "Store empty CompactWriter roundtrip" {
@@ -1645,7 +1958,7 @@ test "SlotStore.Serialized roundtrip" {
     defer file.close(io);
 
     // Serialize using SlotStore.Serialized with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1703,7 +2016,7 @@ test "DescStore.Serialized roundtrip" {
     defer file.close(io);
 
     // Serialize using DescStore.Serialized with arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1913,7 +2226,7 @@ test "SlotStore and DescStore serialization and deserialization" {
     defer file.close(io);
 
     // Serialize using arena allocator
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1962,6 +2275,47 @@ test "SlotStore and DescStore serialization and deserialization" {
 
     const resolved_redirect2 = deserialized.resolveVar(redirect2);
     try std.testing.expectEqual(resolved2.desc_idx, resolved_redirect2.desc_idx);
+}
+
+test "source declaration overflow is rejected before mutating type store" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.initCapacity(gpa, 1, 1);
+    defer store.deinit();
+
+    const before_slots = store.len();
+    const before_descs = store.descs.backing.len();
+    const before_vars = store.vars.len();
+    const unread_backing_var: Var = undefined; // source declaration validation returns before reading this value
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        store.mkAliasWithSourceDecl(
+            .{ .ident_idx = base.Ident.Idx.NONE },
+            unread_backing_var,
+            &.{},
+            base.Ident.Idx.NONE,
+            SourceDecl.max_statement + 1,
+        ),
+    );
+    try std.testing.expectEqual(before_slots, store.len());
+    try std.testing.expectEqual(before_descs, store.descs.backing.len());
+    try std.testing.expectEqual(before_vars, store.vars.len());
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        store.mkNominalWithSourceDecl(
+            .{ .ident_idx = base.Ident.Idx.NONE },
+            unread_backing_var,
+            &.{},
+            base.Ident.Idx.NONE,
+            NominalType.Source.max_statement + 1,
+            false,
+        ),
+    );
+    try std.testing.expectEqual(before_slots, store.len());
+    try std.testing.expectEqual(before_descs, store.descs.backing.len());
+    try std.testing.expectEqual(before_vars, store.vars.len());
 }
 
 test "Store with path compression CompactWriter roundtrip" {

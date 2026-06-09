@@ -174,19 +174,19 @@ PARSE ERROR - fuzz_crash_027.md:40:9:40:10
 PARSE ERROR - fuzz_crash_027.md:41:1:41:2
 PARSE ERROR - fuzz_crash_027.md:122:3:122:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:3:125:4
+MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
+MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
+MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
 UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
+UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
+UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_027.md:32:32:32:33
 UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
-MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
-MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
-UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
-UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
 UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
@@ -203,8 +203,6 @@ UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - fuzz_crash_027.md:1:1:1:1
 UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
@@ -228,6 +226,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
 TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
@@ -330,6 +329,40 @@ Expressions can be identifiers, literals, function calls, or operators.
 		^
 
 
+**MODULE NOT FOUND**
+The module `Stdot` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:6:1:8:4:**
+```roc
+import Stdot
+		exposing [ #tem
+		] # Cose
+```
+
+
+**MODULE NOT FOUND**
+The module `Bae` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:12:1:12:19:**
+```roc
+import Bae as Gooe
+```
+^^^^^^^^^^^^^^^^^^
+
+
+**MODULE NOT FOUND**
+The module `Ba` was not found in this Roc project.
+
+You're attempting to use this module here:
+**fuzz_crash_027.md:13:1:14:4:**
+```roc
+import
+	Ba
+```
+
+
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
 
@@ -350,6 +383,28 @@ This type is referenced here:
 Foo : (Bar, Baz)
 ```
             ^^^
+
+
+**UNDECLARED TYPE**
+The type _Bar_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:29:2:29:5:**
+```roc
+	Bar, #
+```
+	^^^
+
+
+**UNDECLARED TYPE**
+The type _Baz_ is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:30:2:30:5:**
+```roc
+	Baz, #m
+```
+	^^^
 
 
 **UNDECLARED TYPE**
@@ -418,62 +473,6 @@ This type is referenced here:
 Func(a) : Maybe(a), a -> Maybe(a)
 ```
                          ^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Stdot` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:6:1:8:4:**
-```roc
-import Stdot
-		exposing [ #tem
-		] # Cose
-```
-
-
-**MODULE NOT FOUND**
-The module `Bae` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:12:1:12:19:**
-```roc
-import Bae as Gooe
-```
-^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `Ba` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:13:1:14:4:**
-```roc
-import
-	Ba
-```
-
-
-**UNDECLARED TYPE**
-The type _Bar_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:29:2:29:5:**
-```roc
-	Bar, #
-```
-	^^^
-
-
-**UNDECLARED TYPE**
-The type _Baz_ is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:30:2:30:5:**
-```roc
-	Baz, #m
-```
-	^^^
 
 
 **EMPTY TUPLE NOT ALLOWED**
@@ -657,30 +656,6 @@ Is there an `import` or `exposing` missing up-top?
 	expect blah == 1
 ```
 	       ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: ellipsis expression
-
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **UNDEFINED VARIABLE**
@@ -1018,6 +993,21 @@ But the expression between the `match` parenthesis has the type:
     [Blue, Red, ..]
 
 These can never match! Either the pattern or expression has a problem.
+
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
+**fuzz_crash_027.md:111:2:113:3:**
+```roc
+	match_time(
+		..., #
+	)
+```
+
+The `match_time` function has the type:
+
+    [Blue, Red, ..], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -2137,12 +2127,12 @@ expect {
 					(e-lookup-local
 						(p-assign (ident "tag"))))
 				(s-expr
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr
-					(e-call
+					(e-call (constraint-fn-var 1989)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
@@ -2259,7 +2249,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2723)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2629)
 									(receiver
 										(e-match
 											(match
@@ -2284,7 +2274,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2718)
+										(e-dispatch-call (method "times") (constraint-fn-var 2624)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2299,18 +2289,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2831)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2737)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2796)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2702)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2931)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2837)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2896)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2802)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2325,11 +2315,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3041)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2947)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3036)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 2942)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2344,12 +2334,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3107)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3013)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "statod") (constraint-fn-var 3074)
+																		(e-dispatch-call (method "statod") (constraint-fn-var 2980)
 																			(receiver
 																				(e-match
 																					(match
@@ -2471,6 +2461,20 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
+	(s-import (module "pf.Stdout")
+		(exposes
+			(exposed (name "line!") (wildcard false))
+			(exposed (name "e!") (wildcard false))))
+	(s-import (module "Stdot")
+		(exposes))
+	(s-import (module "pkg.S")
+		(exposes
+			(exposed (name "func") (alias "fry") (wildcard false))
+			(exposed (name "Custom") (wildcard true))))
+	(s-import (module "Bae")
+		(exposes))
+	(s-import (module "Ba")
+		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")
 			(ty-args
@@ -2534,20 +2538,6 @@ expect {
 			(ty-malformed)
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
-		(exposes
-			(exposed (name "line!") (wildcard false))
-			(exposed (name "e!") (wildcard false))))
-	(s-import (module "Stdot")
-		(exposes))
-	(s-import (module "pkg.S")
-		(exposes
-			(exposed (name "func") (alias "fry") (wildcard false))
-			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "Bae")
-		(exposes))
-	(s-import (module "Ba")
-		(exposes))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs

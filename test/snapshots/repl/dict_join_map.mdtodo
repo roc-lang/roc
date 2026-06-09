@@ -23,7 +23,7 @@ NIL
 The snapshot tool runs the interpreter backend first (the `dev`/`llvm` backends
 only run as comparison passes, with crash protection). The interpreter currently
 panics on Dict.join_map, so this snapshot can't pass — saving it as `.mdtodo`
-keeps the test cases on record without breaking `zig build snapshot`/`zig build
+keeps the test cases on record without breaking `zig build run-snapshot-tool`/`zig build
 test`. Rename to `.md` once the interpreter bug below is fixed.
 
 # THE BUG

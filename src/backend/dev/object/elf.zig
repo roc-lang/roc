@@ -178,7 +178,7 @@ pub const ElfWriter = struct {
         addend: i64,
     };
 
-    pub fn init(allocator: Allocator, arch: Architecture) !Self {
+    pub fn init(allocator: Allocator, arch: Architecture) Allocator.Error!Self {
         var self = Self{
             .allocator = allocator,
             .arch = arch,
@@ -211,20 +211,20 @@ pub const ElfWriter = struct {
     }
 
     /// Set the code section contents
-    pub fn setCode(self: *Self, code: []const u8) !void {
+    pub fn setCode(self: *Self, code: []const u8) Allocator.Error!void {
         self.text.clearRetainingCapacity();
         try self.text.appendSlice(self.allocator, code);
     }
 
     /// Set the read-only data section contents.
-    pub fn setRodata(self: *Self, rodata: []const u8) !void {
+    pub fn setRodata(self: *Self, rodata: []const u8) Allocator.Error!void {
         self.rodata.clearRetainingCapacity();
         try self.rodata.appendSlice(self.allocator, rodata);
     }
 
     /// Allocate space in the rodata section for a constant value.
     /// Returns the offset within rodata and a pointer to write the value.
-    pub fn allocateRodata(self: *Self, size: usize, alignment: usize) !struct { offset: usize, ptr: [*]u8 } {
+    pub fn allocateRodata(self: *Self, size: usize, alignment: usize) Allocator.Error!struct { offset: usize, ptr: [*]u8 } {
         // Align current position
         const current_len = self.rodata.items.len;
         const aligned_offset = std.mem.alignForward(usize, current_len, alignment);
@@ -240,14 +240,14 @@ pub const ElfWriter = struct {
     }
 
     /// Add a symbol to the object file
-    pub fn addSymbol(self: *Self, symbol: Symbol) !u32 {
+    pub fn addSymbol(self: *Self, symbol: Symbol) Allocator.Error!u32 {
         const idx: u32 = @intCast(self.symbols.items.len);
         try self.symbols.append(self.allocator, symbol);
         return idx;
     }
 
     /// Add an external symbol reference
-    pub fn addExternalSymbol(self: *Self, name: []const u8) !u32 {
+    pub fn addExternalSymbol(self: *Self, name: []const u8) Allocator.Error!u32 {
         return self.addSymbol(.{
             .name = name,
             .section = .undef,
@@ -259,7 +259,7 @@ pub const ElfWriter = struct {
     }
 
     /// Add an absolute pointer relocation to the rodata section.
-    pub fn addRodataRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) !void {
+    pub fn addRodataRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) Allocator.Error!void {
         const reloc_type: u32 = switch (self.arch) {
             .x86_64 => ELF.R_X86_64_64,
             .aarch64 => ELF.R_AARCH64_ABS64,
@@ -274,7 +274,7 @@ pub const ElfWriter = struct {
     }
 
     /// Add a relocation to the text section
-    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) !void {
+    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) Allocator.Error!void {
         const reloc_type: u32 = switch (self.arch) {
             .x86_64 => ELF.R_X86_64_PLT32,
             .aarch64 => ELF.R_AARCH64_CALL26,
@@ -289,7 +289,7 @@ pub const ElfWriter = struct {
     }
 
     /// Add a data-address relocation to the text section.
-    pub fn addTextDataRelocation(self: *Self, offset: u64, symbol_idx: u32, kind: DataRelocationKind) !void {
+    pub fn addTextDataRelocation(self: *Self, offset: u64, symbol_idx: u32, kind: DataRelocationKind) Allocator.Error!void {
         const reloc: TextDataReloc = switch (kind) {
             .abs64 => .{
                 .kind = switch (self.arch) {
@@ -330,7 +330,7 @@ pub const ElfWriter = struct {
     }
 
     /// Add a string to the string table, return its offset
-    fn addString(self: *Self, table: *std.ArrayList(u8), str: []const u8) !u32 {
+    fn addString(self: *Self, table: *std.ArrayList(u8), str: []const u8) Allocator.Error!u32 {
         const offset: u32 = @intCast(table.items.len);
         try table.appendSlice(self.allocator, str);
         try table.append(self.allocator, 0); // Null terminator
@@ -338,7 +338,7 @@ pub const ElfWriter = struct {
     }
 
     /// Write the ELF object file to a buffer
-    pub fn write(self: *Self, output: *std.ArrayList(u8)) !void {
+    pub fn write(self: *Self, output: *std.ArrayList(u8)) Allocator.Error!void {
         // Section indices
         const SHIDX_TEXT = 1;
         const SHIDX_RODATA = 2;
@@ -628,7 +628,7 @@ pub const ElfWriter = struct {
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_shstrtab));
     }
 
-    fn padTo(self: *Self, output: *std.ArrayList(u8), target: u64) !void {
+    fn padTo(self: *Self, output: *std.ArrayList(u8), target: u64) Allocator.Error!void {
         const current: u64 = @intCast(output.items.len);
         if (current < target) {
             const padding: usize = @intCast(target - current);

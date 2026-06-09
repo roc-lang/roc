@@ -1,9 +1,8 @@
 //! Shared test specifications for fx platform tests.
 //!
 //! This module defines IO specs for all fx platform tests that can be run
-//! using the --test mode. These specs are shared between:
-//! - Native Zig tests (fx_platform_test.zig)
-//! - Unified test platform runner (test_runner.zig)
+//! using the --test mode. The shared IO-spec matrix is owned by the parallel
+//! CLI platform runner.
 //!
 //! IO Spec Format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
 //! - 0<text: stdin input

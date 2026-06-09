@@ -104,91 +104,8 @@ pub fn main(process_init: std.process.Init) !void {
         gpa.free(builtin_roc_source);
     }
 
-    // Find nested type declarations in Builtin module
-    // These are nested inside Builtin's record extension (Builtin := [].{...})
-    const bool_type_idx = try findTypeDeclaration(builtin_env, "Bool");
-    const try_type_idx = try findTypeDeclaration(builtin_env, "Try");
-    const dict_type_idx = try findTypeDeclaration(builtin_env, "Dict");
-    const set_type_idx = try findTypeDeclaration(builtin_env, "Set");
-    const str_type_idx = try findTypeDeclaration(builtin_env, "Str");
-    const iter_type_idx = try findTypeDeclaration(builtin_env, "Iter");
-    const list_type_idx = try findTypeDeclaration(builtin_env, "List");
-    const box_type_idx = try findTypeDeclaration(builtin_env, "Box");
-
-    // Find Utf8Problem nested inside Str (e.g., Builtin.Str.Utf8Problem)
-    const utf8_problem_type_idx = try findNestedTypeDeclaration(builtin_env, "Str", "Utf8Problem");
-
-    // Find numeric types nested inside Num (e.g., Builtin.Num.U8)
-    const u8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U8");
-    const i8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I8");
-    const u16_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U16");
-    const i16_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I16");
-    const u32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U32");
-    const i32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I32");
-    const u64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U64");
-    const i64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I64");
-    const u128_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U128");
-    const i128_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I128");
-    const dec_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Dec");
-    const f32_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F32");
-    const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
-    const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
-
-    // Look up idents for each type
-    // All types use fully-qualified names for consistent member lookup
-    // Top-level types: "Builtin.Bool", "Builtin.Str", etc.
-    // Nested types under Num: "Builtin.Num.U8", etc.
-    const bool_ident = builtin_env.common.findIdent("Builtin.Bool") orelse unreachable;
-    const try_ident = builtin_env.common.findIdent("Builtin.Try") orelse unreachable;
-    const dict_ident = builtin_env.common.findIdent("Builtin.Dict") orelse unreachable;
-    const set_ident = builtin_env.common.findIdent("Builtin.Set") orelse unreachable;
-    const str_ident = builtin_env.common.findIdent("Builtin.Str") orelse unreachable;
-    const iter_ident = builtin_env.common.findIdent("Builtin.Iter") orelse unreachable;
-    const list_ident = builtin_env.common.findIdent("Builtin.List") orelse unreachable;
-    const box_ident = builtin_env.common.findIdent("Builtin.Box") orelse unreachable;
-    const utf8_problem_ident = builtin_env.common.findIdent("Builtin.Str.Utf8Problem") orelse unreachable;
-    const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
-    const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
-    const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
-    const i16_ident = builtin_env.common.findIdent("Builtin.Num.I16") orelse unreachable;
-    const u32_ident = builtin_env.common.findIdent("Builtin.Num.U32") orelse unreachable;
-    const i32_ident = builtin_env.common.findIdent("Builtin.Num.I32") orelse unreachable;
-    const u64_ident = builtin_env.common.findIdent("Builtin.Num.U64") orelse unreachable;
-    const i64_ident = builtin_env.common.findIdent("Builtin.Num.I64") orelse unreachable;
-    const u128_ident = builtin_env.common.findIdent("Builtin.Num.U128") orelse unreachable;
-    const i128_ident = builtin_env.common.findIdent("Builtin.Num.I128") orelse unreachable;
-    const dec_ident = builtin_env.common.findIdent("Builtin.Num.Dec") orelse unreachable;
-    const f32_ident = builtin_env.common.findIdent("Builtin.Num.F32") orelse unreachable;
-    const f64_ident = builtin_env.common.findIdent("Builtin.Num.F64") orelse unreachable;
-    const numeral_ident = builtin_env.common.findIdent("Builtin.Num.Numeral") orelse unreachable;
-    // Tag idents for Try type (Ok and Err)
-    const ok_ident = builtin_env.common.findIdent("Ok") orelse unreachable;
-    const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
-
-    // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
-    // Note: These types are already in exposed_items from canonicalization, we just set their node indices
-    try builtin_env.common.setNodeIndexById(gpa, bool_ident, @intCast(@intFromEnum(bool_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, try_ident, @intCast(@intFromEnum(try_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, dict_ident, @intCast(@intFromEnum(dict_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, iter_ident, @intCast(@intFromEnum(iter_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
-
-    try builtin_env.common.setNodeIndexById(gpa, u8_ident, @intCast(@intFromEnum(u8_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i8_ident, @intCast(@intFromEnum(i8_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u16_ident, @intCast(@intFromEnum(u16_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i16_ident, @intCast(@intFromEnum(i16_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u32_ident, @intCast(@intFromEnum(u32_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i32_ident, @intCast(@intFromEnum(i32_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u64_ident, @intCast(@intFromEnum(u64_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i64_ident, @intCast(@intFromEnum(i64_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, u128_ident, @intCast(@intFromEnum(u128_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, i128_ident, @intCast(@intFromEnum(i128_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, dec_ident, @intCast(@intFromEnum(dec_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, f32_ident, @intCast(@intFromEnum(f32_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
+    const builtin_indices = try buildBuiltinIndices(gpa, builtin_env);
+    try installBuiltinNodeIndices(gpa, builtin_env, builtin_indices);
 
     // Create output directories when needed.
     if (std.fs.path.dirname(builtin_bin_path)) |dir| {
@@ -201,9 +118,41 @@ pub fn main(process_init: std.process.Init) !void {
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
-    // Create and serialize builtin indices
-    const builtin_indices = BuiltinIndices{
-        // Statement indices
+    // Validate that BuiltinIndices contains all type declarations under Builtin
+    // This ensures BuiltinIndices stays in sync with the actual Builtin module content
+    try validateBuiltinIndicesCompleteness(gpa, builtin_env, builtin_indices);
+
+    try serializeBuiltinIndices(io, builtin_indices, builtin_indices_path);
+}
+
+fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
+    const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
+    const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
+    const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
+    const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
+    const str_type_idx = try findTypeDeclaration(gpa, env, "Str");
+    const iter_type_idx = try findTypeDeclaration(gpa, env, "Iter");
+    const list_type_idx = try findTypeDeclaration(gpa, env, "List");
+    const box_type_idx = try findTypeDeclaration(gpa, env, "Box");
+
+    const utf8_problem_type_idx = try findNestedTypeDeclaration(gpa, env, "Str", "Utf8Problem");
+
+    const u8_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U8");
+    const i8_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I8");
+    const u16_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U16");
+    const i16_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I16");
+    const u32_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U32");
+    const i32_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I32");
+    const u64_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U64");
+    const i64_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I64");
+    const u128_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U128");
+    const i128_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "I128");
+    const dec_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "Dec");
+    const f32_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "F32");
+    const f64_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "F64");
+    const numeral_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "Numeral");
+
+    return .{
         .bool_type = bool_type_idx,
         .try_type = try_type_idx,
         .dict_type = dict_type_idx,
@@ -227,47 +176,71 @@ pub fn main(process_init: std.process.Init) !void {
         .f32_type = f32_type_idx,
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
-        .bool_ident = bool_ident,
-        .try_ident = try_ident,
-        .dict_ident = dict_ident,
-        .set_ident = set_ident,
-        .str_ident = str_ident,
-        .iter_ident = iter_ident,
-        .list_ident = list_ident,
-        .box_ident = box_ident,
-        .utf8_problem_ident = utf8_problem_ident,
-        .u8_ident = u8_ident,
-        .i8_ident = i8_ident,
-        .u16_ident = u16_ident,
-        .i16_ident = i16_ident,
-        .u32_ident = u32_ident,
-        .i32_ident = i32_ident,
-        .u64_ident = u64_ident,
-        .i64_ident = i64_ident,
-        .u128_ident = u128_ident,
-        .i128_ident = i128_ident,
-        .dec_ident = dec_ident,
-        .f32_ident = f32_ident,
-        .f64_ident = f64_ident,
-        .numeral_ident = numeral_ident,
-        .ok_ident = ok_ident,
-        .err_ident = err_ident,
+        .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
+        .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
+        .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
+        .set_ident = expectBuiltinIdent(env, "Builtin.Set"),
+        .str_ident = expectBuiltinIdent(env, "Builtin.Str"),
+        .iter_ident = expectBuiltinIdent(env, "Builtin.Iter"),
+        .list_ident = expectBuiltinIdent(env, "Builtin.List"),
+        .box_ident = expectBuiltinIdent(env, "Builtin.Box"),
+        .utf8_problem_ident = expectBuiltinIdent(env, "Builtin.Str.Utf8Problem"),
+        .u8_ident = expectBuiltinIdent(env, "Builtin.Num.U8"),
+        .i8_ident = expectBuiltinIdent(env, "Builtin.Num.I8"),
+        .u16_ident = expectBuiltinIdent(env, "Builtin.Num.U16"),
+        .i16_ident = expectBuiltinIdent(env, "Builtin.Num.I16"),
+        .u32_ident = expectBuiltinIdent(env, "Builtin.Num.U32"),
+        .i32_ident = expectBuiltinIdent(env, "Builtin.Num.I32"),
+        .u64_ident = expectBuiltinIdent(env, "Builtin.Num.U64"),
+        .i64_ident = expectBuiltinIdent(env, "Builtin.Num.I64"),
+        .u128_ident = expectBuiltinIdent(env, "Builtin.Num.U128"),
+        .i128_ident = expectBuiltinIdent(env, "Builtin.Num.I128"),
+        .dec_ident = expectBuiltinIdent(env, "Builtin.Num.Dec"),
+        .f32_ident = expectBuiltinIdent(env, "Builtin.Num.F32"),
+        .f64_ident = expectBuiltinIdent(env, "Builtin.Num.F64"),
+        .numeral_ident = expectBuiltinIdent(env, "Builtin.Num.Numeral"),
+        .ok_ident = expectBuiltinIdent(env, "Ok"),
+        .err_ident = expectBuiltinIdent(env, "Err"),
     };
+}
 
-    // Validate that BuiltinIndices contains all type declarations under Builtin
-    // This ensures BuiltinIndices stays in sync with the actual Builtin module content
-    try validateBuiltinIndicesCompleteness(builtin_env, builtin_indices);
+fn expectBuiltinIdent(env: *const ModuleEnv, text: []const u8) base.Ident.Idx {
+    return env.common.findIdent(text) orelse unreachable;
+}
 
-    try serializeBuiltinIndices(io, builtin_indices, builtin_indices_path);
+fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIndices) !void {
+    try env.common.setNodeIndexById(gpa, indices.bool_ident, @intCast(@intFromEnum(indices.bool_type)));
+    try env.common.setNodeIndexById(gpa, indices.try_ident, @intCast(@intFromEnum(indices.try_type)));
+    try env.common.setNodeIndexById(gpa, indices.dict_ident, @intCast(@intFromEnum(indices.dict_type)));
+    try env.common.setNodeIndexById(gpa, indices.set_ident, @intCast(@intFromEnum(indices.set_type)));
+    try env.common.setNodeIndexById(gpa, indices.str_ident, @intCast(@intFromEnum(indices.str_type)));
+    try env.common.setNodeIndexById(gpa, indices.iter_ident, @intCast(@intFromEnum(indices.iter_type)));
+    try env.common.setNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
+    try env.common.setNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
+    try env.common.setNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
+    try env.common.setNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
+    try env.common.setNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));
+    try env.common.setNodeIndexById(gpa, indices.u16_ident, @intCast(@intFromEnum(indices.u16_type)));
+    try env.common.setNodeIndexById(gpa, indices.i16_ident, @intCast(@intFromEnum(indices.i16_type)));
+    try env.common.setNodeIndexById(gpa, indices.u32_ident, @intCast(@intFromEnum(indices.u32_type)));
+    try env.common.setNodeIndexById(gpa, indices.i32_ident, @intCast(@intFromEnum(indices.i32_type)));
+    try env.common.setNodeIndexById(gpa, indices.u64_ident, @intCast(@intFromEnum(indices.u64_type)));
+    try env.common.setNodeIndexById(gpa, indices.i64_ident, @intCast(@intFromEnum(indices.i64_type)));
+    try env.common.setNodeIndexById(gpa, indices.u128_ident, @intCast(@intFromEnum(indices.u128_type)));
+    try env.common.setNodeIndexById(gpa, indices.i128_ident, @intCast(@intFromEnum(indices.i128_type)));
+    try env.common.setNodeIndexById(gpa, indices.dec_ident, @intCast(@intFromEnum(indices.dec_type)));
+    try env.common.setNodeIndexById(gpa, indices.f32_ident, @intCast(@intFromEnum(indices.f32_type)));
+    try env.common.setNodeIndexById(gpa, indices.f64_ident, @intCast(@intFromEnum(indices.f64_type)));
+    try env.common.setNodeIndexById(gpa, indices.numeral_ident, @intCast(@intFromEnum(indices.numeral_type)));
 }
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
 /// Iterates through all statements and ensures every s_nominal_decl is present in BuiltinIndices,
 /// with the exception of "Num" which is a container type, not an auto-imported type.
-fn validateBuiltinIndicesCompleteness(env: *const ModuleEnv, indices: BuiltinIndices) !void {
+fn validateBuiltinIndicesCompleteness(gpa: Allocator, env: *const ModuleEnv, indices: BuiltinIndices) !void {
     // Collect all statement indices from BuiltinIndices using reflection
     // Only check Statement.Idx fields (skip Ident.Idx fields)
-    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(std.heap.page_allocator);
+    var indexed_stmts = std.AutoHashMap(CIR.Statement.Idx, void).init(gpa);
     defer indexed_stmts.deinit();
 
     const fields = @typeInfo(BuiltinIndices).@"struct".fields;
@@ -331,9 +304,6 @@ fn compileModule(
     var module_env = try gpa.create(ModuleEnv);
     errdefer gpa.destroy(module_env);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
     module_env.* = try ModuleEnv.init(gpa, source);
     errdefer module_env.deinit();
 
@@ -395,6 +365,7 @@ fn compileModule(
 
     // 4. Canonicalize
     try module_env.initCIRFields(module_name);
+    module_env.module_role = .builtin;
 
     var can_result = try gpa.create(Can);
     defer {
@@ -436,38 +407,19 @@ fn compileModule(
     if (std.mem.eql(u8, module_name, "Builtin")) {
         try can.BuiltinLowLevel.apply(module_env);
 
-        // Find Bool, Try, and Str statements before type checking
-        // When compiling Builtin, bool_stmt, try_stmt, and str_stmt are initially undefined,
-        // but they must be set before type checking begins
-        const found_bool_stmt = findTypeDeclaration(module_env, "Bool") catch {
+        const builtin_indices = buildBuiltinIndices(gpa, module_env) catch |err| {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-            std.debug.print("ERROR: Could not find Bool type in Builtin module\n", .{});
+            std.debug.print("ERROR: Could not build Builtin type index before type checking\n", .{});
             std.debug.print("=" ** 80 ++ "\n", .{});
-            std.debug.print("The Bool type declaration is required for type checking.\n", .{});
+            std.debug.print("Builtin type declarations are required for type checking.\n", .{});
             std.debug.print("=" ** 80 ++ "\n", .{});
-            return error.TypeDeclarationNotFound;
-        };
-        const found_try_stmt = findTypeDeclaration(module_env, "Try") catch {
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-            std.debug.print("ERROR: Could not find Try type in Builtin module\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
-            std.debug.print("The Try type declaration is required for type checking.\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
-            return error.TypeDeclarationNotFound;
-        };
-        const found_str_stmt = findTypeDeclaration(module_env, "Str") catch {
-            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
-            std.debug.print("ERROR: Could not find Str type in Builtin module\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
-            std.debug.print("The Str type declaration is required for type checking.\n", .{});
-            std.debug.print("=" ** 80 ++ "\n", .{});
-            return error.TypeDeclarationNotFound;
+            return err;
         };
 
-        // Update builtin_ctx with the found statement indices
-        builtin_ctx.bool_stmt = found_bool_stmt;
-        builtin_ctx.try_stmt = found_try_stmt;
-        builtin_ctx.str_stmt = found_str_stmt;
+        builtin_ctx.bool_stmt = builtin_indices.bool_type;
+        builtin_ctx.try_stmt = builtin_indices.try_type;
+        builtin_ctx.str_stmt = builtin_indices.str_type;
+        builtin_ctx.builtin_indices = builtin_indices;
     }
 
     // 6. Type check
@@ -480,7 +432,7 @@ fn compileModule(
         try imported_envs.append(gpa, dep.env);
     }
     module_env.imports.clearResolvedModules();
-    module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
+    try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs.items);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
     defer module_envs.deinit();
@@ -545,7 +497,7 @@ fn serializeModuleEnv(
     env: *const ModuleEnv,
     output_path: []const u8,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
@@ -568,11 +520,9 @@ fn serializeModuleEnv(
 /// Returns the statement index of the type declaration
 /// For builtin_compiler, types are always in all_statements (not builtin_statements)
 /// because we're compiling Builtin.roc itself, not importing from it.
-fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
-    // Construct the qualified name (e.g., "Builtin.Bool")
-    // Types in nested declarations are stored with their full qualified names
-    var qualified_name_buf: [256]u8 = undefined;
-    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}", .{ env.module_name, type_name });
+fn findTypeDeclaration(gpa: Allocator, env: *const ModuleEnv, type_name: []const u8) !CIR.Statement.Idx {
+    const qualified_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ env.module_name, type_name });
+    defer gpa.free(qualified_name);
 
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);
@@ -597,10 +547,14 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
 /// Find a nested type declaration by parent and type name in a compiled module
 /// For example, findNestedTypeDeclaration(env, "Num", "U8") finds "Builtin.Num.U8"
 /// Returns the statement index of the type declaration
-fn findNestedTypeDeclaration(env: *const ModuleEnv, parent_name: []const u8, type_name: []const u8) !CIR.Statement.Idx {
-    // Construct the qualified name (e.g., "Builtin.Num.U8")
-    var qualified_name_buf: [256]u8 = undefined;
-    const qualified_name = try std.fmt.bufPrint(&qualified_name_buf, "{s}.{s}.{s}", .{ env.module_name, parent_name, type_name });
+fn findNestedTypeDeclaration(
+    gpa: Allocator,
+    env: *const ModuleEnv,
+    parent_name: []const u8,
+    type_name: []const u8,
+) !CIR.Statement.Idx {
+    const qualified_name = try std.fmt.allocPrint(gpa, "{s}.{s}.{s}", .{ env.module_name, parent_name, type_name });
+    defer gpa.free(qualified_name);
 
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);

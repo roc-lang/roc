@@ -55,7 +55,7 @@ pub const ReportingConfig = struct {
     /// Maximum bytes for truncating error messages
     max_message_bytes: usize,
 
-    pub fn initFromEnv(allocator: Allocator, roc_ctx: CoreCtx) !ReportingConfig {
+    pub fn initFromEnv(allocator: Allocator, roc_ctx: CoreCtx) Allocator.Error!ReportingConfig {
         var config = ReportingConfig{
             .color_preference = .auto,
             .is_tty = false,
@@ -245,14 +245,14 @@ pub const ReportingConfig = struct {
 };
 
 /// Validate that a string contains valid UTF-8
-pub fn validateUtf8(bytes: []const u8) !void {
+pub fn validateUtf8(bytes: []const u8) error{InvalidUtf8}!void {
     if (!std.unicode.utf8ValidateSlice(bytes)) {
         return error.InvalidUtf8;
     }
 }
 
 /// Safely truncate a UTF-8 string to a maximum byte length
-pub fn truncateUtf8(allocator: Allocator, input: []const u8, max_bytes: usize) ![]u8 {
+pub fn truncateUtf8(allocator: Allocator, input: []const u8, max_bytes: usize) (Allocator.Error || error{ InvalidUtf8, CannotTruncate })![]u8 {
     try validateUtf8(input);
 
     if (input.len <= max_bytes) {
@@ -276,7 +276,7 @@ pub fn truncateUtf8(allocator: Allocator, input: []const u8, max_bytes: usize) !
 }
 
 /// Safely format a string with UTF-8 validation
-pub fn formatUtf8(allocator: Allocator, comptime fmt: []const u8, args: anytype) ![]u8 {
+pub fn formatUtf8(allocator: Allocator, comptime fmt: []const u8, args: anytype) (Allocator.Error || error{InvalidUtf8})![]u8 {
     const result = try std.fmt.allocPrint(allocator, fmt, args);
     validateUtf8(result) catch |err| {
         allocator.free(result);
@@ -286,7 +286,7 @@ pub fn formatUtf8(allocator: Allocator, comptime fmt: []const u8, args: anytype)
 }
 
 /// Safely format a string with UTF-8 validation and truncation
-pub fn formatUtf8Bounded(allocator: Allocator, max_bytes: usize, comptime fmt: []const u8, args: anytype) ![]u8 {
+pub fn formatUtf8Bounded(allocator: Allocator, max_bytes: usize, comptime fmt: []const u8, args: anytype) (Allocator.Error || error{ InvalidUtf8, CannotTruncate })![]u8 {
     const result = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(result);
 

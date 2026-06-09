@@ -30,6 +30,7 @@ pub const LambdaMono = struct {
     pub const Specialize = @import("lambda_mono/specialize.zig");
 };
 pub const LirLower = @import("lir_lower.zig");
+pub const SolvedLirLower = @import("solved_lir_lower.zig");
 pub const StructuralTest = @import("structural_test.zig");
 
 test "postcheck declarations are referenced" {

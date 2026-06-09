@@ -5,6 +5,7 @@
 //! comparison mechanisms.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const sort = @import("sort.zig");
 
 fn cMain() callconv(.c) i32 {
@@ -21,7 +22,7 @@ const DEBUG = false;
 var allocator: std.mem.Allocator = undefined;
 
 /// TODO: Document fuzz_main.
-pub fn fuzz_main() !void {
+pub fn fuzz_main() Allocator.Error!void {
     // Setup an allocator that will detect leaks/use-after-free/etc
     var gpa = std.heap.DebugAllocator(.{}){};
     // this will check for leaks and crash the program if it finds any

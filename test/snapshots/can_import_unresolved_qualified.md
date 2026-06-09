@@ -35,8 +35,8 @@ parser = Json.Parser.Advanced.NonExistent.create
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
 MODULE NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
-MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
-MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:41:12:61
+MODULE NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
+MODULE NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:16:10:16:20
@@ -77,26 +77,26 @@ parseData = |data| Json.stringify(data)
                    ^^^^^^^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Http.Server` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `Server.Request` is qualified by the module `http.Client`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**can_import_unresolved_qualified.md:12:18:12:37:**
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:12:29:12:37:**
 ```roc
 processRequest : Http.Server.Request -> Http.Server.Response
 ```
-                 ^^^^^^^^^^^^^^^^^^^
+                            ^^^^^^^^
 
 
-**MODULE NOT IMPORTED**
-There is no module with the name `Http.Server` imported into this Roc file.
+**MODULE NOT FOUND**
+The type `Server.Response` is qualified by the module `http.Client`, but that module was not found in this Roc project.
 
-You're attempting to use this module here:
-**can_import_unresolved_qualified.md:12:41:12:61:**
+You're attempting to use this type here:
+**can_import_unresolved_qualified.md:12:52:12:61:**
 ```roc
 processRequest : Http.Server.Request -> Http.Server.Response
 ```
-                                        ^^^^^^^^^^^^^^^^^^^^
+                                                   ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

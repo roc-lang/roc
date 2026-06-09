@@ -5,6 +5,7 @@
 //! for stack allocations in the interpreter.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 /// The highest alignment any Roc type can have.
 /// This is used as the base alignment for the allocation used
@@ -34,6 +35,10 @@ pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
+
+/// Single-threaded arena allocator; the non-atomic counterpart to
+/// `std.heap.ArenaAllocator`.
+pub const SingleThreadArena = @import("SingleThreadArena.zig");
 
 /// Serialization format definitions for embedded module data.
 pub const serialization = @import("serialization.zig");
@@ -72,7 +77,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 
         entries: []V,
 
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) Allocator.Error!Self {
             const entries = try allocator.alloc(V, capacity);
             @memset(entries, V.none);
 
@@ -102,7 +107,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             return minimum +| (minimum / 2 + init_capacity);
         }
 
-        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
+        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) Allocator.Error!void {
             const idx = @intFromEnum(key);
 
             // Grow if necessary
@@ -129,4 +134,5 @@ test "collections tests" {
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
+    std.testing.refAllDecls(@import("SingleThreadArena.zig"));
 }

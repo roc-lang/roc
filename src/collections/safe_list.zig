@@ -7,6 +7,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
+const SingleThreadArena = @import("SingleThreadArena.zig");
 
 /// Recursively zero all padding bytes in a value for deterministic serialization.
 /// Handles tagged unions (tail padding, variant overshoot), auto-layout structs
@@ -1205,7 +1206,7 @@ test "SafeList edge cases serialization" {
                 list_u32: SafeList(u32).Serialized,
                 list_u8: SafeList(u8).Serialized,
 
-                pub fn serialize(self: *Serialized, container: *const Self, allocator: std.mem.Allocator, writer: *CompactWriter) !void {
+                pub fn serialize(self: *Serialized, container: *const Self, allocator: std.mem.Allocator, writer: *CompactWriter) Allocator.Error!void {
                     try self.list_u32.serialize(&container.list_u32, allocator, writer);
                     try self.list_u8.serialize(&container.list_u8, allocator, writer);
                 }
@@ -2582,7 +2583,7 @@ test "SafeMultiList.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), @intFromEnum(orig_idx2));
 
     // Create a CompactWriter and arena
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 

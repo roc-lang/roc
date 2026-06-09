@@ -4,6 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const stack_overflow = @import("stack_overflow.zig");
+const SingleThreadArena = @import("collections").SingleThreadArena;
 const Allocator = std.mem.Allocator;
 
 /// True on freestanding targets (e.g. wasm32) where threading is unavailable.
@@ -48,9 +49,9 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
     }
 
     if (ctx.options.use_per_thread_arenas) {
-        // Use per-thread arena allocator with page allocator that clears between work items
-        // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        var arena = std.heap.ArenaAllocator.init(ctx.base_allocator);
+        // Each worker thread owns this arena for its lifetime, so it can be the
+        // single-threaded variant; only `base_allocator` is shared across threads.
+        var arena = SingleThreadArena.init(ctx.base_allocator);
         defer arena.deinit();
 
         while (true) {
@@ -103,7 +104,7 @@ pub fn process(
     allocator: Allocator,
     work_item_count: usize,
     options: ProcessOptions,
-) !void {
+) (Allocator.Error || std.Thread.SpawnError)!void {
     if (work_item_count == 0) return;
 
     if (comptime is_freestanding) {

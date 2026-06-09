@@ -134,7 +134,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// INVARIANT: Each local ID must map to at most ONE register. Using the same
         /// local ID for multiple registers corrupts spill tracking. Use unique temp IDs
         /// (starting at 0x8000_0000) for temporaries that don't correspond to real locals.
-        pub fn allocGeneralFor(self: *Self, local: u32) !GeneralReg {
+        pub fn allocGeneralFor(self: *Self, local: u32) Allocator.Error!GeneralReg {
             // 1. Try caller-saved registers first (preferred - no save/restore needed)
             if (self.allocFromGeneralMask(&self.free_general)) |reg| {
                 // DEBUG: Verify no OTHER register already owns this local
@@ -227,7 +227,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Spill a register to make room and allocate it for the given local.
         /// WARNING: This function is fundamentally unsafe for LirCodeGen's usage pattern.
         /// See the x86_64 version for the full explanation.
-        fn spillAndAllocGeneral(self: *Self) !GeneralReg {
+        fn spillAndAllocGeneral(self: *Self) Allocator.Error!GeneralReg {
             if (builtin.mode == .Debug) {
                 var owned_count: u32 = 0;
                 for (0..NUM_GENERAL_REGS) |i| {
@@ -246,7 +246,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Reload a spilled value back into a register.
         /// Returns the register it was loaded into.
-        pub fn reloadLocal(self: *Self, local: u32) !GeneralReg {
+        pub fn reloadLocal(self: *Self, local: u32) Allocator.Error!GeneralReg {
             // Check if it's already in a register
             if (self.locals.get(local)) |loc| {
                 switch (loc) {
@@ -267,7 +267,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Allocate a floating-point register for a local variable.
-        pub fn allocFloatFor(self: *Self, local: u32) !FloatReg {
+        pub fn allocFloatFor(self: *Self, local: u32) Allocator.Error!FloatReg {
             // Float registers: try caller-saved first
             if (self.allocFromFloatMask(&self.free_float)) |reg| {
                 self.float_owners[@intFromEnum(reg)] = local;
@@ -298,7 +298,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.free_float |= @as(u32, 1) << idx;
         }
 
-        fn spillAndAllocFloat(self: *Self, local: u32) !FloatReg {
+        fn spillAndAllocFloat(self: *Self, local: u32) Allocator.Error!FloatReg {
             // Find a float register to spill
             var victim: ?FloatReg = null;
             for (0..NUM_FLOAT_REGS) |i| {
@@ -327,7 +327,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Reload a spilled float value back into a register.
-        pub fn reloadFloatLocal(self: *Self, local: u32) !FloatReg {
+        pub fn reloadFloatLocal(self: *Self, local: u32) Allocator.Error!FloatReg {
             if (self.locals.get(local)) |loc| {
                 switch (loc) {
                     .float_reg => |r| return @enumFromInt(r),
@@ -344,7 +344,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the register holding a local, reloading if necessary.
-        pub fn getLocalReg(self: *Self, local: u32) !GeneralReg {
+        pub fn getLocalReg(self: *Self, local: u32) Allocator.Error!GeneralReg {
             if (self.locals.get(local)) |loc| {
                 switch (loc) {
                     .general_reg => |r| return @enumFromInt(r),
@@ -356,7 +356,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the float register holding a local, reloading if necessary.
-        pub fn getLocalFloatReg(self: *Self, local: u32) !FloatReg {
+        pub fn getLocalFloatReg(self: *Self, local: u32) Allocator.Error!FloatReg {
             if (self.locals.get(local)) |loc| {
                 switch (loc) {
                     .float_reg => |r| return @enumFromInt(r),
@@ -406,7 +406,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
         /// Saves to [FP + 16], [FP + 32], etc. for each used pair
         /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
-        pub fn emitSaveCalleeSavedToFrame(self: *Self) !void {
+        pub fn emitSaveCalleeSavedToFrame(self: *Self) Allocator.Error!void {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             try builder.emitSaveCalleeSaved(&self.emit);
@@ -416,7 +416,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
         /// Restores from [FP + 16], [FP + 32], etc. for each used pair
         /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
-        pub fn emitRestoreCalleeSavedFromFrame(self: *Self) !void {
+        pub fn emitRestoreCalleeSavedFromFrame(self: *Self) Allocator.Error!void {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             try builder.emitRestoreCalleeSaved(&self.emit);
@@ -425,21 +425,21 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit function prologue (called at start of function)
         /// Note: Call this AFTER register allocation is complete to know which
         /// callee-saved registers need to be preserved.
-        pub fn emitPrologue(self: *Self) !void {
+        pub fn emitPrologue(self: *Self) Allocator.Error!void {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             _ = try builder.emitPrologue(&self.emit);
         }
 
         /// Emit function epilogue and return
-        pub fn emitEpilogue(self: *Self) !void {
+        pub fn emitEpilogue(self: *Self) Allocator.Error!void {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             try builder.emitEpilogue(&self.emit);
         }
 
         /// Emit stack frame setup with given local size
-        pub fn emitStackAlloc(self: *Self, size: u32) !void {
+        pub fn emitStackAlloc(self: *Self, size: u32) Allocator.Error!void {
             if (size > 0) {
                 // sub sp, sp, #size
                 if (size <= 4095) {
@@ -455,33 +455,33 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // Integer operations
 
         /// Emit integer addition: dst = a + b
-        pub fn emitAdd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitAdd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.addRegRegReg(width, dst, a, b);
         }
 
         /// Emit integer subtraction: dst = a - b
-        pub fn emitSub(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitSub(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.subRegRegReg(width, dst, a, b);
         }
 
         /// Emit integer multiplication: dst = a * b
-        pub fn emitMul(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitMul(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.mulRegRegReg(width, dst, a, b);
         }
 
         /// Emit signed integer division: dst = a / b
-        pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.sdivRegRegReg(width, dst, a, b);
         }
 
         /// Emit unsigned integer division: dst = a / b
-        pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.udivRegRegReg(width, dst, a, b);
         }
 
         /// Emit signed integer modulo: dst = a % b
         /// Uses SDIV + MSUB: remainder = a - (a/b) * b
-        pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             // We need a temp register for the quotient
             // Since dst might be the same as a or b, we use dst for intermediate if safe
             // quotient = a / b
@@ -492,7 +492,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Emit unsigned integer modulo: dst = a % b
         /// Uses UDIV + MSUB: remainder = a - (a/b) * b
-        pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             // quotient = a / b
             try self.emit.udivRegRegReg(width, dst, a, b);
             // remainder = a - quotient * b
@@ -500,33 +500,33 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit integer negation: dst = -src
-        pub fn emitNeg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+        pub fn emitNeg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.emit.negRegReg(width, dst, src);
         }
 
         /// Emit bitwise AND: dst = a & b
-        pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.andRegRegReg(width, dst, a, b);
         }
 
         /// Emit bitwise OR: dst = a | b
-        pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.orrRegRegReg(width, dst, a, b);
         }
 
         /// Emit bitwise XOR: dst = a ^ b
-        pub fn emitXor(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        pub fn emitXor(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             try self.emit.eorRegRegReg(width, dst, a, b);
         }
 
         /// Emit bitwise NOT: dst = ~src
-        pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+        pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             // MVN <dst>, <src> is an alias for ORN <dst>, XZR, <src>.
             try self.emit.ornRegRegReg(width, dst, .ZRSP, src);
         }
 
         /// Emit bitwise XOR with immediate: dst = src ^ imm
-        pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
+        pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) Allocator.Error!void {
             // Load immediate into scratch register and use EOR
             try self.emit.movRegImm32(width, .IP0, imm);
             try self.emit.eorRegRegReg(width, dst, src, .IP0);
@@ -535,13 +535,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // Comparison operations
 
         /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
-        pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) !void {
+        pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) Allocator.Error!void {
             try self.emit.cmpRegReg(width, a, b);
             try self.emit.cset(width, dst, cond);
         }
 
         /// Emit float64 compare and set: dst = (a cond b) ? 1 : 0
-        pub fn emitCmpF64(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) !void {
+        pub fn emitCmpF64(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) Allocator.Error!void {
             try self.emit.fcmpRegReg(.double, a, b);
             try self.emit.cset(.w64, dst, cond);
         }
@@ -549,63 +549,63 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // Floating-point operations
 
         /// Emit float64 addition: dst = a + b
-        pub fn emitAddF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitAddF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.faddRegRegReg(.double, dst, a, b);
         }
 
         /// Emit float64 subtraction: dst = a - b
-        pub fn emitSubF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitSubF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.fsubRegRegReg(.double, dst, a, b);
         }
 
         /// Emit float64 multiplication: dst = a * b
-        pub fn emitMulF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitMulF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.fmulRegRegReg(.double, dst, a, b);
         }
 
         /// Emit float64 division: dst = a / b
-        pub fn emitDivF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitDivF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.fdivRegRegReg(.double, dst, a, b);
         }
 
         /// Emit float64 negation: dst = -src
-        pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.emit.fnegRegReg(.double, dst, src);
         }
 
-        pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.emit.fabsRegReg(.double, dst, src);
         }
 
         /// Emit float32 addition: dst = a + b
-        pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.faddRegRegReg(.single, dst, a, b);
         }
 
         /// Emit float32 subtraction: dst = a - b
-        pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.fsubRegRegReg(.single, dst, a, b);
         }
 
         /// Emit float32 multiplication: dst = a * b
-        pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.fmulRegRegReg(.single, dst, a, b);
         }
 
         /// Emit float32 division: dst = a / b
-        pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) Allocator.Error!void {
             try self.emit.fdivRegRegReg(.single, dst, a, b);
         }
 
         /// Emit float32 negation: dst = -src
-        pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.emit.fnegRegReg(.single, dst, src);
         }
 
         // Memory operations
 
         /// Load from stack slot into register
-        pub fn emitLoadStack(self: *Self, width: RegisterWidth, dst: GeneralReg, offset: i32) !void {
+        pub fn emitLoadStack(self: *Self, width: RegisterWidth, dst: GeneralReg, offset: i32) Allocator.Error!void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurRegMem(width, dst, .FP, @intCast(offset));
             } else if (offset > 0) {
@@ -629,7 +629,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Store register to stack slot
-        pub fn emitStoreStack(self: *Self, width: RegisterWidth, offset: i32, src: GeneralReg) !void {
+        pub fn emitStoreStack(self: *Self, width: RegisterWidth, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.sturRegMem(width, src, .FP, @intCast(offset));
             } else if (offset > 0) {
@@ -653,7 +653,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Store byte to stack slot
-        pub fn emitStoreStackByte(self: *Self, offset: i32, src: GeneralReg) !void {
+        pub fn emitStoreStackByte(self: *Self, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.sturbRegMem(src, .FP, @intCast(offset));
             } else {
@@ -665,7 +665,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Store halfword (2 bytes) to stack slot
-        pub fn emitStoreStackHalfword(self: *Self, offset: i32, src: GeneralReg) !void {
+        pub fn emitStoreStackHalfword(self: *Self, offset: i32, src: GeneralReg) Allocator.Error!void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.sturhRegMem(src, .FP, @intCast(offset));
             } else {
@@ -677,7 +677,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Load byte (zero-extended) from stack slot
-        pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) !void {
+        pub fn emitLoadStackByte(self: *Self, dst: GeneralReg, offset: i32) Allocator.Error!void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurbRegMem(dst, .FP, @intCast(offset));
             } else if (offset > 0 and offset <= 4095) {
@@ -693,7 +693,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Load halfword (zero-extended) from stack slot
-        pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) !void {
+        pub fn emitLoadStackHalfword(self: *Self, dst: GeneralReg, offset: i32) Allocator.Error!void {
             if (offset >= -256 and offset <= 255) {
                 try self.emit.ldurhRegMem(dst, .FP, @intCast(offset));
             } else if (offset > 0 and offset <= 8190) {
@@ -709,7 +709,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Load float64 from stack slot
-        pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
+        pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
             if (offset >= 0 and offset <= 32760) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
@@ -723,7 +723,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Store float64 to stack slot
-        pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) !void {
+        pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
             if (offset >= 0 and offset <= 32760) {
                 // Positive offset - use scaled unsigned form
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
@@ -737,7 +737,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Store float32 to stack slot.
-        pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) !void {
+        pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
             if (offset >= 0 and offset <= 16380) {
                 const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 2);
                 try self.emit.fstrRegMemUoff(.single, src, .FP, uoffset);
@@ -751,11 +751,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // Immediate loading
 
         /// Load immediate value into register
-        pub fn emitLoadImm(self: *Self, dst: GeneralReg, value: i64) !void {
+        pub fn emitLoadImm(self: *Self, dst: GeneralReg, value: i64) Allocator.Error!void {
             try self.emit.movRegImm64(dst, @bitCast(value));
         }
 
-        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) !void {
+        pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol_name: []const u8) Allocator.Error!void {
             const page_offset = self.currentOffset();
             try self.emit.adrp(dst);
             const offset12 = self.currentOffset();
@@ -779,14 +779,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
         // Control flow
 
         /// Emit unconditional jump (returns patch location for fixup)
-        pub fn emitJump(self: *Self) !usize {
+        pub fn emitJump(self: *Self) Allocator.Error!usize {
             const patch_loc = self.currentOffset();
             try self.emit.b(0); // Placeholder offset
             return patch_loc;
         }
 
         /// Emit conditional jump (returns patch location for fixup)
-        pub fn emitCondJump(self: *Self, cond: Emit.Condition) !usize {
+        pub fn emitCondJump(self: *Self, cond: Emit.Condition) Allocator.Error!usize {
             const patch_loc = self.currentOffset();
             try self.emit.bcond(cond, 0); // Placeholder offset
             return patch_loc;
@@ -828,7 +828,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit function call with relocation
-        pub fn emitCall(self: *Self, name: []const u8) !void {
+        pub fn emitCall(self: *Self, name: []const u8) Allocator.Error!void {
             const offset = self.currentOffset();
             try self.emit.bl(0); // Placeholder
             try self.relocations.append(.{

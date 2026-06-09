@@ -1,6 +1,7 @@
 //! Scope management for identifier resolution during canonicalization.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("CIR.zig");
@@ -68,8 +69,8 @@ type_var_aliases: std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding),
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
 /// Maps exposed item names to their source modules and original names (for import resolution)
 exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
-/// Maps module names to their Import.Idx for modules imported in this scope
-imported_modules: std.StringHashMapUnmanaged(CIR.Import.Idx),
+/// Maps module identifiers to their Import.Idx for modules imported in this scope.
+imported_modules: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Import.Idx),
 is_function_boundary: bool,
 /// The type name associated with this scope (if this scope is for an associated block)
 /// null for regular scopes, set for scopes created by processAssociatedBlock
@@ -86,7 +87,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .type_var_aliases = std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
-        .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
+        .imported_modules = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Import.Idx){},
         .is_function_boundary = is_function_boundary,
         .associated_type_name = null,
     };
@@ -369,7 +370,7 @@ pub fn introduceTypeAlias(
     gpa: std.mem.Allocator,
     unqualified_name: Ident.Idx,
     qualified_type_decl: CIR.Statement.Idx,
-) !void {
+) Allocator.Error!void {
     try scope.type_bindings.put(gpa, unqualified_name, TypeBinding{
         .associated_nominal = qualified_type_decl,
     });
@@ -588,7 +589,7 @@ pub fn introduceExposedItem(
 }
 
 /// Look up an imported module in this scope
-pub fn lookupImportedModule(scope: *const Scope, module_name: []const u8) ImportedModuleLookupResult {
+pub fn lookupImportedModule(scope: *const Scope, module_name: Ident.Idx) ImportedModuleLookupResult {
     if (scope.imported_modules.get(module_name)) |import_idx| {
         return ImportedModuleLookupResult{ .found = import_idx };
     }
@@ -599,7 +600,7 @@ pub fn lookupImportedModule(scope: *const Scope, module_name: []const u8) Import
 pub fn introduceImportedModule(
     scope: *Scope,
     gpa: std.mem.Allocator,
-    module_name: []const u8,
+    module_name: Ident.Idx,
     import_idx: CIR.Import.Idx,
 ) std.mem.Allocator.Error!ImportedModuleIntroduceResult {
     if (scope.imported_modules.contains(module_name)) {

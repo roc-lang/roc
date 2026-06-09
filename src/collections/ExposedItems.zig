@@ -37,14 +37,14 @@ pub const ExposedItems = struct {
         self.items.deinit(allocator);
     }
 
-    pub fn clone(self: *const Self, allocator: Allocator) !Self {
+    pub fn clone(self: *const Self, allocator: Allocator) Allocator.Error!Self {
         return .{
             .items = try self.items.clone(allocator),
         };
     }
 
     /// Add an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
-    pub fn addExposedById(self: *Self, allocator: Allocator, ident_idx: IdentIdx) !void {
+    pub fn addExposedById(self: *Self, allocator: Allocator, ident_idx: IdentIdx) Allocator.Error!void {
         // Add with value 0 to indicate "exposed but not yet defined"
         // The SortedArrayBuilder will handle duplicates by keeping the last value,
         // but we don't want to overwrite an existing node index with 0
@@ -60,7 +60,7 @@ pub const ExposedItems = struct {
     }
 
     /// Set the node index for an exposed item by its interned ID (pass @bitCast(base.Ident.Idx) to u32)
-    pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u32) !void {
+    pub fn setNodeIndexById(self: *Self, allocator: Allocator, ident_idx: IdentIdx, node_idx: u32) Allocator.Error!void {
         self.items.ensureSorted(allocator);
 
         const entries = self.items.entries.items;
@@ -107,7 +107,7 @@ pub const ExposedItems = struct {
 
     /// Detect duplicate exposed items for error reporting
     /// Returns the interned IDs of duplicates (caller must convert to strings)
-    pub fn detectDuplicates(self: *Self, allocator: Allocator) ![]IdentIdx {
+    pub fn detectDuplicates(self: *Self, allocator: Allocator) Allocator.Error![]IdentIdx {
         return self.items.detectDuplicates(allocator);
     }
 

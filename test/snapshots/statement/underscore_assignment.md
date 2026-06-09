@@ -8,19 +8,9 @@ type=snippet
 _ = 42
 ~~~
 # EXPECTED
-INVALID STATEMENT - underscore_assignment.md:1:1:1:2
+NIL
 # PROBLEMS
-**INVALID STATEMENT**
-The statement `destructuring declaration` is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**underscore_assignment.md:1:1:1:2:**
-```roc
-_ = 42
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
 Underscore,OpAssign,Int,
@@ -41,11 +31,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(d-let
+		(p-underscore)
+		(e-num (value "42"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(expressions))
+	(expressions
+		(expr (type "Dec"))))
 ~~~

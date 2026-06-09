@@ -56,6 +56,7 @@ flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
 static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
 buf_tmp: std.array_list.Managed(u8),
+name_tmp: std.array_list.Managed(u8),
 scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 scratch_tags: std.array_list.Managed(types_mod.Tag),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
@@ -134,6 +135,7 @@ pub fn initFromParts(
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
         .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
+        .name_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
         .scratch_tags = try std.array_list.Managed(types_mod.Tag).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
@@ -151,6 +153,7 @@ pub fn deinit(self: *TypeWriter) void {
     self.static_dispatch_constraints.deinit();
     self.static_dispatch_constraints_tmp.deinit();
     self.buf_tmp.deinit();
+    self.name_tmp.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_tags.deinit();
     // import_mapping is borrowed, not owned, so don't deinit it
@@ -178,6 +181,7 @@ pub fn reset(self: *TypeWriter) void {
     self.static_dispatch_constraints.clearRetainingCapacity();
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
     self.buf_tmp.clearRetainingCapacity();
+    self.name_tmp.clearRetainingCapacity();
     self.scratch_record_fields.clearRetainingCapacity();
     self.scratch_tags.clearRetainingCapacity();
 
@@ -1174,16 +1178,14 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
     const max_attempts = self.idents.interner.entry_count;
     var attempts: usize = 0;
     while (!found and attempts < max_attempts) : (attempts += 1) {
-        var buf: [32]u8 = undefined;
         const candidate_name = if (counter == 0)
             base_name
         else blk: {
-            const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
-                // Buffer too small, fall back to generic name
-                try self.generateNextName(writer);
-                return;
-            };
-            break :blk name;
+            self.name_tmp.clearRetainingCapacity();
+            const len = std.fmt.count("{s}{}", .{ base_name, counter + 1 });
+            try self.name_tmp.resize(len);
+            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable;
+            break :blk self.name_tmp.items;
         };
 
         // Check if this name already exists in the identifier store
@@ -1218,23 +1220,21 @@ fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{ OutOfMemory, W
         var n = self.next_name_index;
         self.next_name_index += 1;
 
-        var name_buf: [8]u8 = undefined;
-        var name_len: usize = 0;
+        self.name_tmp.clearRetainingCapacity();
 
         // Generate name in base-26: a, b, ..., z, aa, ab, ..., az, ba, ...
-        while (name_len < name_buf.len) {
-            name_buf[name_len] = @intCast('a' + (n % 26));
-            name_len += 1;
+        while (true) {
+            try self.name_tmp.append(@intCast('a' + (n % 26)));
             n = n / 26;
             if (n == 0) break;
             n -= 1;
         }
 
         // Names are generated in reverse order, so reverse the buffer
-        std.mem.reverse(u8, name_buf[0..name_len]);
+        std.mem.reverse(u8, self.name_tmp.items);
 
         // Check if this name already exists in the identifier store
-        const candidate_name = name_buf[0..name_len];
+        const candidate_name = self.name_tmp.items;
         const exists = self.idents.interner.contains(candidate_name);
 
         if (!exists) {

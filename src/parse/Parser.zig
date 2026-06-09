@@ -6,12 +6,14 @@
 //! following the "Inform Don't Block" philosophy.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const tracy = @import("tracy");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
+const DeclIndex = @import("DeclIndex.zig");
 const NumericLiteral = @import("NumericLiteral.zig");
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
@@ -28,6 +30,12 @@ gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: NodeStore,
+decl_index: DeclIndex,
+scope_pending_annos: std.ArrayList(?DeclIndex.DeclIdx),
+type_path_stack: std.ArrayList(DeclIndex.TypePathIdx),
+type_path_stack_visible_start: usize,
+collect_type_dependencies: bool,
+scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
@@ -36,13 +44,23 @@ nesting_counter: u8,
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
     const estimated_node_count = tokens.tokens.len;
-    const store = try NodeStore.initCapacity(gpa, estimated_node_count);
+    var store = try NodeStore.initCapacity(gpa, estimated_node_count);
+    errdefer store.deinit();
+
+    var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
+    errdefer scratch_idents.deinit();
 
     return Parser{
         .gpa = gpa,
         .pos = 0,
         .tok_buf = tokens,
         .store = store,
+        .decl_index = DeclIndex.init(gpa),
+        .scope_pending_annos = .empty,
+        .type_path_stack = .empty,
+        .type_path_stack_visible_start = 0,
+        .collect_type_dependencies = false,
+        .scratch_idents = scratch_idents,
         .scratch_nodes = .empty,
         .diagnostics = .empty,
         .cached_malformed_node = null,
@@ -52,7 +70,10 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 
 /// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
+    parser.scratch_idents.deinit();
     parser.scratch_nodes.deinit(parser.gpa);
+    parser.scope_pending_annos.deinit(parser.gpa);
+    parser.type_path_stack.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -175,7 +196,7 @@ const StackError = error{TooNested};
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error || StackError;
 
-fn nest(self: *Parser) !void {
+fn nest(self: *Parser) StackError!void {
     if (self.nesting_counter == 0) {
         return StackError.TooNested;
     }
@@ -189,9 +210,247 @@ fn unnest(self: *Parser) void {
     self.nesting_counter = self.nesting_counter + 1;
 }
 
+fn enterDeclScope(
+    self: *Parser,
+    kind: DeclIndex.ScopeKind,
+    owner: DeclIndex.ScopeOwner,
+    region: AST.TokenizedRegion,
+) Error!DeclIndex.ScopeIdx {
+    const scope_idx = try self.decl_index.enterScope(kind, owner, .{
+        .start = region.start,
+        .end = region.end,
+    });
+    if (kind == .associated) {
+        self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath());
+    }
+    while (self.scope_pending_annos.items.len <= @intFromEnum(scope_idx)) {
+        try self.scope_pending_annos.append(self.gpa, null);
+    }
+    return scope_idx;
+}
+
+fn exitDeclScope(
+    self: *Parser,
+    scope_idx: DeclIndex.ScopeIdx,
+    region: AST.TokenizedRegion,
+) Error!void {
+    self.scope_pending_annos.items[@intFromEnum(scope_idx)] = null;
+    try self.decl_index.exitScope(scope_idx, .{
+        .start = region.start,
+        .end = region.end,
+    });
+}
+
+fn currentPendingAnno(self: *Parser) ?*?DeclIndex.DeclIdx {
+    const scope_idx = self.decl_index.currentScope() orelse return null;
+    return &self.scope_pending_annos.items[@intFromEnum(scope_idx)];
+}
+
+fn currentTypePath(self: *const Parser) ?DeclIndex.TypePathIdx {
+    if (self.type_path_stack.items.len <= self.type_path_stack_visible_start) return null;
+    return self.type_path_stack.items[self.type_path_stack.items.len - 1];
+}
+
+fn currentAssociatedOwnerPath(self: *const Parser) ?DeclIndex.TypePathIdx {
+    const scope_idx = self.decl_index.currentScope() orelse return null;
+    const scope = self.decl_index.scopes.items[@intFromEnum(scope_idx)];
+    if (scope.kind != .associated) return null;
+    return scope.owner_type_path;
+}
+
+fn tokenIdentsEqual(self: *Parser, a: ?Token.Idx, b: ?Token.Idx) bool {
+    const a_tok = a orelse return false;
+    const b_tok = b orelse return false;
+    const a_ident = self.tok_buf.resolveIdentifier(a_tok) orelse return false;
+    const b_ident = self.tok_buf.resolveIdentifier(b_tok) orelse return false;
+    return a_ident.eql(b_ident);
+}
+
+fn recordStatementDecl(
+    self: *Parser,
+    statement_idx: AST.Statement.Idx,
+    statement: AST.Statement,
+    type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
+) Error!void {
+    const scope_idx = self.decl_index.currentScope() orelse return;
+    const owner_type_path = self.currentAssociatedOwnerPath();
+
+    var record = switch (statement) {
+        .decl => |decl| blk: {
+            const pattern = self.store.getPattern(decl.pattern);
+            const name_tok: ?Token.Idx = if (pattern == .ident)
+                pattern.ident.ident_tok
+            else
+                null;
+            const body = self.store.getExpr(decl.body);
+            const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = switch (body) {
+                .lambda => |lambda| .{
+                    .lambda,
+                    @intCast(self.store.patternSlice(lambda.args).len),
+                },
+                else => .{ .none, 0 },
+            };
+            break :blk DeclIndex.Decl{
+                .scope = scope_idx,
+                .statement = @intFromEnum(statement_idx),
+                .kind = .value,
+                .value_form = value_form,
+                .value_arity = value_arity,
+                .name_tok = name_tok,
+                .owner_type_path = owner_type_path,
+                .pattern = @intFromEnum(decl.pattern),
+                .anno = null,
+                .region = .{ .start = decl.region.start, .end = decl.region.end },
+            };
+        },
+        .@"var" => |v| DeclIndex.Decl{
+            .scope = scope_idx,
+            .statement = @intFromEnum(statement_idx),
+            .kind = .var_decl,
+            .name_tok = v.name,
+            .owner_type_path = owner_type_path,
+            .pattern = null,
+            .anno = null,
+            .region = .{ .start = v.region.start, .end = v.region.end },
+        },
+        .import => |i| blk: {
+            if (self.tok_buf.resolveIdentifier(i.module_name_tok)) |module_name| {
+                try self.decl_index.addImport(.{
+                    .module_name = module_name,
+                    .qualifier = if (i.qualifier_tok) |qualifier_tok| self.tok_buf.resolveIdentifier(qualifier_tok) else null,
+                    .nested = i.nested_import,
+                    .region = .{ .start = i.region.start, .end = i.region.end },
+                });
+            }
+            break :blk DeclIndex.Decl{
+                .scope = scope_idx,
+                .statement = @intFromEnum(statement_idx),
+                .kind = .import,
+                .name_tok = i.alias_tok orelse i.module_name_tok,
+                .pattern = null,
+                .anno = null,
+                .region = .{ .start = i.region.start, .end = i.region.end },
+            };
+        },
+        .file_import => |fi| DeclIndex.Decl{
+            .scope = scope_idx,
+            .statement = @intFromEnum(statement_idx),
+            .kind = .file_import,
+            .name_tok = fi.name_tok,
+            .pattern = null,
+            .anno = null,
+            .region = .{ .start = fi.region.start, .end = fi.region.end },
+        },
+        .type_decl => |td| blk: {
+            const header = self.store.getTypeHeader(td.header) catch break :blk null;
+            const kind: DeclIndex.DeclKind = switch (td.kind) {
+                .alias => .type_alias,
+                .nominal => .nominal,
+                .@"opaque" => .@"opaque",
+            };
+            break :blk DeclIndex.Decl{
+                .scope = scope_idx,
+                .statement = @intFromEnum(statement_idx),
+                .kind = kind,
+                .name_tok = header.name,
+                .owner_type_path = owner_type_path,
+                .type_path = type_path,
+                .pattern = null,
+                .anno = @intFromEnum(td.anno),
+                .associated_scope = if (td.associated) |assoc| assoc.scope else null,
+                .type_dependencies = type_dependencies,
+                .region = .{ .start = td.region.start, .end = td.region.end },
+            };
+        },
+        .type_anno => |ta| DeclIndex.Decl{
+            .scope = scope_idx,
+            .statement = @intFromEnum(statement_idx),
+            .kind = if (ta.is_var) .var_anno else .value_anno,
+            .name_tok = ta.name,
+            .owner_type_path = owner_type_path,
+            .pattern = null,
+            .anno = @intFromEnum(ta.anno),
+            .region = .{ .start = ta.region.start, .end = ta.region.end },
+        },
+        else => null,
+    } orelse {
+        if (self.currentPendingAnno()) |pending| pending.* = null;
+        return;
+    };
+
+    if (record.name_tok) |name_tok| {
+        record.name_ident = self.tok_buf.resolveIdentifier(name_tok);
+    }
+
+    const decl_idx = try self.decl_index.addDecl(record);
+    if (record.kind == .value_anno or record.kind == .var_anno) {
+        if (self.currentPendingAnno()) |pending| pending.* = decl_idx;
+        return;
+    }
+
+    if (record.kind == .value or record.kind == .var_decl) {
+        if (self.currentPendingAnno()) |pending| {
+            if (pending.*) |anno_idx| {
+                const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
+                const kinds_match = (record.kind == .value and anno.kind == .value_anno) or
+                    (record.kind == .var_decl and anno.kind == .var_anno);
+                if (kinds_match and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+                    self.decl_index.pairAnnotation(anno_idx, decl_idx);
+                }
+            }
+            pending.* = null;
+        }
+        return;
+    }
+
+    if (self.currentPendingAnno()) |pending| pending.* = null;
+}
+
+fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx {
+    return try self.addStatementWithTypeDependencies(statement, DeclIndex.Span.empty());
+}
+
+fn addStatementWithTypeDependencies(
+    self: *Parser,
+    statement: AST.Statement,
+    type_dependencies: DeclIndex.Span,
+) Error!AST.Statement.Idx {
+    const idx = try self.store.addStatement(statement);
+    try self.recordStatementDecl(idx, statement, type_dependencies, null);
+    return idx;
+}
+
+fn addTypeDeclStatement(
+    self: *Parser,
+    statement: AST.Statement,
+    type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
+) Error!AST.Statement.Idx {
+    const idx = try self.store.addStatement(statement);
+    try self.recordStatementDecl(idx, statement, type_dependencies, type_path);
+    return idx;
+}
+
 fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     const region = self.tok_buf.resolve(token);
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
+}
+
+fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) Error!void {
+    for (self.store.exposedItemSlice(exposes)) |exposed_idx| {
+        const exposed = self.store.getExposedItem(exposed_idx);
+        const name_token: Token.Idx, const region: AST.TokenizedRegion = switch (exposed) {
+            .upper_ident => |ui| .{ ui.ident, ui.region },
+            .upper_ident_star => |ui| .{ ui.ident, ui.region },
+            .lower_ident, .malformed => continue,
+        };
+        const module_name = self.tok_buf.resolveIdentifier(name_token) orelse continue;
+        try self.decl_index.addPackageHeaderModule(module_name, .{
+            .start = region.start,
+            .end = region.end,
+        });
+    }
 }
 
 fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) Error!?base.Ident.Idx {
@@ -256,6 +515,23 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
         return @enumFromInt(@intFromEnum(self.cached_malformed_node.?));
     }
 }
+
+fn recoverMalformedTypeDeclLine(self: *Parser, start: TokenIdx) void {
+    const source = self.tok_buf.env.source;
+    const start_region = self.tok_buf.resolve(start);
+    const statement_start_end: usize = @intCast(start_region.end.offset);
+
+    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+        const current_region = self.tok_buf.resolve(self.pos);
+        const current_start: usize = @intCast(current_region.start.offset);
+        if (current_start > statement_start_end and
+            std.mem.findScalar(u8, source[statement_start_end..current_start], '\n') != null)
+        {
+            return;
+        }
+        self.advance();
+    }
+}
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
@@ -264,9 +540,11 @@ pub fn parseFile(self: *Parser) Error!void {
     defer trace.end();
 
     self.store.emptyScratch();
+    const module_scope = try self.enterDeclScope(.module, .file, AST.TokenizedRegion.empty());
     try self.store.addFile(.{
         .header = undefined, // overwritten below after parseHeader()
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
+        .scope = module_scope,
         .region = AST.TokenizedRegion.empty(),
     });
 
@@ -280,17 +558,20 @@ pub fn parseFile(self: *Parser) Error!void {
         try self.store.addScratchStatement(idx);
     }
 
+    const file_region = AST.TokenizedRegion{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) };
+    try self.exitDeclScope(module_scope, file_region);
     try self.store.addFile(.{
         .header = header,
         .statements = try self.store.statementSpanFrom(scratch_top),
-        .region = .{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) },
+        .scope = module_scope,
+        .region = file_region,
     });
 }
 
 /// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
 ///
 /// Returns the ending position of the collection
-fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) Error!void, parser: fn (*Parser) Error!T) !void {
+fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) Error!void, parser: fn (*Parser) Error!T) (Allocator.Error || error{ TooNested, ExpectedNotFound })!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -762,6 +1043,7 @@ pub fn parsePackageHeader(self: *Parser) Error!AST.Header.Idx {
             .end = self.pos,
         },
     });
+    try self.recordPackageHeaderModules(exposes_span);
 
     // Get Packages
     const packages_start = self.pos;
@@ -1396,7 +1678,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
                 }
 
-                const statement_idx = try self.store.addStatement(.{ .file_import = .{
+                const statement_idx = try self.addStatement(.{ .file_import = .{
                     .path_tok = path_tok,
                     .name_tok = name_tok,
                     .type_tok = type_tok,
@@ -1489,7 +1771,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     }
                 }
 
-                const statement_idx = try self.store.addStatement(.{ .import = .{
+                const statement_idx = try self.addStatement(.{ .import = .{
                     .module_name_tok = module_name_tok,
                     .qualifier_tok = qualifier,
                     .alias_tok = alias_tok,
@@ -1497,6 +1779,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .nested_import = nested_import,
                     .region = .{ .start = start, .end = self.pos },
                 } });
+                if (qualifier == null and !nested_import) {
+                    if (self.tok_buf.resolveIdentifier(module_name_tok)) |module_ident| {
+                        try self.decl_index.addExplicitUnqualifiedImport(module_ident);
+                    }
+                }
                 return statement_idx;
             }
             return try self.pushMalformed(AST.Statement.Idx, .incomplete_import, start);
@@ -1505,7 +1792,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             const start = self.pos;
             self.advance();
             const body = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .expect = .{
+            const statement_idx = try self.addStatement(.{ .expect = .{
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
             } });
@@ -1520,7 +1807,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             };
             const expr = try self.parseExpr();
             const body = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .@"for" = .{
+            const statement_idx = try self.addStatement(.{ .@"for" = .{
                 .region = .{ .start = start, .end = self.pos },
                 .patt = patt,
                 .expr = expr,
@@ -1534,7 +1821,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             self.advance();
             const cond = try self.parseExpr();
             const body = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .@"while" = .{
+            const statement_idx = try self.addStatement(.{ .@"while" = .{
                 .region = .{ .start = start, .end = self.pos },
                 .cond = cond,
                 .body = body,
@@ -1546,7 +1833,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             const start = self.pos;
             self.advance();
             const expr = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .crash = .{
+            const statement_idx = try self.addStatement(.{ .crash = .{
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
@@ -1556,7 +1843,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             const start = self.pos;
             self.advance();
             const expr = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .dbg = .{
+            const statement_idx = try self.addStatement(.{ .dbg = .{
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
@@ -1566,7 +1853,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             const start = self.pos;
             self.advance();
             const expr = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .@"return" = .{
+            const statement_idx = try self.addStatement(.{ .@"return" = .{
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
@@ -1588,7 +1875,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 // Type annotation: var $foo : Type
                 self.advance(); // Advance past OpColon
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
-                const statement_idx = try self.store.addStatement(.{ .type_anno = .{
+                const statement_idx = try self.addStatement(.{ .type_anno = .{
                     .anno = anno,
                     .name = name,
                     .where = try self.parseWhereConstraint(),
@@ -1601,7 +1888,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 return try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
             };
             const body = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .@"var" = .{
+            const statement_idx = try self.addStatement(.{ .@"var" = .{
                 .name = name,
                 .body = body,
                 .region = .{ .start = start, .end = self.pos },
@@ -1611,7 +1898,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
         .KwBreak => {
             const start = self.pos;
             self.advance();
-            const statement_idx = try self.store.addStatement(.{ .@"break" = .{
+            const statement_idx = try self.addStatement(.{ .@"break" = .{
                 .region = .{ .start = start, .end = self.pos },
             } });
 
@@ -1627,7 +1914,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 } });
                 self.advance(); // Advance past OpAssign
                 const idx = try self.parseExpr();
-                const statement_idx = try self.store.addStatement(.{ .decl = .{
+                const statement_idx = try self.addStatement(.{ .decl = .{
                     .pattern = patt_idx,
                     .body = idx,
                     .region = .{ .start = start, .end = self.pos },
@@ -1641,7 +1928,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 self.advance(); // Advance past LowerIdent
                 self.advance(); // Advance past OpColon
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
-                const statement_idx = try self.store.addStatement(.{ .type_anno = .{
+                const statement_idx = try self.addStatement(.{ .type_anno = .{
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
@@ -1663,7 +1950,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 } });
                 self.advance(); // Advance past OpAssign
                 const idx = try self.parseExpr();
-                const statement_idx = try self.store.addStatement(.{ .decl = .{
+                const statement_idx = try self.addStatement(.{ .decl = .{
                     .pattern = patt_idx,
                     .body = idx,
                     .region = .{ .start = start, .end = self.pos },
@@ -1673,7 +1960,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 self.advance(); // Advance past NamedUnderscore
                 self.advance(); // Advance past OpColon
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
-                const statement_idx = try self.store.addStatement(.{ .type_anno = .{
+                const statement_idx = try self.addStatement(.{ .type_anno = .{
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
@@ -1694,7 +1981,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 } });
                 self.advance(); // Advance past OpAssign
                 const idx = try self.parseExpr();
-                const statement_idx = try self.store.addStatement(.{ .decl = .{
+                const statement_idx = try self.addStatement(.{ .decl = .{
                     .pattern = patt_idx,
                     .body = idx,
                     .region = .{ .start = start, .end = self.pos },
@@ -1715,6 +2002,18 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 (statementType == .in_body and self.looksLikeTypeDecl());
             if (is_type_decl_context) {
                 const header = try self.parseTypeHeader();
+                const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+                if (header_node.tag == .malformed) {
+                    self.recoverMalformedTypeDeclLine(start);
+                    const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
+                    return try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
+                }
+                const type_path = blk_path: {
+                    const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
+                    const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
+                    const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
+                    break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
+                };
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
@@ -1725,7 +2024,22 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     else => .alias,
                 };
                 self.advance();
-                const anno = try self.parseTypeAnno(.not_looking_for_args);
+                const type_dependencies_start = self.decl_index.typeDependencyTop();
+                const was_collecting_type_dependencies = self.collect_type_dependencies;
+                self.collect_type_dependencies = true;
+                const anno = self.parseTypeAnno(.not_looking_for_args) catch |err| {
+                    self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
+                    self.collect_type_dependencies = was_collecting_type_dependencies;
+                    return err;
+                };
+                const type_dependencies = blk: {
+                    if (self.store.getTypeAnno(anno) == .malformed) {
+                        self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
+                        break :blk DeclIndex.Span.empty();
+                    }
+                    break :blk self.decl_index.typeDependencySpanFrom(type_dependencies_start);
+                };
+                self.collect_type_dependencies = was_collecting_type_dependencies;
                 const where_clause = try self.parseWhereConstraint();
 
                 // Check if there's a .{ associated } after the type annotation
@@ -1736,7 +2050,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     self.advance(); // consume .
                     self.advance(); // consume {
                     const associated_start = self.pos - 1;
-                    associated = try self.parseStatementOnlyBlock(associated_start);
+                    associated = try self.parseStatementOnlyBlock(associated_start, type_path);
 
                     // Report error if this is a type alias
                     if (kind == .alias) {
@@ -1747,14 +2061,17 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     }
                 }
 
-                const statement_idx = try self.store.addStatement(.{ .type_decl = .{
+                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
                     .kind = kind,
                     .where = where_clause,
                     .associated = associated,
                     .region = .{ .start = start, .end = self.pos },
-                } });
+                } }, type_dependencies, type_path);
+                if (associated) |assoc| {
+                    self.decl_index.setScopeOwner(assoc.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
+                }
                 return statement_idx;
             }
         },
@@ -1799,7 +2116,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 };
 
                 const idx = try self.parseExpr();
-                const statement_idx = try self.store.addStatement(.{ .decl = .{
+                const statement_idx = try self.addStatement(.{ .decl = .{
                     .pattern = patt_idx,
                     .body = idx,
                     .region = .{ .start = start, .end = self.pos },
@@ -1823,7 +2140,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
     // We didn't find any statements, so we must be parsing the final expression.
     const start = self.pos;
     const expr = try self.parseExpr();
-    const statement_idx = try self.store.addStatement(.{ .expr = .{
+    const statement_idx = try self.addStatement(.{ .expr = .{
         .expr = expr,
         .region = .{ .start = start, .end = self.pos },
     } });
@@ -3357,6 +3674,9 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                 .token = qual_result.final_token,
                 .qualifiers = qual_result.qualifiers,
             } });
+            if (self.collect_type_dependencies and qual_result.is_upper) {
+                try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+            }
 
             if (self.peek() == .NoSpaceOpenRound) {
                 self.advance(); // Advance past NoSpaceOpenRound
@@ -3532,8 +3852,10 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     self.expect(.Comma) catch {};
                     break;
                 } else {
-                    // Regular tag in the union
-                    try NodeStore.addScratchTypeAnno(&self.store, try parseTypeAnnoInCollection(self));
+                    // Regular tag in the union. The tag name itself is a
+                    // constructor, not a type reference; only payload
+                    // annotations contribute type dependencies.
+                    try NodeStore.addScratchTypeAnno(&self.store, try parseTagUnionAnnoInCollection(self));
                     self.expect(.Comma) catch {
                         break;
                     };
@@ -3614,6 +3936,103 @@ pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
     defer trace.end();
 
     return try self.parseTypeAnno(.looking_for_type_arg);
+}
+
+fn parseTagUnionAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const was_collecting = self.collect_type_dependencies;
+    self.collect_type_dependencies = false;
+    defer self.collect_type_dependencies = was_collecting;
+
+    const anno = try self.parseTypeAnno(.looking_for_type_arg);
+    if (was_collecting) {
+        try self.recordTypeDependenciesFromTagAnno(anno);
+    }
+    return anno;
+}
+
+fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
+    const anno = self.store.getTypeAnno(anno_idx);
+    switch (anno) {
+        .apply => |apply| {
+            const args = self.store.typeAnnoSlice(apply.args);
+            if (args.len == 0) return;
+            for (args[1..]) |arg_idx| {
+                try self.recordTypeDependenciesFromAnno(arg_idx);
+            }
+        },
+        else => {},
+    }
+}
+
+fn recordTypeDependenciesFromAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
+    const anno = self.store.getTypeAnno(anno_idx);
+    switch (anno) {
+        .ty => |ty| {
+            const token_tag = self.tok_buf.tokens.items(.tag)[ty.token];
+            if (token_tag == .UpperIdent or token_tag == .NoSpaceDotUpperIdent) {
+                try self.recordTypeDependencyFromQualifiedTokens(ty.qualifiers, ty.token);
+            }
+        },
+        .apply => |apply| {
+            for (self.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                try self.recordTypeDependenciesFromAnno(arg_idx);
+            }
+        },
+        .tag_union => |tag_union| {
+            for (self.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                try self.recordTypeDependenciesFromTagAnno(tag_idx);
+            }
+            if (tag_union.ext == .named) {
+                try self.recordTypeDependenciesFromAnno(tag_union.ext.named.anno);
+            }
+        },
+        .tuple => |tuple| {
+            for (self.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                try self.recordTypeDependenciesFromAnno(elem_idx);
+            }
+        },
+        .record => |record| {
+            for (self.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.store.getAnnoRecordField(field_idx) catch continue;
+                try self.recordTypeDependenciesFromAnno(field.ty);
+            }
+            if (record.ext == .named) {
+                try self.recordTypeDependenciesFromAnno(record.ext.named.anno);
+            }
+        },
+        .@"fn" => |func| {
+            for (self.store.typeAnnoSlice(func.args)) |arg_idx| {
+                try self.recordTypeDependenciesFromAnno(arg_idx);
+            }
+            try self.recordTypeDependenciesFromAnno(func.ret);
+        },
+        .parens => |parens| {
+            try self.recordTypeDependenciesFromAnno(parens.anno);
+        },
+        .ty_var, .underscore_type_var, .underscore, .malformed => {},
+    }
+}
+
+fn recordTypeDependencyFromQualifiedTokens(
+    self: *Parser,
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+) Error!void {
+    const top = self.scratch_idents.top();
+    defer self.scratch_idents.clearFrom(top);
+
+    for (self.store.tokenSlice(qualifiers)) |token| {
+        const ident = self.tok_buf.resolveIdentifier(token) orelse return;
+        try self.scratch_idents.append(ident);
+    }
+
+    const final_ident = self.tok_buf.resolveIdentifier(final_token) orelse return;
+    try self.scratch_idents.append(final_ident);
+
+    try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
 }
 
 /// todo
@@ -3747,6 +4166,11 @@ pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
 ///     <stmtN>
 /// }
 pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
+    const previous_type_path_visible_start = self.type_path_stack_visible_start;
+    self.type_path_stack_visible_start = self.type_path_stack.items.len;
+    defer self.type_path_stack_visible_start = previous_type_path_visible_start;
+
+    const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
@@ -3764,11 +4188,16 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
         });
     };
 
+    const block_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+    try self.exitDeclScope(block_scope, block_region);
     const statements = try self.store.statementSpanFrom(scratch_top);
-    return try self.store.addExpr(.{ .block = .{
+    const expr_idx = try self.store.addExpr(.{ .block = .{
         .statements = statements,
-        .region = .{ .start = start, .end = self.pos },
+        .scope = block_scope,
+        .region = block_region,
     } });
+    self.decl_index.setScopeOwner(block_scope, .{ .expr = @intFromEnum(expr_idx) });
+    return expr_idx;
 }
 
 /// Parse a block that contains only statements, no ending expression.
@@ -3778,7 +4207,17 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
 ///     ...
 ///     <stmtN>
 /// }
-pub fn parseStatementOnlyBlock(self: *Parser, start: u32) Error!AST.Associated {
+pub fn parseStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+    if (owner_type_path) |path| {
+        try self.type_path_stack.append(self.gpa, path);
+    }
+    defer {
+        if (owner_type_path != null) {
+            _ = self.type_path_stack.pop();
+        }
+    }
+
+    const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = start, .end = start });
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
@@ -3808,10 +4247,13 @@ pub fn parseStatementOnlyBlock(self: *Parser, start: u32) Error!AST.Associated {
         });
     };
 
+    const assoc_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+    try self.exitDeclScope(assoc_scope, assoc_region);
     const statements = try self.store.statementSpanFrom(scratch_top);
     return AST.Associated{
         .statements = statements,
-        .region = .{ .start = start, .end = self.pos },
+        .scope = assoc_scope,
+        .region = assoc_region,
     };
 }
 

@@ -5,6 +5,7 @@
 //! caller's responsibility.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 // std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
@@ -53,13 +54,13 @@ pub const ExecutableMemory = struct {
 
     /// Allocate executable memory and copy the given code into it.
     /// The code bytes should already have any relocations applied.
-    pub fn init(code: []const u8) !Self {
+    pub fn init(code: []const u8) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!Self {
         return initWithEntryOffset(code, 0);
     }
 
     /// Allocate executable memory with a specific entry offset.
     /// Use this when procedures are compiled before the main expression.
-    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) !Self {
+    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform })!Self {
         if (code.len == 0) {
             return error.EmptyCode;
         }
@@ -129,7 +130,7 @@ pub const ExecutableMemory = struct {
 };
 
 /// Allocate memory that can be made executable
-fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
+fn allocateMemory(size: usize) (Allocator.Error || error{ MmapFailed, VirtualAllocFailed, UnsupportedPlatform })![]align(std.heap.page_size_min) u8 {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
             const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
@@ -154,7 +155,7 @@ fn allocateMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
 }
 
 /// Make the memory executable
-fn makeExecutable(memory: []align(std.heap.page_size_min) u8) !void {
+fn makeExecutable(memory: []align(std.heap.page_size_min) u8) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
     switch (builtin.os.tag) {
         .macos, .ios, .tvos, .watchos, .linux, .freebsd, .openbsd, .netbsd => {
             const prot: std.posix.PROT = .{ .READ = true, .EXEC = true };
