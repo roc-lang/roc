@@ -795,7 +795,8 @@ fn parseTypeHeaderTokens(self: *Parser) Error!AST.TypeHeader.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .UpperIdent);
     self.advance();
-    if (self.peek() != .NoSpaceOpenRound and self.peek() != .OpenRound) {
+    const open_tok = self.peek();
+    if (open_tok != .NoSpaceOpenRound and open_tok != .OpenRound) {
         return try self.store.addTypeHeader(.{
             .name = start,
             .args = .{ .span = .{ .start = 0, .len = 0 } },
