@@ -1392,9 +1392,7 @@ fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
     const files_top = self.store.scratchTargetFileTop();
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         try self.store.addScratchTargetFile(try self.parseTargetFileTokens());
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
+        if (!self.consumeComma()) {
             break;
         }
     }
