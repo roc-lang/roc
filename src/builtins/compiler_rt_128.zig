@@ -27,6 +27,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const ryu = @import("ryu.zig");
 const math = std.math;
 const Log2Int = math.Log2Int;
 const native_endian = builtin.cpu.arch.endian();
@@ -568,7 +569,7 @@ pub fn f64_to_u128(x: f64) u128 {
     }
 }
 
-// Integer formatting (avoids std.fmt which calls @rem on u128)
+// Integer formatting (avoids Zig formatting helpers, which call @rem on u128)
 
 /// Format a u128 as a decimal string into the provided buffer.
 /// Returns the slice of `buf` that contains the formatted number.
@@ -617,13 +618,42 @@ pub fn i128_to_str(buf: []u8, val: i128) FormatResult {
     return u128_to_str_inner(buf, @as(u128, @intCast(val)));
 }
 
+pub fn int_string_capacity(comptime T: type) comptime_int {
+    const info = @typeInfo(T).int;
+    return switch (info.signedness) {
+        .signed => switch (info.bits) {
+            8 => 4,
+            16 => 6,
+            32 => 11,
+            64 => 20,
+            128 => 40,
+            else => @compileError("unsupported signed integer width"),
+        },
+        .unsigned => switch (info.bits) {
+            8 => 3,
+            16 => 5,
+            32 => 10,
+            64 => 20,
+            128 => 39,
+            else => @compileError("unsupported unsigned integer width"),
+        },
+    };
+}
+
+pub fn int_to_str(comptime T: type, buf: []u8, val: T) []const u8 {
+    const info = @typeInfo(T).int;
+    return switch (info.signedness) {
+        .signed => i128_to_str(buf, @as(i128, @intCast(val))).str,
+        .unsigned => u128_to_str(buf, @as(u128, @intCast(val))).str,
+    };
+}
+
 // f64/f32 to string formatting.
-// Uses Ryu's binaryToDecimal (u64-only) followed by manual decimal formatting,
-// avoiding std.fmt.float which uses u128 arithmetic internally (isPowerOf10,
-// printIntAny) and would pull in __udivti3/__umodti3 from compiler-rt.
+// Uses Roc's vendored Ryu binary-to-decimal conversion followed by manual
+// decimal formatting, avoiding Zig formatting symbols in compiled programs.
 
 /// Format an f64 as a decimal string into the provided buffer.
-/// Uses Ryu algorithm via std.fmt.float.binaryToDecimal (u64-only).
+/// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
 /// Buffer must be at least 400 bytes.
 pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
@@ -631,7 +661,7 @@ pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
 }
 
 /// Format an f32 as a decimal string into the provided buffer.
-/// Uses Ryu algorithm via std.fmt.float.binaryToDecimal (u64-only).
+/// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
 /// Buffer must be at least 400 bytes.
 pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
@@ -643,13 +673,12 @@ pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
 /// notation (`M.MMMeEE`) for very large/small magnitudes (matches Python's
 /// `repr` thresholds: dp_offset > 16 or dp_offset <= -4); decimal otherwise.
 pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
-    const float = std.fmt.float;
-    const tables = &float.Backend64_TablesFull;
+    const tables = &ryu.Backend64_TablesFull;
 
     const d = if (is_f32)
-        float.binaryToDecimal(u64, @as(u64, @as(u32, @truncate(val_bits))), 23, 8, false, tables)
+        ryu.binaryToDecimal(u64, @as(u64, @as(u32, @truncate(val_bits))), 23, 8, false, tables)
     else
-        float.binaryToDecimal(u64, val_bits, 52, 11, false, tables);
+        ryu.binaryToDecimal(u64, val_bits, 52, 11, false, tables);
 
     // Handle special values (NaN, inf)
     if (d.exponent == 0x7fffffff) {

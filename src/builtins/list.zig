@@ -3,7 +3,6 @@
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
-const builtin = @import("builtin");
 
 const utils = @import("utils.zig");
 const UpdateMode = utils.UpdateMode;

@@ -597,23 +597,9 @@ fn strFromIntHelp(
     int: T,
     roc_ops: *RocOps,
 ) RocStr {
-    // determine maximum size for this T
-    const size = comptime blk: {
-        // the string representation of the minimum i128 value uses at most 40 characters
-        var buf: [40]u8 = undefined;
-        const resultMin = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
-        const resultMax = std.fmt.bufPrint(&buf, "{}", .{std.math.maxInt(T)}) catch unreachable;
-        const result = if (resultMin.len > resultMax.len) resultMin.len else resultMax.len;
-        break :blk result;
-    };
-
+    const size = compiler_rt_128.int_string_capacity(T);
     var buf: [size]u8 = undefined;
-    const result: []const u8 = if (T == i128)
-        compiler_rt_128.i128_to_str(&buf, int).str
-    else if (T == u128)
-        compiler_rt_128.u128_to_str(&buf, int).str
-    else
-        std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
+    const result = compiler_rt_128.int_to_str(T, &buf, int);
 
     return RocStr.init(result.ptr, result.len, roc_ops);
 }
